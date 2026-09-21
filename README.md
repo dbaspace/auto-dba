@@ -1,6 +1,6 @@
 # auto-dba
 
-独立的 DBA 运维自助工作台：从 `jupiter-db_manage_hub` 抽取工单 / 建库 / CDC / 迁移 / 闪回 / 归档等能力，去掉 Saturn、saturn-guard、MDM 依赖，使用本地登录、本地实例库表与审批人。
+独立的 DBA 运维自助工作台，覆盖工单、建库、CDC、迁移、闪回、归档等能力。使用本地登录、本地实例库表与审批人。
 
 前端为 **React 18 + Ant Design 5 + Redux Toolkit + ahooks + react-router-dom v6 + Tailwind 3**（目录 `frontend/`）。旧 Vue 3 + Element Plus 实现已归档到 `frontend-vue-archive/`，仅作对照，不再作为默认启动目标。本地为**前后端分离**：改前端不必动后端，改后端不必重新构建前端。
 
@@ -66,7 +66,7 @@ Vite 默认 http://localhost:5174 ，`/api` 代理到 8800。若 5174 已被占�
 
 改 Go 后只重启后端；前端标签页不用关。
 
-全链路监控图组件对齐老项目 `PipelineVisualization.tsx`（Tailwind class + Ant Card 外观），小屏横滚、大屏 `w-max min-w-[1080px]` 保持三块布局不散。
+全链路监控图组件为 `PipelineVisualization.tsx`（Tailwind class + Ant Card 外观），小屏横滚、大屏 `w-max min-w-[1080px]` 保持三块布局不散。
 
 ## 约束说明
 
