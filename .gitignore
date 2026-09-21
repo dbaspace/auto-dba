@@ -4,6 +4,7 @@
 /auto-dba
 node_modules/
 /frontend/dist/
+/frontend-vue-archive/
 *.exe
 .DS_Store
 .env

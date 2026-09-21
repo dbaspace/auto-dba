@@ -1,1 +1,0 @@
-function l(n){const o=(n==null?void 0:n.db_name)||(n==null?void 0:n.name)||"",e=((n==null?void 0:n.domains)||[]).map(a=>String(a).trim()).filter(Boolean),i=((n==null?void 0:n.tags)||[]).map(a=>String(a).trim()).filter(Boolean);let t=o;return e.length&&(t+=` @ ${e.join(",")}`),i.length&&(t+=` [${i.join(",")}]`),t}export{l as d};

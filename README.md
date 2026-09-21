@@ -2,7 +2,7 @@
 
 独立的 DBA 运维自助工作台，覆盖工单、建库、CDC、迁移、闪回、归档等能力。使用本地登录、本地实例库表与审批人。
 
-前端为 **React 18 + Ant Design 5 + Redux Toolkit + ahooks + react-router-dom v6 + Tailwind 3**（目录 `frontend/`）。旧 Vue 3 + Element Plus 实现已归档到 `frontend-vue-archive/`，仅作对照，不再作为默认启动目标。本地为**前后端分离**：改前端不必动后端，改后端不必重新构建前端。
+前端为 **React 18 + Ant Design 5 + Redux Toolkit + ahooks + react-router-dom v6 + Tailwind 3**（目录 `frontend/`）。本地为**前后端分离**：改前端不必动后端，改后端不必重新构建前端。
 
 ## 运行方式：手动维护
 
