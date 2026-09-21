@@ -1,6 +1,8 @@
 # auto-dba
 
-独立的 DBA 运维自助工作台，覆盖工单、建库、CDC、迁移、闪回、归档等能力。使用本地登录、本地实例库表与审批人。
+独立的 DBA 运维自助工作台，覆盖工单、查询、CDC、迁移、闪回、归档与权限治理。业务对象登记在本系统内，使用本地登录（可接 LDAP / SSO）、本地实例库表与审批人。
+
+功能按侧栏逐项说明见 [docs/features.md](docs/features.md)。
 
 前端为 **React 18 + Ant Design 5 + Redux Toolkit + ahooks + react-router-dom v6 + Tailwind 3**（目录 `frontend/`）。本地为**前后端分离**：改前端不必动后端，改后端不必重新构建前端。
 
@@ -76,10 +78,10 @@ CDC / 迁移 / 海豚 / SR 在 `config.yaml` 未配置外部地址时任务可�
 
 PG 闪回生产约定：默认不改 `REPLICA IDENTITY`；DEFAULT 表靠 FPW/堆页死行补齐非主键列（VACUUM 前完成）；仅高风险表在变更窗临时 FULL。
 
-## 表结构对比
+## 相关文档
 
-菜单 **同步与迁移 → 表结构对比**（`/ops/migration/compare`）：对同族实例（PostgreSQL 互比，或 MySQL/TiDB/OceanBase 互比）做异步结构对比，并生成源→目标、只增不删的修复 SQL。
+功能目录与各模块说明见 [docs/features.md](docs/features.md)。
+
+菜单 **同步与迁移 → 表结构对比**（`/ops/migration/compare`）：对同族实例（PostgreSQL 互比，或 MySQL/TiDB/OceanBase 互比）做异步结构对比，并生成源→目标、只增不删的修复 SQL。范围与 API 见 [docs/migration-schema-compare.md](docs/migration-schema-compare.md)。
 
 新增页面及页面上的新建/编辑/删除等操作，须在菜单中登记并完成前后端鉴权，见 [docs/rbac-permissions.md](docs/rbac-permissions.md)。
-
-说明、对比范围、API 与自测见 [docs/migration-schema-compare.md](docs/migration-schema-compare.md)。
