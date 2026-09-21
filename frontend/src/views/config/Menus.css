@@ -1,0 +1,146 @@
+.menus-page {
+  overflow: hidden;
+  height: 100%;
+}
+.table-wrap {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.table-wrap .ant-table-wrapper,
+.table-wrap .ant-spin-nested-loading,
+.table-wrap .ant-spin-container,
+.table-wrap .ant-table,
+.table-wrap .ant-table-container {
+  height: 100%;
+}
+.table-wrap .ant-table-container {
+  display: flex;
+  flex-direction: column;
+}
+.table-wrap .ant-table-header {
+  flex-shrink: 0;
+}
+.table-wrap .ant-table-body {
+  flex: 1 1 0 !important;
+  overflow: auto !important;
+  max-height: none !important;
+}
+.ops {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  white-space: nowrap;
+  gap: 4px;
+}
+.ops .ant-btn {
+  margin: 0;
+  padding: 0 2px;
+}
+.muted {
+  color: #c0c4cc;
+}
+.icon-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.name-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.menu-icon {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: #909399;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.toggle:hover {
+  color: #409eff;
+}
+.toggle-placeholder {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+.icon-placeholder {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+.name-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.menu-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.menu-form .fi {
+  display: flex;
+  align-items: flex-start;
+}
+.menu-form .fi > label {
+  width: 100px;
+  flex-shrink: 0;
+  padding-top: 5px;
+  text-align: right;
+  padding-right: 12px;
+  color: #606266;
+}
+.menu-form .fi > label .req {
+  color: #f56c6c;
+  margin-left: 4px;
+}
+.menu-form .fi > .ant-input,
+.menu-form .fi > .ant-input-number,
+.menu-form .fi > .ant-select {
+  flex: 1;
+  min-width: 0;
+}
+.table-wrap .menu-row.lv-0 > td {
+  background: #f5f7fa;
+}
+.table-wrap .menu-row.lv-0 .name-text {
+  font-weight: 600;
+  color: #303133;
+}
+.table-wrap .menu-row.lv-1 > td {
+  background: #fff;
+}
+.table-wrap .menu-row.lv-1 .name-text {
+  color: #303133;
+}
+.table-wrap .menu-row.lv-2 > td {
+  background: #fafafa;
+}
+.table-wrap .menu-row.lv-2 .name-text {
+  color: #606266;
+}
+.table-wrap .menu-row.lv-3 > td,
+.table-wrap .menu-row.lv-4 > td {
+  background: #fcfcfc;
+}
+.table-wrap .menu-row.lv-3 .name-text,
+.table-wrap .menu-row.lv-4 .name-text {
+  color: #909399;
+}

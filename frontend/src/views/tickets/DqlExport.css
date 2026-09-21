@@ -1,0 +1,154 @@
+/* DQL 工单：对齐 DDL 左右分栏 */
+.dql-page {
+  background: #fafafa;
+}
+
+.dql-split-form {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+  height: 100%;
+  overflow: hidden;
+  gap: 16px;
+}
+
+.dql-split-form.order-split {
+  flex-direction: row;
+}
+
+.dql-split-form > .order-aside {
+  overflow-y: auto;
+}
+
+.dql-page .order-aside .ant-form-item {
+  max-width: var(--order-field-w);
+}
+
+.dql-page .warn-box {
+  margin: 4px 0 10px;
+  padding: 8px 10px 0;
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+  border-radius: 4px;
+  flex-shrink: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.dql-page .warn-box .ant-form-item {
+  max-width: 100%;
+}
+
+.dql-page .warn-rules {
+  border-bottom: 1px solid #fcd34d;
+  margin-bottom: 8px;
+}
+
+.dql-page .warn-rules p {
+  margin: 0 0 6px;
+  color: #a16207;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.dql-page .warn-rules b {
+  color: #854d0e;
+  font-weight: 600;
+}
+
+.dql-page .warn-strong {
+  color: #713f12 !important;
+  font-weight: 600;
+}
+
+.dql-page .mask-line {
+  margin: 0 0 6px;
+  padding: 6px 8px;
+  background: #f3f0d8;
+  color: #a16207;
+  font-size: 12px;
+  word-break: break-word;
+}
+
+.dql-page .mask-chip {
+  display: inline-block;
+  margin: 4px 0 0 4px;
+  padding: 2px 8px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  color: #374151;
+  font-size: 12px;
+}
+
+.dql-page .muted {
+  color: #9ca3af;
+}
+
+.dql-page .form-extra {
+  color: #9ca3af;
+  font-size: 12px;
+  line-height: 1.4;
+  margin-top: 4px;
+}
+
+.dql-page .type-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dql-main-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #111827;
+  margin-bottom: 4px;
+  flex-shrink: 0;
+}
+
+.dql-sql-hint {
+  margin: 0 0 12px;
+  color: #9ca3af;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.dql-page .order-main {
+  overflow: hidden;
+}
+
+.dql-sql-item {
+  flex: 1 1 0;
+  min-height: 0;
+  margin-bottom: 0 !important;
+  max-width: none !important;
+  width: 100%;
+}
+
+.dql-sql-item .ant-form-item-row,
+.dql-sql-item .ant-form-item-control,
+.dql-sql-item .ant-form-item-control-input,
+.dql-sql-item .ant-form-item-control-input-content {
+  height: 100%;
+  min-height: 0;
+}
+
+.dql-sql-item .ant-form-item-control-input-content {
+  display: flex;
+  flex-direction: column;
+}
+
+.dql-sql-editor {
+  flex: 1 1 0 !important;
+  min-height: 240px !important;
+  height: 100% !important;
+  resize: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.dql-sql-editor.ant-input {
+  height: 100% !important;
+}

@@ -1,0 +1,1195 @@
+package handler
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/gin-gonic/gin"
+
+	"auto-dba/internal/archive"
+	"auto-dba/internal/cdc"
+	"auto-dba/internal/dbmig"
+	"auto-dba/internal/flashback"
+	"auto-dba/internal/goinception"
+	"auto-dba/internal/middleware"
+	"auto-dba/internal/rediscmd"
+	"auto-dba/internal/redisquery"
+	"auto-dba/internal/secret"
+	"auto-dba/internal/sqlcheck"
+	"auto-dba/internal/store"
+	"auto-dba/internal/ticketexec"
+)
+
+type TicketHandler struct {
+	Store     *store.DB
+	Secret    string
+	Flashback *flashback.FlashbackImpl
+	Migration *dbmig.Engine
+	Archive   *archive.Engine
+	CDC       *cdc.Orchestrator
+}
+
+type ticketCheckReq struct {
+	SQLContent string `json:"sql_content"`
+	Type       string `json:"type"`
+	DBType     string `json:"db_type"`
+	InstanceID string `json:"instance_id"`
+	DBName     string `json:"db_name"`
+}
+
+type ticketSubmitReq struct {
+	InstanceID    string `json:"instance_id"`
+	DBName        string `json:"db_name"`
+	DatabaseID    string `json:"database_id"`
+	Type          string `json:"type"`
+	SQLContent    string `json:"sql_content"`
+	Description   string `json:"description"`
+	DBType        string `json:"db_type"`
+	AssignedTo    string `json:"assigned_to"`
+	AssignedToA   string `json:"AssignedTo"`
+	Reviewer      string `json:"reviewer"`
+	Approver      string `json:"approver"`
+	NeedRollback  string `json:"need_rollback"`
+	ScheduledAt   string `json:"scheduled_at"`
+	NeedSensitive bool   `json:"need_sensitive_data"`
+	DBAAssigned   string `json:"dba_assigned_to"`
+	SecAssigned   string `json:"security_assigned_to"`
+	RowCount      int    `json:"row_count"`
+}
+
+func (r ticketSubmitReq) reviewer() string {
+	for _, v := range []string{r.AssignedTo, r.AssignedToA, r.Reviewer, r.Approver} {
+		if s := strings.TrimSpace(v); s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+type targetActDeny int
+
+const (
+	targetActAllow targetActDeny = iota
+	targetActDenyNotApprover
+	targetActDenyDBNotRegistered
+	targetActDenyInstanceMissing
+)
+
+func usernameInList(username string, list []string) bool {
+	username = strings.TrimSpace(username)
+	for _, v := range list {
+		if strings.EqualFold(strings.TrimSpace(v), username) {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *TicketHandler) canActOnTarget(instanceID, dbName, username string) (bool, targetActDeny, string, error) {
+	inst, err := h.Store.GetInstance(instanceID)
+	if err != nil {
+		return false, targetActAllow, "", err
+	}
+	if inst == nil {
+		return false, targetActDenyInstanceMissing, "实例未登记，请先在「配置 → 实例」中登记", nil
+	}
+	if strings.TrimSpace(dbName) == "" {
+		if len(inst.Approvers) == 0 || usernameInList(username, inst.Approvers) {
+			return true, targetActAllow, "", nil
+		}
+		return false, targetActDenyNotApprover, "当前用户不在实例审批人名单中", nil
+	}
+	dbEnt, err := h.Store.FindDatabase(instanceID, dbName)
+	if err != nil {
+		return false, targetActAllow, "", err
+	}
+	if dbEnt == nil {
+		return false, targetActDenyDBNotRegistered, "库未登记，请先在「配置 → 已登记库」中登记 " + dbName, nil
+	}
+	if len(dbEnt.Approvers) > 0 {
+		if usernameInList(username, dbEnt.Approvers) {
+			return true, targetActAllow, "", nil
+		}
+		return false, targetActDenyNotApprover, "当前用户不在库级审批人名单中", nil
+	}
+	if len(inst.Approvers) == 0 || usernameInList(username, inst.Approvers) {
+		return true, targetActAllow, "", nil
+	}
+	return false, targetActDenyNotApprover, "当前用户不在实例审批人名单中", nil
+}
+
+func (h *TicketHandler) resolveApprovers(instanceID, dbName string) []string {
+	if dbName != "" {
+		if dbEnt, _ := h.Store.FindDatabase(instanceID, dbName); dbEnt != nil && len(dbEnt.Approvers) > 0 {
+			return dbEnt.Approvers
+		}
+	}
+	if inst, _ := h.Store.GetInstance(instanceID); inst != nil {
+		return inst.Approvers
+	}
+	return nil
+}
+
+func (h *TicketHandler) ListDBTypes(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"data": []string{"mysql", "postgres", "tidb", "starrocks", "clickhouse"}})
+}
+
+func (h *TicketHandler) GetTargets(c *gin.Context) {
+	list, err := h.Store.ListInstances(c.Query("db_type"), c.Query("q"))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": list})
+}
+
+func (h *TicketHandler) ListInstances(c *gin.Context) {
+	h.GetTargets(c)
+}
+
+func (h *TicketHandler) ListInstanceDatabases(c *gin.Context) {
+	list, err := h.Store.ListDatabases(c.Param("instance_id"), c.Query("q"))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	viewer := h.Store.ViewerOf(middleware.Username(c), middleware.Role(c))
+	c.JSON(http.StatusOK, gin.H{"data": store.FilterVisibleDatabases(list, viewer)})
+}
+
+func (h *TicketHandler) GetTargetApprovers(c *gin.Context) {
+	list := h.resolveApprovers(c.Query("instance_id"), c.Query("db_name"))
+	users, _ := h.Store.ListUsers()
+	type item struct {
+		Type string `json:"type"`
+		Name string `json:"name"`
+	}
+	out := []item{}
+	seen := map[string]bool{}
+	for _, name := range list {
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, item{Type: "user", Name: name})
+	}
+	if len(out) == 0 {
+		if def, _ := h.Store.GetGlobalArg("sync_default_approver"); def != "" {
+			out = append(out, item{Type: "user", Name: def})
+		}
+		for _, u := range users {
+			if !seen[u.Username] {
+				out = append(out, item{Type: "user", Name: u.Username})
+			}
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"data": out})
+}
+
+func (h *TicketHandler) CheckSQL(c *gin.Context) {
+	var req ticketCheckReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, h.checkTicketSQL(req.SQLContent, req.Type, req.DBType, req.InstanceID, req.DBName))
+}
+
+func (h *TicketHandler) resolveReviewEngine(dbType, instanceID string) string {
+	if e := store.NormalizeReviewEngine(dbType); e != "" {
+		return e
+	}
+	instanceID = strings.TrimSpace(instanceID)
+	if instanceID == "" {
+		return ""
+	}
+	inst, err := h.Store.GetInstance(instanceID)
+	if err != nil || inst == nil {
+		return ""
+	}
+	return store.NormalizeReviewEngine(inst.DBType)
+}
+
+func toCheckRules(list []store.ReviewRule) []sqlcheck.Rule {
+	out := make([]sqlcheck.Rule, 0, len(list))
+	for _, it := range list {
+		out = append(out, sqlcheck.Rule{Name: it.Name, Value: it.Value, Label: it.Label})
+	}
+	return out
+}
+
+func (h *TicketHandler) loadReviewRules(engine string) []sqlcheck.Rule {
+	if engine == "" || h == nil || h.Store == nil {
+		return nil
+	}
+	list, err := h.Store.ListReviewRules(engine)
+	if err != nil {
+		return nil
+	}
+	return toCheckRules(list)
+}
+
+func (h *TicketHandler) checkTicketSQL(sqlContent, issueType, dbType, instanceID, dbName string) sqlcheck.Result {
+	engine := h.resolveReviewEngine(dbType, instanceID)
+	issueType = strings.ToLower(strings.TrimSpace(issueType))
+	if engine == "mysql" && (issueType == store.IssueTypeDDL || issueType == store.IssueTypeDML) {
+		if res, used := h.checkViaGoInception(sqlContent, instanceID, dbName); used {
+			return res
+		}
+	}
+	rules := h.loadReviewRules(engine)
+	if len(rules) == 0 {
+		rules = sqlcheck.LegacyRules(
+			h.Store.BoolArg("ddl_forbid_drop_database", true),
+			h.Store.BoolArg("dml_require_where", true),
+		)
+	}
+	return sqlcheck.CheckTicketWithRules(sqlContent, issueType, engine, rules)
+}
+
+func applyCreateDBReview(h *TicketHandler, sqlContent, dbType, instanceID string) sqlcheck.Result {
+	engine := ""
+	if h != nil {
+		engine = h.resolveReviewEngine(dbType, instanceID)
+	} else {
+		engine = store.NormalizeReviewEngine(dbType)
+	}
+	var rules []sqlcheck.Rule
+	if h != nil {
+		rules = h.loadReviewRules(engine)
+	}
+	return sqlcheck.CheckCreateDBWithRules(sqlContent, engine, rules)
+}
+
+func (h *TicketHandler) checkViaGoInception(sqlContent, instanceID, dbName string) (sqlcheck.Result, bool) {
+	cfg, err := h.Store.GetGoInceptionSettings(h.Secret)
+	if err != nil || cfg == nil || !cfg.Ready() {
+		return sqlcheck.Result{}, false
+	}
+	instanceID = strings.TrimSpace(instanceID)
+	if instanceID == "" {
+		return giCheckFail("goInception 需要先选择实例"), true
+	}
+	inst, err := h.Store.GetInstance(instanceID)
+	if err != nil || inst == nil {
+		return giCheckFail("实例不存在"), true
+	}
+	host := strings.TrimSpace(inst.Host)
+	if host == "" {
+		host = strings.TrimSpace(inst.DomainName)
+	}
+	if host == "" {
+		return giCheckFail("实例 host 为空"), true
+	}
+	password := ""
+	if strings.TrimSpace(inst.Password) != "" {
+		plain, decErr := secret.Decrypt(h.Secret, inst.Password)
+		if decErr != nil {
+			return giCheckFail("解密实例密码失败: " + decErr.Error()), true
+		}
+		password = plain
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	res, err := goinception.Audit(ctx, goinception.Config{
+		Host:     cfg.Host,
+		Port:     cfg.Port,
+		User:     cfg.User,
+		Password: cfg.Password,
+	}, sqlContent, host, inst.Port, inst.Username, password, dbName)
+	if err != nil {
+		return giCheckFail(err.Error()), true
+	}
+	if res.OK {
+		return sqlcheck.Result{
+			OK: true,
+			Statements: []sqlcheck.StatementRow{{
+				Stage: "Audit completed", ErrorLevel: "INFO", Message: "goInception 审核通过", SQL: sqlContent, RuleID: "goInception",
+			}},
+		}, true
+	}
+	out := sqlcheck.Result{OK: false}
+	for _, e := range res.Errors {
+		msg := strings.TrimSpace(e.Message)
+		if msg == "" {
+			msg = "审核未通过"
+		}
+		out.Statements = append(out.Statements, sqlcheck.StatementRow{
+			Stage: "goInception", ErrorLevel: "ERROR", Message: msg, SQL: e.SQL, RuleID: e.RuleID,
+		})
+		out.Errors = append(out.Errors, map[string]any{"rule_id": e.RuleID, "message": msg, "sql": e.SQL})
+	}
+	if len(out.Errors) == 0 {
+		out.Statements = append(out.Statements, sqlcheck.StatementRow{
+			Stage: "goInception", ErrorLevel: "ERROR", Message: "审核未通过", SQL: sqlContent, RuleID: "goInception",
+		})
+		out.Errors = append(out.Errors, map[string]any{"rule_id": "goInception", "message": "审核未通过"})
+	}
+	return out, true
+}
+
+func giCheckFail(msg string) sqlcheck.Result {
+	return sqlcheck.Result{
+		OK: false,
+		Statements: []sqlcheck.StatementRow{{
+			Stage: "goInception", ErrorLevel: "ERROR", Message: msg, RuleID: "goInception",
+		}},
+		Errors: []map[string]any{{"rule_id": "goInception", "message": msg}},
+	}
+}
+
+func (h *TicketHandler) Submit(c *gin.Context) {
+	var req ticketSubmitReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	req.Type = strings.ToLower(strings.TrimSpace(req.Type))
+	if !store.ValidIssueType(req.Type) {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "不支持的工单类型: " + req.Type})
+		return
+	}
+	username := middleware.Username(c)
+	if req.Type == store.IssueTypeDQL {
+		if err := h.prepareDQLSubmit(c, &req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+			return
+		}
+	} else if req.Type == store.IssueTypeDDL {
+		ids := ddlDataSourceIDs(req.NeedRollback, req.InstanceID)
+		if len(ids) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "请选择数据源实例"})
+			return
+		}
+		for _, id := range ids {
+			ok, _, msg, err := h.canActOnTarget(id, req.DBName, username)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+				return
+			}
+			if !ok {
+				c.JSON(http.StatusBadRequest, gin.H{"message": h.decorateTargetDeny(id, msg)})
+				return
+			}
+		}
+	} else {
+		ok, _, msg, err := h.canActOnTarget(req.InstanceID, req.DBName, username)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+			return
+		}
+		if !ok {
+			c.JSON(http.StatusBadRequest, gin.H{"message": msg})
+			return
+		}
+	}
+	reviewer := req.reviewer()
+	if reviewer == "" {
+		reviewer, _ = h.Store.GetGlobalArg("sync_default_approver")
+	}
+	if reviewer == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "审批人必填（assigned_to），或在全局参数配置 sync_default_approver"})
+		return
+	}
+	approvers := h.resolveApprovers(req.InstanceID, req.DBName)
+	if len(approvers) > 0 && !usernameInList(reviewer, approvers) {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "审核人须在目标库/实例 approvers 列表中"})
+		return
+	}
+	res := h.checkTicketSQL(req.SQLContent, req.Type, req.DBType, req.InstanceID, req.DBName)
+	if !res.OK {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "SQL 校验未通过", "details": res})
+		return
+	}
+	if req.Type == store.IssueTypeDQL && req.NeedRollback == "" {
+		extra, _ := json.Marshal(map[string]any{
+			"need_sensitive_data":  req.NeedSensitive,
+			"dba_assigned_to":      strings.TrimSpace(req.DBAAssigned),
+			"security_assigned_to": strings.TrimSpace(req.SecAssigned),
+			"row_count":            req.RowCount,
+		})
+		req.NeedRollback = string(extra)
+	}
+	issue := &store.Issue{
+		IssueType:    req.Type,
+		Type:         req.Type,
+		InstanceID:   req.InstanceID,
+		DatabaseID:   req.DatabaseID,
+		DBName:       req.DBName,
+		SQLContent:   req.SQLContent,
+		Description:  req.Description,
+		Status:       store.StatusPending,
+		Submitter:    username,
+		AssignedTo:   reviewer,
+		NeedRollback: req.NeedRollback,
+		ScheduledAt:  req.ScheduledAt,
+	}
+	if err := h.Store.CreateIssue(issue); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	NotifyIssueCreatedAsync(h.Store, h.Secret, issue)
+	c.JSON(http.StatusOK, gin.H{"data": issue})
+}
+
+func (h *TicketHandler) prepareDQLSubmit(c *gin.Context, req *ticketSubmitReq) error {
+	if strings.TrimSpace(req.SQLContent) == "" {
+		return errors.New("SQL语句不能为空")
+	}
+	dba := strings.TrimSpace(req.DBAAssigned)
+	sec := strings.TrimSpace(req.SecAssigned)
+	if (dba == "") != (sec == "") {
+		return errors.New("请同步设置 DBA审批人 和 安全审批人")
+	}
+	if req.NeedSensitive && (dba == "" || sec == "") {
+		return errors.New("开启原文导出敏感字段需设置DBA审批人和安全审批人")
+	}
+	if req.RowCount > 500 && (dba == "" || sec == "") {
+		return errors.New("导出数据超过500条需设置DBA审批人和安全审批人")
+	}
+	var rec *store.Database
+	if strings.TrimSpace(req.DatabaseID) != "" {
+		it, err := h.Store.GetDatabase(req.DatabaseID)
+		if err != nil {
+			return err
+		}
+		rec = it
+	}
+	if rec == nil && req.InstanceID != "" && req.DBName != "" {
+		it, err := h.Store.FindDatabase(req.InstanceID, req.DBName)
+		if err != nil {
+			return err
+		}
+		rec = it
+	}
+	if rec == nil {
+		return errors.New("库未登记，请先在「配置 → 已登记库」中登记")
+	}
+	viewer := h.Store.ViewerOf(middleware.Username(c), middleware.Role(c))
+	if !rec.VisibleTo(viewer) {
+		return errors.New("无权限访问该库")
+	}
+	req.DatabaseID = rec.ID
+	req.InstanceID = rec.InstanceID
+	req.DBName = rec.DBName
+	return nil
+}
+
+func (h *TicketHandler) List(c *gin.Context) {
+	role := middleware.Role(c)
+	list, err := h.Store.ListIssues(c.Query("type"), c.Query("status"), c.Query("q"), middleware.Username(c), middleware.IsPrivileged(role))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	if list == nil {
+		list = []store.Issue{}
+	}
+	c.JSON(http.StatusOK, gin.H{"data": list})
+}
+
+func (h *TicketHandler) GetDetail(c *gin.Context) {
+	it, err := h.Store.GetIssue(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	if it == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "工单不存在"})
+		return
+	}
+	it = h.maybeFinishApprovedCreateDB(c.Request.Context(), it)
+	c.JSON(http.StatusOK, gin.H{"data": it})
+}
+
+func (h *TicketHandler) Approve(c *gin.Context) {
+	it, err := h.Store.GetIssue(c.Param("id"))
+	if err != nil || it == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "工单不存在"})
+		return
+	}
+	if it.Status != store.StatusPending {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "仅待审批工单可批准"})
+		return
+	}
+	user := middleware.Username(c)
+	if it.AssignedTo != "" && !strings.EqualFold(it.AssignedTo, user) && !middleware.IsPrivileged(middleware.Role(c)) {
+		c.JSON(http.StatusForbidden, gin.H{"message": "仅指定审批人或管理员可批准"})
+		return
+	}
+	if err := h.Store.UpdateIssueStatus(it.ID, store.StatusApproved, ""); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	it.Status = store.StatusApproved
+	if err := h.syncArchiveAfterIssue(it, store.StatusApproved); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "工单已通过，但同步归档任务失败: " + err.Error()})
+		return
+	}
+	if err := h.syncFlashbackAfterIssue(c.Request.Context(), it, store.StatusApproved); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "工单已通过，但启动闪回任务失败: " + err.Error()})
+		return
+	}
+	if err := h.syncCDCAfterIssue(it, store.StatusApproved); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "工单已通过，但启动 CDC 任务失败: " + err.Error()})
+		return
+	}
+	if err := h.syncMigrationAfterIssue(it, store.StatusApproved); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "工单已通过，但启动迁移任务失败: " + err.Error()})
+		return
+	}
+	if ticketexec.ShouldAutoRun(it.IssueType) && !scheduledInFuture(it.ScheduledAt) {
+		if err := h.executeTicket(c.Request.Context(), it); err != nil {
+			c.JSON(http.StatusOK, gin.H{"data": it, "message": "已通过，自动执行失败: " + err.Error()})
+			return
+		}
+	}
+	if err := h.finishCreateDBAfterExec(c.Request.Context(), it); err != nil {
+		c.JSON(http.StatusOK, gin.H{"data": it, "message": "已通过并执行建库，但写入账号失败: " + err.Error()})
+		return
+	}
+	if latest, err := h.Store.GetIssue(it.ID); err == nil && latest != nil {
+		it = latest
+	}
+	c.JSON(http.StatusOK, gin.H{"data": it})
+}
+
+func (h *TicketHandler) Reject(c *gin.Context) {
+	var req struct {
+		Reason string `json:"reason"`
+	}
+	_ = c.ShouldBindJSON(&req)
+	it, err := h.Store.GetIssue(c.Param("id"))
+	if err != nil || it == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "工单不存在"})
+		return
+	}
+	if err := h.Store.UpdateIssueStatus(it.ID, store.StatusRejected, req.Reason); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	_ = h.syncArchiveAfterIssue(it, store.StatusRejected)
+	_ = h.syncFlashbackAfterIssue(c.Request.Context(), it, store.StatusRejected)
+	_ = h.syncCDCAfterIssue(it, store.StatusRejected)
+	_ = h.syncMigrationAfterIssue(it, store.StatusRejected)
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func (h *TicketHandler) Cancel(c *gin.Context) {
+	it, err := h.Store.GetIssue(c.Param("id"))
+	if err != nil || it == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "工单不存在"})
+		return
+	}
+	if it.Submitter != middleware.Username(c) && !middleware.IsPrivileged(middleware.Role(c)) {
+		c.JSON(http.StatusForbidden, gin.H{"message": "仅提交人或管理员可撤销"})
+		return
+	}
+	if err := h.cancelIssue(c.Request.Context(), it, ""); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func (h *TicketHandler) cancelIssue(ctx context.Context, it *store.Issue, reason string) error {
+	if h == nil || h.Store == nil || it == nil {
+		return nil
+	}
+	if err := h.Store.UpdateIssueStatus(it.ID, store.StatusCanceled, reason); err != nil {
+		return err
+	}
+	_ = h.syncArchiveAfterIssue(it, store.StatusCanceled)
+	_ = h.syncFlashbackAfterIssue(ctx, it, store.StatusCanceled)
+	_ = h.syncCDCAfterIssue(it, store.StatusCanceled)
+	_ = h.syncMigrationAfterIssue(it, store.StatusCanceled)
+	return nil
+}
+
+func (h *TicketHandler) Execute(c *gin.Context) {
+	it, err := h.Store.GetIssue(c.Param("id"))
+	if err != nil || it == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "工单不存在"})
+		return
+	}
+	if !ticketexec.CanRetry(it.Status) {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "仅已通过或执行失败的工单可执行"})
+		return
+	}
+	if it.IssueType == store.IssueTypeFlashback {
+		if err := h.syncFlashbackAfterIssue(c.Request.Context(), it, store.StatusApproved); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true, "message": "已触发闪回执行"})
+		return
+	}
+	if it.IssueType == store.IssueTypeCDC {
+		if err := h.syncCDCAfterIssue(it, store.StatusApproved); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true, "message": "已触发 CDC 执行"})
+		return
+	}
+	if it.IssueType == store.IssueTypeMigration {
+		if err := h.syncMigrationAfterIssue(it, store.StatusApproved); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true, "message": "已触发数据迁移执行"})
+		return
+	}
+	if !ticketexec.ShouldAutoRun(it.IssueType) {
+		if err := h.Store.UpdateIssueStatus(it.ID, store.StatusExecuted, ""); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true, "message": "已标记执行"})
+		return
+	}
+	if err := h.executeTicket(c.Request.Context(), it); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error(), "data": it})
+		return
+	}
+	if latest, err := h.Store.GetIssue(it.ID); err == nil && latest != nil {
+		it = latest
+	}
+	if err := h.finishCreateDBAfterExec(c.Request.Context(), it); err != nil {
+		c.JSON(http.StatusOK, gin.H{"ok": it.Status == store.StatusExecuted, "data": it, "message": "建库已执行，但写入账号失败: " + err.Error()})
+		return
+	}
+	if latest, err := h.Store.GetIssue(it.ID); err == nil && latest != nil {
+		it = latest
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": it.Status == store.StatusExecuted, "data": it})
+}
+
+func (h *TicketHandler) syncArchiveAfterIssue(it *store.Issue, issueStatus string) error {
+	if it == nil || it.IssueType != store.IssueTypeArchive {
+		return nil
+	}
+	t, err := h.Store.GetArchiveByIssueID(it.ID)
+	if err != nil {
+		return err
+	}
+	if t == nil {
+		return nil
+	}
+	switch issueStatus {
+	case store.StatusRejected:
+		return h.Store.UpdateArchiveState(t.ID, store.StatusRejected, store.StatusRejected)
+	case store.StatusCanceled:
+		return h.Store.UpdateArchiveState(t.ID, store.StatusCanceled, store.StatusCanceled)
+	case store.StatusApproved:
+		if store.ArchiveRunMode(t) == "scheduled" {
+			return h.Store.UpdateArchiveState(t.ID, "scheduled", store.StatusApproved)
+		}
+		if err := h.Store.UpdateArchiveState(t.ID, store.StatusApproved, store.StatusApproved); err != nil {
+			return err
+		}
+		if h.Archive != nil {
+			return h.Archive.Start(t.ID)
+		}
+		return nil
+	default:
+		return nil
+	}
+}
+
+func (h *TicketHandler) fbEngine() *flashback.FlashbackImpl {
+	if h != nil && h.Flashback != nil {
+		return h.Flashback
+	}
+	return flashback.New()
+}
+
+func (h *TicketHandler) syncFlashbackAfterIssue(ctx context.Context, it *store.Issue, issueStatus string) error {
+	if it == nil || it.IssueType != store.IssueTypeFlashback {
+		return nil
+	}
+	return h.fbEngine().SyncAfterIssue(ctx, it.ID, issueStatus)
+}
+
+func (h *TicketHandler) syncCDCAfterIssue(it *store.Issue, issueStatus string) error {
+	if it == nil || it.IssueType != store.IssueTypeCDC {
+		return nil
+	}
+	list, err := h.Store.ListCDCByIssueID(it.ID)
+	if err != nil {
+		return err
+	}
+	if len(list) == 0 {
+		return nil
+	}
+	var last error
+	for i := range list {
+		t := &list[i]
+		switch issueStatus {
+		case store.StatusRejected:
+			if err := h.Store.UpdateCDCStatus(t.ID, store.StatusRejected, store.StatusRejected); err != nil {
+				last = err
+			}
+		case store.StatusCanceled:
+			if err := h.Store.UpdateCDCStatus(t.ID, store.StatusCanceled, store.StatusCanceled); err != nil {
+				last = err
+			}
+		case store.StatusApproved:
+			next := t.Status
+			if next == store.StatusPending || next == store.StatusRejected || next == store.StatusCanceled {
+				next = store.StatusInit
+				if t.TaskType == "add_table" || t.TaskType == "alter_schema" || t.TaskType == "remove_table" || t.TaskType == "delete_task" {
+					next = store.StatusRunning
+				}
+			}
+			if err := h.Store.UpdateCDCStatus(t.ID, next, store.StatusApproved); err != nil {
+				last = err
+				continue
+			}
+			if h.CDC != nil && (t.TaskType == "init" || t.TaskType == "add_table" || t.TaskType == "alter_schema" || t.TaskType == "remove_table" || t.TaskType == "delete_task") {
+				_ = h.Store.InsertCDCLog(&store.CDCSyncLog{
+					TaskID: t.ID, Level: "INFO", Step: "orchestrate",
+					Message: "approval passed, start execution",
+				})
+				ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+				_ = h.CDC.Apply(ctx, t.ID, "")
+				cancel()
+			}
+		}
+	}
+	return last
+}
+
+func (h *TicketHandler) migEngine() *dbmig.Engine {
+	if h != nil && h.Migration != nil {
+		return h.Migration
+	}
+	if h == nil {
+		return nil
+	}
+	return dbmig.New(h.Store, h.Secret)
+}
+
+func (h *TicketHandler) syncMigrationAfterIssue(it *store.Issue, issueStatus string) error {
+	if it == nil || it.IssueType != store.IssueTypeMigration {
+		return nil
+	}
+	t, err := h.Store.GetMigrationByIssueID(it.ID)
+	if err != nil {
+		return err
+	}
+	if t == nil {
+		return nil
+	}
+	switch issueStatus {
+	case store.StatusRejected:
+		t.ApprovalStatus = store.StatusRejected
+		t.Status = store.StatusCanceled
+		t.ErrorMessage = "审批已驳回"
+		_ = h.Store.AddMigrationLog(t.ID, "WARN", "审批已驳回")
+		return h.Store.UpdateMigration(t)
+	case store.StatusCanceled:
+		t.ApprovalStatus = store.StatusCanceled
+		t.Status = store.StatusCanceled
+		t.ErrorMessage = "审批已撤销"
+		_ = h.Store.AddMigrationLog(t.ID, "WARN", "审批已撤销")
+		return h.Store.UpdateMigration(t)
+	case store.StatusApproved:
+		t.ApprovalStatus = store.StatusApproved
+		t.ApprovedBy = it.AssignedTo
+		if t.StartMode == "scheduled" {
+			t.Status = store.StatusScheduled
+			if err := h.Store.UpdateMigration(t); err != nil {
+				return err
+			}
+			_ = h.Store.AddMigrationLog(t.ID, "INFO", "审批已通过，等待定时启动")
+			return nil
+		}
+		if err := h.Store.UpdateMigration(t); err != nil {
+			return err
+		}
+		_ = h.Store.AddMigrationLog(t.ID, "INFO", "审批已通过，开始执行")
+		eng := h.migEngine()
+		if eng == nil {
+			return nil
+		}
+		return eng.Start(t.ID)
+	default:
+		return nil
+	}
+}
+
+func (h *TicketHandler) executeTicket(ctx context.Context, it *store.Issue) error {
+	if it == nil {
+		return errors.New("工单不存在")
+	}
+	if it.IssueType == store.IssueTypeCreateDB {
+		return h.executeCreateDBTicket(ctx, it)
+	}
+	if it.IssueType == store.IssueTypeDDL {
+		return h.executeDDLTicket(ctx, it)
+	}
+	if it.IssueType == store.IssueTypeRedis {
+		return h.executeRedisTicket(ctx, it)
+	}
+	inst, err := h.Store.GetInstance(it.InstanceID)
+	if err != nil {
+		return err
+	}
+	if inst == nil {
+		res := &ticketexec.Result{Success: false, Message: "工单实例不存在"}
+		return h.persistExec(it, res)
+	}
+	check := h.checkTicketSQL(it.SQLContent, it.IssueType, inst.DBType, it.InstanceID, it.DBName)
+	if !check.OK {
+		return h.persistExec(it, reviewGateResult(check))
+	}
+	t, err := h.execTarget(inst, it.DBName)
+	if err != nil {
+		res := &ticketexec.Result{Success: false, Message: err.Error()}
+		return h.persistExec(it, res)
+	}
+	res := ticketexec.Run(ctx, it.IssueType, it.SQLContent, t)
+	return h.persistExec(it, res)
+}
+
+// ddlDataSourceIDs 从 need_rollback JSON 解析多选实例；空则回退到主 instance_id。
+func ddlDataSourceIDs(needRollback, fallbackInstanceID string) []string {
+	var ids []string
+	raw := strings.TrimSpace(needRollback)
+	if raw != "" {
+		var extra struct {
+			DataSourceIDs []string `json:"data_source_ids"`
+		}
+		if json.Unmarshal([]byte(raw), &extra) == nil {
+			ids = extra.DataSourceIDs
+		}
+	}
+	out := uniqueTrimmedIDs(ids)
+	if len(out) == 0 {
+		fb := strings.TrimSpace(fallbackInstanceID)
+		if fb != "" {
+			return []string{fb}
+		}
+		return nil
+	}
+	return out
+}
+
+func uniqueTrimmedIDs(ids []string) []string {
+	seen := map[string]struct{}{}
+	var out []string
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
+
+func (h *TicketHandler) decorateTargetDeny(instanceID, msg string) string {
+	msg = strings.TrimSpace(msg)
+	if msg == "" {
+		msg = "目标校验失败"
+	}
+	inst, err := h.Store.GetInstance(instanceID)
+	if err != nil || inst == nil {
+		return msg + "（实例 " + instanceID + "）"
+	}
+	name := strings.TrimSpace(inst.Name)
+	if name == "" {
+		name = instanceID
+	}
+	return msg + "（实例 " + name + "）"
+}
+
+func (h *TicketHandler) executeDDLTicket(ctx context.Context, it *store.Issue) error {
+	ids := ddlDataSourceIDs(it.NeedRollback, it.InstanceID)
+	if len(ids) == 0 {
+		return h.persistExec(it, &ticketexec.Result{Success: false, Message: "工单未指定实例"})
+	}
+	merged := &ticketexec.Result{StartedAt: time.Now().UTC().Format(time.RFC3339), Success: true}
+	for _, id := range ids {
+		inst, err := h.Store.GetInstance(id)
+		if err != nil {
+			return err
+		}
+		if inst == nil {
+			merged.Success = false
+			merged.Message = "实例不存在: " + id
+			break
+		}
+		// 执行前再确认库仍已登记（与提交硬约束一致）
+		dbEnt, err := h.Store.FindDatabase(id, it.DBName)
+		if err != nil {
+			return err
+		}
+		if dbEnt == nil {
+			merged.Success = false
+			merged.Message = h.decorateTargetDeny(id, "库未登记，请先在「配置 → 已登记库」中登记 "+it.DBName)
+			merged.Records = append(merged.Records, ticketexec.Record{
+				InstanceID: id, InstanceName: inst.Name, Host: inst.Host, DB: it.DBName,
+				Status: "failed", ErrorMessage: merged.Message, Order: len(merged.Records) + 1,
+			})
+			break
+		}
+		check := h.checkTicketSQL(it.SQLContent, it.IssueType, inst.DBType, id, it.DBName)
+		if !check.OK {
+			gate := reviewGateResult(check)
+			tagExecRecords(gate, id, inst.Name)
+			mergeExecResult(merged, gate)
+			merged.Success = false
+			if merged.Message == "" && gate != nil {
+				merged.Message = gate.Message
+			}
+			break
+		}
+		t, err := h.execTarget(inst, it.DBName)
+		if err != nil {
+			merged.Success = false
+			merged.Message = err.Error()
+			merged.Records = append(merged.Records, ticketexec.Record{
+				InstanceID: id, InstanceName: inst.Name, Host: inst.Host, DB: it.DBName,
+				Status: "failed", ErrorMessage: err.Error(), Order: len(merged.Records) + 1,
+			})
+			break
+		}
+		res := ticketexec.Run(ctx, it.IssueType, it.SQLContent, t)
+		tagExecRecords(res, id, inst.Name)
+		mergeExecResult(merged, res)
+		if res == nil || !res.Success {
+			if merged.Message == "" && res != nil {
+				merged.Message = res.Message
+			}
+			merged.Success = false
+			break
+		}
+	}
+	merged.EndedAt = time.Now().UTC().Format(time.RFC3339)
+	if merged.Success && merged.Summary == "" {
+		merged.Summary = "DDL 已在全部目标实例执行"
+	}
+	return h.persistExec(it, merged)
+}
+
+func (h *TicketHandler) executeRedisTicket(ctx context.Context, it *store.Issue) error {
+	inst, err := h.Store.GetInstance(it.InstanceID)
+	if err != nil {
+		return err
+	}
+	if inst == nil {
+		return h.persistExec(it, &ticketexec.Result{Success: false, Message: "工单实例不存在"})
+	}
+	if !strings.EqualFold(strings.TrimSpace(inst.DBType), "redis") {
+		return h.persistExec(it, &ticketexec.Result{Success: false, Message: "实例类型不是 redis"})
+	}
+	rules, err := h.Store.GetRedisCommandRules()
+	if err != nil {
+		return h.persistExec(it, &ticketexec.Result{Success: false, Message: err.Error()})
+	}
+	cmds, err := rediscmd.ValidCommandsWith(rules, it.SQLContent)
+	if err != nil {
+		return h.persistExec(it, &ticketexec.Result{Success: false, Message: err.Error()})
+	}
+	password := ""
+	if strings.TrimSpace(inst.Password) != "" {
+		plain, decErr := secret.Decrypt(h.Secret, inst.Password)
+		if decErr != nil {
+			return h.persistExec(it, &ticketexec.Result{Success: false, Message: "解密实例密码失败: " + decErr.Error()})
+		}
+		password = plain
+	}
+	host := strings.TrimSpace(inst.Host)
+	if host == "" {
+		host = strings.TrimSpace(inst.DomainName)
+	}
+	opt := redisquery.Options{Username: inst.Username, Password: password}
+	started := time.Now().UTC().Format(time.RFC3339)
+	res := &ticketexec.Result{StartedAt: started, Engine: "redis", Success: true}
+	for i, cmd := range cmds {
+		cmdStart := time.Now().UTC().Format(time.RFC3339)
+		out, execErr := redisquery.ExecuteAllowed(ctx, inst, opt, it.DBName, cmd, rules)
+		cmdEnd := time.Now().UTC().Format(time.RFC3339)
+		rec := ticketexec.Record{
+			InstanceID: inst.ID, InstanceName: inst.Name, Host: host, DB: it.DBName,
+			Port: inst.Port, Username: inst.Username, SQL: cmd,
+			StartedAt: cmdStart, EndedAt: cmdEnd, Order: i + 1,
+		}
+		if execErr != nil {
+			rec.Status = "failed"
+			rec.ErrorMessage = execErr.Error()
+			res.Records = append(res.Records, rec)
+			res.Success = false
+			res.Message = execErr.Error()
+			if len(res.SuccessSQLs) > 0 {
+				res.Summary = fmt.Sprintf("部分执行后失败，已成功 %d/%d 条", len(res.SuccessSQLs), len(cmds))
+			}
+			res.EndedAt = cmdEnd
+			return h.persistExec(it, res)
+		}
+		rec.Status = "success"
+		if out != nil {
+			rec.AffectedRow = int64(out.RowCount)
+		}
+		res.Records = append(res.Records, rec)
+		res.SuccessSQLs = append(res.SuccessSQLs, ticketexec.SuccSQL{
+			Host: host, DB: it.DBName, SQL: cmd, Order: i + 1,
+		})
+	}
+	res.Summary = fmt.Sprintf("成功执行 %d 条 Redis 命令", len(cmds))
+	res.EndedAt = time.Now().UTC().Format(time.RFC3339)
+	return h.persistExec(it, res)
+}
+
+func tagExecRecords(res *ticketexec.Result, instanceID, instanceName string) {
+	if res == nil {
+		return
+	}
+	for i := range res.Records {
+		if strings.TrimSpace(res.Records[i].InstanceID) == "" {
+			res.Records[i].InstanceID = instanceID
+		}
+		if strings.TrimSpace(res.Records[i].InstanceName) == "" {
+			res.Records[i].InstanceName = instanceName
+		}
+	}
+}
+
+func (h *TicketHandler) persistExec(it *store.Issue, res *ticketexec.Result) error {
+	status := store.StatusFailed
+	if res != nil && res.Success {
+		status = store.StatusExecuted
+	}
+	if err := h.Store.UpdateIssueExec(it.ID, status, ticketexec.ToJSON(res)); err != nil {
+		return err
+	}
+	it.Status = status
+	it.ExecuteResult = ticketexec.ToJSON(res)
+	if res != nil {
+		it.Exec = res
+	}
+	return nil
+}
+
+func reviewGateResult(check sqlcheck.Result) *ticketexec.Result {
+	res := &ticketexec.Result{
+		Success:   false,
+		Message:   "执行前审核规则未通过",
+		StartedAt: time.Now().UTC().Format(time.RFC3339),
+		EndedAt:   time.Now().UTC().Format(time.RFC3339),
+	}
+	for _, st := range check.Statements {
+		if !strings.EqualFold(st.ErrorLevel, "ERROR") {
+			continue
+		}
+		res.Records = append(res.Records, ticketexec.Record{
+			SQL:          st.SQL,
+			Status:       "failed",
+			ErrorMessage: st.Message,
+			Order:        len(res.Records) + 1,
+		})
+	}
+	if len(res.Records) == 0 {
+		res.Records = append(res.Records, ticketexec.Record{
+			Status: "failed", ErrorMessage: res.Message, Order: 1,
+		})
+	}
+	return res
+}
+
+func scheduledInFuture(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return false
+	}
+	for _, layout := range []string{time.RFC3339, time.RFC3339Nano, "2006-01-02 15:04:05", "2006-01-02T15:04:05"} {
+		if tm, err := time.ParseInLocation(layout, raw, time.Local); err == nil {
+			return tm.After(time.Now())
+		}
+	}
+	return false
+}
+
+func (h *TicketHandler) Stats(c *gin.Context) {
+	st, err := h.Store.IssueStats()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": st})
+}
+
+func dashboardFilterFromQuery(c *gin.Context, viewer string) store.DashboardFilter {
+	return store.DashboardFilter{
+		Q:         c.Query("q"),
+		IssueType: firstQuery(c, "issue_type", "type"),
+		Status:    c.Query("status"),
+		DBType:    c.Query("db_type"),
+		IDC:       c.Query("idc"),
+		IDCScope:  c.Query("idc_scope"),
+		DateFrom:  c.Query("date_from"),
+		DateTo:    c.Query("date_to"),
+		Viewer:    viewer,
+	}
+}
+
+func firstQuery(c *gin.Context, keys ...string) string {
+	for _, k := range keys {
+		if v := strings.TrimSpace(c.Query(k)); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func (h *TicketHandler) DashboardStats(c *gin.Context) {
+	st, err := h.Store.DashboardStats(dashboardFilterFromQuery(c, middleware.Username(c)))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": st})
+}
+
+func (h *TicketHandler) Todos(c *gin.Context) {
+	page, size := store.ParsePage(c.Query("current"), c.Query("page_size"))
+	list, total, err := h.Store.DashboardTodos(dashboardFilterFromQuery(c, ""), middleware.Username(c), page, size)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	if list == nil {
+		list = []store.DashboardTodo{}
+	}
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"pending_count": total, "list": list, "pagination": gin.H{"total": total, "current": page, "page_size": size}}})
+}
+
+func (h *TicketHandler) Activities(c *gin.Context) {
+	limit := 20
+	if v := strings.TrimSpace(c.Query("limit")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	list, err := h.Store.DashboardActivities(dashboardFilterFromQuery(c, ""), limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	if list == nil {
+		list = []store.DashboardActivity{}
+	}
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"list": list}})
+}

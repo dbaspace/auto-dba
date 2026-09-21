@@ -1,0 +1,249 @@
+/* CdcCreate 专属样式：由旧 CdcCreate.vue <style scoped> 迁移（去掉 Element Plus :deep()） */
+.cdc-create {
+  overflow: auto;
+}
+.cdc-card {
+  margin-bottom: 16px;
+  border-radius: 8px;
+}
+.map-card {
+  min-height: 420px;
+}
+.card-title {
+  font-weight: 500;
+  color: #111827;
+}
+.card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.form-extra {
+  margin-top: 6px;
+  color: #6b7280;
+  font-size: 12px;
+}
+.form-extra.warn {
+  color: #b45309;
+}
+.qmark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-left: 4px;
+  border-radius: 50%;
+  border: 1px solid #d1d5db;
+  color: #9ca3af;
+  font-size: 10px;
+  line-height: 1;
+  cursor: help;
+  vertical-align: middle;
+}
+.label-opt {
+  margin-left: 4px;
+  font-weight: 400;
+}
+.key-opt-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: 8px;
+}
+.key-pop {
+  font-size: 13px;
+  line-height: 1.6;
+  color: #374151;
+}
+.key-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+.dp-block {
+  border-top: 1px dashed #e5e7eb;
+  padding-top: 12px;
+  margin-top: 8px;
+}
+.mono input,
+.mono textarea {
+  font-family: Menlo, Consolas, Monaco, monospace;
+  font-size: 12px;
+}
+.cdc-adv {
+  border: none;
+}
+.infra-title {
+  display: block;
+  font-weight: 600;
+  font-size: 12px;
+  margin: 12px 0 4px;
+  color: #111827;
+}
+.opt-main {
+  font-size: 13px;
+}
+.opt-sub {
+  display: block;
+  color: #9ca3af;
+  font-size: 12px;
+  line-height: 1.5;
+  margin-top: 2px;
+  padding-left: 22px;
+}
+.mode-radios,
+.key-models {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: flex-start;
+  width: 100%;
+}
+.mode-opt,
+.key-opt {
+  width: 100%;
+}
+.mode-opt .ant-radio-wrapper,
+.key-opt .ant-radio-wrapper {
+  align-items: flex-start;
+  height: auto;
+  white-space: normal;
+}
+.warn-text {
+  color: #d97706;
+}
+.ml {
+  margin-left: 8px;
+}
+.src-list {
+  max-height: 420px;
+  overflow: auto;
+  padding: 4px 0;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+}
+.src-row {
+  padding: 6px 12px;
+  border-bottom: 1px solid #f3f4f6;
+}
+.src-row:last-child {
+  border-bottom: 0;
+}
+.src-name {
+  margin-right: 8px;
+}
+.src-members {
+  margin: 4px 0 0 24px;
+}
+.expand-btn {
+  padding: 0 4px;
+}
+.map-item {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  margin-bottom: 10px;
+  background: #fff;
+}
+.map-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+}
+.map-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.map-arrow {
+  color: #9ca3af;
+}
+.map-body {
+  padding: 0 12px 12px;
+}
+.tree-empty {
+  padding: 28px 12px;
+  text-align: center;
+  color: #9ca3af;
+  font-size: 13px;
+}
+.mb-sm {
+  margin-bottom: 6px;
+}
+.tbl-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+.tbl-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 4px 12px;
+  max-height: 320px;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+}
+.col-radios {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+.precheck-box {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+.precheck-box.ok {
+  background: #f0fdf4;
+  color: #166534;
+}
+.precheck-box.bad {
+  background: #fef2f2;
+  color: #991b1b;
+}
+.sql-box textarea {
+  font-family: Menlo, Consolas, Monaco, monospace;
+  font-size: 12px;
+}
+.map-summary {
+  max-height: 260px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.map-summary-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px dashed #f3f4f6;
+}
+.map-summary-row code {
+  font-size: 12px;
+}
+.shard-db-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.alter-map {
+  cursor: pointer;
+}
+.alter-map.active {
+  background: #eff6ff;
+}

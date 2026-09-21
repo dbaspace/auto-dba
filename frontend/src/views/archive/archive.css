@@ -1,0 +1,372 @@
+/* 从 archive/*.vue 的 scoped 样式忠实搬入并聚合，作用域统一到 .archive-shell */
+.archive-shell {
+  box-sizing: border-box;
+  min-height: 100%;
+  height: auto;
+  overflow: auto;
+}
+.archive-shell .gray-page {
+  overflow: auto;
+}
+.archive-shell .mb {
+  margin-bottom: 16px;
+}
+.archive-shell .mb-sm {
+  margin-bottom: 12px;
+}
+
+/* KPI 卡片 */
+.archive-shell .kpi-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: #fff;
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+.archive-shell .kpi-ico {
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  flex-shrink: 0;
+}
+.archive-shell .kpi-num {
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1;
+  color: #111827;
+}
+.archive-shell .kpi-label {
+  color: #6b7280;
+  font-size: 13px;
+  margin-top: 6px;
+}
+
+/* 面板 / 卡片头 */
+.archive-shell .panel {
+  border-radius: 8px;
+}
+.archive-shell .card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.archive-shell .card-title {
+  font-weight: 500;
+  color: #111827;
+}
+.archive-shell .card-extra {
+  display: inline-flex;
+  gap: 4px;
+}
+
+/* 系统健康 */
+.archive-shell .health-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  color: #4b5563;
+  margin: 10px 0;
+}
+.archive-shell .badge {
+  min-width: 22px;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+}
+.archive-shell .badge-warn {
+  background: #fef3c7;
+  color: #b45309;
+}
+.archive-shell .badge-info {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+.archive-shell .health-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+/* 快速开始 */
+.archive-shell .quick-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+.archive-shell .quick-btn {
+  border: 0;
+  background: #f5f5f5;
+  border-radius: 6px;
+  padding: 14px 16px;
+  text-align: left;
+  cursor: pointer;
+  color: #1f2937;
+  font-size: 14px;
+}
+.archive-shell .quick-btn:hover {
+  background: #e5e7eb;
+}
+@media (max-width: 900px) {
+  .archive-shell .quick-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+/* 页头 */
+.archive-shell .page-head {
+  margin-bottom: 16px;
+}
+.archive-shell .page-head.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.archive-shell .page-head h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  color: #111827;
+}
+.archive-shell .page-head p {
+  margin: 6px 0 0;
+  color: #6b7280;
+  font-size: 13px;
+}
+
+/* 工具条 */
+.archive-shell .toolbar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.archive-shell .toolbar.mb {
+  margin-bottom: 16px;
+}
+
+/* 表单包裹 */
+.archive-shell .form-wrap {
+  max-width: 672px;
+}
+.archive-shell .hint {
+  margin-top: 6px;
+  color: #6b7280;
+  font-size: 12px;
+}
+.archive-shell .actions {
+  display: flex;
+  gap: 12px;
+}
+
+/* 任务列表 */
+.archive-shell .name-link {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: #1677ff;
+  cursor: pointer;
+}
+.archive-shell .name-link:hover {
+  text-decoration: underline;
+}
+.archive-shell .muted {
+  color: #9ca3af;
+}
+.archive-shell .ops {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  gap: 4px;
+  white-space: nowrap;
+}
+.archive-shell .ops .ant-btn {
+  margin: 0;
+  padding: 0 4px;
+}
+.archive-shell .pager {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+/* 监控告警规则 */
+.archive-shell .empty {
+  color: #9ca3af;
+  font-size: 13px;
+  padding: 8px 0;
+}
+.archive-shell .rule-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.archive-shell .rule-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+.archive-shell .rule-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.archive-shell .dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.archive-shell .dot-ok {
+  background: #3b82f6;
+}
+.archive-shell .dot-danger {
+  background: #ef4444;
+}
+.archive-shell .rule-title,
+.archive-shell .alert-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #1f2937;
+}
+.archive-shell .rule-ops {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+/* 系统设置 */
+.archive-shell .set-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.archive-shell .set-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 8px;
+  cursor: pointer;
+  border-bottom: 1px solid #f3f4f6;
+  color: #1f2937;
+}
+.archive-shell .set-list li:last-child {
+  border-bottom: 0;
+}
+.archive-shell .set-list li:hover {
+  background: #fafafa;
+}
+.archive-shell .status {
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 4px;
+  padding: 2px 10px;
+}
+.archive-shell .status.ok {
+  background: #f0fdf4;
+  color: #15803d;
+}
+.archive-shell .status.pending {
+  background: #fffbeb;
+  color: #b45309;
+}
+.archive-shell .set-panel {
+  max-width: 896px;
+}
+
+/* 报表 KPI */
+.archive-shell .kpi {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: #fff;
+  border: 1px solid #f0f0f0;
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+/* 脱敏向导 */
+.archive-shell .step-desc {
+  color: #6b7280;
+  font-size: 13px;
+  margin: 0 0 16px;
+}
+
+/* CreateTaskDialog */
+.archive-create-dialog .help-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: #d1d5db;
+  color: #fff;
+  font-size: 10px;
+  cursor: help;
+  vertical-align: middle;
+}
+.archive-create-dialog .script-guide {
+  margin-bottom: 16px;
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: #334155;
+  font-size: 13px;
+}
+.archive-create-dialog .guide-title {
+  font-weight: 600;
+  color: #0f172a;
+}
+.archive-create-dialog .guide-code {
+  margin: 8px 0 0;
+  overflow: auto;
+  border-radius: 6px;
+  background: #fff;
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #1e293b;
+}
+.archive-create-dialog .mono textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+.archive-create-dialog .tip-block {
+  max-width: 360px;
+  line-height: 1.6;
+}
+.archive-create-dialog .tip-block > div + div {
+  margin-top: 6px;
+}
+.archive-create-dialog .ant-modal-body {
+  max-height: 70vh;
+  overflow-y: auto;
+  padding-top: 8px;
+}
+.archive-create-dialog .dialog-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 8px;
+}

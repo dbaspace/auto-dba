@@ -1,0 +1,41 @@
+.type-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.ds-opt {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+}
+.muted {
+  color: #9ca3af;
+  font-size: 12px;
+}
+.extra {
+  color: #9ca3af;
+  font-size: 12px;
+  line-height: 1.4;
+  margin-top: 4px;
+}
+.sql-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: #111827;
+  margin-bottom: 12px;
+  flex-shrink: 0;
+}
+.aside-actions {
+  margin-bottom: 0;
+  margin-top: 8px;
+}
+.lv-error {
+  color: #dc2626;
+}
+.lv-warn {
+  color: #f59e0b;
+}
+.lv-ok {
+  color: #16a34a;
+}

@@ -1,0 +1,446 @@
+/* 从 Flashback.vue / FlashbackCloud.vue 的 scoped 样式忠实搬入 */
+.fb-shell {
+  --bg: #eef2f7;
+  --card: #fff;
+  --ink: #1d2a3a;
+  --muted: #6b7a8d;
+  --line: #e4eaf2;
+  --blue: #2f6fed;
+  --blue-soft: #e8f0fe;
+  --ok: #1f8a4c;
+  --fail: #c0352b;
+  box-sizing: border-box;
+  min-height: 100%;
+  height: auto;
+  overflow: auto;
+  padding: 18px 22px 36px;
+  background: var(--bg);
+  color: var(--ink);
+}
+.fb-shell .card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: 0 10px 28px rgba(30, 58, 110, 0.07);
+  padding: 22px;
+}
+.fb-shell .card h2 {
+  margin: 0 0 6px;
+  font-size: 20px;
+}
+.fb-shell .card h3 {
+  margin: 0 0 12px;
+  font-size: 15px;
+}
+.fb-shell .lead,
+.fb-shell .meta {
+  color: var(--muted);
+  font-size: 13px;
+}
+.fb-shell .toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: end;
+  margin-bottom: 16px;
+}
+.fb-shell .grow {
+  flex: 1;
+}
+.fb-shell .steps {
+  display: flex;
+  gap: 22px;
+  margin: 16px 0 20px;
+}
+.fb-shell .step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+}
+.fb-shell .step b {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: #e8edf5;
+  font-size: 13px;
+}
+.fb-shell .step.on {
+  color: var(--blue);
+}
+.fb-shell .step.on b {
+  background: var(--blue);
+  color: #fff;
+}
+.fb-shell .split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.fb-shell .field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.fb-shell .field label {
+  font-size: 12px;
+  color: var(--muted);
+}
+.fb-shell .addr {
+  background: #f6f8fc;
+  border: 1px dashed #cfd8e6;
+  border-radius: 12px;
+  padding: 12px;
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+.fb-shell .chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.fb-shell .chip {
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 999px;
+  padding: 5px 10px;
+  cursor: pointer;
+  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.fb-shell .chip.on {
+  background: var(--blue-soft);
+  color: var(--blue);
+  border-color: #c5d6fb;
+}
+.fb-shell .chip input {
+  margin: 0;
+}
+.fb-shell .info {
+  background: #eef5ff;
+  border: 1px dashed #b7ccf5;
+  border-radius: 12px;
+  padding: 12px;
+  color: #335285;
+  font-size: 13px;
+}
+.fb-shell .tip {
+  margin-top: 12px;
+  line-height: 1.55;
+}
+.fb-shell .tip strong {
+  display: block;
+  margin-bottom: 6px;
+  color: #1e3a6e;
+}
+.fb-shell .tip p {
+  margin: 0 0 8px;
+}
+.fb-shell .tip pre {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  background: #fff;
+  border: 1px solid #d5e2f7;
+  border-radius: 8px;
+}
+.fb-shell .actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+  align-items: center;
+}
+.fb-shell .checks {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+.fb-shell .check {
+  display: grid;
+  grid-template-columns: 88px 1fr;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  align-items: start;
+}
+.fb-shell .err {
+  color: var(--fail);
+  font-size: 13px;
+  margin-top: 8px;
+}
+.fb-shell .logs {
+  max-height: 340px;
+  overflow: auto;
+  background: #152033;
+  color: #e8eef7;
+  border-radius: 12px;
+  padding: 12px;
+  margin-top: 8px;
+}
+.fb-shell .log-line {
+  margin: 0 0 8px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+.fb-shell .log-line.warn {
+  color: #f0c36a;
+}
+.fb-shell .log-line.error {
+  color: #ff9b8c;
+}
+.fb-shell .meters {
+  display: grid;
+  gap: 12px;
+}
+.fb-shell .track {
+  height: 10px;
+  background: #e8edf5;
+  border-radius: 999px;
+  overflow: hidden;
+}
+.fb-shell .bar {
+  height: 100%;
+  background: linear-gradient(90deg, var(--blue), #7aa4f5);
+}
+.fb-shell .bar.parse {
+  background: linear-gradient(90deg, #1f8a4c, #6ecf93);
+}
+.fb-shell .mono {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 0;
+}
+.fb-shell .empty {
+  padding: 40px 16px;
+  text-align: center;
+  color: var(--muted);
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+}
+.fb-shell .pager {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.fb-shell .badge {
+  display: inline-flex;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: #edf1f6;
+}
+.fb-shell .badge.online {
+  background: #edf1f6;
+}
+.fb-shell .dash {
+  display: grid;
+  gap: 16px;
+}
+.fb-shell .dash-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+}
+.fb-shell .dash-kpi {
+  padding: 18px 20px;
+}
+.fb-shell .dash-kpi h3 {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+.fb-shell .dash-kpi .num {
+  margin: 10px 0 8px;
+  font-size: 32px;
+  font-weight: 700;
+  line-height: 1;
+}
+.fb-shell .dash-kpi .foot {
+  margin: 0;
+  font-size: 13px;
+}
+.fb-shell .dash-kpi .foot.up {
+  color: var(--ok);
+}
+.fb-shell .dash-kpi .foot.down {
+  color: var(--fail);
+}
+.fb-shell .dash-mid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.7fr) minmax(280px, 1fr);
+  gap: 16px;
+}
+.fb-shell .dash-hd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+.fb-shell .dash-hd h3 {
+  margin: 0;
+}
+.fb-shell .dash-bars {
+  display: flex;
+  align-items: stretch;
+  gap: 14px;
+  height: 168px;
+}
+.fb-shell .dash-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 0;
+}
+.fb-shell .dash-col .stack {
+  flex: 1;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+.fb-shell .dash-col .seg {
+  width: 100%;
+  border-radius: 6px 6px 0 0;
+}
+.fb-shell .dash-col .seg.ok {
+  background: #5b8def;
+}
+.fb-shell .dash-col .seg.fail {
+  background: #e36b63;
+}
+.fb-shell .dash-col .lab {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.fb-shell .dash-legend {
+  display: flex;
+  gap: 16px;
+  margin-top: 12px;
+  font-size: 13px;
+  color: #4a5b70;
+}
+.fb-shell .dash-legend i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: 6px;
+}
+.fb-shell .dash-legend .ok {
+  background: #5b8def;
+}
+.fb-shell .dash-legend .fail {
+  background: #e36b63;
+}
+.fb-shell .go-btn {
+  width: 100%;
+}
+.fb-shell .link {
+  color: var(--blue);
+  cursor: pointer;
+}
+@media (max-width: 1100px) {
+  .fb-shell .split,
+  .fb-shell .dash-kpis,
+  .fb-shell .dash-mid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* FlashbackCloud.vue scoped 样式 */
+.fb-cloud {
+  max-width: 960px;
+}
+.fb-cloud .lead {
+  color: #606266;
+  font-size: 13px;
+  line-height: 1.6;
+  margin: 0 0 12px;
+}
+.fb-cloud .mb {
+  margin-bottom: 16px;
+}
+.fb-cloud .checks {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.fb-cloud .check {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 12px;
+  border: 1px solid #f0f0f0;
+  border-radius: 8px;
+  background: #fff;
+}
+.fb-cloud .dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-top: 6px;
+  flex-shrink: 0;
+}
+.fb-cloud .dot.ok {
+  background: #52c41a;
+}
+.fb-cloud .dot.bad {
+  background: #ff4d4f;
+}
+.fb-cloud .mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: #909399;
+  margin-top: 2px;
+  word-break: break-all;
+}
+.fb-cloud .meta {
+  font-size: 12px;
+  color: #8c8c8c;
+  margin-top: 4px;
+}
+.fb-cloud .panel {
+  margin-bottom: 16px;
+}
+.fb-cloud .card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.fb-cloud .grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 16px;
+}
+.fb-cloud .actions {
+  margin-top: 8px;
+}
+.fb-cloud .ops-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.fb-cloud .ops-title h1 {
+  margin: 0;
+  font-size: 20px;
+}
+@media (max-width: 800px) {
+  .fb-cloud .grid {
+    grid-template-columns: 1fr;
+  }
+}

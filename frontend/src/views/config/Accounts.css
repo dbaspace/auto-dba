@@ -1,0 +1,45 @@
+.hint {
+  color: #6b7280;
+  font-size: 13px;
+  margin: 0 0 12px;
+}
+.inst-tabs {
+  flex-shrink: 0;
+}
+.inst-tabs .ant-tabs-nav {
+  margin-bottom: 12px;
+}
+/* Tabs 仅作类型切换，内容区在 Tabs 外，隐藏空 content-holder */
+.inst-tabs .ant-tabs-content-holder {
+  display: none;
+}
+.inst-tabs .ant-tabs-nav-wrap {
+  overflow-x: auto !important;
+  overflow-y: hidden;
+}
+.inst-tabs .ant-tabs-nav-wrap::-webkit-scrollbar {
+  height: 4px;
+}
+.inst-tabs .ant-tabs-nav-wrap::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+  border-radius: 2px;
+}
+.inst-tabs .ant-tabs-nav-operations {
+  display: none;
+}
+.tab-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.pwd-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.pwd {
+  background: #f3f4f6;
+  padding: 2px 8px;
+  border-radius: 4px;
+}

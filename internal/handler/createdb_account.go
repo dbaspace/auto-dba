@@ -1,0 +1,345 @@
+package handler
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"auto-dba/internal/secret"
+	"auto-dba/internal/sqlcheck"
+	"auto-dba/internal/store"
+	"auto-dba/internal/ticketexec"
+)
+
+func createDBInstanceIDs(it *store.Issue) []string {
+	extra := parseCreateDBExtra(it)
+	if extra != nil && len(extra.InstanceIDs) > 0 {
+		return extra.InstanceIDs
+	}
+	if it != nil && strings.TrimSpace(it.InstanceID) != "" {
+		return []string{it.InstanceID}
+	}
+	return nil
+}
+
+func grantPrivileges(perms []string) string {
+	var out []string
+	seen := map[string]bool{}
+	for _, p := range perms {
+		priv := ""
+		switch strings.ToLower(strings.TrimSpace(p)) {
+		case "r", "select":
+			priv = "SELECT"
+		case "c", "insert":
+			priv = "INSERT"
+		case "u", "update":
+			priv = "UPDATE"
+		case "d", "delete":
+			priv = "DELETE"
+		}
+		if priv == "" || seen[priv] {
+			continue
+		}
+		seen[priv] = true
+		out = append(out, priv)
+	}
+	if len(out) == 0 {
+		return "SELECT"
+	}
+	return strings.Join(out, ", ")
+}
+
+func sqlQuoteString(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+}
+
+func pgQuoteIdent(name string) string {
+	return `"` + strings.ReplaceAll(strings.TrimSpace(name), `"`, `""`) + `"`
+}
+
+func buildCreateUserSQL(engine, username, password string) string {
+	user := strings.TrimSpace(username)
+	if user == "" {
+		return ""
+	}
+	if engine == "postgres" {
+		return fmt.Sprintf("CREATE USER %s ENCRYPTED PASSWORD %s", pgQuoteIdent(user), sqlQuoteString(password))
+	}
+	return fmt.Sprintf("CREATE USER %s IDENTIFIED BY %s", user, sqlQuoteString(password))
+}
+
+func buildConnectGrantSQL(engine, username, dbName string) string {
+	user := strings.TrimSpace(username)
+	db := strings.TrimSpace(dbName)
+	if user == "" || db == "" {
+		return ""
+	}
+	if engine == "postgres" {
+		return fmt.Sprintf("GRANT CONNECT ON DATABASE %s TO %s", pgQuoteIdent(db), pgQuoteIdent(user))
+	}
+	return ""
+}
+
+func buildSchemaGrantSQL(engine, username, dbName string, perms []string) string {
+	user := strings.TrimSpace(username)
+	db := strings.TrimSpace(dbName)
+	if user == "" || db == "" {
+		return ""
+	}
+	privs := grantPrivileges(perms)
+	if engine == "postgres" {
+		u := pgQuoteIdent(user)
+		return fmt.Sprintf(
+			"GRANT %s ON ALL TABLES IN SCHEMA public TO %s;\n"+
+				"GRANT USAGE ON SCHEMA public TO %s;\n"+
+				"GRANT CREATE ON SCHEMA public TO %s;\n"+
+				"ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, DELETE, INSERT, UPDATE ON TABLES TO %s;\n"+
+				"GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO %s;\n"+
+				"ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL PRIVILEGES ON SEQUENCES TO %s",
+			privs, u, u, u, u, u, u,
+		)
+	}
+	return fmt.Sprintf("GRANT %s ON DATABASE %s TO %s", privs, db, user)
+}
+
+func alreadyExistsErr(msg string) bool {
+	m := strings.ToLower(msg)
+	return strings.Contains(m, "already exists") ||
+		strings.Contains(m, "duplicate") ||
+		strings.Contains(m, "already exist")
+}
+
+func execOKOrExists(res *ticketexec.Result) error {
+	if res == nil {
+		return fmt.Errorf("空执行结果")
+	}
+	if res.Success {
+		return nil
+	}
+	if alreadyExistsErr(res.Message) {
+		return nil
+	}
+	for _, rec := range res.Records {
+		if alreadyExistsErr(rec.ErrorMessage) {
+			return nil
+		}
+	}
+	if res.Message != "" {
+		return fmt.Errorf("%s", res.Message)
+	}
+	return fmt.Errorf("执行失败")
+}
+
+func (h *TicketHandler) execTarget(inst *store.Instance, dbName string) (ticketexec.Target, error) {
+	var t ticketexec.Target
+	if inst == nil {
+		return t, fmt.Errorf("工单实例不存在")
+	}
+	password, err := secret.Decrypt(h.Secret, inst.Password)
+	if err != nil {
+		return t, fmt.Errorf("解密实例密码失败: %w", err)
+	}
+	host := strings.TrimSpace(inst.Host)
+	if host == "" {
+		host = strings.TrimSpace(inst.DomainName)
+	}
+	t = ticketexec.Target{
+		Host:     host,
+		Port:     inst.Port,
+		Username: inst.Username,
+		Password: password,
+		DBName:   dbName,
+		DBType:   inst.DBType,
+	}
+	return t, nil
+}
+
+func mergeExecResult(dst, src *ticketexec.Result) {
+	if dst == nil || src == nil {
+		return
+	}
+	if dst.Engine == "" {
+		dst.Engine = src.Engine
+	}
+	dst.Records = append(dst.Records, src.Records...)
+	dst.SuccessSQLs = append(dst.SuccessSQLs, src.SuccessSQLs...)
+	if src.Skipped {
+		dst.Skipped = true
+	}
+	if !src.Success {
+		dst.Success = false
+		if src.Message != "" {
+			dst.Message = src.Message
+		}
+		if src.Summary != "" {
+			dst.Summary = src.Summary
+		}
+		return
+	}
+	if src.Summary != "" {
+		if dst.Summary != "" {
+			dst.Summary += "; "
+		}
+		dst.Summary += src.Summary
+	}
+}
+
+func (h *TicketHandler) executeCreateDBTicket(ctx context.Context, it *store.Issue) error {
+	ids := createDBInstanceIDs(it)
+	if len(ids) == 0 {
+		return h.persistExec(it, &ticketexec.Result{Success: false, Message: "工单未指定实例"})
+	}
+	merged := &ticketexec.Result{StartedAt: time.Now().UTC().Format(time.RFC3339), Success: true}
+	for _, id := range ids {
+		inst, err := h.Store.GetInstance(id)
+		if err != nil {
+			return err
+		}
+		if inst == nil {
+			merged.Success = false
+			merged.Message = "实例不存在: " + id
+			break
+		}
+		check := applyCreateDBReview(h, it.SQLContent, inst.DBType, id)
+		if !check.OK {
+			return h.persistExec(it, reviewGateResult(check))
+		}
+		t, err := h.execTarget(inst, it.DBName)
+		if err != nil {
+			merged.Success = false
+			merged.Message = err.Error()
+			break
+		}
+		t.ConnectDB = ticketexec.AdminConnectDB(inst.DBType)
+		res := ticketexec.Run(ctx, store.IssueTypeCreateDB, it.SQLContent, t)
+		mergeExecResult(merged, res)
+		if res == nil || !res.Success {
+			if merged.Message == "" && res != nil {
+				merged.Message = res.Message
+			}
+			break
+		}
+	}
+	merged.EndedAt = time.Now().UTC().Format(time.RFC3339)
+	if merged.Success && merged.Summary == "" {
+		merged.Summary = "建库 SQL 已执行"
+	}
+	return h.persistExec(it, merged)
+}
+
+func (h *TicketHandler) finishCreateDBAfterExec(ctx context.Context, it *store.Issue) error {
+	if it == nil || it.IssueType != store.IssueTypeCreateDB {
+		return nil
+	}
+	if it.Status != store.StatusExecuted {
+		return nil
+	}
+	if err := materializeCreateDBAccounts(h.Store, h.Secret, it); err != nil {
+		return err
+	}
+	if warn := provisionCreateDBAccounts(ctx, h, it); warn != "" {
+		appendCreateDBWarn(it, h, warn)
+	}
+	return nil
+}
+
+func appendCreateDBWarn(it *store.Issue, h *TicketHandler, warn string) {
+	if it == nil || h == nil || strings.TrimSpace(warn) == "" {
+		return
+	}
+	res := ticketexec.Parse(it.ExecuteResult)
+	if res == nil {
+		res = &ticketexec.Result{Success: true}
+	}
+	if res.Summary != "" {
+		res.Summary += "；"
+	}
+	res.Summary += "账号授权：" + warn
+	_ = h.Store.UpdateIssueExec(it.ID, it.Status, ticketexec.ToJSON(res))
+	it.ExecuteResult = ticketexec.ToJSON(res)
+	it.Exec = res
+}
+
+func (h *TicketHandler) maybeFinishApprovedCreateDB(ctx context.Context, it *store.Issue) *store.Issue {
+	if it == nil || it.IssueType != store.IssueTypeCreateDB || it.Status != store.StatusApproved {
+		return it
+	}
+	if scheduledInFuture(it.ScheduledAt) {
+		return it
+	}
+	_ = h.executeCreateDBTicket(ctx, it)
+	if latest, err := h.Store.GetIssue(it.ID); err == nil && latest != nil {
+		it = latest
+	}
+	if err := h.finishCreateDBAfterExec(ctx, it); err == nil {
+		if latest, err := h.Store.GetIssue(it.ID); err == nil && latest != nil {
+			it = latest
+		}
+	}
+	return it
+}
+
+// provisionCreateDBAccounts 对齐 Hub：建库成功后在实例上 CREATE USER 并授权。失败不推翻工单。
+func provisionCreateDBAccounts(ctx context.Context, h *TicketHandler, it *store.Issue) string {
+	if h == nil || it == nil {
+		return ""
+	}
+	extra := parseCreateDBExtra(it)
+	if extra == nil || strings.TrimSpace(extra.Username) == "" {
+		return ""
+	}
+	accs, err := h.Store.ListAccountsByTicket(it.ID)
+	if err != nil {
+		return err.Error()
+	}
+	if len(accs) == 0 {
+		return ""
+	}
+	var warns []string
+	createdUser := map[string]bool{}
+	for _, acc := range accs {
+		inst, _ := h.Store.GetInstance(acc.InstanceID)
+		if inst == nil {
+			warns = append(warns, "实例不存在 "+acc.InstanceID)
+			continue
+		}
+		pwd, err := secret.Decrypt(h.Secret, acc.Password)
+		if err != nil {
+			warns = append(warns, "解密账号密码失败")
+			continue
+		}
+		admin, err := h.execTarget(inst, acc.DBName)
+		if err != nil {
+			warns = append(warns, err.Error())
+			continue
+		}
+		admin.ConnectDB = ticketexec.AdminConnectDB(inst.DBType)
+		engine := ticketexec.EngineOf(inst.DBType)
+		if !createdUser[acc.InstanceID] {
+			if sql := buildCreateUserSQL(engine, acc.Username, pwd); sql != "" {
+				if err := execOKOrExists(ticketexec.ExecStatements(ctx, admin, []string{sql})); err != nil {
+					warns = append(warns, "CREATE USER: "+err.Error())
+					continue
+				}
+			}
+			createdUser[acc.InstanceID] = true
+		}
+		if sql := buildConnectGrantSQL(engine, acc.Username, acc.DBName); sql != "" {
+			if err := execOKOrExists(ticketexec.ExecStatements(ctx, admin, []string{sql})); err != nil {
+				warns = append(warns, "GRANT CONNECT: "+err.Error())
+			}
+		}
+		if sql := buildSchemaGrantSQL(engine, acc.Username, acc.DBName, extra.Permissions); sql != "" {
+			target := admin
+			if engine == "postgres" {
+				target.ConnectDB = acc.DBName
+			}
+			stmts := sqlcheck.SplitSQL(sql)
+			if err := execOKOrExists(ticketexec.ExecStatements(ctx, target, stmts)); err != nil {
+				warns = append(warns, "GRANT: "+err.Error())
+			}
+		}
+	}
+	return strings.Join(warns, "；")
+}

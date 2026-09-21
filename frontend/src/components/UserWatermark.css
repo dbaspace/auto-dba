@@ -1,0 +1,25 @@
+.user-watermark {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  overflow: hidden;
+  pointer-events: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  justify-content: flex-start;
+  padding: 24px;
+}
+
+.user-watermark span {
+  pointer-events: none;
+  display: inline-block;
+  margin: 56px 80px;
+  opacity: 0.08;
+  font-size: 16px;
+  font-weight: 400;
+  transform: rotate(-24deg);
+  color: #111827;
+  user-select: none;
+  white-space: nowrap;
+}

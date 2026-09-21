@@ -1,0 +1,53 @@
+.redis-order .ds-opt {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+}
+
+.redis-order .muted {
+  color: #9ca3af;
+  font-size: 12px;
+}
+
+.redis-order .hint {
+  color: #9ca3af;
+  font-size: 12px;
+  margin: 0 0 12px;
+}
+
+.redis-order .hint-alert {
+  margin-bottom: 12px;
+}
+
+.redis-order .sql-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 12px 0;
+  flex-wrap: wrap;
+}
+
+.redis-order .redis-stat {
+  color: #6b7280;
+  font-size: 13px;
+}
+
+.redis-order .lv-error {
+  color: #dc2626;
+}
+
+.redis-order .lv-warn {
+  color: #f59e0b;
+}
+
+.redis-order .lv-ok {
+  color: #16a34a;
+}
+
+.redis-order .redis-main-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1f2937;
+  margin-bottom: 12px;
+}

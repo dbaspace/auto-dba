@@ -1,0 +1,51 @@
+/* Migration 列表页样式：由旧 Migration.vue <style scoped> 迁移（:deep(.el-*) → .ant-*） */
+.mig-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+}
+.mig-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.mig-head h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 500;
+  color: #111827;
+}
+.mig-actions {
+  display: flex;
+  gap: 8px;
+}
+.mig-filters {
+  margin-bottom: 12px;
+}
+.mig-filters .ant-form-item {
+  margin-bottom: 8px;
+}
+.name-link {
+  color: #1677ff;
+  cursor: pointer;
+}
+.mig-pager {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+.mig-ops {
+  display: inline-flex;
+  gap: 4px;
+  white-space: nowrap;
+}
+.mig-ops .ant-btn {
+  margin: 0;
+  padding: 0;
+  height: auto;
+}

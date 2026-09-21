@@ -1,0 +1,131 @@
+.map-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.map-list {
+  max-height: 600px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.map-item {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 12px;
+  background: #fff;
+}
+.map-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.map-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.map-head-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.caret {
+  color: #9ca3af;
+}
+.ellip {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.target-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.target-lab {
+  width: 48px;
+  flex-shrink: 0;
+}
+.map-body {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed #e5e7eb;
+}
+.key-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.key-hint {
+  margin: 6px 0;
+  color: #cf1322;
+  font-size: 12px;
+  font-weight: 600;
+}
+.order-row {
+  margin-bottom: 8px;
+}
+.order-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 8px;
+  background: #f3f4f6;
+  border-radius: 4px;
+  font-size: 12px;
+}
+.col-name {
+  font-weight: 500;
+}
+.pk {
+  color: #faad14;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+.shard-box {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed #e5e7eb;
+}
+.shard-keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+  padding-left: 16px;
+}
+.tree-empty {
+  padding: 28px 12px;
+  text-align: center;
+  color: #9ca3af;
+  font-size: 13px;
+}
+.map-panel .muted {
+  color: #9ca3af;
+  font-size: 12px;
+}
+.map-panel .mb {
+  margin-bottom: 8px;
+}
+.mb-sm {
+  margin-bottom: 6px;
+}

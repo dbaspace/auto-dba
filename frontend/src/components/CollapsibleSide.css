@@ -1,0 +1,119 @@
+.collapsible-side {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: visible;
+  transition: width 0.18s ease;
+}
+
+.collapsible-side-head {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  margin-bottom: 10px;
+  min-height: 28px;
+  padding-right: 4px;
+}
+
+.collapsible-side-title {
+  font-weight: 600;
+  font-size: 14px;
+  color: #1f2937;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.collapsible-side-body {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.collapsible-side-body > .mb,
+.collapsible-side-body > .ant-input-affix-wrapper,
+.collapsible-side-body > .ant-select {
+  flex-shrink: 0;
+}
+
+.collapsible-side-float-btn {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  z-index: 30;
+  transform: translate(50%, -50%);
+  width: 24px;
+  height: 48px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #d0d5dd;
+  border-radius: 999px;
+  background: #fff;
+  color: #4b5563;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.14);
+  transition: color 0.15s, border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+
+.collapsible-side-float-btn:hover {
+  color: #1677ff;
+  border-color: #91caff;
+  background: #f0f7ff;
+  box-shadow: 0 3px 10px rgba(22, 119, 255, 0.22);
+}
+
+/* 收起后：整颗钮贴在主区左缘，避免被父级 overflow 裁掉一半 */
+.collapsible-side-collapsed {
+  position: relative;
+  flex-shrink: 0;
+  width: 0;
+  align-self: stretch;
+  overflow: visible;
+  z-index: 30;
+  pointer-events: none;
+}
+
+.collapsible-side-collapsed .collapsible-side-float-btn {
+  pointer-events: auto;
+  left: 0;
+  right: auto;
+  transform: translate(0, -50%);
+  width: 28px;
+  height: 56px;
+  border-radius: 0 999px 999px 0;
+  border: 1px solid #91caff;
+  border-left: none;
+  background: #e6f4ff;
+  color: #1677ff;
+  font-size: 14px;
+  font-weight: 600;
+  box-shadow: 2px 2px 10px rgba(22, 119, 255, 0.28);
+}
+
+.collapsible-side-collapsed .collapsible-side-float-btn:hover {
+  background: #bae0ff;
+  border-color: #1677ff;
+  color: #0958d9;
+  box-shadow: 3px 3px 12px rgba(22, 119, 255, 0.35);
+}
+
+.query-page .pane-left.collapsible-side,
+.kafka-query .side.collapsible-side,
+.redis-query .side.collapsible-side {
+  overflow: visible;
+}
+
+.query-page .pane-left .collapsible-side-body,
+.kafka-query .side .collapsible-side-body,
+.redis-query .side .collapsible-side-body {
+  overflow: hidden;
+}

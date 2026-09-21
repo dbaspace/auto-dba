@@ -1,0 +1,203 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #app { height: 100%; margin: 0; overflow: hidden; }
+.el-popper, .el-select__popper, .el-picker__popper, .el-dropdown__popper {
+  z-index: 4000 !important;
+}
+.el-dialog {
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.22);
+}
+body { font-family: "PingFang SC", "Microsoft YaHei", sans-serif; background: #f5f7fa; }
+.page-card {
+  background: #fff;
+  padding: 16px;
+  border-radius: 8px;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+.toolbar { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; align-items: center; flex-shrink: 0; }
+.hint { color: #909399; font-size: 13px; margin: 0 0 12px; }
+
+.ops-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+}
+.ticket-fit {
+  padding: 16px;
+  box-sizing: border-box;
+  overflow: hidden;
+  max-height: 100%;
+}
+.ops-crumb {
+  flex-shrink: 0;
+  margin-bottom: 12px;
+  padding: 8px 0;
+  border-top: 1px solid #e5e7eb;
+  border-bottom: 1px solid #e5e7eb;
+  font-size: 14px;
+}
+.ops-crumb .link { color: #1677ff; cursor: pointer; }
+.ops-crumb .link:hover { color: #4096ff; }
+.ops-crumb .sep { margin: 0 8px; color: #9ca3af; }
+.ops-crumb .current { color: #4b5563; }
+.ops-title {
+  position: relative;
+  z-index: 2;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.ops-title h1,
+.order-head h1 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 500;
+  color: #111827;
+}
+.ops-filters {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+.filter-item {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  flex: 1;
+}
+.filter-item .label {
+  color: #6b7280;
+  min-width: 72px;
+  text-align: right;
+  padding-right: 8px;
+  flex-shrink: 0;
+  font-size: 14px;
+}
+.filter-item .el-select,
+.filter-item .el-input { width: 100%; }
+.ops-table {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+.order-page,
+.gray-page {
+  width: 100%;
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+  padding: 16px;
+  background: #fafafa;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.order-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  flex-shrink: 0;
+  padding: 0 4px;
+}
+.order-split {
+  display: flex;
+  flex: 1;
+  gap: 16px;
+  min-height: 0;
+  min-width: 0;
+}
+.order-aside {
+  width: 320px;
+  flex-shrink: 0;
+  background: #fff;
+  border: 1px solid #f3f4f6;
+  border-radius: 4px;
+  padding: 16px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.order-aside > form,
+.order-aside > .el-form {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
+}
+.order-aside .aside-actions {
+  position: sticky;
+  bottom: 0;
+  background: #fff;
+  z-index: 1;
+  margin-bottom: 0;
+  padding-bottom: 4px;
+}
+.order-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  background: #fff;
+  border: 1px solid #f3f4f6;
+  border-radius: 4px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+.order-main .el-tabs { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.order-main .el-tabs__content { flex: 1; overflow: auto; }
+.sql-editor .el-textarea__inner {
+  min-height: min(220px, 28vh);
+  font-family: Menlo, Consolas, Monaco, monospace;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.ticket-form-scroll {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
+}
+.ticket-form-actions {
+  flex-shrink: 0;
+  padding-top: 12px;
+  margin-top: 4px;
+  border-top: 1px solid #f3f4f6;
+  background: inherit;
+}
+@media (max-width: 1100px) {
+  .order-split {
+    flex-direction: column;
+  }
+  .order-aside {
+    width: 100%;
+    max-height: 38%;
+  }
+}
+.sql-actions { margin: 12px 0 8px; }
+.white-card {
+  background: #fff;
+  border: 1px solid #f3f4f6;
+  border-radius: 4px;
+  padding: 16px;
+}
+.form-narrow { max-width: 768px; margin: 0 auto; width: 100%; }
+.form-wide { max-width: 1152px; margin: 0 auto; width: 100%; }

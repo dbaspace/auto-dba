@@ -1,0 +1,260 @@
+.review-page {
+  background: #fff;
+  flex: 1;
+  min-height: 0;
+}
+
+.review-page .ops-title {
+  margin-bottom: 8px;
+}
+
+.gi-card {
+  margin-bottom: 20px;
+  padding: 16px 16px 4px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fafafa;
+}
+
+.gi-head h2 {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.gi-head p {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: #6b7280;
+  line-height: 1.5;
+}
+
+.gi-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 16px;
+  margin-bottom: 12px;
+}
+
+.gi-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.gi-label {
+  color: #606266;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.title-actions,
+.panel-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.panel-actions {
+  margin-bottom: 16px;
+}
+
+.inst-tabs {
+  flex-shrink: 0;
+}
+
+.inst-tabs .ant-tabs-nav {
+  margin-bottom: 12px;
+}
+
+.inst-tabs .ant-tabs-content-holder {
+  display: none;
+}
+
+/* 引擎较多时横向滚动，避免裁切末尾 */
+.inst-tabs .ant-tabs-nav-wrap {
+  overflow-x: auto !important;
+  overflow-y: hidden;
+}
+
+.inst-tabs .ant-tabs-nav-wrap::-webkit-scrollbar {
+  height: 4px;
+}
+
+.inst-tabs .ant-tabs-nav-wrap::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+  border-radius: 2px;
+}
+
+.inst-tabs .ant-tabs-nav-operations {
+  display: none;
+}
+
+.review-body-spin {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.review-body-spin .ant-spin-container {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.review-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.redis-review-body {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.redis-rules-panel {
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-bottom: 4px;
+}
+
+.redis-blacklist-card {
+  flex-shrink: 0;
+}
+
+.redis-cmd-table-card {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  margin-bottom: 0;
+  padding-bottom: 12px;
+}
+
+.redis-cmd-table-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.redis-cmd-table-wrap .ant-table-body {
+  overflow-y: auto !important;
+  scrollbar-gutter: stable;
+}
+
+.redis-cmd-table-wrap .ant-table-body::-webkit-scrollbar {
+  width: 8px;
+}
+
+.redis-cmd-table-wrap .ant-table-body::-webkit-scrollbar-thumb {
+  background: #c1c1c1;
+  border-radius: 4px;
+}
+
+.redis-cmd-table-wrap .ant-table-body::-webkit-scrollbar-track {
+  background: #f0f0f0;
+}
+
+.redis-cmd-table-wrap .ant-pagination {
+  margin: 12px 0 0 !important;
+  flex-shrink: 0;
+}
+
+.empty {
+  color: #9ca3af;
+  text-align: center;
+  padding: 64px 0;
+  font-size: 14px;
+}
+
+.empty-sm {
+  color: #9ca3af;
+  text-align: center;
+  padding: 24px 0;
+  font-size: 13px;
+}
+
+.rule-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  column-gap: 32px;
+  align-items: start;
+}
+
+.rule-col {
+  min-width: 0;
+}
+
+.rule-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0 4px;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.rule-label {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: #1f2937;
+  line-height: 32px;
+}
+
+.rule-ctrl {
+  flex-shrink: 0;
+}
+
+.rule-input {
+  width: 80px;
+}
+
+.rule-section {
+  margin-bottom: 32px;
+}
+
+.rule-section:last-child {
+  margin-bottom: 0;
+}
+
+.rule-section h2 {
+  margin: 0 0 12px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.rule-cell {
+  min-width: 0;
+}
+
+.rule-wide-wrap {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  column-gap: 32px;
+}
+
+.rule-span {
+  grid-column: 1 / -1;
+  min-width: 0;
+}

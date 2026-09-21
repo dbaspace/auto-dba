@@ -1,0 +1,18 @@
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding-top: 12px;
+  flex-shrink: 0;
+}
+.pager-total {
+  color: #6b7280;
+  font-size: 13px;
+}
+.form-extra {
+  color: #9ca3af;
+  font-size: 12px;
+  line-height: 1.4;
+  margin-top: 4px;
+}

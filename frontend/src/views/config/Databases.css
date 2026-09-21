@@ -1,0 +1,103 @@
+.inst-tabs {
+  flex-shrink: 0;
+}
+
+.inst-tabs .ant-tabs-nav {
+  margin-bottom: 12px;
+}
+
+/* Tabs 仅作类型切换，内容区在 Tabs 外，隐藏空 content-holder */
+.inst-tabs .ant-tabs-content-holder {
+  display: none;
+}
+
+/* 引擎较多时 tab 横向滚动，避免裁切末尾 */
+.inst-tabs .ant-tabs-nav-wrap {
+  overflow-x: auto !important;
+  overflow-y: hidden;
+}
+
+.inst-tabs .ant-tabs-nav-wrap::-webkit-scrollbar {
+  height: 4px;
+}
+
+.inst-tabs .ant-tabs-nav-wrap::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+  border-radius: 2px;
+}
+
+.inst-tabs .ant-tabs-nav-operations {
+  display: none;
+}
+
+/* 表格占满剩余高度，表体内部滚动，分页条始终可见 */
+.ops-page .ops-table .ant-table-wrapper,
+.ops-page .ops-table .ant-spin-nested-loading,
+.ops-page .ops-table .ant-spin-container,
+.ops-page .ops-table .ant-table,
+.ops-page .ops-table .ant-table-container {
+  height: 100%;
+}
+
+.ops-page .ops-table .ant-table-body {
+  overflow-y: auto !important;
+}
+
+.tab-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.cell-tag {
+  margin-right: 4px;
+}
+.type-hint {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: #6b7280;
+}
+.live-hint {
+  color: #d97706;
+}
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding-top: 12px;
+  flex-shrink: 0;
+}
+.pager-total {
+  color: #6b7280;
+  font-size: 13px;
+}
+.db-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.db-form .fi {
+  display: flex;
+  align-items: flex-start;
+}
+.db-form .fi > label {
+  width: 100px;
+  flex-shrink: 0;
+  padding-top: 5px;
+  text-align: right;
+  padding-right: 12px;
+  color: #606266;
+}
+.db-form .fi-body {
+  flex: 1;
+  min-width: 0;
+}
+.db-form .fi > .ant-input,
+.db-form .fi > .ant-select {
+  flex: 1;
+  min-width: 0;
+}

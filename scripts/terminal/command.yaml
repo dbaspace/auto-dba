@@ -1,0 +1,9 @@
+# 首期仅保留节点 SSH 终端动作（由 auto-dba 配置注入 user/key）
+actions:
+  - name: node.terminal
+    type: command
+    title: Node Terminal
+    permit_write: true
+    command: /bin/sh
+    # args: <scripts_dir>/node-terminal.sh <host> <ssh_user> <ssh_identity_file>
+    script: node-terminal.sh

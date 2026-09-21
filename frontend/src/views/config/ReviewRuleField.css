@@ -1,0 +1,38 @@
+.rule-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0 4px;
+  border-bottom: 1px solid #f3f4f6;
+}
+.rule-row.is-wide {
+  height: auto;
+  min-height: 32px;
+  padding: 6px 4px;
+}
+.rule-label {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  color: #1f2937;
+  line-height: 32px;
+}
+.rule-ctrl {
+  flex-shrink: 0;
+}
+.rule-ctrl.grow {
+  flex: 1;
+  min-width: 0;
+}
+.rule-input {
+  width: 80px;
+}
+.rule-input-wide {
+  width: 100%;
+}

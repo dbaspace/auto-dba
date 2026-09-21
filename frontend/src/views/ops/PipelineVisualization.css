@@ -1,0 +1,76 @@
+/* 外层：窄屏可横滚 */
+.pv-scroll {
+  width: 100%;
+  overflow-x: auto;
+}
+
+/*
+ * 上排左对齐、按内容取宽；
+ * 下排整组贴右；
+ * ↓ 绝对定位在 Kafka 底边中心与 StarRocks 顶边中心的几何中点。
+ */
+.pv-board {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 28px; /* 给中间 ↓ 留出空隙 */
+  width: 100%;
+  min-width: max-content;
+}
+
+.pv-row-head {
+  display: flex;
+  align-items: stretch;
+  justify-content: flex-start;
+}
+
+.pv-head-cell {
+  display: flex;
+}
+
+/* 下排：靠右；列 = StarRocks | → | Routine Load */
+.pv-tail-block {
+  margin-left: auto;
+  display: flex;
+  align-items: stretch;
+}
+
+.pv-tail-sr,
+.pv-tail-rl {
+  display: flex;
+}
+
+/* Kafka ↔ StarRocks 中点 */
+.pv-turn {
+  position: absolute;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  color: #9ca3af;
+  font-size: 16px;
+  line-height: 1;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.pv-arrow {
+  display: inline-flex;
+  align-items: center;
+  margin: 0 4px;
+  color: #9ca3af;
+  font-size: 14px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+/* 按内容取宽，上限 160px；长文案换行增高 */
+.pv-card.ant-card {
+  width: max-content;
+  max-width: 160px;
+  min-width: 120px;
+  flex-shrink: 0;
+}

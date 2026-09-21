@@ -1,0 +1,253 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  /* 根字号略收紧，便于信息密度；Tailwind rem 与页面正文以此为基准 */
+  font-size: 12px;
+}
+
+html ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+html ::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+  background-color: rgba(220, 223, 230, 0.3);
+}
+
+html ::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+  background: rgba(161, 171, 189, 0.3);
+}
+
+/* 侧栏：展开多项时菜单区域可纵向滚动 */
+.app-sider.ant-layout-sider,
+.app-sider .ant-layout-sider-children {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.app-sider-menu {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+body {
+  font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  background: #f5f7fa;
+}
+
+/* 通用页面容器：与旧项目 class 名保持一致，便于逐页复刻 */
+.page-card {
+  background: #fff;
+  padding: 16px;
+  border-radius: 8px;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+
+.ops-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+}
+
+.ops-title {
+  position: relative;
+  z-index: 2;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.ops-title h1 {
+  margin: 0;
+  margin-right: auto;
+  font-size: 16px;
+  font-weight: 500;
+  color: #111827;
+}
+
+.ops-table {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+.ops-filters {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+
+.filter-item {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  flex: 1;
+}
+
+.filter-item .label {
+  color: #6b7280;
+  min-width: 72px;
+  text-align: right;
+  padding-right: 8px;
+  flex-shrink: 0;
+  font-size: 12px;
+}
+
+.pager {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+  flex-shrink: 0;
+}
+
+.toolbar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.hint {
+  color: #909399;
+  font-size: 13px;
+  margin: 0 0 12px;
+}
+
+.order-page,
+.gray-page {
+  width: 100%;
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+  padding: 16px;
+  background: #fafafa;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.order-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  flex-shrink: 0;
+  padding: 0 4px;
+}
+.order-split {
+  display: flex;
+  flex: 1;
+  gap: 16px;
+  min-height: 0;
+  min-width: 0;
+}
+.order-aside {
+  width: 320px;
+  flex-shrink: 0;
+  background: #fff;
+  border: 1px solid #f3f4f6;
+  border-radius: 4px;
+  padding: 16px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  --order-field-w: 280px;
+}
+.order-aside .ant-form-item {
+  margin-bottom: 10px;
+  max-width: var(--order-field-w);
+}
+.order-aside .ant-form-item .ant-select,
+.order-aside .ant-form-item .ant-input,
+.order-aside .ant-form-item .ant-input-affix-wrapper,
+.order-aside .ant-form-item .ant-picker,
+.order-aside .ant-form-item .ant-input-number {
+  width: 100%;
+}
+.order-aside > form {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
+}
+.order-aside .aside-actions {
+  position: sticky;
+  bottom: 0;
+  background: #fff;
+  z-index: 1;
+  margin-bottom: 0;
+  padding-bottom: 4px;
+}
+.order-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  background: #fff;
+  border: 1px solid #f3f4f6;
+  border-radius: 4px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+.sql-editor textarea {
+  min-height: min(220px, 28vh);
+  font-family: Menlo, Consolas, Monaco, monospace;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.ticket-form-scroll {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
+}
+.ticket-form-actions {
+  flex-shrink: 0;
+  padding-top: 12px;
+  margin-top: 4px;
+  border-top: 1px solid #f3f4f6;
+  background: inherit;
+}
+.form-narrow {
+  max-width: 768px;
+  margin: 0 auto;
+  width: 100%;
+}
+@media (max-width: 1100px) {
+  .order-split {
+    flex-direction: column;
+  }
+  .order-aside {
+    width: 100%;
+    max-height: 38%;
+  }
+}

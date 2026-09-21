@@ -1,0 +1,94 @@
+/* 权限申请：对齐 DDL 左右分栏 */
+.dcl-page {
+  background: #fafafa;
+}
+
+.dcl-split-form {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+  height: 100%;
+  overflow: hidden;
+  gap: 16px;
+}
+
+.dcl-split-form.order-split {
+  flex-direction: row;
+}
+
+.dcl-split-form > .order-aside {
+  overflow-y: auto;
+}
+
+.dcl-page .order-aside .ant-form-item {
+  max-width: var(--order-field-w);
+}
+
+.dcl-page .perm-item.ant-form-item {
+  max-width: 100%;
+}
+
+.dcl-page .hint {
+  color: #9ca3af;
+  font-size: 12px;
+  margin: 0 0 8px;
+}
+
+.dcl-page .perm-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 0;
+}
+
+.dcl-page .perm-group .ant-checkbox-wrapper {
+  margin-inline-end: 8px;
+  line-height: 28px;
+}
+
+.dcl-page .extra {
+  margin-top: 4px;
+  color: #909399;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.dcl-main-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #111827;
+  margin-bottom: 12px;
+  flex-shrink: 0;
+}
+
+/* 右侧数据库选择占满剩余高度 */
+.dcl-page .order-main {
+  overflow: hidden;
+}
+
+.dcl-page .db-item {
+  flex: 1 1 0;
+  min-height: 0;
+  margin-bottom: 0 !important;
+  max-width: none !important;
+  width: 100%;
+}
+
+.dcl-page .db-item .ant-form-item-row,
+.dcl-page .db-item .ant-form-item-control,
+.dcl-page .db-item .ant-form-item-control-input,
+.dcl-page .db-item .ant-form-item-control-input-content {
+  height: 100%;
+  min-height: 0;
+}
+
+.dcl-page .db-item .ant-form-item-control-input-content {
+  display: flex;
+  flex-direction: column;
+}
+
+.dcl-page .db-item .db-picker {
+  flex: 1 1 0;
+  min-height: 0;
+  height: 100%;
+}

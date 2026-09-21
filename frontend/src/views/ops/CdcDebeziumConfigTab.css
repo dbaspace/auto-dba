@@ -1,0 +1,68 @@
+.dbz-summary {
+  padding: 12px;
+  background: #f8fafc;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  margin-bottom: 12px;
+}
+.dbz-summary-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.dbz-summary-meta {
+  margin-top: 6px;
+  color: #6b7280;
+  font-size: 12px;
+  display: flex;
+  gap: 16px;
+}
+.dbz-toolbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.dbz-search {
+  width: 260px;
+}
+.dbz-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.dbz-val {
+  word-break: break-all;
+  font-size: 12px;
+}
+.dbz-add {
+  margin-top: 8px;
+}
+.mb {
+  margin-bottom: 12px;
+}
+.pager {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 12px;
+  color: #6b7280;
+  font-size: 12px;
+}
+.cfg-pre {
+  margin: 0;
+  padding: 12px;
+  background: #f8fafc;
+  border-radius: 6px;
+  font-family: Menlo, Consolas, Monaco, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow: auto;
+  max-height: 480px;
+  white-space: pre-wrap;
+}
+.preview-body p {
+  margin: 0 0 8px;
+}

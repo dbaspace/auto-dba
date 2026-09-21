@@ -1,0 +1,12 @@
+{
+  "name": "auto-dba",
+  "private": true,
+  "version": "0.1.0",
+  "description": "auto-dba 根脚本：用 pnpm -C 指定 frontend（React）子项目启动",
+  "scripts": {
+    "dev": "pnpm -C ./frontend dev",
+    "build": "pnpm -C ./frontend build",
+    "preview": "pnpm -C ./frontend preview",
+    "install:web": "pnpm -C ./frontend install"
+  }
+}

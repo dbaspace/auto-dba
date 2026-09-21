@@ -1,0 +1,55 @@
+/* MigrationSettings 样式：由旧 MigrationSettings.vue <style scoped> 迁移 */
+.mig-settings {
+  overflow: auto !important;
+}
+.mig-settings .ops-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.mig-settings .ops-title h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  color: #111827;
+}
+.mig-settings .panel {
+  margin-bottom: 16px;
+  border-radius: 8px;
+}
+.mig-settings .panel.last {
+  margin-bottom: 0;
+}
+.mig-settings .card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.mig-settings .hint {
+  color: #6b7280;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.mig-settings .mb {
+  margin-bottom: 8px;
+}
+.mig-settings .actions {
+  display: flex;
+  gap: 8px;
+}
+.mig-settings .help-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: #d1d5db;
+  color: #fff;
+  font-size: 10px;
+  cursor: help;
+  vertical-align: middle;
+}

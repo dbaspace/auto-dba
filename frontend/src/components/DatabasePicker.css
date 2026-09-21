@@ -1,0 +1,127 @@
+.db-picker {
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 0;
+}
+.db-picker.disabled {
+  opacity: 0.6;
+  pointer-events: none;
+}
+.db-picker .panel {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+}
+.db-picker .panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  border-bottom: 1px solid #f3f4f6;
+  font-size: 13px;
+  font-weight: 500;
+  color: #1f2937;
+  flex-shrink: 0;
+}
+.db-picker .link {
+  border: 0;
+  background: none;
+  color: #1677ff;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0;
+}
+.db-picker .panel-search {
+  padding: 6px 12px;
+  border-bottom: 1px solid #f3f4f6;
+  flex-shrink: 0;
+}
+.db-picker .panel-checkall {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid #f3f4f6;
+  background: #f9fafb;
+  font-size: 13px;
+  color: #4b5563;
+  flex-shrink: 0;
+}
+.db-picker .panel-list {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+.db-picker .empty {
+  padding: 16px 12px;
+  text-align: center;
+  color: #9ca3af;
+  font-size: 13px;
+}
+.db-picker .row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #f9fafb;
+  cursor: pointer;
+}
+.db-picker .row:hover {
+  background: #eff6ff;
+}
+.db-picker .row.between {
+  justify-content: space-between;
+  cursor: default;
+}
+.db-picker .row.between:hover {
+  background: #f9fafb;
+}
+.db-picker .name {
+  font-size: 13px;
+  color: #1f2937;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.db-picker .panel-foot {
+  padding: 6px 12px;
+  border-top: 1px solid #f3f4f6;
+  font-size: 12px;
+  color: #9ca3af;
+  flex-shrink: 0;
+}
+.db-picker .swap {
+  display: flex;
+  align-items: center;
+  color: #9ca3af;
+  flex-shrink: 0;
+}
+.db-picker .remove {
+  width: 20px;
+  height: 20px;
+  border: 1px solid #d1d5db;
+  border-radius: 50%;
+  background: #fff;
+  color: #6b7280;
+  cursor: pointer;
+  line-height: 16px;
+}
+.db-picker .remove:hover {
+  color: #ef4444;
+  border-color: #fca5a5;
+}
+@media (max-width: 640px) {
+  .db-picker {
+    flex-direction: column;
+  }
+}

@@ -1,0 +1,47 @@
+.inst-tabs {
+  flex-shrink: 0;
+}
+.tab-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.domain-tag {
+  margin: 0 4px 4px 0;
+}
+.muted {
+  color: #9ca3af;
+}
+.type-hint {
+  margin-top: 6px;
+  color: #909399;
+  font-size: 12px;
+}
+.inst-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.inst-form .fi {
+  display: flex;
+  align-items: flex-start;
+}
+.inst-form .fi > label {
+  width: 90px;
+  flex-shrink: 0;
+  padding-top: 5px;
+  text-align: right;
+  padding-right: 12px;
+  color: #606266;
+}
+.inst-form .fi-body {
+  flex: 1;
+  min-width: 0;
+}
+.inst-form .fi > .ant-input,
+.inst-form .fi > .ant-input-password,
+.inst-form .fi > .ant-input-number,
+.inst-form .fi > .ant-select {
+  flex: 1;
+  min-width: 0;
+}

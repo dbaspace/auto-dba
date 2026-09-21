@@ -1,0 +1,61 @@
+.type-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.ds-opt {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+}
+.muted {
+  color: #9ca3af;
+  font-size: 12px;
+}
+.optional {
+  color: #9ca3af;
+  font-weight: 400;
+}
+.hint {
+  color: #9ca3af;
+  font-size: 12px;
+  margin: 0 0 12px;
+}
+.sql-title {
+  font-size: 15px;
+  font-weight: 500;
+  color: #111827;
+  margin-bottom: 8px;
+  flex-shrink: 0;
+}
+.sql-actions {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0;
+}
+.aside-actions {
+  margin-bottom: 8px;
+  margin-top: 8px;
+}
+.aside-actions .ant-form-item-control-input-content {
+  display: block;
+  width: 100%;
+}
+.draft-item {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+.submit-wrap {
+  display: block;
+  width: 100%;
+}
+.lv-error {
+  color: #dc2626;
+}
+.lv-warn {
+  color: #f59e0b;
+}
+.lv-ok {
+  color: #16a34a;
+}

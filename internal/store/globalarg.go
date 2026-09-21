@@ -1,0 +1,116 @@
+package store
+
+import (
+	"database/sql"
+	"errors"
+	"strconv"
+	"strings"
+	"time"
+)
+
+const ArgLoginIdleTimeoutMin = "login_idle_timeout_min"
+const ArgUserWatermarkEnabled = "user_watermark_enabled"
+
+func (d *DB) ListGlobalArgs() ([]GlobalArg, error) {
+	rows, err := d.Query(`SELECT key, value, description, updated_at FROM tbl_global_args ORDER BY key`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []GlobalArg
+	for rows.Next() {
+		var a GlobalArg
+		if err := rows.Scan(&a.Key, &a.Value, &a.Description, &a.UpdatedAt); err != nil {
+			return nil, err
+		}
+		if a.Key == KeyLdapConfig || a.Key == KeyGoInception {
+			continue
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+func (d *DB) GetGlobalArg(key string) (string, error) {
+	var v string
+	err := d.QueryRow(`SELECT value FROM tbl_global_args WHERE key=?`, key).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return v, err
+}
+
+func (d *DB) CreateGlobalArg(key, value, desc string) error {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return errors.New("key 必填")
+	}
+	var exists int
+	_ = d.QueryRow(`SELECT COUNT(1) FROM tbl_global_args WHERE key=?`, key).Scan(&exists)
+	if exists > 0 {
+		return errors.New("参数键已存在")
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := d.Exec(`INSERT INTO tbl_global_args(key, value, description, updated_at) VALUES(?,?,?,?)`, key, value, desc, now)
+	return err
+}
+
+func (d *DB) SetGlobalArg(key, value, desc string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	var exists int
+	_ = d.QueryRow(`SELECT COUNT(1) FROM tbl_global_args WHERE key=?`, key).Scan(&exists)
+	if exists > 0 {
+		_, err := d.Exec(`UPDATE tbl_global_args SET value=?, description=?, updated_at=? WHERE key=?`, value, desc, now, key)
+		return err
+	}
+	_, err := d.Exec(`INSERT INTO tbl_global_args(key, value, description, updated_at) VALUES(?,?,?,?)`, key, value, desc, now)
+	return err
+}
+
+func (d *DB) DeleteGlobalArg(key string) error {
+	res, err := d.Exec(`DELETE FROM tbl_global_args WHERE key=?`, key)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return errors.New("参数不存在")
+	}
+	return nil
+}
+
+func (d *DB) BoolArg(key string, def bool) bool {
+	v, err := d.GetGlobalArg(key)
+	if err != nil || strings.TrimSpace(v) == "" {
+		return def
+	}
+	v = strings.ToLower(strings.TrimSpace(v))
+	return v == "1" || v == "true" || v == "yes" || v == "on"
+}
+
+// LoginIdleTimeoutMin 返回登录闲置超时分钟数。空/非法回退 def（通常 30）；显式 0 表示关闭。
+func (d *DB) LoginIdleTimeoutMin(def int) int {
+	if def < 0 {
+		def = 30
+	}
+	if d == nil {
+		return def
+	}
+	v, err := d.GetGlobalArg(ArgLoginIdleTimeoutMin)
+	if err != nil || strings.TrimSpace(v) == "" {
+		return def
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || n < 0 {
+		return def
+	}
+	return n
+}
+
+// UserWatermarkEnabled 是否开启用户水印。未配置时默认关闭。
+func (d *DB) UserWatermarkEnabled() bool {
+	if d == nil {
+		return false
+	}
+	return d.BoolArg(ArgUserWatermarkEnabled, false)
+}

@@ -1,0 +1,195 @@
+import React from 'react'
+import { createHashRouter, Navigate, useParams } from 'react-router-dom'
+import AppLayout from '../layout/AppLayout'
+import Login from '../views/Login'
+import ForgotPassword from '../views/ForgotPassword'
+import ResetPassword from '../views/ResetPassword'
+import Forbidden from '../views/Forbidden'
+import RequireAuth from './RequireAuth'
+import Dashboard from '../views/dashboard/Dashboard'
+import CdcList from '../views/ops/CdcList'
+import CdcDetail from '../views/ops/CdcDetail'
+import CdcCreate from '../views/ops/CdcCreate'
+import TicketList from '../views/tickets/TicketList'
+import TicketDetail from '../views/tickets/TicketDetail'
+import DclGrants from '../views/tickets/DclGrants'
+import CreateDb from '../views/tickets/CreateDb'
+import DdlOrder from '../views/tickets/DdlOrder'
+import DmlOrder from '../views/tickets/DmlOrder'
+import DqlExport from '../views/tickets/DqlExport'
+import KafkaOrder from '../views/ops/KafkaOrder'
+import RedisOrder from '../views/ops/RedisOrder'
+import SlotList from '../views/ops/SlotList'
+import Multilang from '../views/ops/Multilang'
+import ExternalStatus from '../views/ops/ExternalStatus'
+import Sessions from '../views/ops/Sessions'
+import SqlInsight from '../views/ops/SqlInsight'
+import Migration from '../views/ops/Migration'
+import MigrationCreate from '../views/ops/MigrationCreate'
+import MigrationDetail from '../views/ops/MigrationDetail'
+import MigrationSettings from '../views/ops/MigrationSettings'
+import MigrationSchemaCompare from '../views/ops/MigrationSchemaCompare'
+import Flashback from '../views/flashback/Flashback'
+import FlashbackCloud from '../views/flashback/FlashbackCloud'
+import Environments from '../views/config/Environments'
+import Regions from '../views/config/Regions'
+import Users from '../views/config/Users'
+import Roles from '../views/config/Roles'
+import GlobalArgs from '../views/config/GlobalArgs'
+import LoginLogs from '../views/config/LoginLogs'
+import QueryAudits from '../views/config/QueryAudits'
+import Connectors from '../views/config/Connectors'
+import AuthConfig from '../views/config/AuthConfig'
+import ReviewRules from '../views/config/ReviewRules'
+import Instances from '../views/config/Instances'
+import Databases from '../views/config/Databases'
+import Accounts from '../views/config/Accounts'
+import Menus from '../views/config/Menus'
+import RunHistory from '../views/archive/RunHistory'
+import Masking from '../views/archive/Masking'
+import Report from '../views/archive/Report'
+import ArchiveDashboard from '../views/archive/Dashboard'
+import ArchiveOrder from '../views/archive/ArchiveOrder'
+import TaskList from '../views/archive/TaskList'
+import ArchiveMonitor from '../views/archive/Monitor'
+import ArchiveSettings from '../views/archive/Settings'
+import KafkaQuery from '../views/query/KafkaQuery'
+import RedisQuery from '../views/query/RedisQuery'
+import CommonQuery from '../views/query/CommonQuery'
+import Terminal from '../views/ops/Terminal'
+
+/** 旧路径带 :id 时转发到新路径 */
+function RedirectWithId({ toPrefix }: { toPrefix: string }) {
+  const { id } = useParams()
+  return <Navigate to={`${toPrefix}/${id || ''}`} replace />
+}
+
+const router = createHashRouter([
+  { path: '/login', element: <Login /> },
+  { path: '/forgot-password', element: <ForgotPassword /> },
+  { path: '/reset-password', element: <ResetPassword /> },
+  { path: '/403', element: <Forbidden /> },
+  {
+    path: '/',
+    element: (
+      <RequireAuth>
+        <AppLayout />
+      </RequireAuth>
+    ),
+    children: [
+      { index: true, element: <Navigate to="/ops/dashboard" replace /> },
+      { path: 'ops/dashboard', element: <Dashboard /> },
+      { path: 'metadata/database/search/dashboard', element: <Navigate to="/ops/dashboard" replace /> },
+
+      { path: 'ops/query', element: <CommonQuery /> },
+      { path: 'ops/kafka-query', element: <KafkaQuery /> },
+      { path: 'ops/redis-query', element: <RedisQuery /> },
+      { path: 'query/kafka', element: <Navigate to="/ops/kafka-query" replace /> },
+      { path: 'query/redis', element: <Navigate to="/ops/redis-query" replace /> },
+      { path: 'metadata/database/search/common/:db?/:table?', element: <Navigate to="/ops/query" replace /> },
+
+      { path: 'ops/tickets', element: <TicketList /> },
+      { path: 'ops/tickets/:id', element: <TicketDetail /> },
+      { path: 'ops/ddl', element: <DdlOrder /> },
+      { path: 'metadata/database/search/serviceOperations/ddl-order', element: <Navigate to="/ops/ddl" replace /> },
+      { path: 'database/search/serviceOperations/ddl-order', element: <Navigate to="/ops/ddl" replace /> },
+      { path: 'ops/dml', element: <DmlOrder /> },
+      { path: 'metadata/database/search/serviceOperations/dml-order', element: <Navigate to="/ops/dml" replace /> },
+      { path: 'database/search/serviceOperations/dml-order', element: <Navigate to="/ops/dml" replace /> },
+      { path: 'ops/dql', element: <DqlExport /> },
+      { path: 'metadata/database/work-order/dql', element: <Navigate to="/ops/dql" replace /> },
+      { path: 'database/work-order/dql', element: <Navigate to="/ops/dql" replace /> },
+      { path: 'ops/createdb', element: <CreateDb /> },
+      { path: 'metadata/database/search/serviceOperations/createdb', element: <Navigate to="/ops/createdb" replace /> },
+      { path: 'database/search/serviceOperations/createdb', element: <Navigate to="/ops/createdb" replace /> },
+      { path: 'ops/dcl', element: <DclGrants /> },
+      { path: 'ops/kafka', element: <KafkaOrder /> },
+      { path: 'ops/redis', element: <RedisOrder /> },
+      { path: 'ops/slots', element: <SlotList /> },
+
+      { path: 'ops/cdc', element: <CdcList /> },
+      { path: 'ops/cdc/create', element: <CdcCreate /> },
+      { path: 'ops/cdc/:id', element: <CdcDetail /> },
+      { path: 'metadata/database/search/serviceOperations/cdcSyncTask', element: <Navigate to="/ops/cdc" replace /> },
+      { path: 'metadata/database/search/serviceOperations/cdcSyncTask/create', element: <Navigate to="/ops/cdc/create" replace /> },
+      { path: 'metadata/database/search/serviceOperations/cdcSyncTask/:id', element: <RedirectWithId toPrefix="/ops/cdc" /> },
+      { path: 'database/search/serviceOperations/cdcSyncTask', element: <Navigate to="/ops/cdc" replace /> },
+      { path: 'database/search/serviceOperations/cdcSyncTask/create', element: <Navigate to="/ops/cdc/create" replace /> },
+      { path: 'database/search/serviceOperations/cdcSyncTask/:id', element: <RedirectWithId toPrefix="/ops/cdc" /> },
+
+      { path: 'ops/migration', element: <Migration /> },
+      { path: 'ops/migration/create', element: <MigrationCreate /> },
+      { path: 'ops/migration/settings', element: <MigrationSettings /> },
+      { path: 'ops/migration/compare', element: <MigrationSchemaCompare /> },
+      { path: 'ops/migration/:id', element: <MigrationDetail /> },
+      { path: 'metadata/database/search/serviceOperations/migration', element: <Navigate to="/ops/migration" replace /> },
+      { path: 'metadata/database/search/serviceOperations/migration/create', element: <Navigate to="/ops/migration/create" replace /> },
+      { path: 'metadata/database/search/serviceOperations/migration/settings', element: <Navigate to="/ops/migration/settings" replace /> },
+      { path: 'metadata/database/search/serviceOperations/migration/:id', element: <RedirectWithId toPrefix="/ops/migration" /> },
+      { path: 'database/search/serviceOperations/migration', element: <Navigate to="/ops/migration" replace /> },
+      { path: 'database/search/serviceOperations/migration/create', element: <Navigate to="/ops/migration/create" replace /> },
+      { path: 'database/search/serviceOperations/migration/settings', element: <Navigate to="/ops/migration/settings" replace /> },
+      { path: 'database/search/serviceOperations/migration/:id', element: <RedirectWithId toPrefix="/ops/migration" /> },
+
+      { path: 'ops/flashback', element: <Navigate to="/ops/flashback/dashboard" replace /> },
+      { path: 'ops/flashback/dashboard', element: <Flashback /> },
+      { path: 'ops/flashback/tasks', element: <Flashback /> },
+      { path: 'ops/flashback/history', element: <Flashback /> },
+      { path: 'ops/flashback/history/:id', element: <Flashback /> },
+      { path: 'ops/flashback/cloud', element: <FlashbackCloud /> },
+      { path: 'metadata/database/search/serviceOperations/flashback', element: <Navigate to="/ops/flashback/dashboard" replace /> },
+      { path: 'database/search/serviceOperations/flashback', element: <Navigate to="/ops/flashback/dashboard" replace /> },
+
+      { path: 'ops/archive', element: <Navigate to="/ops/archive/dashboard" replace /> },
+      { path: 'ops/archive/dashboard', element: <ArchiveDashboard /> },
+      { path: 'ops/archive/apply', element: <ArchiveOrder /> },
+      { path: 'ops/archive/tasks', element: <TaskList /> },
+      { path: 'ops/archive/runs', element: <RunHistory /> },
+      { path: 'ops/archive/monitor', element: <ArchiveMonitor /> },
+      { path: 'ops/archive/settings', element: <ArchiveSettings /> },
+      { path: 'ops/archive/masking', element: <Masking /> },
+      { path: 'ops/archive/report', element: <Report /> },
+      { path: 'metadata/database/search/archiverManager', element: <Navigate to="/ops/archive/dashboard" replace /> },
+      { path: 'metadata/database/search/archiverManager/archiveDashboard', element: <Navigate to="/ops/archive/dashboard" replace /> },
+      { path: 'metadata/database/search/serviceOperations/archiverManager/archiveDashboard', element: <Navigate to="/ops/archive/dashboard" replace /> },
+      { path: 'metadata/database/search/serviceOperations/archiverManager/archiveTask', element: <Navigate to="/ops/archive/apply" replace /> },
+      { path: 'metadata/database/search/serviceOperations/archiverManager/archiverList', element: <Navigate to="/ops/archive/tasks" replace /> },
+      { path: 'metadata/database/search/serviceOperations/archiverManager/archivetaskMonitor', element: <Navigate to="/ops/archive/monitor" replace /> },
+      { path: 'metadata/database/search/serviceOperations/archiverManager/archivetaskSetting', element: <Navigate to="/ops/archive/settings" replace /> },
+
+      { path: 'ops/sql-insight', element: <SqlInsight /> },
+      { path: 'metadata/database/search/serviceOperations/activitysnapshot', element: <Navigate to="/ops/sql-insight" replace /> },
+      { path: 'database/search/serviceOperations/activitysnapshot', element: <Navigate to="/ops/sql-insight" replace /> },
+      { path: 'ops/sessions', element: <Sessions /> },
+      { path: 'metadata/database/search/serviceOperations/process', element: <Navigate to="/ops/sessions" replace /> },
+      { path: 'database/search/serviceOperations/process', element: <Navigate to="/ops/sessions" replace /> },
+      { path: 'ops/multilang', element: <Multilang /> },
+      { path: 'ops/dolphin', element: <ExternalStatus kind="dolphin" /> },
+      { path: 'ops/sr', element: <ExternalStatus kind="sr" /> },
+      { path: 'ops/terminal', element: <Terminal /> },
+
+      { path: 'config/instances', element: <Instances /> },
+      { path: 'config/regions', element: <Regions /> },
+      { path: 'config/environments', element: <Environments /> },
+      { path: 'config/connectors', element: <Connectors /> },
+      { path: 'metadata/database/manage/connector', element: <Navigate to="/config/connectors" replace /> },
+      { path: 'config/databases', element: <Databases /> },
+      { path: 'config/accounts', element: <Accounts /> },
+      { path: 'metadata/database/manage/account', element: <Navigate to="/config/accounts" replace /> },
+      { path: 'database/manage/account', element: <Navigate to="/config/accounts" replace /> },
+      { path: 'config/review-rules', element: <ReviewRules /> },
+      { path: 'metadata/database/manage/goinception', element: <Navigate to="/config/review-rules" replace /> },
+      { path: 'database/manage/goinception', element: <Navigate to="/config/review-rules" replace /> },
+      { path: 'config/args', element: <GlobalArgs /> },
+      { path: 'config/menus', element: <Menus /> },
+      { path: 'config/roles', element: <Roles /> },
+      { path: 'config/users', element: <Users /> },
+      { path: 'config/login-logs', element: <LoginLogs /> },
+      { path: 'config/query-audits', element: <QueryAudits /> },
+      { path: 'config/ldap', element: <AuthConfig /> },
+    ],
+  },
+  { path: '*', element: <Navigate to="/" replace /> },
+])
+
+export default router

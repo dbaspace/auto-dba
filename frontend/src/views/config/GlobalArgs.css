@@ -1,0 +1,45 @@
+.hint {
+  margin: 0 0 12px;
+  color: #6b7280;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+/* 表格占满剩余高度，表体内部滚动，避免盖住底部分页 */
+.ops-page .ops-table .ant-table-wrapper,
+.ops-page .ops-table .ant-spin-nested-loading,
+.ops-page .ops-table .ant-spin-container,
+.ops-page .ops-table .ant-table,
+.ops-page .ops-table .ant-table-container {
+  height: 100%;
+}
+
+.ops-page .ops-table .ant-table-body {
+  overflow-y: auto !important;
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 4px;
+  flex-shrink: 0;
+  min-height: 40px;
+  position: relative;
+  z-index: 2;
+  background: #fff;
+}
+
+.pager-total {
+  color: #6b7280;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.pager .ant-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+}

@@ -1,0 +1,56 @@
+.type-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.ds-opt {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+}
+.ds-select .ant-select-selector {
+  flex-wrap: wrap;
+}
+.muted {
+  color: #9ca3af;
+  font-size: 12px;
+}
+.optional {
+  color: #9ca3af;
+  font-weight: 400;
+}
+.batch-row {
+  display: flex;
+  gap: 24px;
+  align-items: center;
+}
+.hint {
+  color: #9ca3af;
+  font-size: 12px;
+  margin: 0 0 12px;
+}
+.hint-alert {
+  margin-bottom: 12px;
+}
+.sql-actions {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0;
+}
+.aside-actions {
+  margin-bottom: 0;
+  margin-top: 8px;
+}
+.submit-wrap {
+  display: inline-block;
+}
+.lv-error {
+  color: #dc2626;
+}
+.lv-warn {
+  color: #f59e0b;
+}
+.lv-ok {
+  color: #16a34a;
+}

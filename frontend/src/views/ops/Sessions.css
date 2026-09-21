@@ -1,0 +1,32 @@
+.sessions-tabs {
+  display: flex;
+  gap: 24px;
+  border-bottom: 1px solid #f0f0f0;
+  margin-bottom: 12px;
+  flex-shrink: 0;
+}
+.sessions-tab {
+  border: 0;
+  background: transparent;
+  padding: 8px 0;
+  cursor: pointer;
+  font-size: 14px;
+  color: #4b5563;
+  position: relative;
+}
+.sessions-tab.active {
+  color: #1677ff;
+}
+.sessions-tab.active::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: #1677ff;
+}
+.extra { margin-bottom: 12px; gap: 10px; }
+.muted { color: #6b7280; font-size: 13px; }
+.ops-page .ops-table .ant-table-wrapper { height: 100%; }
+.pager { flex-shrink: 0; display: flex; justify-content: flex-end; padding: 8px 0 0; }
