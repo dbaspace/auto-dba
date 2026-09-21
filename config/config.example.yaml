@@ -18,7 +18,8 @@ log:
 
 db:
   driver: postgres
-  dsn: "postgres://autosql_user:xV2vkHQk5jdY@10.100.112.14:5432/db_autosql?sslmode=disable"
+  # 本地填写，勿提交真实账号密码
+  dsn: "postgres://user:password@127.0.0.1:5432/db_autosql?sslmode=disable"
 
 cdc:
   enabled: false
@@ -42,10 +43,10 @@ external:
   starrocks_fe_url: ""
 
 # WebTTY / 实例主机 SSH（密钥登录，不用库账号密码）
+# 私钥放在本机 config/terminal/，该目录不入库
 terminal:
   enabled: true
-  ssh_user: sysadmin
-  # 私钥路径（勿提交仓库）；对应公钥见同目录 id_ed25519.pub
+  ssh_user: ""
   ssh_identity_file: config/terminal/id_ed25519
   scripts_dir: ""
   static_dir: ""

@@ -9,6 +9,7 @@ node_modules/
 .DS_Store
 .env
 *.db
-config/terminal/id_ed25519
-config/terminal/id_rsa
-config/terminal/*.pem
+# 本地配置含数据库账号密码，勿入库
+/config/config.yaml
+# 终端私钥与公钥均不入库
+/config/terminal/

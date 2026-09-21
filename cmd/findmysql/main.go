@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"os"
 	"strings"
 
 	_ "github.com/jackc/pgx/v4/stdlib"
@@ -11,7 +12,11 @@ import (
 )
 
 func main() {
-	meta := "postgres://autosql_user:xV2vkHQk5jdY@10.100.112.14:5432/db_autosql?sslmode=disable"
+	meta := os.Getenv("META_DSN")
+	if meta == "" {
+		fmt.Fprintln(os.Stderr, "请设置 META_DSN，不要把账号密码写进代码")
+		os.Exit(1)
+	}
 	db, err := sql.Open("pgx", meta)
 	if err != nil {
 		panic(err)

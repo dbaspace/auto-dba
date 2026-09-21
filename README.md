@@ -35,7 +35,7 @@ go build -o bin/auto-dba ./cmd/auto-dba
 默认监听 `0.0.0.0:8800`。健康检查：`GET /healthz`。  
 `http.serve_static` 默认为 `false`，**不要用 8800 打开页面**。
 
-元数据使用 PostgreSQL（见 `config/config.yaml` 的 `db.dsn`，当前库为 `db_autosql`）。启动时自动建表并写入种子数据。账号无 CREATEDB 权限，因此不会自动创建新库。
+元数据使用 PostgreSQL。复制 `config/config.example.yaml` 为本地 `config/config.yaml` 后填写 `db.dsn`。该文件和 `config/terminal/` 下的终端密钥已忽略，不要提交账号密码或密钥。启动时自动建表并写入种子数据。账号无 CREATEDB 权限，因此不会自动创建新库。
 
 首次启动会种子：
 

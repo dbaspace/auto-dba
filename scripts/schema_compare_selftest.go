@@ -21,7 +21,6 @@ import (
 )
 
 const (
-	dsnDefault = "postgres://autosql_user:xV2vkHQk5jdY@10.100.112.14:5432/db_autosql?sslmode=disable"
 	srcSchema  = "cmp_selftest_src"
 	tgtSchema  = "cmp_selftest_tgt"
 	tableName  = "tbl_selftest_demo"
@@ -34,7 +33,8 @@ func main() {
 	}
 	dsn := os.Getenv("SELFTEST_DSN")
 	if dsn == "" {
-		dsn = dsnDefault
+		fmt.Println("跳过：未设置 SELFTEST_DSN")
+		os.Exit(0)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
