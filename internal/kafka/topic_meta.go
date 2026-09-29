@@ -210,20 +210,38 @@ func fetchTopicLogSizes(ctx context.Context, inst *store.Instance, brokers []kaf
 }
 
 func fetchTopicLogEntries(ctx context.Context, inst *store.Instance, brokers []kafkago.Broker, topic string) []TopicLogEntry {
+	if topic == "" {
+		return fetchTopicLogEntriesFor(ctx, inst, brokers, nil)
+	}
+	return fetchTopicLogEntriesFor(ctx, inst, brokers, []string{topic})
+}
+
+func fetchTopicLogEntriesFor(ctx context.Context, inst *store.Instance, brokers []kafkago.Broker, topics []string) []TopicLogEntry {
 	if len(brokers) == 0 {
 		return nil
 	}
 	transport := kafkago.DefaultTransport
 	var req *describelogdirs.Request
-	if topic == "" {
+	if len(topics) == 0 {
 		// Topics=null => 拉取全部 topic 的 log dirs
 		req = &describelogdirs.Request{Topics: nil}
 	} else {
-		req = &describelogdirs.Request{
-			Topics: []describelogdirs.RequestTopic{{
-				Name:       topic,
+		reqTopics := make([]describelogdirs.RequestTopic, 0, len(topics))
+		for _, name := range topics {
+			if name == "" {
+				continue
+			}
+			reqTopics = append(reqTopics, describelogdirs.RequestTopic{
+				Name:       name,
 				Partitions: []int32{},
-			}},
+			})
+		}
+		req = &describelogdirs.Request{Topics: reqTopics}
+	}
+	allow := map[string]struct{}{}
+	for _, name := range topics {
+		if name != "" {
+			allow[name] = struct{}{}
 		}
 	}
 	var out []TopicLogEntry
@@ -245,8 +263,10 @@ func fetchTopicLogEntries(ctx context.Context, inst *store.Instance, brokers []k
 				continue
 			}
 			for _, t := range result.Topics {
-				if topic != "" && t.Name != topic {
-					continue
+				if len(allow) > 0 {
+					if _, ok := allow[t.Name]; !ok {
+						continue
+					}
 				}
 				for _, p := range t.Partitions {
 					if p.IsFuture {

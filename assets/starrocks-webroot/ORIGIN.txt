@@ -1,0 +1,3 @@
+SOURCE=https://github.com/StarRocks/starrocks/tree/main/webroot
+Copied from StarRocks upstream webroot (FE static + BE UI assets).
+Font url() paths in bootstrap*.css remapped to flat /starrocks-webroot/static/ files.

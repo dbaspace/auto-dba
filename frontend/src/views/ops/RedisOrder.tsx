@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Alert, AutoComplete, Button, Form, Input, Select, Space, Table, message } from 'antd'
+import { Alert, AutoComplete, Button, Form, Input, Select, Space, message } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
 import type { ColumnsType } from 'antd/es/table'
 import api from '../../api/request'
 import { useWorkOrderDraft } from '../../hooks/useWorkOrderDraft'
@@ -33,7 +34,7 @@ function emptyForm() {
   return {
     env: '',
     instance_id: '',
-    db_name: 'db0',
+    db_name: '',
     assigned_to: '',
     command: '',
     description: '',
@@ -383,6 +384,7 @@ export default function RedisOrder() {
 
             <Form.Item name="db_name" label="操作库 (DB)" rules={[{ required: true, message: '请选择操作库' }]}>
               <Select
+                placeholder="请选择操作库"
                 options={Array.from({ length: 16 }, (_, i) => ({
                   value: `db${i}`,
                   label: `DB ${i}`,
@@ -463,7 +465,7 @@ export default function RedisOrder() {
                 ? '检测未通过，请修改命令后重新检测'
                 : '请先点击「命令检测」并通过后，再提交'}
           </p>
-          <Table
+          <ResponsiveTable
             dataSource={checkRows}
             columns={checkColumns}
             size="small"

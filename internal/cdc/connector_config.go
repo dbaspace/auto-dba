@@ -13,6 +13,7 @@ const (
 	VersionSourceRestore     = "restore"
 	VersionSourceAddTable    = "add_table"
 	VersionSourceRemoveTable = "remove_table"
+	VersionSourceReinit      = "reinit"
 	VersionKeepN             = 50
 	connectorMaskValue       = "********"
 )

@@ -68,6 +68,11 @@ func redactInstance(it *store.Instance) {
 	it.Password = ""
 }
 
+func redactInstanceCopy(it store.Instance) store.Instance {
+	redactInstance(&it)
+	return it
+}
+
 func (h *InstanceHandler) List(c *gin.Context) {
 	list, err := h.Store.ListInstances(c.Query("db_type"), c.Query("q"))
 	if err != nil {
@@ -258,6 +263,7 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "创建失败（可能是 host+port 已存在）: " + err.Error()})
 		return
 	}
+	_ = h.Store.AppendCmdbAudit(c.GetString(middleware.CtxUsername), "create", "instance", it.ID, "api", nil, redactInstanceCopy(it))
 	redactInstance(&it)
 	c.JSON(http.StatusOK, gin.H{"data": it})
 }
@@ -317,6 +323,7 @@ func (h *InstanceHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
+	_ = h.Store.AppendCmdbAudit(c.GetString(middleware.CtxUsername), "update", "instance", it.ID, "api", redactInstanceCopy(*exist), redactInstanceCopy(it))
 	redactInstance(&it)
 	c.JSON(http.StatusOK, gin.H{"data": it})
 }
@@ -340,10 +347,31 @@ func validateHostACL(it *store.Instance) string {
 }
 
 func (h *InstanceHandler) Delete(c *gin.Context) {
-	if err := h.Store.DeleteInstance(c.Param("id")); err != nil {
+	id := c.Param("id")
+	exist, _ := h.Store.GetInstance(id)
+	if exist != nil && strings.EqualFold(strings.TrimSpace(exist.DBType), "host") {
+		refs, err := collectHostRefs(h.Store, exist)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": "检查主机引用失败: " + err.Error()})
+			return
+		}
+		if len(refs) > 0 {
+			c.JSON(http.StatusConflict, gin.H{
+				"message": "主机「" + exist.Name + "」仍被使用，请先下线节点并删除 Agent：" + formatHostRefs(refs),
+				"data":    refs,
+			})
+			return
+		}
+	}
+	if err := h.Store.DeleteInstance(id); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
+	var before any
+	if exist != nil {
+		before = redactInstanceCopy(*exist)
+	}
+	_ = h.Store.AppendCmdbAudit(c.GetString(middleware.CtxUsername), "delete", "instance", id, "api", before, nil)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
@@ -386,6 +414,31 @@ func (h *InstanceHandler) ListKafkaTopics(c *gin.Context) {
 		list = []kquery.TopicDetail{}
 	}
 	c.JSON(http.StatusOK, gin.H{"data": list, "lite": lite})
+}
+
+func (h *InstanceHandler) KafkaTopicStats(c *gin.Context) {
+	inst, ok := h.kafkaInstance(c)
+	if !ok {
+		return
+	}
+	var body struct {
+		Names []string `json:"names"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "names 必填"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 25*time.Second)
+	defer cancel()
+	list, err := kquery.TopicPageStats(ctx, inst, body.Names)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	if list == nil {
+		list = []kquery.TopicDetail{}
+	}
+	c.JSON(http.StatusOK, gin.H{"data": list})
 }
 
 func (h *InstanceHandler) DeleteKafkaTopic(c *gin.Context) {
@@ -688,6 +741,7 @@ func (h *DatabaseHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "创建失败（库名可能已存在）: " + err.Error()})
 		return
 	}
+	_ = h.Store.AppendCmdbAudit(c.GetString(middleware.CtxUsername), "create", "database", it.ID, "api", nil, it)
 	c.JSON(http.StatusOK, gin.H{"data": it})
 }
 
@@ -771,14 +825,18 @@ func (h *DatabaseHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
+	_ = h.Store.AppendCmdbAudit(c.GetString(middleware.CtxUsername), "update", "database", it.ID, "api", exist, it)
 	c.JSON(http.StatusOK, gin.H{"data": it})
 }
 
 func (h *DatabaseHandler) Delete(c *gin.Context) {
-	if err := h.Store.DeleteDatabase(c.Param("id")); err != nil {
+	id := c.Param("id")
+	exist, _ := h.Store.GetDatabase(id)
+	if err := h.Store.DeleteDatabase(id); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
+	_ = h.Store.AppendCmdbAudit(c.GetString(middleware.CtxUsername), "delete", "database", id, "api", exist, nil)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 

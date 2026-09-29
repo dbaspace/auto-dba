@@ -14,8 +14,11 @@ export const WORK_ORDER_CREATE_OPTIONS: WorkOrderCreateOption[] = [
   { type: 'ddl', label: 'DDL工单', path: '/ops/ddl' },
   { type: 'dml', label: 'DML工单', path: '/ops/dml' },
   { type: 'kafka', label: 'Kafka工单', path: '/ops/kafka' },
+  { type: 'redis', label: 'Redis工单', path: '/ops/redis' },
   { type: 'dcl', label: '权限申请', path: '/ops/dcl' },
   { type: 'createdb', label: '新增数据库', path: '/ops/createdb' },
+  { type: 'dql', label: '数据导出', path: '/ops/dql' },
+  { type: 'archive', label: '归档工单', path: '/ops/archive/apply' },
   { type: 'multi', label: '多语模板', path: '/ops/multilang' },
   { type: 'cdc', label: 'CDC同步任务', path: '/ops/cdc/create' },
   { type: 'migration', label: '数据迁移', path: '/ops/migration/create' },
@@ -26,17 +29,21 @@ const LEGACY_PAGE_DRAFTS: Record<string, { store: 'sessionStorage' | 'localStora
   dml: { store: 'sessionStorage', key: 'auto-dba-dml-draft' },
   createdb: { store: 'sessionStorage', key: 'auto-dba-createdb-draft' },
   kafka: { store: 'localStorage', key: 'auto-dba-kafka-draft' },
+  redis: { store: 'localStorage', key: 'auto-dba-redis-draft' },
   dcl: { store: 'localStorage', key: 'auto-dba-dcl-draft' },
+  dql: { store: 'sessionStorage', key: 'auto-dba-dql-draft' },
+  archive: { store: 'localStorage', key: 'auto-dba-archive-draft' },
   cdc: { store: 'localStorage', key: 'auto-dba-cdc-create-draft' },
   migration: { store: 'localStorage', key: 'auto-dba-migration-draft' },
 }
 
 const IGNORE_MEANINGFUL_KEYS = new Set([
-  'assigned_to', 'reviewer', 'assigned_approver', 'scheduled_at', 'is_debug',
+  'assigned_to', 'reviewer', 'assigned_approver', 'approver', 'scheduled_at', 'is_debug',
   'action', 'cleanup_policy', 'retention', 'partition', 'replication', 'step',
   'task_type', 'debezium_mode', 'message_schema_mode', 'key_model',
   'auto_create_table', 'shard_db', 'shard_table', 'start_mode', 'migration_mode',
   'schema_strategy', 'conflict_strategy', 'transfer_mode', 'batch_size', 'speed_limit',
+  'run_mode', 'need_sensitive_data', 'row_count', 'columns',
 ])
 
 export const DRAFTS_CHANGED_EVENT = 'work-order-drafts-changed'
@@ -260,7 +267,12 @@ export function saveWorkOrderDraft(
   if (!uid || !type || !path) return false
   const values = serializeDraftValues(draft.values)
   const map = readMap(uid)
-  if (!opts.force && !map[type] && !hasMeaningfulDraftValues(values)) return true
+  if (!opts.force && !hasMeaningfulDraftValues(values)) {
+    if (!map[type]) return true
+    delete map[type]
+    removeLegacy(type)
+    return writeMap(uid, map)
+  }
   map[type] = {
     type,
     label: String(draft.label || type),

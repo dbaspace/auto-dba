@@ -1,41 +1,131 @@
-import React from 'react'
+import React, { useId } from 'react'
+import './BrandMark.css'
 
-/** auto-dba 专属品牌标：A/D 咬合字母组合 + 自动化折线，避免通用数据库圆柱 */
-export default function BrandMark({ size = 36 }: { size?: number }) {
+/** 设计稿左侧盾牌 + 库 + 钥孔图标（viewBox 320²） */
+export function BrandMarkIcon({
+  size = 32,
+  className = '',
+}: {
+  size?: number
+  className?: string
+}) {
+  const uid = useId().replace(/:/g, '')
+  const bg = `kp-${uid}-bg`
+  const cy = `kp-${uid}-cy`
+  const pu = `kp-${uid}-pu`
+
   return (
     <svg
+      className={`brand-mark-icon ${className}`.trim()}
       width={size}
       height={size}
-      viewBox="0 0 40 40"
+      viewBox="0 0 320 320"
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
       role="img"
-      aria-label="auto-dba"
+      aria-hidden
     >
-      <rect width="40" height="40" rx="10" fill="#EEF1F8" />
-      {/* A */}
-      <path
-        d="M7 31 L15.5 8 H19 L14.2 22.5 H24.3 L22.6 27.5 H12.4 L10.2 31 H7Z"
-        fill="#1F2937"
+      <defs>
+        <linearGradient id={bg} x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#1B4F8C" />
+          <stop offset="1" stopColor="#3B8DFF" />
+        </linearGradient>
+        <linearGradient id={cy} x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#00E5FF" />
+          <stop offset="1" stopColor="#2F80FF" />
+        </linearGradient>
+        <linearGradient id={pu} x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#8B5CF6" />
+          <stop offset="1" stopColor="#FF4FD8" />
+        </linearGradient>
+      </defs>
+      <rect width="320" height="320" rx="80" fill={`url(#${bg})`} />
+      <ellipse
+        cx="160"
+        cy="160"
+        rx="125"
+        ry="46"
+        fill="none"
+        stroke="#8B5CF6"
+        strokeWidth="5"
+        opacity=".55"
+        transform="rotate(-18 160 160)"
       />
-      <path d="M13.6 19 H22.2 L21.2 22.2 H12.7 L13.6 19Z" fill="#4F5FB8" />
-      {/* D */}
-      <path
-        d="M21 8 H26.5C32.3 8 36 12.2 36 20C36 27.8 32.3 32 26.5 32H21V8Z"
-        fill="#4F5FB8"
+      <ellipse
+        cx="160"
+        cy="160"
+        rx="125"
+        ry="46"
+        fill="none"
+        stroke="#00E5FF"
+        strokeWidth="5"
+        opacity=".55"
+        transform="rotate(42 160 160)"
       />
       <path
-        d="M24.2 12.2V27.8H26.4C29.9 27.8 32.2 24.7 32.2 20C32.2 15.3 29.9 12.2 26.4 12.2H24.2Z"
-        fill="#EEF1F8"
-      />
-      {/* 自动化轨迹 */}
-      <path
-        d="M22.8 16.5H26.2L27.8 14.2L30 20.2L31.8 17.4"
-        stroke="#1F2937"
-        strokeWidth="1.5"
-        strokeLinecap="round"
+        d="M160 50 L252 92 L252 182 C252 232 204 270 160 286 C116 270 68 232 68 182 L68 92 Z"
+        fill="none"
+        stroke={`url(#${cy})`}
+        strokeWidth="10"
         strokeLinejoin="round"
       />
+      <ellipse cx="160" cy="130" rx="46" ry="16" fill="#00E5FF" />
+      <rect x="114" y="130" width="92" height="42" fill="#00E5FF" opacity=".5" />
+      <ellipse cx="160" cy="172" rx="46" ry="16" fill="#00E5FF" />
+      <circle cx="160" cy="160" r="24" fill="#fff" opacity=".96" />
+      <circle cx="160" cy="154" r="10" fill="#1E3A5F" />
+      <rect x="156" y="160" width="8" height="22" rx="4" fill="#1E3A5F" />
+      <g fill={`url(#${pu})`}>
+        <rect x="238" y="88" width="30" height="9" rx="4.5" />
+        <rect x="248.5" y="77.5" width="9" height="30" rx="4.5" />
+      </g>
+      <circle cx="48" cy="220" r="10" fill="#00E5FF" />
+      <circle cx="282" cy="128" r="10" fill="#8B5CF6" />
     </svg>
+  )
+}
+
+/** 侧栏字标：展开 = 图标 + KeePlus；收起 = 仅图标；textOnly 仅字标（登录页旁已有大图标） */
+export function BrandWordmark({
+  collapsed = false,
+  textOnly = false,
+  className = '',
+}: {
+  collapsed?: boolean
+  textOnly?: boolean
+  className?: string
+}) {
+  if (textOnly) {
+    return (
+      <span className={`brand-wordmark ${className}`.trim()} aria-label="KeePlus" title="KeePlus">
+        <span className="brand-kee">Kee</span>
+        <span className="brand-plus">Plus</span>
+      </span>
+    )
+  }
+  if (collapsed) {
+    return (
+      <span className={`brand-lockup brand-lockup-compact ${className}`.trim()} aria-label="KeePlus" title="KeePlus">
+        <BrandMarkIcon size={28} />
+      </span>
+    )
+  }
+  return (
+    <span className={`brand-lockup ${className}`.trim()} aria-label="KeePlus" title="KeePlus">
+      <BrandMarkIcon size={30} />
+      <span className="brand-wordmark">
+        <span className="brand-kee">Kee</span>
+        <span className="brand-plus">Plus</span>
+      </span>
+    </span>
+  )
+}
+
+/** 登录等场景的方形图标 */
+export default function BrandMark({ size = 36 }: { size?: number }) {
+  return (
+    <span className="brand-mark" style={{ width: size, height: size }} aria-label="KeePlus" role="img">
+      <BrandMarkIcon size={size} />
+    </span>
   )
 }

@@ -1,0 +1,614 @@
+/* 外观主题 CSS 变量默认值（ocean-blue / light） */
+:root {
+  --app-color-primary: #1677ff;
+  --app-color-primary-soft: #e6f4ff;
+  --app-sider-bg: #f0f7ff;
+  --app-sider-text: #374151;
+  --app-sider-active-bg: #e6f4ff;
+  --app-sider-active-color: #1677ff;
+  --app-header-bg: #ffffff;
+  --app-header-height: 44px;
+  --app-border: #d6e4ff;
+  --app-page-bg: #ffffff;
+  --app-content-bg: #ffffff;
+  --app-text: #1f2937;
+  --app-text-secondary: #8c8c8c;
+}
+
+html[data-color-mode='dark'] body {
+  background: var(--app-page-bg);
+  color: var(--app-text);
+}
+
+.app-sider.ant-layout-sider {
+  background: var(--app-sider-bg) !important;
+  border-right-color: var(--app-border) !important;
+}
+
+.app-sider-brand {
+  height: var(--app-header-height);
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 0 12px 0 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--app-border);
+  color: var(--app-sider-text);
+  background: var(--app-sider-bg);
+}
+
+.app-sider.is-collapsed .app-sider-brand {
+  justify-content: center;
+  padding: 0;
+}
+
+.app-sider-footer {
+  flex-shrink: 0;
+  border-top: 1px solid var(--app-border);
+  padding: 6px 0 8px;
+  background: var(--app-sider-bg);
+}
+
+.app-sider-footer-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  border: none;
+  background: transparent;
+  text-align: left;
+  padding: 10px 20px;
+  cursor: pointer;
+  color: var(--app-sider-text);
+  font-size: 14px;
+  border-radius: 0;
+}
+
+.app-sider-footer-btn:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+html[data-color-mode='dark'] .app-sider-footer-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.app-sider.is-collapsed .app-sider-footer-btn,
+.app-sider.is-collapsed .app-sider-top-item {
+  justify-content: center;
+  padding: 10px 0;
+  gap: 0;
+}
+
+.app-sider.is-collapsed .app-sider-top-item .app-sider-label,
+.app-sider.is-collapsed .app-sider-footer-btn .app-sider-label {
+  display: none;
+}
+
+.app-sider.is-collapsed .app-sider-top-item.active,
+.app-sider.is-collapsed .app-sider-top-item.flyout-open {
+  margin: 0 8px;
+  border-radius: 8px;
+  width: calc(100% - 16px);
+  padding: 10px 0;
+}
+
+.app-appearance-panel {
+  width: 320px;
+  padding: 4px 0 0;
+}
+
+.app-appearance-section-title {
+  font-size: 12px;
+  color: #8c8c8c;
+  margin-bottom: 10px;
+}
+
+.app-appearance-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.app-appearance-card {
+  position: relative;
+  border: 1px solid #f0f0f0;
+  border-radius: 8px;
+  padding: 8px 6px 6px;
+  background: #fff;
+  cursor: pointer;
+  text-align: center;
+}
+
+.app-appearance-card:hover {
+  border-color: #d9d9d9;
+}
+
+.app-appearance-card.is-active {
+  border-color: var(--app-color-primary);
+  background: var(--app-color-primary-soft);
+}
+
+.app-appearance-thumb {
+  height: 44px;
+  border-radius: 6px;
+  overflow: hidden;
+  display: flex;
+  border: 1px solid #f0f0f0;
+  margin-bottom: 6px;
+}
+
+.app-appearance-thumb-sider {
+  width: 28%;
+  background: #eee;
+}
+
+.app-appearance-thumb-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: #fafafa;
+}
+
+.app-appearance-thumb-header {
+  height: 10px;
+  background: #fff;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.app-appearance-thumb-body {
+  flex: 1;
+  margin: 4px;
+  border-radius: 2px;
+  background: #fff;
+  border-left: 3px solid var(--thumb-accent, #1677ff);
+}
+
+.app-appearance-card-label {
+  font-size: 12px;
+  color: #374151;
+  line-height: 1.2;
+}
+
+.app-appearance-check {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--app-color-primary);
+  color: #fff;
+  font-size: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.app-appearance-mode {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: #f5f5f5;
+  border-radius: 8px;
+}
+
+.app-appearance-mode-btn {
+  flex: 1;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  padding: 8px 4px;
+  cursor: pointer;
+  font-size: 12px;
+  color: #595959;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.app-appearance-mode-btn.is-active {
+  background: #fff;
+  color: var(--app-color-primary);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+/* —— 深色模式：布局壳 + 常见白底卡片 —— */
+html[data-color-mode='dark'] .app-tab-bar {
+  background: var(--app-page-bg) !important;
+  border-bottom-color: var(--app-border) !important;
+}
+
+html[data-color-mode='dark'] .app-tab {
+  color: var(--app-text-secondary);
+  border-right-color: var(--app-border);
+}
+
+html[data-color-mode='dark'] .app-tab:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--app-text);
+}
+
+html[data-color-mode='dark'] .app-tab.active {
+  background: var(--app-content-bg) !important;
+  color: var(--app-sider-active-color) !important;
+}
+
+html[data-color-mode='dark'] .app-tab-panels,
+html[data-color-mode='dark'] .app-tab-panel {
+  background: var(--app-content-bg) !important;
+  color: var(--app-text);
+}
+
+html[data-color-mode='dark'] .nav-flyout {
+  background: var(--app-content-bg) !important;
+  border-color: var(--app-border) !important;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+}
+
+html[data-color-mode='dark'] .nav-flyout-head {
+  border-bottom-color: var(--app-border);
+  color: var(--app-text);
+}
+
+html[data-color-mode='dark'] .nav-flyout-section + .nav-flyout-section {
+  border-top-color: var(--app-border);
+}
+
+html[data-color-mode='dark'] .nav-flyout-section-title,
+html[data-color-mode='dark'] .nav-flyout-head-title {
+  color: var(--app-text);
+}
+
+html[data-color-mode='dark'] .nav-flyout-link {
+  color: var(--app-text);
+}
+
+html[data-color-mode='dark'] .nav-flyout-link:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+html[data-color-mode='dark'] .page-card,
+html[data-color-mode='dark'] .ops-card,
+html[data-color-mode='dark'] .kpi,
+html[data-color-mode='dark'] .wb-card,
+html[data-color-mode='dark'] .chart-card {
+  background: var(--app-content-bg) !important;
+  border-color: var(--app-border) !important;
+  color: var(--app-text);
+  box-shadow: none;
+}
+
+html[data-color-mode='dark'] .kpi-top,
+html[data-color-mode='dark'] .kpi-foot,
+html[data-color-mode='dark'] .nav-flyout-head-sub {
+  color: var(--app-text-secondary) !important;
+}
+
+html[data-color-mode='dark'] .kpi-num {
+  color: var(--app-text) !important;
+}
+
+html[data-color-mode='dark'] .ant-layout,
+html[data-color-mode='dark'] .ant-layout-content {
+  background: var(--app-page-bg) !important;
+}
+
+html[data-color-mode='dark'] .ant-card {
+  background: var(--app-content-bg);
+  border-color: var(--app-border);
+  color: var(--app-text);
+}
+
+html[data-color-mode='dark'] .ant-card .ant-card-head {
+  background: var(--app-content-bg);
+  border-bottom-color: var(--app-border);
+  color: var(--app-text);
+}
+
+html[data-color-mode='dark'] .ant-table-wrapper .ant-table {
+  background: var(--app-content-bg);
+  color: var(--app-text);
+}
+
+html[data-color-mode='dark'] .ant-table-thead > tr > th {
+  background: #262626 !important;
+  color: var(--app-text) !important;
+  border-bottom-color: var(--app-border) !important;
+}
+
+html[data-color-mode='dark'] .ant-table-tbody > tr > td {
+  border-bottom-color: var(--app-border) !important;
+}
+
+html[data-color-mode='dark'] .ant-table-tbody > tr:hover > td {
+  background: #262626 !important;
+}
+
+html[data-color-mode='dark'] .page-card h1,
+html[data-color-mode='dark'] .page-card h2,
+html[data-color-mode='dark'] .page-card h3 {
+  color: var(--app-text);
+}
+
+html[data-color-mode='dark'] .pager,
+html[data-color-mode='dark'] .ops-page,
+html[data-color-mode='dark'] .page-card {
+  background: var(--app-content-bg) !important;
+  color: var(--app-text);
+}
+
+html[data-color-mode='dark'] .order-aside,
+html[data-color-mode='dark'] .order-main,
+html[data-color-mode='dark'] .order-aside .aside-actions {
+  background: var(--app-content-bg) !important;
+  border-color: var(--app-border) !important;
+  color: var(--app-text);
+}
+
+html[data-color-mode='dark'] .ops-title h1,
+html[data-color-mode='dark'] .sql-title,
+html[data-color-mode='dark'] .wb-head-title,
+html[data-color-mode='dark'] .chart-title {
+  color: var(--app-text) !important;
+}
+
+html[data-color-mode='dark'] .hint,
+html[data-color-mode='dark'] .muted,
+html[data-color-mode='dark'] .optional,
+html[data-color-mode='dark'] .pager-total,
+html[data-color-mode='dark'] .filter-item .label {
+  color: var(--app-text-secondary) !important;
+}
+
+html[data-color-mode='dark'] .quick:not(.alert) {
+  background: #262626 !important;
+  border-color: var(--app-border) !important;
+  color: var(--app-text) !important;
+}
+
+html[data-color-mode='dark'] .quick:not(.alert):hover {
+  background: #303030 !important;
+}
+
+html[data-color-mode='dark'] .create-item {
+  background: #262626 !important;
+  border-color: var(--app-border) !important;
+  color: var(--app-text) !important;
+}
+
+html[data-color-mode='dark'] .create-item:hover {
+  background: #303030 !important;
+  border-color: var(--app-color-primary) !important;
+}
+
+html[data-color-mode='dark'] .act-list li {
+  color: var(--app-text-secondary);
+}
+
+/* Ant 表面兜底 */
+html[data-color-mode='dark'] .ant-pagination {
+  color: var(--app-text-secondary);
+}
+
+html[data-color-mode='dark'] .ant-pagination .ant-pagination-item {
+  background: var(--app-content-bg);
+  border-color: var(--app-border);
+}
+
+html[data-color-mode='dark'] .ant-pagination .ant-pagination-item a {
+  color: var(--app-text);
+}
+
+html[data-color-mode='dark'] .ant-pagination .ant-pagination-item-active {
+  background: var(--app-color-primary);
+  border-color: var(--app-color-primary);
+}
+
+html[data-color-mode='dark'] .ant-pagination .ant-pagination-item-active a {
+  color: #fff;
+}
+
+html[data-color-mode='dark'] .ant-tabs-nav,
+html[data-color-mode='dark'] .ant-tabs-content-holder {
+  background: transparent;
+  color: var(--app-text);
+}
+
+html[data-color-mode='dark'] .ant-tabs-tab {
+  color: var(--app-text-secondary);
+}
+
+html[data-color-mode='dark'] .ant-form-item-label > label {
+  color: var(--app-text) !important;
+}
+
+html[data-color-mode='dark'] .ant-input,
+html[data-color-mode='dark'] .ant-input-affix-wrapper,
+html[data-color-mode='dark'] .ant-input-number,
+html[data-color-mode='dark'] .ant-input-textarea textarea,
+html[data-color-mode='dark'] .ant-select-selector,
+html[data-color-mode='dark'] .ant-picker {
+  background: #141414 !important;
+  border-color: var(--app-border) !important;
+  color: var(--app-text) !important;
+}
+
+html[data-color-mode='dark'] .ant-input::placeholder,
+html[data-color-mode='dark'] .ant-select-selection-placeholder {
+  color: #737373 !important;
+}
+
+html[data-color-mode='dark'] .ant-collapse,
+html[data-color-mode='dark'] .ant-collapse-content,
+html[data-color-mode='dark'] .ant-collapse-header {
+  background: var(--app-content-bg) !important;
+  color: var(--app-text) !important;
+  border-color: var(--app-border) !important;
+}
+
+html[data-color-mode='dark'] .ant-empty-description {
+  color: var(--app-text-secondary) !important;
+}
+
+html[data-color-mode='dark'] .ant-modal-content,
+html[data-color-mode='dark'] .ant-modal-header,
+html[data-color-mode='dark'] .ant-drawer-content,
+html[data-color-mode='dark'] .ant-drawer-header {
+  background: var(--app-content-bg) !important;
+  color: var(--app-text) !important;
+  border-color: var(--app-border) !important;
+}
+
+html[data-color-mode='dark'] .ant-modal-title,
+html[data-color-mode='dark'] .ant-drawer-title {
+  color: var(--app-text) !important;
+}
+
+html[data-color-mode='dark'] .ant-divider {
+  border-color: var(--app-border);
+}
+
+html[data-color-mode='dark'] .ant-descriptions-bordered .ant-descriptions-item-label,
+html[data-color-mode='dark'] .ant-descriptions-bordered .ant-descriptions-item-content {
+  background: var(--app-content-bg);
+  border-color: var(--app-border);
+  color: var(--app-text);
+}
+
+html[data-color-mode='dark'] .ant-alert {
+  border-color: var(--app-border);
+}
+
+html[data-color-mode='dark'] .ant-radio-wrapper,
+html[data-color-mode='dark'] .ant-checkbox-wrapper {
+  color: var(--app-text);
+}
+
+html[data-color-mode='dark'] .ant-segmented {
+  background: #141414;
+}
+
+html[data-color-mode='dark'] .ant-btn-default {
+  background: #262626;
+  border-color: var(--app-border);
+  color: var(--app-text);
+}
+
+/* —— 各业务模块壳：查询 / 工单灰底页 / 配置 / 归档 等 —— */
+html[data-color-mode='dark'] .order-page,
+html[data-color-mode='dark'] .gray-page,
+html[data-color-mode='dark'] .query-page,
+html[data-color-mode='dark'] .pane-left,
+html[data-color-mode='dark'] .pane-right,
+html[data-color-mode='dark'] .editor-col,
+html[data-color-mode='dark'] .hist-col,
+html[data-color-mode='dark'] .result-col,
+html[data-color-mode='dark'] .work-tabs,
+html[data-color-mode='dark'] .tool-bar,
+html[data-color-mode='dark'] .kafka-query .layout,
+html[data-color-mode='dark'] .redis-query .layout {
+  background: var(--app-content-bg) !important;
+  color: var(--app-text);
+  border-color: var(--app-border) !important;
+}
+
+html[data-color-mode='dark'] .sql-box,
+html[data-color-mode='dark'] .db-name,
+html[data-color-mode='dark'] .store-title {
+  color: var(--app-text) !important;
+}
+
+html[data-color-mode='dark'] .query-wm span {
+  color: #fff !important;
+  opacity: 0.06;
+}
+
+html[data-color-mode='dark'] .store-item:hover {
+  background: #262626 !important;
+}
+
+html[data-color-mode='dark'] .work-tabs,
+html[data-color-mode='dark'] .tool-bar,
+html[data-color-mode='dark'] .db-meta {
+  border-color: var(--app-border) !important;
+}
+
+html[data-color-mode='dark'] .query-page .pane-collapse-btn {
+  background: #262626 !important;
+  color: var(--app-text) !important;
+  border-color: var(--app-border) !important;
+}
+
+html[data-color-mode='dark'] .ant-tree,
+html[data-color-mode='dark'] .ant-tree .ant-tree-node-content-wrapper {
+  background: transparent !important;
+  color: var(--app-text) !important;
+}
+
+html[data-color-mode='dark'] .ant-tree .ant-tree-node-content-wrapper:hover,
+html[data-color-mode='dark'] .ant-tree .ant-tree-node-content-wrapper.ant-tree-node-selected {
+  background: #262626 !important;
+}
+
+html[data-color-mode='dark'] .ant-tabs-card > .ant-tabs-nav .ant-tabs-tab,
+html[data-color-mode='dark'] .ant-tabs-card > .ant-tabs-nav .ant-tabs-tab-active {
+  background: var(--app-content-bg) !important;
+  border-color: var(--app-border) !important;
+  color: var(--app-text) !important;
+}
+
+html[data-color-mode='dark'] .detail-page,
+html[data-color-mode='dark'] .flashback-page,
+html[data-color-mode='dark'] .archive-page,
+html[data-color-mode='dark'] .migration-page,
+html[data-color-mode='dark'] .cdc-page,
+html[data-color-mode='dark'] .ldap-page,
+html[data-color-mode='dark'] .menus-layout,
+html[data-color-mode='dark'] .menus-left,
+html[data-color-mode='dark'] .menus-right,
+html[data-color-mode='dark'] .review-rules-page,
+html[data-color-mode='dark'] .collapsible-side,
+html[data-color-mode='dark'] .db-picker,
+html[data-color-mode='dark'] .db-picker-panel {
+  background: var(--app-content-bg) !important;
+  color: var(--app-text);
+  border-color: var(--app-border) !important;
+}
+
+html[data-color-mode='dark'] .app-tab-panel {
+  background: var(--app-page-bg) !important;
+}
+
+html[data-color-mode='dark'] .app-tab-panels {
+  background: var(--app-page-bg) !important;
+}
+
+/* 浅色/系统：内容区强制与 content 同色铺满（与深色观感一致） */
+html[data-color-mode='light'] .app-tab-panel,
+html[data-color-mode='light'] .app-tab-panels {
+  background: var(--app-content-bg) !important;
+}
+
+html[data-color-mode='light'] .ops-page,
+html[data-color-mode='light'] .order-page,
+html[data-color-mode='light'] .gray-page,
+html[data-color-mode='light'] .page-card,
+html[data-color-mode='light'] .ldap-page,
+html[data-color-mode='light'] .mig-page,
+html[data-color-mode='light'] .mig-create,
+html[data-color-mode='light'] .mig-detail,
+html[data-color-mode='light'] .cdc-shell,
+html[data-color-mode='light'] .review-page,
+html[data-color-mode='light'] .query-page,
+html[data-color-mode='light'] .archive-shell,
+html[data-color-mode='light'] .fb-cloud,
+html[data-color-mode='light'] .fb-shell,
+html[data-color-mode='light'] .dash {
+  background: var(--app-content-bg) !important;
+}

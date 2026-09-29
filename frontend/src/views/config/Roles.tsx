@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Button, Form, Input, Modal, Space, Table, Tree, message } from 'antd'
+import { Button, Form, Input, Modal, Space, Tree, message } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
 import type { DataNode } from 'antd/es/tree'
 import api from '../../api/request'
 import Auth from '../../components/Auth'
@@ -284,7 +285,7 @@ export default function Roles() {
       </div>
 
       <div className="white-card" style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
-        <Table
+        <ResponsiveTable
           rowKey="id"
           dataSource={roles}
           pagination={false}
@@ -434,7 +435,7 @@ export default function Roles() {
         onCancel={() => setMembersOpen(false)}
         destroyOnClose
       >
-        <Table
+        <ResponsiveTable
           rowKey="id"
           loading={membersLoading}
           dataSource={members}
@@ -450,10 +451,10 @@ export default function Roles() {
 
       <style>{`
         .role-perm-box {
-          border: 1px solid #f0f0f0;
+          border: 1px solid var(--app-border, #f0f0f0);
           border-radius: 8px;
           padding: 12px;
-          background: #fafafa;
+          background: var(--app-page-bg, #fafafa);
         }
         .role-perm-toolbar {
           display: flex;
@@ -465,8 +466,8 @@ export default function Roles() {
         .role-perm-tree {
           max-height: 360px;
           overflow: auto;
-          background: #fff;
-          border: 1px solid #f0f0f0;
+          background: var(--app-content-bg, #fff);
+          border: 1px solid var(--app-border, #f0f0f0);
           border-radius: 6px;
           padding: 8px 12px;
         }

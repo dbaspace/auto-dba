@@ -1,0 +1,253 @@
+import React, { useMemo } from 'react'
+import { Navigate, Route, Routes, useParams } from 'react-router-dom'
+import Dashboard from '../views/dashboard/Dashboard'
+import CdcList from '../views/ops/CdcList'
+import CdcDetail from '../views/ops/CdcDetail'
+import CdcCreate from '../views/ops/CdcCreate'
+import TicketList from '../views/tickets/TicketList'
+import TicketDetail from '../views/tickets/TicketDetail'
+import DclGrants from '../views/tickets/DclGrants'
+import CreateDb from '../views/tickets/CreateDb'
+import DdlOrder from '../views/tickets/DdlOrder'
+import DmlOrder from '../views/tickets/DmlOrder'
+import DqlExport from '../views/tickets/DqlExport'
+import KafkaOrder from '../views/ops/KafkaOrder'
+import RedisOrder from '../views/ops/RedisOrder'
+import SlotList from '../views/ops/SlotList'
+import Multilang from '../views/ops/Multilang'
+import DolphinOps from '../views/ops/DolphinOps'
+import SrNodes from '../views/ops/SrNodes'
+import ClusterDeployHub from '../views/ops/ClusterDeployHub'
+import ClusterDeployEngine from '../views/ops/ClusterDeployEngine'
+import Sessions from '../views/ops/Sessions'
+import SqlInsight from '../views/ops/SqlInsight'
+import DbMonitor from '../views/ops/DbMonitor'
+import RedisRdb from '../views/ops/redis-rdb/RedisRdb'
+import Migration from '../views/ops/Migration'
+import MigrationCreate from '../views/ops/MigrationCreate'
+import MigrationDetail from '../views/ops/MigrationDetail'
+import MigrationSettings from '../views/ops/MigrationSettings'
+import MigrationSchemaCompare from '../views/ops/MigrationSchemaCompare'
+import Flashback from '../views/flashback/Flashback'
+import FlashbackCloud from '../views/flashback/FlashbackCloud'
+import Environments from '../views/config/Environments'
+import Regions from '../views/config/Regions'
+import Users from '../views/config/Users'
+import Roles from '../views/config/Roles'
+import GlobalArgs from '../views/config/GlobalArgs'
+import SqlInsightSettings from '../views/config/SqlInsightSettings'
+import LoginLogs from '../views/config/LoginLogs'
+import QueryAudits from '../views/config/QueryAudits'
+import Connectors from '../views/config/Connectors'
+import MonitorTargets from '../views/config/MonitorTargets'
+import FeAdmin from '../views/config/FeAdmin'
+import DsAdmin from '../views/config/DsAdmin'
+import AuthConfig from '../views/config/AuthConfig'
+import ReviewRules from '../views/config/ReviewRules'
+import Instances from '../views/config/Instances'
+import Databases from '../views/config/Databases'
+import Accounts from '../views/config/Accounts'
+import Menus from '../views/config/Menus'
+import RunHistory from '../views/archive/RunHistory'
+import Masking from '../views/archive/Masking'
+import Report from '../views/archive/Report'
+import ArchiveDashboard from '../views/archive/Dashboard'
+import ArchiveOrder from '../views/archive/ArchiveOrder'
+import TaskList from '../views/archive/TaskList'
+import ArchiveMonitor from '../views/archive/Monitor'
+import ArchiveSettings from '../views/archive/Settings'
+import KafkaQuery from '../views/query/KafkaQuery'
+import RedisQuery from '../views/query/RedisQuery'
+import CommonQuery from '../views/query/CommonQuery'
+import Terminal from '../views/ops/Terminal'
+import HaMaintain from '../views/ops/HaMaintain'
+import BackupPolicies from '../views/backup/Policies'
+import BackupRuns from '../views/backup/Runs'
+import BackupSettings from '../views/backup/Settings'
+import PlatformAgent from '../views/config/PlatformAgent'
+import OssUpload from '../views/config/OssUpload'
+import CmdbAssets from '../views/cmdb/Assets'
+import CmdbTopology from '../views/cmdb/Topology'
+import CmdbTags from '../views/cmdb/Tags'
+import CmdbDiscover from '../views/cmdb/Discover'
+import CmdbImportExport from '../views/cmdb/ImportExport'
+import CmdbAudit from '../views/cmdb/Audit'
+import CmdbSync from '../views/cmdb/Sync'
+
+function RedirectWithId({ toPrefix }: { toPrefix: string }) {
+  const { id } = useParams()
+  return <Navigate to={`${toPrefix}/${id || ''}`} replace />
+}
+
+/** 单个 Tab 面板：用固定 location 匹配路由，隐藏时组件仍挂载保活 */
+export function TabPagePanel({ pathname, search }: { pathname: string; search?: string }) {
+  const loc = useMemo(
+    () => ({
+      pathname,
+      search: search || '',
+      hash: '',
+      state: null as unknown,
+      key: pathname + (search || ''),
+    }),
+    [pathname, search],
+  )
+
+  return (
+    <Routes location={loc}>
+      <Route path="/ops/dashboard" element={<Dashboard />} />
+      <Route path="/metadata/database/search/dashboard" element={<Navigate to="/ops/dashboard" replace />} />
+
+      <Route path="/ops/query" element={<CommonQuery />} />
+      <Route path="/ops/kafka-query" element={<KafkaQuery />} />
+      <Route path="/ops/redis-query" element={<RedisQuery />} />
+      <Route path="/query/kafka" element={<Navigate to="/ops/kafka-query" replace />} />
+      <Route path="/query/redis" element={<Navigate to="/ops/redis-query" replace />} />
+      <Route path="/metadata/database/search/common/:db?/:table?" element={<Navigate to="/ops/query" replace />} />
+
+      <Route path="/ops/tickets" element={<TicketList />} />
+      <Route path="/ops/tickets/:id" element={<TicketDetail />} />
+      <Route path="/ops/ddl" element={<DdlOrder />} />
+      <Route path="/metadata/database/search/serviceOperations/ddl-order" element={<Navigate to="/ops/ddl" replace />} />
+      <Route path="/database/search/serviceOperations/ddl-order" element={<Navigate to="/ops/ddl" replace />} />
+      <Route path="/ops/dml" element={<DmlOrder />} />
+      <Route path="/metadata/database/search/serviceOperations/dml-order" element={<Navigate to="/ops/dml" replace />} />
+      <Route path="/database/search/serviceOperations/dml-order" element={<Navigate to="/ops/dml" replace />} />
+      <Route path="/ops/dql" element={<DqlExport />} />
+      <Route path="/metadata/database/work-order/dql" element={<Navigate to="/ops/dql" replace />} />
+      <Route path="/database/work-order/dql" element={<Navigate to="/ops/dql" replace />} />
+      <Route path="/ops/createdb" element={<CreateDb />} />
+      <Route path="/metadata/database/search/serviceOperations/createdb" element={<Navigate to="/ops/createdb" replace />} />
+      <Route path="/database/search/serviceOperations/createdb" element={<Navigate to="/ops/createdb" replace />} />
+      <Route path="/ops/dcl" element={<DclGrants />} />
+      <Route path="/ops/kafka" element={<KafkaOrder />} />
+      <Route path="/ops/redis" element={<RedisOrder />} />
+      <Route path="/ops/slots" element={<SlotList />} />
+
+      <Route path="/ops/cdc" element={<CdcList />} />
+      <Route path="/ops/cdc/create" element={<CdcCreate />} />
+      <Route path="/ops/cdc/:id" element={<CdcDetail />} />
+      <Route path="/metadata/database/search/serviceOperations/cdcSyncTask" element={<Navigate to="/ops/cdc" replace />} />
+      <Route path="/metadata/database/search/serviceOperations/cdcSyncTask/create" element={<Navigate to="/ops/cdc/create" replace />} />
+      <Route path="/metadata/database/search/serviceOperations/cdcSyncTask/:id" element={<RedirectWithId toPrefix="/ops/cdc" />} />
+      <Route path="/database/search/serviceOperations/cdcSyncTask" element={<Navigate to="/ops/cdc" replace />} />
+      <Route path="/database/search/serviceOperations/cdcSyncTask/create" element={<Navigate to="/ops/cdc/create" replace />} />
+      <Route path="/database/search/serviceOperations/cdcSyncTask/:id" element={<RedirectWithId toPrefix="/ops/cdc" />} />
+
+      <Route path="/ops/migration" element={<Migration />} />
+      <Route path="/ops/migration/create" element={<MigrationCreate />} />
+      <Route path="/ops/migration/settings" element={<MigrationSettings />} />
+      <Route path="/ops/migration/compare" element={<MigrationSchemaCompare />} />
+      <Route path="/ops/migration/:id" element={<MigrationDetail />} />
+      <Route path="/metadata/database/search/serviceOperations/migration" element={<Navigate to="/ops/migration" replace />} />
+      <Route path="/metadata/database/search/serviceOperations/migration/create" element={<Navigate to="/ops/migration/create" replace />} />
+      <Route path="/metadata/database/search/serviceOperations/migration/settings" element={<Navigate to="/ops/migration/settings" replace />} />
+      <Route path="/metadata/database/search/serviceOperations/migration/:id" element={<RedirectWithId toPrefix="/ops/migration" />} />
+      <Route path="/database/search/serviceOperations/migration" element={<Navigate to="/ops/migration" replace />} />
+      <Route path="/database/search/serviceOperations/migration/create" element={<Navigate to="/ops/migration/create" replace />} />
+      <Route path="/database/search/serviceOperations/migration/settings" element={<Navigate to="/ops/migration/settings" replace />} />
+      <Route path="/database/search/serviceOperations/migration/:id" element={<RedirectWithId toPrefix="/ops/migration" />} />
+
+      <Route path="/ops/flashback" element={<Navigate to="/ops/flashback/dashboard" replace />} />
+      <Route path="/ops/flashback/dashboard" element={<Flashback />} />
+      <Route path="/ops/flashback/tasks" element={<Flashback />} />
+      <Route path="/ops/flashback/history" element={<Flashback />} />
+      <Route path="/ops/flashback/history/:id" element={<Flashback />} />
+      <Route path="/ops/flashback/cloud" element={<FlashbackCloud />} />
+      <Route path="/metadata/database/search/serviceOperations/flashback" element={<Navigate to="/ops/flashback/dashboard" replace />} />
+      <Route path="/database/search/serviceOperations/flashback" element={<Navigate to="/ops/flashback/dashboard" replace />} />
+
+      <Route path="/ops/archive" element={<Navigate to="/ops/archive/dashboard" replace />} />
+      <Route path="/ops/archive/dashboard" element={<ArchiveDashboard />} />
+      <Route path="/ops/archive/apply" element={<ArchiveOrder />} />
+      <Route path="/ops/archive/tasks" element={<TaskList />} />
+      <Route path="/ops/archive/runs" element={<RunHistory />} />
+      <Route path="/ops/archive/monitor" element={<ArchiveMonitor />} />
+      <Route path="/ops/archive/settings" element={<ArchiveSettings />} />
+      <Route path="/ops/archive/masking" element={<Masking />} />
+      <Route path="/ops/archive/report" element={<Report />} />
+      <Route path="/metadata/database/search/archiverManager" element={<Navigate to="/ops/archive/dashboard" replace />} />
+      <Route path="/metadata/database/search/archiverManager/archiveDashboard" element={<Navigate to="/ops/archive/dashboard" replace />} />
+      <Route path="/metadata/database/search/serviceOperations/archiverManager/archiveDashboard" element={<Navigate to="/ops/archive/dashboard" replace />} />
+      <Route path="/metadata/database/search/serviceOperations/archiverManager/archiveTask" element={<Navigate to="/ops/archive/apply" replace />} />
+      <Route path="/metadata/database/search/serviceOperations/archiverManager/archiverList" element={<Navigate to="/ops/archive/tasks" replace />} />
+      <Route path="/metadata/database/search/serviceOperations/archiverManager/archivetaskMonitor" element={<Navigate to="/ops/archive/monitor" replace />} />
+      <Route path="/metadata/database/search/serviceOperations/archiverManager/archivetaskSetting" element={<Navigate to="/ops/archive/settings" replace />} />
+
+      <Route path="/ops/backup" element={<Navigate to="/ops/backup/policies" replace />} />
+      <Route path="/ops/backup/policies" element={<BackupPolicies />} />
+      <Route path="/ops/backup/runs" element={<BackupRuns />} />
+      <Route path="/ops/backup/settings" element={<BackupSettings />} />
+
+      <Route path="/ops/sql-insight" element={<SqlInsight />} />
+      <Route path="/ops/redis-rdb" element={<RedisRdb />} />
+      <Route path="/ops/db-monitor" element={<Navigate to="/ops/db-monitor/postgres" replace />} />
+      <Route path="/ops/db-monitor/postgres" element={<DbMonitor engine="postgres" />} />
+      <Route path="/ops/db-monitor/mysql" element={<DbMonitor engine="mysql" />} />
+      <Route path="/ops/db-monitor/redis" element={<DbMonitor engine="redis" />} />
+      <Route path="/ops/db-monitor/starrocks" element={<DbMonitor engine="starrocks" />} />
+      <Route path="/ops/db-monitor/clickhouse" element={<DbMonitor engine="clickhouse" />} />
+      <Route path="/ops/db-monitor/kafka" element={<DbMonitor engine="kafka" />} />
+      <Route path="/ops/db-monitor/tidb" element={<DbMonitor engine="tidb" />} />
+      <Route path="/ops/db-monitor/cockroachdb" element={<DbMonitor engine="cockroachdb" />} />
+      <Route path="/ops/db-monitor/cassandra" element={<DbMonitor engine="cassandra" />} />
+      <Route path="/ops/db-monitor/oceanbase" element={<DbMonitor engine="oceanbase" />} />
+      <Route path="/ops/db-monitor/host" element={<DbMonitor engine="host" />} />
+      <Route path="/ops/db-monitor/mongodb" element={<DbMonitor engine="mongodb" />} />
+      <Route path="/ops/db-monitor/oracle" element={<DbMonitor engine="oracle" />} />
+      <Route path="/ops/db-monitor/elasticsearch" element={<DbMonitor engine="elasticsearch" />} />
+      <Route path="/ops/db-monitor/sqlserver" element={<DbMonitor engine="sqlserver" />} />
+      <Route path="/ops/db-monitor/debezium" element={<DbMonitor engine="debezium" />} />
+      <Route path="/ops/db-monitor/dolphinscheduler" element={<DbMonitor engine="dolphinscheduler" />} />
+      <Route path="/metadata/database/search/serviceOperations/activitysnapshot" element={<Navigate to="/ops/sql-insight" replace />} />
+      <Route path="/database/search/serviceOperations/activitysnapshot" element={<Navigate to="/ops/sql-insight" replace />} />
+      <Route path="/ops/sessions" element={<Sessions />} />
+      <Route path="/metadata/database/search/serviceOperations/process" element={<Navigate to="/ops/sessions" replace />} />
+      <Route path="/database/search/serviceOperations/process" element={<Navigate to="/ops/sessions" replace />} />
+      <Route path="/ops/multilang" element={<Multilang />} />
+      <Route path="/ops/dolphin" element={<DolphinOps />} />
+      <Route path="/ops/sr" element={<SrNodes />} />
+      <Route path="/ops/cluster-deploy" element={<ClusterDeployHub />} />
+      <Route path="/ops/cluster-deploy/:engine" element={<ClusterDeployEngine />} />
+      <Route path="/ops/sr-cluster" element={<Navigate to="/ops/cluster-deploy/starrocks" replace />} />
+      <Route path="/ops/terminal" element={<Terminal />} />
+      <Route path="/ops/ha" element={<HaMaintain />} />
+
+      <Route path="/cmdb/assets" element={<CmdbAssets />} />
+      <Route path="/cmdb/topology" element={<CmdbTopology />} />
+      <Route path="/cmdb/tags" element={<CmdbTags />} />
+      <Route path="/cmdb/discover" element={<CmdbDiscover />} />
+      <Route path="/cmdb/import-export" element={<CmdbImportExport />} />
+      <Route path="/cmdb/audit" element={<CmdbAudit />} />
+      <Route path="/cmdb/sync" element={<CmdbSync />} />
+
+      <Route path="/config/instances" element={<Instances />} />
+      <Route path="/config/regions" element={<Regions />} />
+      <Route path="/config/environments" element={<Environments />} />
+      <Route path="/config/tags" element={<Navigate to="/cmdb/tags" replace />} />
+      <Route path="/config/connectors" element={<Connectors />} />
+      <Route path="/config/agents" element={<PlatformAgent />} />
+      <Route path="/config/oss" element={<OssUpload />} />
+      <Route path="/config/monitor-targets" element={<MonitorTargets />} />
+      <Route path="/config/fe-admin" element={<FeAdmin />} />
+      <Route path="/config/ds-admin" element={<DsAdmin />} />
+      <Route path="/metadata/database/manage/connector" element={<Navigate to="/config/connectors" replace />} />
+      <Route path="/config/databases" element={<Databases />} />
+      <Route path="/config/accounts" element={<Accounts />} />
+      <Route path="/metadata/database/manage/account" element={<Navigate to="/config/accounts" replace />} />
+      <Route path="/database/manage/account" element={<Navigate to="/config/accounts" replace />} />
+      <Route path="/config/review-rules" element={<ReviewRules />} />
+      <Route path="/config/sql-insight" element={<SqlInsightSettings />} />
+      <Route path="/metadata/database/manage/goinception" element={<Navigate to="/config/review-rules" replace />} />
+      <Route path="/database/manage/goinception" element={<Navigate to="/config/review-rules" replace />} />
+      <Route path="/config/args" element={<GlobalArgs />} />
+      <Route path="/config/menus" element={<Menus />} />
+      <Route path="/config/roles" element={<Roles />} />
+      <Route path="/config/users" element={<Users />} />
+      <Route path="/config/login-logs" element={<LoginLogs />} />
+      <Route path="/config/query-audits" element={<QueryAudits />} />
+      <Route path="/config/ldap" element={<AuthConfig />} />
+
+      <Route path="*" element={<div style={{ padding: 24, color: '#999' }}>页面不存在</div>} />
+    </Routes>
+  )
+}

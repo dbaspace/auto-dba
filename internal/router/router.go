@@ -38,16 +38,35 @@ type Deps struct {
 	Redis     *handler.RedisHandler // Redis 工单；为 nil 时不注册路由
 	Insight   *handler.InsightHandler
 	Session   *handler.SessionHandler
-	Multilang *handler.MultilangHandler
-	External  *handler.ExternalHandler
-	DCL       *handler.DCLHandler
-	RBAC      *handler.RBACHandler
-	Ldap      *handler.LdapHandler
-	Sso       *handler.SsoHandler
-	SMTP      *handler.SMTPHandler
-	Notify    *handler.NotifyHandler
-	Terminal  *terminal.Handler
-	Static    string
+	PgSpace   *handler.PgSpaceHandler
+	RedisRDB  *handler.RedisRDBHandler
+	AWR       *handler.AWRHandler
+	SqlInsightAnalysis *handler.SqlInsightAnalysisHandler
+	DbMonitor          *handler.DbMonitorHandler
+	DbMonitorProxy     gin.HandlerFunc // mode=remote 时反向代理到独立 db-monitor 服务
+	Multilang          *handler.MultilangHandler
+	External       *handler.ExternalHandler
+	MonitorTarget  *handler.MonitorTargetHandler
+	MonitorTag     *handler.MonitorLabelTagHandler
+	FeAdmin        *handler.FeAdminHandler
+	DsAdmin        *handler.DsAdminHandler
+	OSSSettings    *handler.OSSSettingsHandler
+	OSSUpload      *handler.OSSUploadHandler
+	StarRocksWeb   *handler.StarRocksWebHandler
+	HA             *handler.HAHandler
+	Proxy          *handler.ProxyHandler
+	Backup         *handler.BackupHandler
+	SrCluster      *handler.SrClusterHandler
+	DbDeploy       *handler.DbDeployHandler
+	Cmdb           *handler.CmdbHandler
+	DCL            *handler.DCLHandler
+	RBAC           *handler.RBACHandler
+	Ldap           *handler.LdapHandler
+	Sso            *handler.SsoHandler
+	SMTP           *handler.SMTPHandler
+	Notify         *handler.NotifyHandler
+	Terminal       *terminal.Handler
+	Static         string
 }
 
 func Init(e *gin.Engine, d Deps) {
@@ -153,6 +172,7 @@ func Init(e *gin.Engine, d Deps) {
 		d.Terminal.MountStatic(e)
 	}
 	secured.GET("/instances/:id/kafka/topics", d.Inst.ListKafkaTopics)
+	secured.POST("/instances/:id/kafka/topics/stats", d.Inst.KafkaTopicStats)
 	secured.DELETE("/instances/:id/kafka/topics/:topic", d.Inst.DeleteKafkaTopic)
 	secured.GET("/instances/:id/kafka/topics/:topic/partitions", d.Inst.GetKafkaTopicPartitions)
 	secured.GET("/instances/:id/kafka/topics/:topic/configs", d.Inst.GetKafkaTopicConfigs)
@@ -182,6 +202,42 @@ func Init(e *gin.Engine, d Deps) {
 	secured.PUT("/environments/:id", requireURN(store.URNEnvironmentsEdit), d.Env.Update)
 	secured.DELETE("/environments/:id", requireURN(store.URNEnvironmentsDelete), d.Env.Delete)
 
+	if d.MonitorTag != nil {
+		secured.GET("/monitor-tags", d.MonitorTag.List)
+		secured.POST("/monitor-tags", requireURN(store.URNMonitorTagsCreate), d.MonitorTag.Create)
+		secured.PUT("/monitor-tags/:id", requireURN(store.URNMonitorTagsEdit), d.MonitorTag.Update)
+		secured.DELETE("/monitor-tags/:id", requireURN(store.URNMonitorTagsDelete), d.MonitorTag.Delete)
+	}
+
+	if d.Cmdb != nil {
+		cm := secured.Group("/cmdb")
+		cm.GET("/cis", d.Cmdb.ListCIs)
+		cm.GET("/cis/:type/:id", d.Cmdb.GetCI)
+		cm.GET("/cis/:type/:id/graph", d.Cmdb.Graph)
+		cm.GET("/cis/:type/:id/tags", d.Cmdb.GetCITags)
+		cm.PUT("/cis/:type/:id/tags", requireURN(store.URNCmdbEdit), d.Cmdb.SetCITags)
+		cm.GET("/relations", d.Cmdb.ListRelations)
+		cm.POST("/relations", requireURN(store.URNCmdbEdit), d.Cmdb.CreateRelation)
+		cm.DELETE("/relations/:id", requireURN(store.URNCmdbEdit), d.Cmdb.DeleteRelation)
+		cm.GET("/tags", d.Cmdb.ListTagDefs)
+		cm.POST("/tags", requireURN(store.URNCmdbEdit), d.Cmdb.UpsertTagDef)
+		cm.PUT("/tags/:id", requireURN(store.URNCmdbEdit), d.Cmdb.UpsertTagDef)
+		cm.DELETE("/tags/:id", requireURN(store.URNCmdbEdit), d.Cmdb.DeleteTagDef)
+		cm.POST("/tags/sync-monitor", requireURN(store.URNCmdbEdit), d.Cmdb.SyncMonitorTags)
+		cm.GET("/audit", d.Cmdb.ListAudit)
+		cm.GET("/discover/from-monitor", d.Cmdb.DiscoverFromMonitor)
+		cm.GET("/discover/databases", d.Cmdb.DiscoverDatabases)
+		cm.POST("/discover/databases/register", requireURN(store.URNCmdbEdit), d.Cmdb.RegisterDatabases)
+		cm.GET("/export", requireURN(store.URNCmdbImport), d.Cmdb.Export)
+		cm.POST("/import", requireURN(store.URNCmdbImport), d.Cmdb.Import)
+		cm.GET("/sync/jobs", d.Cmdb.ListSyncJobs)
+		cm.POST("/sync/jobs", requireURN(store.URNCmdbSync), d.Cmdb.UpsertSyncJob)
+		cm.PUT("/sync/jobs/:id", requireURN(store.URNCmdbSync), d.Cmdb.UpsertSyncJob)
+		cm.DELETE("/sync/jobs/:id", requireURN(store.URNCmdbSync), d.Cmdb.DeleteSyncJob)
+		cm.POST("/sync/jobs/:id/run", requireURN(store.URNCmdbSync), d.Cmdb.RunSyncJob)
+		cm.GET("/sync/runs", d.Cmdb.ListSyncRuns)
+	}
+
 	secured.GET("/connectors", d.Connector.List)
 	secured.POST("/connectors", requireURN(store.URNConnectorsCreate), d.Connector.Create)
 	secured.GET("/connectors/:id", d.Connector.Get)
@@ -210,6 +266,7 @@ func Init(e *gin.Engine, d Deps) {
 	t.PUT("/:id/approve", d.Ticket.Approve)
 	t.PUT("/:id/reject", d.Ticket.Reject)
 	t.PUT("/:id/cancel", d.Ticket.Cancel)
+	t.PUT("/:id/assignee", d.Ticket.TransferAssignee)
 	t.POST("/:id/execute", d.Ticket.Execute)
 	t.POST("/:id/export", d.Ticket.Export)
 
@@ -249,6 +306,8 @@ func Init(e *gin.Engine, d Deps) {
 	cdc.POST("/tasks/batch-alter-schema", d.CDC.BatchAlterSchema)
 	cdc.POST("/tasks/synced-tables/batch", d.CDC.SyncedTablesBatch)
 	cdc.GET("/tasks/init-list", d.CDC.InitList)
+	cdc.GET("/tasks/reinit/candidates", d.CDC.ReinitCandidates)
+	cdc.POST("/tasks/reinit/batch", d.CDC.ReinitBatch)
 	cdc.POST("/discover/tables", d.CDC.DiscoverTables)
 	cdc.POST("/discover/databases", d.CDC.DiscoverDatabases)
 	cdc.GET("/schema-alerts", d.CDC.ListSchemaAlerts)
@@ -282,6 +341,8 @@ func Init(e *gin.Engine, d Deps) {
 	cdc.POST("/tasks/:id/resume", d.CDC.Action("running", "approved"))
 	cdc.POST("/tasks/:id/restart", d.CDC.Action("running", "none"))
 	cdc.POST("/tasks/:id/retry", d.CDC.Action("running", "none"))
+	cdc.POST("/tasks/:id/reinit/preview", d.CDC.ReinitPreview)
+	cdc.POST("/tasks/:id/reinit", d.CDC.Reinit)
 
 	secured.GET("/sync-slots", d.Slot.List)
 	secured.POST("/sync-slots/collect", d.Slot.Collect)
@@ -370,21 +431,382 @@ func Init(e *gin.Engine, d Deps) {
 		secured.POST("/redis/orders", d.Redis.Create)
 	}
 
+	if d.HA != nil {
+		hg := secured.Group("/ha")
+		hg.GET("/meta/modes", d.HA.Meta)
+		hg.GET("/candidates", d.HA.ListCandidateSources)
+		hg.POST("/candidates/import-dbdeploy", d.HA.ImportDbDeployMembers)
+		hg.GET("/clusters", d.HA.ListClusters)
+		hg.POST("/clusters", d.HA.CreateCluster)
+		hg.GET("/clusters/:id", d.HA.GetCluster)
+		hg.PUT("/clusters/:id", d.HA.UpdateCluster)
+		hg.DELETE("/clusters/:id", d.HA.DeleteCluster)
+		hg.GET("/clusters/:id/topology", d.HA.Topology)
+		hg.GET("/clusters/:id/mha/conf", d.HA.GetMHAConf)
+		hg.POST("/clusters/:id/mha/conf/preview", d.HA.PreviewMHAConf)
+		hg.PUT("/clusters/:id/mha/conf", d.HA.SaveMHAConf)
+		hg.POST("/clusters/:id/mha/conf/push", d.HA.PushMHAConf)
+		hg.GET("/clusters/:id/mha/manager/status", d.HA.GetMHAManagerStatus)
+		hg.POST("/clusters/:id/mha/manager/:action", d.HA.MHAManagerCtrl)
+		hg.POST("/clusters/:id/mha/packages/install", d.HA.InstallMHAPackages)
+		hg.GET("/clusters/:id/mha/packages/runs", d.HA.ListMHAInstallRuns)
+		hg.GET("/clusters/:id/pgaf/state", d.HA.GetPGAFState)
+		hg.GET("/clusters/:id/pgaf/service/status", d.HA.GetPGAFServiceStatus)
+		hg.POST("/clusters/:id/pgaf/service/:action", d.HA.PGAFServiceCtrl)
+		hg.POST("/clusters/:id/pgaf/packages/install", d.HA.InstallPGAFPackages)
+		hg.GET("/clusters/:id/pgaf/packages/runs", d.HA.ListPGAFInstallRuns)
+		hg.GET("/clusters/:id/patroni/cluster", d.HA.GetPatroniCluster)
+		hg.POST("/clusters/:id/patroni/packages/install", d.HA.InstallPatroniPackages)
+		hg.GET("/clusters/:id/patroni/packages/runs", d.HA.ListPatroniInstallRuns)
+		hg.GET("/mha/releases", d.HA.ListMHAReleases)
+		hg.POST("/mha/releases", d.HA.CreateMHARelease)
+		hg.PATCH("/mha/releases/:id", d.HA.UpdateMHARelease)
+		hg.DELETE("/mha/releases/:id", d.HA.DeleteMHARelease)
+		hg.POST("/mha/releases/:id/artifacts", d.HA.UpsertMHAReleaseArtifact)
+		hg.POST("/mha/releases/:id/presign", d.HA.PresignMHARelease)
+		hg.GET("/mha/oss", d.HA.GetMHAOSS)
+		hg.PUT("/mha/oss", d.HA.PutMHAOSS)
+		hg.GET("/pgaf/releases", d.HA.ListPGAFReleases)
+		hg.POST("/pgaf/releases", d.HA.CreatePGAFRelease)
+		hg.PATCH("/pgaf/releases/:id", d.HA.UpdatePGAFRelease)
+		hg.DELETE("/pgaf/releases/:id", d.HA.DeletePGAFRelease)
+		hg.POST("/pgaf/releases/:id/artifacts", d.HA.UpsertPGAFReleaseArtifact)
+		hg.POST("/pgaf/releases/:id/presign", d.HA.PresignPGAFRelease)
+		hg.GET("/pgaf/oss", d.HA.GetPGAFOSS)
+		hg.PUT("/pgaf/oss", d.HA.PutPGAFOSS)
+		hg.GET("/patroni/releases", d.HA.ListPatroniReleases)
+		hg.POST("/patroni/releases", d.HA.CreatePatroniRelease)
+		hg.PATCH("/patroni/releases/:id", d.HA.UpdatePatroniRelease)
+		hg.DELETE("/patroni/releases/:id", d.HA.DeletePatroniRelease)
+		hg.POST("/patroni/releases/:id/artifacts", d.HA.UpsertPatroniReleaseArtifact)
+		hg.POST("/patroni/releases/:id/presign", d.HA.PresignPatroniRelease)
+		hg.GET("/patroni/oss", d.HA.GetPatroniOSS)
+		hg.PUT("/patroni/oss", d.HA.PutPatroniOSS)
+		hg.POST("/precheck", d.HA.Precheck)
+		hg.POST("/changes", d.HA.SubmitChange)
+		hg.GET("/tasks", d.HA.ListTasks)
+		hg.GET("/controllers", d.HA.ListControllers)
+		hg.POST("/controllers", d.HA.CreateController)
+		hg.DELETE("/controllers/:id", d.HA.DeleteController)
+		hg.POST("/controllers/:id/env-check", d.HA.EnvCheckController)
+	}
+
+	if d.Proxy != nil {
+		pg := secured.Group("/proxy")
+		pg.GET("/meta", d.Proxy.Meta)
+		pg.GET("/services", d.Proxy.List)
+		pg.POST("/services/deploy", d.Proxy.Deploy) // 静态路径须先于 /services/:id
+		pg.POST("/services", d.Proxy.Create)
+		pg.GET("/services/:id", d.Proxy.Get)
+		pg.PUT("/services/:id", d.Proxy.Update)
+		pg.DELETE("/services/:id", d.Proxy.Delete)
+		pg.POST("/preview", d.Proxy.Preview)
+		pg.POST("/services/:id/conf/push", d.Proxy.Push)
+		pg.POST("/services/:id/conf/validate", d.Proxy.Validate)
+		pg.GET("/services/:id/service/status", d.Proxy.ServiceStatus)
+		pg.POST("/services/:id/service/:action", d.Proxy.ServiceCtrl)
+		pg.GET("/services/:id/lvs/ipvs", d.Proxy.LVSIpvs)
+		pg.GET("/services/:id/lvs/status", d.Proxy.LVSStatus)
+		pg.GET("/services/:id/versions", d.Proxy.VersionList)
+		pg.GET("/services/:id/versions/:versionId", d.Proxy.VersionDetail)
+		pg.POST("/services/:id/versions/:versionId/restore", d.Proxy.VersionRestore)
+		pg.GET("/services/:id/deploy/jobs/:jobId", d.Proxy.DeployJob)
+	}
+
+	if d.Backup != nil {
+		bg := secured.Group("/backup")
+		bg.GET("/meta", d.Backup.Meta)
+		bg.GET("/policies", d.Backup.ListPolicies)
+		bg.POST("/policies", d.Backup.CreatePolicy)
+		bg.GET("/policies/:id", d.Backup.GetPolicy)
+		bg.PATCH("/policies/:id", d.Backup.UpdatePolicy)
+		bg.DELETE("/policies/:id", d.Backup.DeletePolicy)
+		bg.POST("/policies/:id/enabled", d.Backup.SetPolicyEnabled)
+		bg.POST("/policies/:id/run", d.Backup.RunPolicy)
+		bg.GET("/runs", d.Backup.ListRuns)
+		bg.GET("/runs/:id", d.Backup.GetRun)
+		bg.GET("/storages", d.Backup.ListStorages)
+		bg.POST("/storages", d.Backup.CreateStorage)
+		bg.PATCH("/storages/:id", d.Backup.UpdateStorage)
+		bg.DELETE("/storages/:id", d.Backup.DeleteStorage)
+		bg.GET("/agents", d.Backup.ListAgents)
+		bg.POST("/agents", d.Backup.CreateAgent)
+		bg.GET("/agents/status", d.Backup.ListAgentStatus)
+		bg.POST("/agents/preflight", d.Backup.PreflightAgent)
+		bg.POST("/agents/deploy", d.Backup.DeployAgent)
+		bg.GET("/agents/deploys", d.Backup.ListDeploys)
+		bg.GET("/agents/deploys/:id", d.Backup.GetDeploy)
+		bg.DELETE("/agents/:id", d.Backup.DeleteAgent)
+		bg.POST("/agents/:id/probe", d.Backup.ProbeAgent)
+		bg.POST("/agents/:id/start", d.Backup.StartAgent)
+		bg.POST("/agents/:id/stop", d.Backup.StopAgent)
+		bg.POST("/agents/:id/redeploy", d.Backup.RedeployAgent)
+	}
+
+	if d.Backup != nil {
+		// 平台级 Agent API（与 /backup/agents 同源；配置中心主入口）
+		pg := secured.Group("/platform/agents")
+		pg.GET("", d.Backup.ListAgents)
+		pg.POST("", d.Backup.CreateAgent)
+		pg.GET("/status", d.Backup.ListAgentStatus)
+		pg.POST("/preflight", d.Backup.PreflightAgent)
+		pg.POST("/deploy", d.Backup.DeployAgent)
+		pg.GET("/deploys", d.Backup.ListDeploys)
+		pg.GET("/deploys/:id", d.Backup.GetDeploy)
+		pg.DELETE("/:id", d.Backup.DeleteAgent)
+		pg.POST("/:id/probe", d.Backup.ProbeAgent)
+		pg.POST("/:id/start", d.Backup.StartAgent)
+		pg.POST("/:id/stop", d.Backup.StopAgent)
+		pg.POST("/:id/redeploy", d.Backup.RedeployAgent)
+	}
+
+	if d.SrCluster != nil {
+		sg := secured.Group("/sr-cluster")
+		sg.GET("/meta", d.SrCluster.Meta)
+		sg.GET("/agents", d.SrCluster.ListAgents)
+		sg.POST("/agents", d.SrCluster.CreateAgent)
+		sg.POST("/agents/deploy", d.SrCluster.DeployAgent)
+		sg.GET("/agents/deploys", d.SrCluster.ListAgentDeploys)
+		sg.GET("/agents/deploys/:id", d.SrCluster.GetAgentDeploy)
+		sg.GET("/agents/status", d.SrCluster.ListAgentStatus)
+		sg.DELETE("/agents/:id", d.SrCluster.DeleteAgent)
+		sg.POST("/agents/:id/probe", d.SrCluster.ProbeAgent)
+		sg.POST("/agents/:id/start", d.SrCluster.StartAgent)
+		sg.POST("/agents/:id/stop", d.SrCluster.StopAgent)
+		sg.GET("/oss", d.SrCluster.GetOSS)
+		sg.PUT("/oss", d.SrCluster.PutOSS)
+		sg.POST("/oss/test", d.SrCluster.TestOSS)
+		sg.GET("/releases", d.SrCluster.ListReleases)
+		sg.POST("/releases", d.SrCluster.CreateRelease)
+		sg.PATCH("/releases/:id", d.SrCluster.UpdateRelease)
+		sg.DELETE("/releases/:id", d.SrCluster.DeleteRelease)
+		sg.POST("/releases/:id/artifacts", d.SrCluster.UpsertArtifact)
+		sg.POST("/releases/:id/artifacts/upload", d.SrCluster.UploadArtifact)
+		sg.POST("/releases/:id/artifacts/sync-from-oss", d.SrCluster.SyncArtifactsFromOSS)
+		sg.GET("/env-policies", d.SrCluster.ListEnvPolicies)
+		sg.PUT("/env-policies", d.SrCluster.UpsertEnvPolicy)
+		sg.GET("/conf-templates", d.SrCluster.ListConfTemplates)
+		sg.PUT("/conf-templates", d.SrCluster.UpsertConfTemplate)
+		sg.POST("/conf-templates/reset", d.SrCluster.ResetConfTemplates)
+		sg.GET("/clusters", d.SrCluster.ListClusters)
+		sg.POST("/clusters", d.SrCluster.CreateCluster)
+		sg.POST("/tickets", d.SrCluster.CreateTicket)
+		sg.GET("/clusters/:id", d.SrCluster.GetCluster)
+		sg.PATCH("/clusters/:id", d.SrCluster.UpdateCluster)
+		sg.DELETE("/clusters/:id", d.SrCluster.DeleteCluster)
+		sg.GET("/clusters/:id/nodes", d.SrCluster.ListNodes)
+		sg.POST("/clusters/:id/nodes", d.SrCluster.CreateNode)
+		sg.POST("/clusters/:id/nodes/precheck", d.SrCluster.PrecheckAddNode)
+		sg.DELETE("/clusters/:id/nodes/:nodeId", d.SrCluster.DeleteNode)
+		sg.POST("/clusters/:id/init", d.SrCluster.StartInit)
+		sg.POST("/clusters/:id/reinit", d.SrCluster.StartReinit)
+		sg.POST("/clusters/:id/upgrade", d.SrCluster.StartUpgrade)
+		sg.POST("/clusters/:id/upgrade/precheck", d.SrCluster.PrecheckUpgrade)
+		sg.GET("/clusters/:id/configs", d.SrCluster.GetConfigs)
+		sg.PUT("/clusters/:id/configs", d.SrCluster.PutConfigs)
+		sg.GET("/clusters/:id/configs/preview", d.SrCluster.PreviewConfigs)
+		sg.PUT("/clusters/:id/nodes/:nodeId/config", d.SrCluster.PutNodeConfig)
+		sg.POST("/clusters/:id/config-apply", d.SrCluster.StartConfigApply)
+		sg.POST("/clusters/:id/nodes/:nodeId/add", d.SrCluster.StartAddNode)
+		sg.POST("/clusters/:id/nodes/:nodeId/restart", d.SrCluster.StartRestartNode)
+		sg.POST("/clusters/:id/nodes/:nodeId/start", d.SrCluster.StartNodeStart)
+		sg.POST("/clusters/:id/nodes/:nodeId/stop", d.SrCluster.StartNodeStop)
+		sg.POST("/clusters/:id/nodes/:nodeId/remove", d.SrCluster.StartRemoveNode)
+		sg.GET("/changes", d.SrCluster.ListChanges)
+		sg.GET("/changes/:id", d.SrCluster.GetChange)
+		sg.POST("/changes/:id/cancel", d.SrCluster.CancelChange)
+		sg.POST("/changes/:id/retry", d.SrCluster.RetryChange)
+		sg.POST("/changes/:id/rollback-node", d.SrCluster.RollbackUpgradeNode)
+	}
+	if d.DbDeploy != nil {
+		dg := secured.Group("/db-deploy")
+		dg.GET("/meta", d.DbDeploy.Meta)
+		dg.GET("/engines", d.DbDeploy.ListEngines)
+		dg.GET("/releases", d.DbDeploy.ListReleases)
+		dg.POST("/releases", d.DbDeploy.UpsertRelease)
+		dg.PUT("/releases/:id", d.DbDeploy.UpsertRelease)
+		dg.DELETE("/releases/:id", d.DbDeploy.DeleteRelease)
+		dg.POST("/releases/:id/presign", d.DbDeploy.PresignRelease)
+		dg.GET("/clusters", d.DbDeploy.ListClusters)
+		dg.POST("/clusters", d.DbDeploy.UpsertCluster)
+		dg.POST("/tickets", d.DbDeploy.CreateTicket)
+		dg.GET("/clusters/:id", d.DbDeploy.GetCluster)
+		dg.PUT("/clusters/:id", d.DbDeploy.UpsertCluster)
+		dg.DELETE("/clusters/:id", d.DbDeploy.DeleteCluster)
+		dg.POST("/clusters/:id/deploy", d.DbDeploy.StartDeploy)
+		dg.POST("/clusters/:id/ha-init", d.DbDeploy.StartHaInit)
+		dg.POST("/clusters/:id/ha/preflight", d.DbDeploy.HAPreflight)
+		dg.GET("/clusters/:id/nodes", d.DbDeploy.ListNodes)
+		dg.POST("/clusters/:id/nodes", d.DbDeploy.UpsertNode)
+		dg.POST("/clusters/:id/nodes/precheck", d.DbDeploy.PrecheckAddNode)
+		dg.DELETE("/clusters/:id/nodes/:nodeId", d.DbDeploy.DeleteNode)
+		dg.POST("/clusters/:id/nodes/:nodeId/start", d.DbDeploy.StartNode)
+		dg.POST("/clusters/:id/nodes/:nodeId/stop", d.DbDeploy.StopNode)
+		dg.POST("/clusters/:id/nodes/:nodeId/restart", d.DbDeploy.RestartNode)
+		dg.POST("/clusters/:id/nodes/:nodeId/add", d.DbDeploy.AddNode)
+		dg.POST("/clusters/:id/nodes/:nodeId/remove", d.DbDeploy.RemoveNode)
+		dg.GET("/changes", d.DbDeploy.ListChanges)
+		dg.GET("/changes/:id", d.DbDeploy.GetChange)
+		dg.POST("/changes/:id/retry", d.DbDeploy.RetryChange)
+		dg.POST("/changes/:id/cancel", d.DbDeploy.CancelChange)
+		dg.GET("/agents", d.DbDeploy.ListAgents)
+		dg.POST("/agents", d.DbDeploy.UpsertAgent)
+		dg.DELETE("/agents/:id", d.DbDeploy.DeleteAgent)
+		dg.POST("/agents/deploy", d.DbDeploy.DeployAgent)
+		dg.GET("/agents/deploys", d.DbDeploy.ListAgentDeploys)
+		dg.GET("/agents/deploys/:id", d.DbDeploy.GetAgentDeploy)
+		dg.GET("/oss", d.DbDeploy.GetOSS)
+		dg.PUT("/oss", d.DbDeploy.PutOSS)
+	}
+
 	secured.GET("/sql-insight", d.Insight.List)
 	secured.POST("/sql-insight", d.Insight.Create)
 	secured.GET("/pg-activity-snapshots", d.Insight.ListSnapshots)
 	secured.GET("/pg-activity-snapshots/stats", d.Insight.SnapshotStats)
-	secured.POST("/pg-activity-snapshots/collect", d.Insight.CollectSnapshots)
+	secured.GET("/pg-activity-snapshots/summary", d.Insight.SnapshotSummary)
+	secured.POST("/pg-activity-snapshots/collect", requireURN(store.URNSqlInsightCollect), d.Insight.CollectSnapshots)
 	secured.GET("/pg-sessions/activities", d.Session.Activities)
 	secured.GET("/pg-sessions/locks", d.Session.Locks)
 	secured.POST("/pg-sessions/:pid/cancel", d.Session.Cancel)
 	secured.POST("/pg-sessions/:pid/terminate", d.Session.Terminate)
+
+	if d.PgSpace != nil {
+		ps := secured.Group("/pg-space")
+		ps.GET("/instances", d.PgSpace.Instances)
+		ps.GET("/realtime", d.PgSpace.Realtime)
+		ps.GET("/databases", d.PgSpace.Databases)
+		ps.GET("/snapshots", d.PgSpace.Snapshots)
+		ps.GET("/trend", d.PgSpace.Trend)
+		ps.GET("/summary", d.PgSpace.Summary)
+		ps.GET("/advice", d.PgSpace.Advice)
+		ps.GET("/advice/summary", d.PgSpace.AdviceSummary)
+		ps.POST("/collect", requireURN(store.URNSqlInsightSpaceCollect), d.PgSpace.Collect)
+		ps.GET("/collect/status", d.PgSpace.CollectStatus)
+		ps.GET("/collect/jobs", d.PgSpace.CollectJobs)
+		ps.POST("/collect/pause", requireURN(store.URNSqlInsightSpaceCollect), d.PgSpace.CollectPause)
+		ps.POST("/collect/resume", requireURN(store.URNSqlInsightSpaceCollect), d.PgSpace.CollectResume)
+		ps.POST("/collect/cancel", requireURN(store.URNSqlInsightSpaceCollect), d.PgSpace.CollectCancel)
+	}
+	if d.RedisRDB != nil {
+		rr := secured.Group("/redis-rdb")
+		rr.GET("/instances", d.RedisRDB.Instances)
+		rr.GET("/agents", d.RedisRDB.Agents)
+		rr.GET("/online", d.RedisRDB.Online)
+		rr.POST("/upload", d.RedisRDB.Upload)
+		rr.POST("/fetch", d.RedisRDB.Fetch)
+		rr.GET("/jobs", d.RedisRDB.Jobs)
+		rr.GET("/jobs/:id", d.RedisRDB.Job)
+		rr.GET("/jobs/:id/report", d.RedisRDB.Report)
+		rr.DELETE("/jobs/:id", d.RedisRDB.DeleteJob)
+	}
+
+	if d.AWR != nil {
+		ar := secured.Group("/awr-reports")
+		ar.GET("", d.AWR.List)
+		ar.GET("/detail", d.AWR.Detail)
+		ar.GET("/export", d.AWR.Export)
+		ar.GET("/summary", d.AWR.Summary)
+		ar.GET("/summary/export", d.AWR.SummaryExport)
+		ar.POST("/generate", requireURN(store.URNSqlInsightAwrGenerate), d.AWR.Generate)
+		ar.GET("/generate/status", d.AWR.GenerateStatus)
+		ar.GET("/generate/jobs", d.AWR.GenerateJobs)
+		ar.POST("/generate/pause", requireURN(store.URNSqlInsightAwrGenerate), d.AWR.GeneratePause)
+		ar.POST("/generate/resume", requireURN(store.URNSqlInsightAwrGenerate), d.AWR.GenerateResume)
+		ar.POST("/generate/cancel", requireURN(store.URNSqlInsightAwrGenerate), d.AWR.GenerateCancel)
+	}
+
+	if d.SqlInsightAnalysis != nil {
+		si := secured.Group("/sql-insight/analysis")
+		si.GET("/catalog", d.SqlInsightAnalysis.Catalog)
+		si.GET("/metrics", d.SqlInsightAnalysis.ListMetrics)
+		si.POST("/metrics", d.SqlInsightAnalysis.CreateMetric)
+		si.PUT("/metrics/:id", d.SqlInsightAnalysis.UpdateMetric)
+		si.DELETE("/metrics/:id", d.SqlInsightAnalysis.DeleteMetric)
+		si.GET("/rules", d.SqlInsightAnalysis.ListRules)
+		si.POST("/rules", d.SqlInsightAnalysis.CreateRule)
+		si.PUT("/rules/:id", d.SqlInsightAnalysis.UpdateRule)
+		si.DELETE("/rules/:id", d.SqlInsightAnalysis.DeleteRule)
+		si.GET("/runs", d.SqlInsightAnalysis.ListRuns)
+		si.POST("/runs", requireURN(store.URNSqlInsightAnalyze), d.SqlInsightAnalysis.CreateRun)
+		si.GET("/runs/:id", d.SqlInsightAnalysis.GetRun)
+		si.GET("/findings", d.SqlInsightAnalysis.ListFindings)
+		si.POST("/findings/:id/feedback", d.SqlInsightAnalysis.Feedback)
+		si.GET("/summary", d.SqlInsightAnalysis.Summary)
+	}
+
+	if d.DbMonitorProxy != nil {
+		secured.Any("/db-monitor", d.DbMonitorProxy)
+		secured.Any("/db-monitor/*path", d.DbMonitorProxy)
+	} else if d.DbMonitor != nil {
+		dm := secured.Group("/db-monitor")
+		dm.GET("/catalog", d.DbMonitor.Catalog)
+		dm.GET("/instances", d.DbMonitor.Instances)
+		dm.GET("/clusters", d.DbMonitor.Clusters)
+		dm.GET("/overview", d.DbMonitor.Overview)
+		dm.GET("/panels", d.DbMonitor.Panels)
+		dm.POST("/query", d.DbMonitor.Query)
+	}
 
 	secured.GET("/multilang-template/tasks", d.Multilang.List)
 	secured.POST("/multilang-template/tasks", d.Multilang.Create)
 
 	secured.GET("/dsadmin/status", d.External.Dolphin)
 	secured.GET("/feadmin/status", d.External.StarRocks)
+
+	if d.MonitorTarget != nil {
+		mt := secured.Group("/monitor-targets")
+		mt.GET("", d.MonitorTarget.List)
+		mt.POST("", d.MonitorTarget.Create)
+		mt.GET("/preview", d.MonitorTarget.Preview)
+		mt.GET("/:id", d.MonitorTarget.Get)
+		mt.PUT("/:id", d.MonitorTarget.Update)
+		mt.DELETE("/:id", d.MonitorTarget.Delete)
+	}
+	if d.FeAdmin != nil {
+		fe := secured.Group("/feadmin")
+		fe.GET("", d.FeAdmin.List)
+		fe.POST("", d.FeAdmin.Create)
+		fe.GET("/:id", d.FeAdmin.Get)
+		fe.PUT("/:id", d.FeAdmin.Update)
+		fe.DELETE("/:id", d.FeAdmin.Delete)
+	}
+	if d.DsAdmin != nil {
+		ds := secured.Group("/dsadmin")
+		ds.GET("", d.DsAdmin.List)
+		ds.POST("", d.DsAdmin.Create)
+		ds.GET("/credential", d.DsAdmin.Credential)
+		ds.GET("/warm", d.DsAdmin.Warm)
+		ds.GET("/:id", d.DsAdmin.Get)
+		ds.PUT("/:id", d.DsAdmin.Update)
+		ds.DELETE("/:id", d.DsAdmin.Delete)
+		secured.GET("/ds-console/:env", d.DsAdmin.ConsoleBootstrap)
+		secured.Any("/ds-proxy/:env/*filepath", d.DsAdmin.Proxy)
+	}
+	if d.OSSSettings != nil {
+		oss := secured.Group("/oss-settings")
+		oss.GET("", d.OSSSettings.List)
+		oss.POST("", d.OSSSettings.Create)
+		oss.POST("/test", d.OSSSettings.Test)
+		oss.GET("/:id", d.OSSSettings.Get)
+		oss.PUT("/:id", d.OSSSettings.Update)
+		oss.DELETE("/:id", d.OSSSettings.Delete)
+	}
+	if d.OSSUpload != nil {
+		up := secured.Group("/oss-uploads")
+		up.GET("", d.OSSUpload.List)
+		up.POST("", d.OSSUpload.Create)
+		up.GET("/:id", d.OSSUpload.Get)
+		up.PUT("/:id/parts/:n", d.OSSUpload.PutPart)
+		up.POST("/:id/complete", d.OSSUpload.Complete)
+		up.POST("/:id/abort", d.OSSUpload.Abort)
+	}
+	if d.StarRocksWeb != nil {
+		secured.POST("/starrocks-web/page", d.StarRocksWeb.FetchPage)
+		secured.Any("/starrocks-fe-proxy/:id/*filepath", d.StarRocksWeb.FeProxy)
+		secured.Any("/starrocks-be-proxy/:host/*filepath", d.StarRocksWeb.BeProxy)
+		// 本地 vendored StarRocks css/js（无需登录；代理 HTML 改写到此路径）
+		handler.MountStarRocksWebroot(e)
+	}
 
 	if d.Static != "" {
 		serveSPA(e, d.Static)

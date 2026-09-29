@@ -151,6 +151,8 @@ func (h *TicketHandler) execTarget(inst *store.Instance, dbName string) (tickete
 		Password: password,
 		DBName:   dbName,
 		DBType:   inst.DBType,
+
+		LongStmtTimeout: h.Store.TicketDDLLongStmtTimeout(),
 	}
 	return t, nil
 }
@@ -164,6 +166,12 @@ func mergeExecResult(dst, src *ticketexec.Result) {
 	}
 	dst.Records = append(dst.Records, src.Records...)
 	dst.SuccessSQLs = append(dst.SuccessSQLs, src.SuccessSQLs...)
+	dst.SuccessCount += src.SuccessCount
+	dst.FailCount += src.FailCount
+	if src.Compacted {
+		dst.Compacted = true
+	}
+	mergeTargetStats(dst, src.TargetStats)
 	if src.Skipped {
 		dst.Skipped = true
 	}
@@ -182,6 +190,27 @@ func mergeExecResult(dst, src *ticketexec.Result) {
 			dst.Summary += "; "
 		}
 		dst.Summary += src.Summary
+	}
+}
+
+func mergeTargetStats(dst *ticketexec.Result, src []ticketexec.TargetStat) {
+	if dst == nil || len(src) == 0 {
+		return
+	}
+	idx := map[string]int{}
+	for i := range dst.TargetStats {
+		key := strings.TrimSpace(dst.TargetStats[i].Host) + "\x00" + strings.TrimSpace(dst.TargetStats[i].DB)
+		idx[key] = i
+	}
+	for _, st := range src {
+		key := strings.TrimSpace(st.Host) + "\x00" + strings.TrimSpace(st.DB)
+		if i, ok := idx[key]; ok {
+			dst.TargetStats[i].Success += st.Success
+			dst.TargetStats[i].Failed += st.Failed
+			continue
+		}
+		idx[key] = len(dst.TargetStats)
+		dst.TargetStats = append(dst.TargetStats, st)
 	}
 }
 
@@ -268,14 +297,10 @@ func (h *TicketHandler) maybeFinishApprovedCreateDB(ctx context.Context, it *sto
 	if scheduledInFuture(it.ScheduledAt) {
 		return it
 	}
-	_ = h.executeCreateDBTicket(ctx, it)
+	// 历史卡在「已通过」的建库单：后台异步补执行，避免详情页同步跑被 HTTP 超时掐断
+	_ = h.beginAsyncAutoExec(it)
 	if latest, err := h.Store.GetIssue(it.ID); err == nil && latest != nil {
 		it = latest
-	}
-	if err := h.finishCreateDBAfterExec(ctx, it); err == nil {
-		if latest, err := h.Store.GetIssue(it.ID); err == nil && latest != nil {
-			it = latest
-		}
 	}
 	return it
 }

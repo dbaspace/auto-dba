@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
-import { Button, Card, Input, Modal, Select, Table } from 'antd'
+import { Button, Card, Input, Modal, Select } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
 import type { ColumnsType } from 'antd/es/table'
 import api from '../../api/request'
 import './archive.css'
@@ -78,7 +79,7 @@ export default function Archive() {
           新建归档
         </Button>
       </div>
-      <Table
+      <ResponsiveTable
         rowKey={(r) => r.id ?? r.name}
         columns={columns}
         dataSource={rows}

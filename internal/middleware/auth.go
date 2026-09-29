@@ -54,6 +54,9 @@ func Auth(secret string, db *store.DB, skipPrefixes ...string) gin.HandlerFunc {
 				raw = ck
 			}
 		}
+		if raw == "" {
+			raw = c.Query("access_token")
+		}
 		raw = strings.TrimSpace(raw)
 		if strings.HasPrefix(strings.ToLower(raw), "bearer ") {
 			raw = strings.TrimSpace(raw[7:])

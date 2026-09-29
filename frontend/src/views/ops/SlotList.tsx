@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react'
-import { Button, Space, Table, message } from 'antd'
+import { Button, Space, message } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
 import api from '../../api/request'
 
 export default function SlotList() {
@@ -39,12 +40,12 @@ export default function SlotList() {
       </div>
       <p className="hint">独立部署按本地 postgres 实例写入占位槽；连接真实库后可替换为 pg_replication_slots 采集。</p>
       <div className="ops-table">
-        <Table
+        <ResponsiveTable
           rowKey={(r) => r.id || `${r.host}-${r.port}-${r.slot_name}`}
           dataSource={rows}
           bordered
           pagination={false}
-          scroll={{ y: '100%' }}
+          scroll={{ x: 'max-content', y: '100%' }}
           style={{ height: '100%' }}
           columns={[
             { title: '主机', dataIndex: 'host', minWidth: 160 },

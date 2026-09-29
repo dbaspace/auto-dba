@@ -18,7 +18,7 @@ func (d *DB) seed() error {
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	if n == 0 {
-		hash, err := bcrypt.GenerateFromPassword([]byte("admin"), bcrypt.DefaultCost)
+		hash, err := bcrypt.GenerateFromPassword([]byte("admin123"), bcrypt.DefaultCost)
 		if err != nil {
 			return err
 		}
@@ -28,7 +28,7 @@ func (d *DB) seed() error {
 		); err != nil {
 			return err
 		}
-		log.Printf("seed: default user admin/admin created")
+		log.Printf("seed: default user admin/admin123 created")
 	}
 
 	mysqlVars, err := defaultGoInceptionVariablesJSON()
@@ -42,6 +42,7 @@ func (d *DB) seed() error {
 	defaults := []GlobalArg{
 		{Key: "sync_approval_enabled", Value: "true", Description: "CDC 创建/删除是否走审批"},
 		{Key: "sync_default_approver", Value: "admin", Description: "建库与同步默认审批人"},
+		{Key: ArgIssueGlobalApproverWhitelist, Value: "", Description: "工单/迁移超级审核白名单：登录名，逗号或换行分隔；可不等于 assigned_to 也能看待办并审批"},
 		{Key: "sync_sr_routine_load_desired_concurrent", Value: "3", Description: "CDC Routine Load 默认并发"},
 		{Key: "sync_kafka_topic_partitions", Value: "3", Description: "CDC Kafka Topic 默认分区数"},
 		{Key: "sync_kafka_topic_replication_factor", Value: "1", Description: "CDC Kafka Topic 默认副本数"},
@@ -51,6 +52,7 @@ func (d *DB) seed() error {
 		{Key: "sync_shard_fanout_on_approve", Value: "true", Description: "分库任务审批后是否拆子任务"},
 		{Key: "ticket_exclude_cdc_when_empty", Value: "true", Description: "工单列表无筛选时排除 cdc_sync"},
 		{Key: "ddl_forbid_drop_database", Value: "true", Description: "DDL 禁止 DROP DATABASE"},
+		{Key: ArgTicketDDLLongStmtTimeoutMinutes, Value: "360", Description: "DDL 工单长耗时语句（CREATE INDEX CONCURRENTLY 等）单条执行超时（分钟）"},
 		{Key: "dml_require_where", Value: "true", Description: "UPDATE/DELETE 必须带 WHERE"},
 		{Key: "login_idle_timeout_min", Value: "30", Description: "登录闲置超时（分钟），无操作自动退出；0 表示关闭"},
 		{Key: ArgUserWatermarkEnabled, Value: "false", Description: "是否开启用户水印：true/false；开启后页面展示当前用户标识水印"},
@@ -72,6 +74,22 @@ func (d *DB) seed() error {
 		{Key: "ticket_instance_types", Value: `[{"value":"mysql","label":"MySQL"},{"value":"postgres","label":"PostgreSQL"},{"value":"tidb","label":"TiDB"},{"value":"cockroachdb","label":"CockroachDB"},{"value":"oceanbase","label":"OceanBase"},{"value":"cassandra","label":"Cassandra"},{"value":"oracle","label":"Oracle"},{"value":"elasticsearch","label":"Elasticsearch"},{"value":"mongodb","label":"MongoDB"},{"value":"sqlserver","label":"SqlServer"},{"value":"starrocks","label":"StarRocks"},{"value":"clickhouse","label":"ClickHouse"},{"value":"kafka","label":"Kafka"},{"value":"redis","label":"Redis"}]`, Description: "实例可选类型：JSON [{value,label}]，仅 value 必填"},
 		{Key: GlobalArgGoInceptionVariables, Value: mysqlVars, Description: descGoInceptionVariables},
 		{Key: GlobalArgTicketReviewRules, Value: reviewRules, Description: descTicketReviewRules},
+		{Key: "awr_prometheus_base_url", Value: "", Description: "Prometheus 地址（必填，为空则不生成报告）"},
+		{Key: "awr_prometheus_auth_token", Value: "", Description: "可选鉴权 token"},
+		{Key: "awr_prom_instance_label", Value: "id", Description: "库指标关联标签名"},
+		{Key: "awr_prom_host_label", Value: "instance", Description: "主机指标关联标签名"},
+		{Key: "awr_enabled", Value: "true", Description: "AWR 总开关"},
+		{Key: "awr_daily_cron", Value: "0 30 1 * * *", Description: "AWR 每日生成 cron（6 段含秒）"},
+		{Key: "awr_host_metrics_enabled", Value: "false", Description: "主机(node_exporter)指标开关"},
+		{Key: "awr_cloud_metrics_enabled", Value: "false", Description: "云监控(qce)资源补充开关（默认关闭）"},
+		{Key: "awr_retention_days", Value: "30", Description: "AWR 报告保留天数"},
+		{Key: "awr_push_enabled", Value: "false", Description: "AWR 每日推送开关"},
+		{Key: "awr_push_receiver", Value: "", Description: "AWR 推送接收人 username（逗号分隔）"},
+		{Key: "pg_space_enabled", Value: "true", Description: "表空间定时采集开关"},
+		{Key: "pg_space_daily_cron", Value: "0 0 3 * * *", Description: "表空间每日采集 Cron（6 段含秒）"},
+		{Key: "pg_space_retention_days", Value: "90", Description: "表空间快照保留天数"},
+		{Key: "sql_insight_analysis_cron_enabled", Value: "false", Description: "智能分析定时开关"},
+		{Key: "sql_insight_analysis_cron", Value: "0 0 3 * * *", Description: "智能分析每日 Cron（6 段含秒）"},
 	}
 	for _, a := range defaults {
 		var exists int
@@ -171,10 +189,40 @@ func (d *DB) seedRBAC(now string) error {
 	if err := d.ensureArchiveMenuTree(now); err != nil {
 		return err
 	}
+	if err := d.ensureBackupMenuTree(now); err != nil {
+		return err
+	}
 	if err := d.ensureRegionEnvMenus(now); err != nil {
 		return err
 	}
+	if err := d.ensureMonitorTagMenu(now); err != nil {
+		return err
+	}
+	if err := d.EnsureDefaultMonitorLabelTags(); err != nil {
+		return err
+	}
 	if err := d.ensureConnectorMenu(now); err != nil {
+		return err
+	}
+	if err := d.ensureMonitorOpsMenus(now); err != nil {
+		return err
+	}
+	if err := d.ensureConfigCenterGroups(now); err != nil {
+		return err
+	}
+	if err := d.ensurePlatformAgentMenu(now); err != nil {
+		return err
+	}
+	if err := d.ensureMigrationOSSMenu(now); err != nil {
+		return err
+	}
+	if err := d.ensureSrClusterMenu(now); err != nil {
+		return err
+	}
+	if err := d.ensureDbMonitorMenu(now); err != nil {
+		return err
+	}
+	if err := d.ensureSqlInsightActionMenus(now); err != nil {
 		return err
 	}
 	if err := d.ensureDbConfigMenuTree(now); err != nil {
@@ -193,6 +241,15 @@ func (d *DB) seedRBAC(now string) error {
 		return err
 	}
 	if err := d.ensureTerminalMenu(now); err != nil {
+		return err
+	}
+	if err := d.ensureHAMenu(now); err != nil {
+		return err
+	}
+	if err := d.ensureCmdbMenuTree(now); err != nil {
+		return err
+	}
+	if err := d.EnsureDefaultCmdbTagDefs(); err != nil {
 		return err
 	}
 	if err := d.backfillMenuMeta(); err != nil {
@@ -300,8 +357,52 @@ func defaultMenuIcon(id, path string) string {
 		return "databoard"
 	case "m-diag":
 		return "monitor"
+	case "m-diag-perf":
+		return "search"
+	case "m-diag-rdbms":
+		return "coin"
+	case "m-diag-dist":
+		return "monitor"
+	case "m-diag-nosql":
+		return "databoard"
+	case "m-diag-infra":
+		return "connection"
 	case "m-diag-sql":
 		return "search"
+	case "m-diag-dbmon":
+		return "monitor"
+	case "m-diag-dbmon-mysql":
+		return "coin"
+	case "m-diag-dbmon-redis":
+		return "connection"
+	case "m-diag-dbmon-starrocks":
+		return "histogram"
+	case "m-diag-dbmon-clickhouse":
+		return "databoard"
+	case "m-diag-dbmon-kafka":
+		return "files"
+	case "m-diag-dbmon-tidb":
+		return "coin"
+	case "m-diag-dbmon-cockroach":
+		return "monitor"
+	case "m-diag-dbmon-cassandra":
+		return "databoard"
+	case "m-diag-dbmon-oceanbase":
+		return "histogram"
+	case "m-diag-dbmon-host":
+		return "monitor"
+	case "m-diag-dbmon-mongodb":
+		return "coin"
+	case "m-diag-dbmon-oracle":
+		return "databoard"
+	case "m-diag-dbmon-es":
+		return "search"
+	case "m-diag-dbmon-sqlserver":
+		return "monitor"
+	case "m-diag-dbmon-debezium":
+		return "connection"
+	case "m-diag-dbmon-dolphin":
+		return "histogram"
 	case "m-diag-sess":
 		return "cpu"
 	case "m-plat":
@@ -314,6 +415,24 @@ func defaultMenuIcon(id, path string) string {
 		return "coin"
 	case "m-plat-term":
 		return "monitor"
+	case "m-plat-ha":
+		return "safety"
+	case "m-cmdb":
+		return "coin"
+	case "m-cmdb-assets":
+		return "list"
+	case "m-cmdb-topo":
+		return "share"
+	case "m-cmdb-tags":
+		return "tag"
+	case "m-cmdb-discover":
+		return "search"
+	case "m-cmdb-io":
+		return "upload"
+	case "m-cmdb-audit":
+		return "audit"
+	case "m-cmdb-sync":
+		return "refresh"
 	case "m-rbac":
 		return "lock"
 	case "m-cfg":
@@ -326,8 +445,26 @@ func defaultMenuIcon(id, path string) string {
 		return "location"
 	case "m-cfg-env":
 		return "grid"
+	case "m-cfg-tags":
+		return "tag"
+	case "m-cfg-base":
+		return "setting"
+	case "m-cfg-access":
+		return "tag"
+	case "m-cfg-obs":
+		return "monitor"
 	case "m-cfg-conn":
 		return "connection"
+	case "m-cfg-agent":
+		return "connection"
+	case "m-cfg-oss":
+		return "upload"
+	case "m-cfg-monitor":
+		return "monitor"
+	case "m-cfg-fe-admin":
+		return "coin"
+	case "m-cfg-ds-admin":
+		return "histogram"
 	case "m-cfg-db":
 		return "coin"
 	case "m-cfg-accounts":
@@ -339,15 +476,15 @@ func defaultMenuIcon(id, path string) string {
 	case "m-cfg-menus":
 		return "menu"
 	case "m-cfg-roles":
-		return "user"
+		return "team"
 	case "m-cfg-users":
-		return "user-filled"
+		return "user"
 	case "m-cfg-login-logs":
-		return "clock"
+		return "login"
 	case "m-cfg-ldap":
-		return "key"
+		return "safety"
 	case "m-cfg-query-audits":
-		return "search"
+		return "audit"
 	}
 	switch path {
 	case "/ops/dashboard":
@@ -422,30 +559,64 @@ func (d *DB) seedMenus(now string) error {
 		{"m-safe-arc-mask", "m-safe-arc", "敏感数据脱敏", "/ops/archive/masking", "um.sidebar.ops-archive-masking", "查看数据脱敏", "lock", 38},
 		{"m-safe-arc-rpt", "m-safe-arc", "归档报表", "/ops/archive/report", "um.sidebar.ops-archive-report", "查看归档报表", "databoard", 39},
 		{"m-diag", "", "诊断", "", "um.sidebar.diag", "查看诊断", "monitor", 40},
-		{"m-diag-sql", "m-diag", "SQL 洞察", "/ops/sql-insight", "um.sidebar.ops-sql-insight", "查看 SQL 洞察", "search", 41},
-		{"m-diag-sess", "m-diag", "会话管理", "/ops/sessions", "um.sidebar.ops-sessions", "查看会话管理", "cpu", 42},
+		{"m-diag-perf", "m-diag", "性能诊断", "", "um.sidebar.diag-perf", "查看性能诊断", "search", 10},
+		{"m-diag-sql", "m-diag-perf", "SQL 洞察", "/ops/sql-insight", "um.sidebar.ops-sql-insight", "查看 SQL 洞察", "search", 1},
+		{"m-diag-sess", "m-diag-perf", "会话管理", "/ops/sessions", "um.sidebar.ops-sessions", "查看会话管理", "cpu", 2},
+		{"m-diag-rdbms", "m-diag", "关系型数据库", "", "um.sidebar.diag-rdbms", "查看关系型数据库监控", "coin", 20},
+		{"m-diag-dbmon-mysql", "m-diag-rdbms", "MySQL监控", "/ops/db-monitor/mysql", "um.sidebar.ops-db-monitor-mysql", "查看 MySQL 监控", "coin", 1},
+		{"m-diag-dbmon", "m-diag-rdbms", "Postgres监控", "/ops/db-monitor/postgres", "um.sidebar.ops-db-monitor-postgres", "查看 Postgres 监控", "monitor", 2},
+		{"m-diag-dbmon-oracle", "m-diag-rdbms", "Oracle监控", "/ops/db-monitor/oracle", "um.sidebar.ops-db-monitor-oracle", "查看 Oracle 监控", "databoard", 3},
+		{"m-diag-dbmon-sqlserver", "m-diag-rdbms", "SQLServer监控", "/ops/db-monitor/sqlserver", "um.sidebar.ops-db-monitor-sqlserver", "查看 SQLServer 监控", "monitor", 4},
+		{"m-diag-dbmon-oceanbase", "m-diag-rdbms", "OceanBase监控", "/ops/db-monitor/oceanbase", "um.sidebar.ops-db-monitor-oceanbase", "查看 OceanBase 监控", "histogram", 5},
+		{"m-diag-dist", "m-diag", "分布式 SQL", "", "um.sidebar.diag-dist", "查看分布式 SQL 监控", "monitor", 30},
+		{"m-diag-dbmon-tidb", "m-diag-dist", "TiDB监控", "/ops/db-monitor/tidb", "um.sidebar.ops-db-monitor-tidb", "查看 TiDB 监控", "coin", 1},
+		{"m-diag-dbmon-cockroach", "m-diag-dist", "CockroachDB监控", "/ops/db-monitor/cockroachdb", "um.sidebar.ops-db-monitor-cockroach", "查看 CockroachDB 监控", "monitor", 2},
+		{"m-diag-nosql", "m-diag", "分析与 NoSQL", "", "um.sidebar.diag-nosql", "查看分析与 NoSQL 监控", "databoard", 40},
+		{"m-diag-dbmon-starrocks", "m-diag-nosql", "Starrocks监控", "/ops/db-monitor/starrocks", "um.sidebar.ops-db-monitor-starrocks", "查看 StarRocks 监控", "histogram", 1},
+		{"m-diag-dbmon-clickhouse", "m-diag-nosql", "ClickHouse监控", "/ops/db-monitor/clickhouse", "um.sidebar.ops-db-monitor-clickhouse", "查看 ClickHouse 监控", "databoard", 2},
+		{"m-diag-dbmon-redis", "m-diag-nosql", "Redis监控", "/ops/db-monitor/redis", "um.sidebar.ops-db-monitor-redis", "查看 Redis 监控", "connection", 3},
+		{"m-diag-redis-rdb", "m-diag-nosql", "Redis内存分析", "/ops/redis-rdb", "um.sidebar.ops-redis-rdb", "查看 Redis RDB 内存分析", "search", 4},
+		{"m-diag-dbmon-mongodb", "m-diag-nosql", "MongoDB监控", "/ops/db-monitor/mongodb", "um.sidebar.ops-db-monitor-mongodb", "查看 MongoDB 监控", "coin", 5},
+		{"m-diag-dbmon-cassandra", "m-diag-nosql", "Cassandra监控", "/ops/db-monitor/cassandra", "um.sidebar.ops-db-monitor-cassandra", "查看 Cassandra 监控", "databoard", 6},
+		{"m-diag-dbmon-es", "m-diag-nosql", "ES监控", "/ops/db-monitor/elasticsearch", "um.sidebar.ops-db-monitor-es", "查看 Elasticsearch 监控", "search", 7},
+		{"m-diag-infra", "m-diag", "中间件与基础设施", "", "um.sidebar.diag-infra", "查看中间件与基础设施监控", "connection", 50},
+		{"m-diag-dbmon-kafka", "m-diag-infra", "Kafka监控", "/ops/db-monitor/kafka", "um.sidebar.ops-db-monitor-kafka", "查看 Kafka 监控", "files", 1},
+		{"m-diag-dbmon-debezium", "m-diag-infra", "Debezium监控", "/ops/db-monitor/debezium", "um.sidebar.ops-db-monitor-debezium", "查看 Debezium 监控", "connection", 2},
+		{"m-diag-dbmon-host", "m-diag-infra", "主机监控", "/ops/db-monitor/host", "um.sidebar.ops-db-monitor-host", "查看主机监控", "monitor", 3},
+		{"m-diag-dbmon-dolphin", "m-diag-infra", "海豚监控", "/ops/db-monitor/dolphinscheduler", "um.sidebar.ops-db-monitor-dolphin", "查看海豚监控", "histogram", 4},
 		{"m-plat", "", "平台运维", "", "um.sidebar.platform", "查看平台运维", "grid", 50},
 		{"m-plat-ml", "m-plat", "多语模版", "/ops/multilang", "um.sidebar.ops-multilang", "查看多语模版", "files", 51},
 		{"m-plat-ds", "m-plat", "海豚管理", "/ops/dolphin", "um.sidebar.ops-dolphin", "查看海豚管理", "histogram", 52},
-		{"m-plat-sr", "m-plat", "SR 节点", "/ops/sr", "um.sidebar.ops-sr", "查看 SR 节点", "coin", 53},
+		{"m-plat-sr", "m-plat", "SR控制台", "/ops/sr", "um.sidebar.ops-sr", "查看 SR 控制台", "coin", 52},
 		{"m-plat-term", "m-plat", "主机终端", "/ops/terminal", "um.sidebar.ops-terminal", "查看主机终端", "monitor", 54},
+		{"m-plat-ha", "m-plat", "高可用服务维护", "/ops/ha", "um.sidebar.ops-ha", "查看高可用服务维护", "safety", 55},
 		{"m-rbac", "", "用户权限", "", "um.sidebar.rbac", "查看用户权限", "lock", 55},
-		{"m-cfg-users", "m-rbac", "用户管理", "/config/users", "um.sidebar.config-users", "查看用户管理", "user-filled", 56},
-		{"m-cfg-roles", "m-rbac", "角色授权", "/config/roles", "um.sidebar.config-roles", "查看角色授权", "user", 57},
+		{"m-cfg-users", "m-rbac", "用户管理", "/config/users", "um.sidebar.config-users", "查看用户管理", "user", 56},
+		{"m-cfg-roles", "m-rbac", "角色授权", "/config/roles", "um.sidebar.config-roles", "查看角色授权", "team", 57},
 		{"m-cfg-menus", "m-rbac", "菜单管理", "/config/menus", "um.sidebar.config-menus", "查看菜单管理", "menu", 58},
-		{"m-cfg-login-logs", "m-rbac", "登录日志", "/config/login-logs", "um.sidebar.config-login-logs", "查看登录日志", "clock", 59},
-		{"m-cfg-ldap", "m-rbac", "认证配置", "/config/ldap", "um.sidebar.config-ldap", "查看认证配置", "key", 60},
-		{"m-cfg-query-audits", "m-rbac", "查询审计", "/config/query-audits", "um.sidebar.config-query-audits", "查看查询审计", "search", 61},
+		{"m-cfg-login-logs", "m-rbac", "登录日志", "/config/login-logs", "um.sidebar.config-login-logs", "查看登录日志", "login", 59},
+		{"m-cfg-ldap", "m-rbac", "认证配置", "/config/ldap", "um.sidebar.config-ldap", "查看认证配置", "safety", 60},
+		{"m-cfg-query-audits", "m-rbac", "查询审计", "/config/query-audits", "um.sidebar.config-query-audits", "查看查询审计", "audit", 61},
 		{"m-cfg", "", "配置中心", "", "um.sidebar.config", "查看配置中心", "setting", 2},
-		{"m-db-config", "", "数据库配置", "", "um.sidebar.db-config", "查看数据库配置", "coin", 3},
+		{"m-cfg-base", "m-cfg", "基础设置", "", "um.sidebar.config-base", "查看基础设置", "setting", 10},
+		{"m-cfg-access", "m-cfg", "标签与连接", "", "um.sidebar.config-access", "查看标签与连接", "tag", 20},
+		{"m-cfg-obs", "m-cfg", "监控运维", "", "um.sidebar.config-obs", "查看监控运维", "monitor", 30},
+		{"m-cfg-args", "m-cfg-base", "全局参数", "/config/args", "um.sidebar.config-args", "查看全局参数", "setting", 1},
+		{"m-cfg-region", "m-cfg-base", "区域管理", "/config/regions", "um.sidebar.config-regions", "查看区域管理", "location", 2},
+		{"m-cfg-env", "m-cfg-base", "环境管理", "/config/environments", "um.sidebar.config-environments", "查看环境管理", "grid", 3},
+		{"m-cfg-tags", "m-cfg-access", "标签管理", "/config/tags", "um.sidebar.config-tags", "查看标签管理", "tag", 1},
+		{"m-cfg-conn", "m-cfg-access", "连接器", "/config/connectors", "um.sidebar.config-connectors", "查看连接器", "connection", 2},
+		{"m-cfg-agent", "m-cfg-access", "平台 Agent", "/config/agents", "um.sidebar.config-agents", "查看平台 Agent", "connection", 3},
+		{"m-cfg-oss", "m-cfg-access", "对象存储", "/config/oss", "um.sidebar.config-oss", "查看对象存储配置与上传", "upload", 4},
+		{"m-cfg-monitor", "m-cfg-obs", "监控目标注册", "/config/monitor-targets", "um.sidebar.config-monitor-targets", "查看监控目标注册", "monitor", 1},
+		{"m-cfg-fe-admin", "m-cfg-obs", "FE管理", "/config/fe-admin", "um.sidebar.config-fe-admin", "查看 FE 管理", "coin", 2},
+		{"m-cfg-ds-admin", "m-cfg-obs", "海豚配置", "/config/ds-admin", "um.sidebar.config-ds-admin", "查看海豚配置", "histogram", 3},
+		{"m-db-config", "", "资源配置", "", "um.sidebar.db-config", "查看资源配置", "coin", 3},
 		{"m-cfg-inst", "m-db-config", "实例管理", "/config/instances", "um.sidebar.config-instances", "查看实例管理", "monitor", 1},
 		{"m-cfg-db", "m-db-config", "已登记库", "/config/databases", "um.sidebar.config-databases", "查看已登记库", "coin", 2},
 		{"m-cfg-accounts", "m-db-config", "账号管理", "/config/accounts", "um.sidebar.config-accounts", "查看账号管理", "user", 3},
 		{"m-cfg-review", "m-db-config", "审核规则", "/config/review-rules", "um.sidebar.config-review-rules", "查看审核规则", "document", 4},
-		{"m-cfg-args", "m-cfg", "全局参数", "/config/args", "um.sidebar.config-args", "查看全局参数", "setting", 73},
-		{"m-cfg-region", "m-cfg", "区域管理", "/config/regions", "um.sidebar.config-regions", "查看区域管理", "location", 74},
-		{"m-cfg-env", "m-cfg", "环境管理", "/config/environments", "um.sidebar.config-environments", "查看环境管理", "grid", 75},
-		{"m-cfg-conn", "m-cfg", "连接器", "/config/connectors", "um.sidebar.config-connectors", "查看连接器", "connection", 76},
+		{"m-cfg-sql-insight", "m-db-config", "SQL 洞察设置", "/config/sql-insight", "um.sidebar.config-sql-insight", "查看 SQL 洞察设置", "setting", 5},
 	}
 	for _, it := range items {
 		m := &Menu{
@@ -766,6 +937,38 @@ func (d *DB) ensureArchiveMenuTree(now string) error {
 	return nil
 }
 
+func (d *DB) ensureBackupMenuTree(now string) error {
+	items := []seedMenu{
+		{"m-safe-bak", "m-safe", "数据备份", "", "um.sidebar.ops-backup", "查看数据备份", "folder", 40},
+		{"m-safe-bak-pol", "m-safe-bak", "备份策略", "/ops/backup/policies", "um.sidebar.ops-backup-policies", "查看备份策略", "list", 41},
+		{"m-safe-bak-runs", "m-safe-bak", "执行记录", "/ops/backup/runs", "um.sidebar.ops-backup-runs", "查看备份执行记录", "clock", 42},
+		{"m-safe-bak-set", "m-safe-bak", "备份存储", "/ops/backup/settings", "um.sidebar.ops-backup-settings", "查看备份存储", "setting", 43},
+	}
+	for _, it := range items {
+		m := &Menu{
+			ID: it.ID, ParentID: it.Parent, Title: it.Title, Path: it.Path,
+			URN: it.URN, PermissionDesc: it.Perm, Icon: it.Icon, SortOrder: it.Sort, Enabled: true,
+			CreatedAt: now, UpdatedAt: now,
+		}
+		if err := d.EnsureMenu(m); err != nil {
+			return err
+		}
+		if err := d.GrantMenuFollowingParent(it.ID, it.Parent); err != nil {
+			return err
+		}
+		if it.Parent == "m-safe-bak" {
+			if err := d.GrantMenuToAllRoles(it.ID); err != nil {
+				return err
+			}
+		}
+	}
+	if err := d.GrantMenuToAllRoles("m-safe-bak"); err != nil {
+		return err
+	}
+	log.Printf("seed: backup menu tree ensured")
+	return nil
+}
+
 func (d *DB) ensureRegionEnvCatalog(now string) error {
 	if exist, _ := d.GetRegion("r-default"); exist == nil {
 		if err := d.CreateRegion(&Region{ID: "r-default", Code: "default", Name: "默认", Description: "默认区域", CreatedAt: now, UpdatedAt: now}); err != nil {
@@ -817,10 +1020,154 @@ func (d *DB) ensureRegionEnvMenus(now string) error {
 	return nil
 }
 
+func (d *DB) ensureMonitorTagMenu(now string) error {
+	items := []seedMenu{
+		{"m-cfg-tags", "m-cfg", "标签管理", "/config/tags", "um.sidebar.config-tags", "查看标签管理", "tag", 69},
+	}
+	for _, it := range items {
+		m := &Menu{
+			ID: it.ID, ParentID: it.Parent, Title: it.Title, Path: it.Path,
+			URN: it.URN, PermissionDesc: it.Perm, Icon: it.Icon, SortOrder: it.Sort, Enabled: true,
+			CreatedAt: now, UpdatedAt: now,
+		}
+		if err := d.EnsureMenu(m); err != nil {
+			return err
+		}
+		if err := d.GrantMenuFollowingParent(it.ID, it.Parent); err != nil {
+			return err
+		}
+	}
+	log.Printf("seed: monitor tag menu ensured")
+	return nil
+}
+
+// ensureConfigCenterGroups 将配置中心叶子菜单归入专业分组，供侧栏 Flyout 分栏展示。
+func (d *DB) ensureConfigCenterGroups(now string) error {
+	groups := []seedMenu{
+		{"m-cfg-base", "m-cfg", "基础设置", "", "um.sidebar.config-base", "查看基础设置", "setting", 10},
+		{"m-cfg-access", "m-cfg", "标签与连接", "", "um.sidebar.config-access", "查看标签与连接", "tag", 20},
+		{"m-cfg-obs", "m-cfg", "监控运维", "", "um.sidebar.config-obs", "查看监控运维", "monitor", 30},
+	}
+	for _, it := range groups {
+		m := &Menu{
+			ID: it.ID, ParentID: it.Parent, Title: it.Title, Path: it.Path,
+			URN: it.URN, PermissionDesc: it.Perm, Icon: it.Icon, SortOrder: it.Sort, Enabled: true,
+			CreatedAt: now, UpdatedAt: now,
+		}
+		if err := d.EnsureMenu(m); err != nil {
+			return err
+		}
+		if err := d.GrantMenuFollowingParent(it.ID, it.Parent); err != nil {
+			return err
+		}
+	}
+	leaves := []struct {
+		id, parent string
+		sort       int
+	}{
+		{"m-cfg-args", "m-cfg-base", 1},
+		{"m-cfg-region", "m-cfg-base", 2},
+		{"m-cfg-env", "m-cfg-base", 3},
+		{"m-cfg-tags", "m-cfg-access", 1},
+		{"m-cfg-conn", "m-cfg-access", 2},
+		{"m-cfg-agent", "m-cfg-access", 3},
+		{"m-cfg-oss", "m-cfg-access", 4},
+		{"m-cfg-monitor", "m-cfg-obs", 1},
+		{"m-cfg-fe-admin", "m-cfg-obs", 2},
+		{"m-cfg-ds-admin", "m-cfg-obs", 3},
+	}
+	for _, leaf := range leaves {
+		exist, err := d.GetMenu(leaf.id)
+		if err != nil {
+			return err
+		}
+		if exist == nil {
+			continue
+		}
+		exist.ParentID = leaf.parent
+		exist.SortOrder = leaf.sort
+		exist.UpdatedAt = now
+		if err := d.UpdateMenu(exist); err != nil {
+			return err
+		}
+		if err := d.GrantMenuFollowingParent(leaf.id, leaf.parent); err != nil {
+			return err
+		}
+	}
+	log.Printf("seed: config center groups ensured")
+	return nil
+}
+
+// ensurePlatformAgentMenu 配置中心 · 平台 Agent（平台级执行面，归属 backup/rdb/ha）。
+func (d *DB) ensurePlatformAgentMenu(now string) error {
+	m := &Menu{
+		ID: "m-cfg-agent", ParentID: "m-cfg-access", Title: "平台 Agent", Path: "/config/agents",
+		URN: "um.sidebar.config-agents", PermissionDesc: "查看平台 Agent", Icon: "connection",
+		SortOrder: 3, Enabled: true, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := d.EnsureMenu(m); err != nil {
+		return err
+	}
+	if err := d.GrantMenuFollowingParent(m.ID, m.ParentID); err != nil {
+		return err
+	}
+	log.Printf("seed: platform agent menu ensured")
+	return nil
+}
+
+// ensureMigrationOSSMenu 配置中心 · OSS 配置（数据迁移 OSS 中转等引用）。
+func (d *DB) ensureMigrationOSSMenu(now string) error {
+	m := &Menu{
+		ID: "m-cfg-oss", ParentID: "m-cfg-access", Title: "对象存储", Path: "/config/oss",
+		URN: "um.sidebar.config-oss", PermissionDesc: "查看对象存储配置与上传", Icon: "upload",
+		SortOrder: 4, Enabled: true, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := d.EnsureMenu(m); err != nil {
+		return err
+	}
+	if err := d.GrantMenuFollowingParent(m.ID, m.ParentID); err != nil {
+		return err
+	}
+	log.Printf("seed: migration oss menu ensured")
+	return nil
+}
+
+// ensureSrClusterMenu 平台运维 · 集群部署（按引擎类型交付；StarRocks 为第一种）。
+func (d *DB) ensureSrClusterMenu(now string) error {
+	parent := &Menu{
+		ID: "m-plat", ParentID: "", Title: "平台运维", Path: "",
+		URN: "um.sidebar.platform", PermissionDesc: "查看平台运维", Icon: "grid",
+		SortOrder: 50, Enabled: true, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := d.EnsureMenu(parent); err != nil {
+		return err
+	}
+	m := &Menu{
+		ID: "m-plat-sr-cluster", ParentID: "m-plat", Title: "集群部署", Path: "/ops/cluster-deploy",
+		URN: "um.sidebar.ops-cluster-deploy", PermissionDesc: "查看集群部署", Icon: "coin",
+		SortOrder: 53, Enabled: true, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := d.EnsureMenu(m); err != nil {
+		return err
+	}
+	// 将原「SR 节点」菜单更名为控制台并调整排序，与集群部署区分
+	if exist, err := d.GetMenu("m-plat-sr"); err == nil && exist != nil {
+		exist.SortOrder = 52
+		exist.Title = "SR控制台"
+		exist.UpdatedAt = now
+		_ = d.UpdateMenu(exist)
+	}
+	if err := d.GrantMenuFollowingParent(m.ID, m.ParentID); err != nil {
+		return err
+	}
+	log.Printf("seed: cluster-deploy menu ensured")
+	return nil
+}
+
 func (d *DB) ensureDbConfigMenuTree(now string) error {
 	parent := &Menu{
-		ID: "m-db-config", ParentID: "", Title: "数据库配置", Path: "",
-		URN: "um.sidebar.db-config", PermissionDesc: "查看数据库配置", Icon: "coin",
+		ID: "m-db-config", ParentID: "", Title: "资源配置", Path: "",
+		URN: "um.sidebar.db-config", PermissionDesc: "查看资源配置", Icon: "coin",
 		SortOrder: 3, Enabled: true, CreatedAt: now, UpdatedAt: now,
 	}
 	if err := d.EnsureMenu(parent); err != nil {
@@ -834,6 +1181,7 @@ func (d *DB) ensureDbConfigMenuTree(now string) error {
 		{"m-cfg-db", "m-db-config", "已登记库", "/config/databases", "um.sidebar.config-databases", "查看已登记库", "coin", 2},
 		{"m-cfg-accounts", "m-db-config", "账号管理", "/config/accounts", "um.sidebar.config-accounts", "查看账号管理", "user", 3},
 		{"m-cfg-review", "m-db-config", "审核规则", "/config/review-rules", "um.sidebar.config-review-rules", "查看审核规则", "document", 4},
+		{"m-cfg-sql-insight", "m-db-config", "SQL 洞察设置", "/config/sql-insight", "um.sidebar.config-sql-insight", "查看 SQL 洞察设置", "setting", 5},
 	}
 	for _, it := range items {
 		m := &Menu{
@@ -871,10 +1219,67 @@ func (d *DB) ensureTerminalMenu(now string) error {
 	return d.GrantMenuFollowingParent(m.ID, m.ParentID)
 }
 
+func (d *DB) ensureHAMenu(now string) error {
+	parent := &Menu{
+		ID: "m-plat", ParentID: "", Title: "平台运维", Path: "",
+		URN: "um.sidebar.platform", PermissionDesc: "查看平台运维", Icon: "grid",
+		SortOrder: 50, Enabled: true, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := d.EnsureMenu(parent); err != nil {
+		return err
+	}
+	m := &Menu{
+		ID: "m-plat-ha", ParentID: "m-plat", Title: "高可用服务维护", Path: "/ops/ha",
+		URN: "um.sidebar.ops-ha", PermissionDesc: "查看高可用服务维护", Icon: "safety",
+		SortOrder: 55, Enabled: true, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := d.EnsureMenu(m); err != nil {
+		return err
+	}
+	return d.GrantMenuFollowingParent(m.ID, m.ParentID)
+}
+
+func (d *DB) ensureCmdbMenuTree(now string) error {
+	items := []seedMenu{
+		{"m-cmdb", "", "CMDB", "", "um.sidebar.cmdb", "查看 CMDB", "coin", 8},
+		{"m-cmdb-assets", "m-cmdb", "资产目录", "/cmdb/assets", "um.sidebar.cmdb-assets", "查看资产目录", "list", 1},
+		{"m-cmdb-topo", "m-cmdb", "关系拓扑", "/cmdb/topology", "um.sidebar.cmdb-topology", "查看关系拓扑", "share", 2},
+		{"m-cmdb-tags", "m-cmdb", "标签管理", "/cmdb/tags", "um.sidebar.cmdb-tags", "查看 CMDB 标签", "tag", 3},
+		{"m-cmdb-discover", "m-cmdb", "发现登记", "/cmdb/discover", "um.sidebar.cmdb-discover", "查看发现登记", "search", 4},
+		{"m-cmdb-io", "m-cmdb", "导入导出", "/cmdb/import-export", "um.sidebar.cmdb-io", "查看导入导出", "upload", 5},
+		{"m-cmdb-audit", "m-cmdb", "变更审计", "/cmdb/audit", "um.sidebar.cmdb-audit", "查看变更审计", "audit", 6},
+		{"m-cmdb-sync", "m-cmdb", "同步任务", "/cmdb/sync", "um.sidebar.cmdb-sync", "查看同步任务", "refresh", 7},
+		{"m-act-cmdb-edit", "m-cmdb", "编辑 CMDB", "", URNCmdbEdit, "编辑 CMDB", "edit", 90},
+		{"m-act-cmdb-import", "m-cmdb", "导入导出权限", "", URNCmdbImport, "CMDB 导入导出", "upload", 91},
+		{"m-act-cmdb-sync", "m-cmdb", "同步权限", "", URNCmdbSync, "CMDB 外部同步", "refresh", 92},
+	}
+	for _, it := range items {
+		m := &Menu{
+			ID: it.ID, ParentID: it.Parent, Title: it.Title, Path: it.Path,
+			URN: it.URN, PermissionDesc: it.Perm, Icon: it.Icon, SortOrder: it.Sort, Enabled: true,
+			CreatedAt: now, UpdatedAt: now,
+		}
+		if err := d.EnsureMenu(m); err != nil {
+			return err
+		}
+		if err := d.GrantMenuFollowingParent(it.ID, it.Parent); err != nil {
+			return err
+		}
+	}
+	// 原配置中心标签页指向 CMDB 标签
+	if exist, err := d.GetMenu("m-cfg-tags"); err == nil && exist != nil {
+		exist.Path = "/cmdb/tags"
+		exist.UpdatedAt = now
+		_ = d.UpdateMenu(exist)
+	}
+	log.Printf("seed: cmdb menu tree ensured")
+	return nil
+}
+
 func (d *DB) ensureLoginLogsMenu(now string) error {
 	m := &Menu{
 		ID: "m-cfg-login-logs", ParentID: "m-rbac", Title: "登录日志", Path: "/config/login-logs",
-		URN: "um.sidebar.config-login-logs", PermissionDesc: "查看登录日志", Icon: "clock",
+		URN: "um.sidebar.config-login-logs", PermissionDesc: "查看登录日志", Icon: "login",
 		SortOrder: 59, Enabled: true, CreatedAt: now, UpdatedAt: now,
 	}
 	if err := d.EnsureMenu(m); err != nil {
@@ -886,7 +1291,7 @@ func (d *DB) ensureLoginLogsMenu(now string) error {
 func (d *DB) ensureQueryAuditsMenu(now string) error {
 	m := &Menu{
 		ID: "m-cfg-query-audits", ParentID: "m-rbac", Title: "查询审计", Path: "/config/query-audits",
-		URN: "um.sidebar.config-query-audits", PermissionDesc: "查看查询审计", Icon: "search",
+		URN: "um.sidebar.config-query-audits", PermissionDesc: "查看查询审计", Icon: "audit",
 		SortOrder: 61, Enabled: true, CreatedAt: now, UpdatedAt: now,
 	}
 	if err := d.EnsureMenu(m); err != nil {
@@ -898,7 +1303,7 @@ func (d *DB) ensureQueryAuditsMenu(now string) error {
 func (d *DB) ensureLdapMenu(now string) error {
 	m := &Menu{
 		ID: "m-cfg-ldap", ParentID: "m-rbac", Title: "认证配置", Path: "/config/ldap",
-		URN: "um.sidebar.config-ldap", PermissionDesc: "查看认证配置", Icon: "key",
+		URN: "um.sidebar.config-ldap", PermissionDesc: "查看认证配置", Icon: "safety",
 		SortOrder: 60, Enabled: true, CreatedAt: now, UpdatedAt: now,
 	}
 	if err := d.EnsureMenu(m); err != nil {
@@ -921,12 +1326,12 @@ func (d *DB) ensureUserPermissionMenus(now string) error {
 		return err
 	}
 	items := []seedMenu{
-		{"m-cfg-users", "m-rbac", "用户管理", "/config/users", "um.sidebar.config-users", "查看用户管理", "user-filled", 56},
-		{"m-cfg-roles", "m-rbac", "角色授权", "/config/roles", "um.sidebar.config-roles", "查看角色授权", "user", 57},
+		{"m-cfg-users", "m-rbac", "用户管理", "/config/users", "um.sidebar.config-users", "查看用户管理", "user", 56},
+		{"m-cfg-roles", "m-rbac", "角色授权", "/config/roles", "um.sidebar.config-roles", "查看角色授权", "team", 57},
 		{"m-cfg-menus", "m-rbac", "菜单管理", "/config/menus", "um.sidebar.config-menus", "查看菜单管理", "menu", 58},
-		{"m-cfg-login-logs", "m-rbac", "登录日志", "/config/login-logs", "um.sidebar.config-login-logs", "查看登录日志", "clock", 59},
-		{"m-cfg-ldap", "m-rbac", "认证配置", "/config/ldap", "um.sidebar.config-ldap", "查看认证配置", "key", 60},
-		{"m-cfg-query-audits", "m-rbac", "查询审计", "/config/query-audits", "um.sidebar.config-query-audits", "查看查询审计", "search", 61},
+		{"m-cfg-login-logs", "m-rbac", "登录日志", "/config/login-logs", "um.sidebar.config-login-logs", "查看登录日志", "login", 59},
+		{"m-cfg-ldap", "m-rbac", "认证配置", "/config/ldap", "um.sidebar.config-ldap", "查看认证配置", "safety", 60},
+		{"m-cfg-query-audits", "m-rbac", "查询审计", "/config/query-audits", "um.sidebar.config-query-audits", "查看查询审计", "audit", 61},
 	}
 	for _, it := range items {
 		m := &Menu{
@@ -985,6 +1390,107 @@ func (d *DB) ensureConnectorMenu(now string) error {
 		return err
 	}
 	log.Printf("seed: connector menu ensured")
+	return nil
+}
+
+func (d *DB) ensureMonitorOpsMenus(now string) error {
+	items := []seedMenu{
+		{"m-cfg-monitor", "m-cfg", "监控目标注册", "/config/monitor-targets", "um.sidebar.config-monitor-targets", "查看监控目标注册", "monitor", 70},
+		{"m-cfg-fe-admin", "m-cfg", "FE管理", "/config/fe-admin", "um.sidebar.config-fe-admin", "查看 FE 管理", "coin", 71},
+		{"m-cfg-ds-admin", "m-cfg", "海豚配置", "/config/ds-admin", "um.sidebar.config-ds-admin", "查看海豚配置", "histogram", 72},
+	}
+	for _, it := range items {
+		m := &Menu{
+			ID: it.ID, ParentID: it.Parent, Title: it.Title, Path: it.Path,
+			URN: it.URN, PermissionDesc: it.Perm, Icon: it.Icon, SortOrder: it.Sort, Enabled: true,
+			CreatedAt: now, UpdatedAt: now,
+		}
+		if err := d.EnsureMenu(m); err != nil {
+			return err
+		}
+		if err := d.GrantMenuFollowingParent(it.ID, it.Parent); err != nil {
+			return err
+		}
+	}
+	// rename SR console menu title if present
+	if exist, err := d.GetMenu("m-plat-sr"); err == nil && exist != nil && exist.Title != "SR控制台" {
+		exist.Title = "SR控制台"
+		exist.UpdatedAt = now
+		_ = d.UpdateMenu(exist)
+	}
+	log.Printf("seed: monitor/fe/ds menus ensured")
+	return nil
+}
+
+func (d *DB) ensureSqlInsightActionMenus(now string) error {
+	items := []seedMenu{
+		{"m-act-si-collect", "m-diag-sql", "手动采集活动快照", "", URNSqlInsightCollect, "手动采集 PG 活动会话快照", "upload", 90},
+		{"m-act-si-awr-gen", "m-diag-sql", "手动生成 AWR 报告", "", URNSqlInsightAwrGenerate, "手动触发生成 / 管理 AWR 生成任务", "histogram", 91},
+		{"m-act-si-space-collect", "m-diag-sql", "手动采集表空间", "", URNSqlInsightSpaceCollect, "手动采集表空间快照 / 管理采集任务", "download", 92},
+		{"m-act-si-analyze", "m-diag-sql", "手动智能分析", "", URNSqlInsightAnalyze, "手动触发智能分析运行", "search", 93},
+	}
+	for _, it := range items {
+		m := &Menu{
+			ID: it.ID, ParentID: it.Parent, Title: it.Title, Path: it.Path,
+			URN: it.URN, PermissionDesc: it.Perm, Icon: it.Icon, SortOrder: it.Sort, Enabled: true,
+			CreatedAt: now, UpdatedAt: now,
+		}
+		if err := d.EnsureMenu(m); err != nil {
+			return err
+		}
+		if err := d.GrantMenuFollowingParent(it.ID, it.Parent); err != nil {
+			return err
+		}
+	}
+	log.Printf("seed: sql-insight action menus ensured")
+	return nil
+}
+
+func (d *DB) ensureDbMonitorMenu(now string) error {
+	items := []struct {
+		ID, Parent, Title, Path, URN, Perm, Icon string
+		Sort                                     int
+	}{
+		{"m-diag-perf", "m-diag", "性能诊断", "", "um.sidebar.diag-perf", "查看性能诊断", "search", 10},
+		{"m-diag-sql", "m-diag-perf", "SQL 洞察", "/ops/sql-insight", "um.sidebar.ops-sql-insight", "查看 SQL 洞察", "search", 1},
+		{"m-diag-sess", "m-diag-perf", "会话管理", "/ops/sessions", "um.sidebar.ops-sessions", "查看会话管理", "cpu", 2},
+		{"m-diag-rdbms", "m-diag", "关系型数据库", "", "um.sidebar.diag-rdbms", "查看关系型数据库监控", "coin", 20},
+		{"m-diag-dbmon-mysql", "m-diag-rdbms", "MySQL监控", "/ops/db-monitor/mysql", "um.sidebar.ops-db-monitor-mysql", "查看 MySQL 监控", "coin", 1},
+		{"m-diag-dbmon", "m-diag-rdbms", "Postgres监控", "/ops/db-monitor/postgres", "um.sidebar.ops-db-monitor-postgres", "查看 Postgres 监控", "monitor", 2},
+		{"m-diag-dbmon-oracle", "m-diag-rdbms", "Oracle监控", "/ops/db-monitor/oracle", "um.sidebar.ops-db-monitor-oracle", "查看 Oracle 监控", "databoard", 3},
+		{"m-diag-dbmon-sqlserver", "m-diag-rdbms", "SQLServer监控", "/ops/db-monitor/sqlserver", "um.sidebar.ops-db-monitor-sqlserver", "查看 SQLServer 监控", "monitor", 4},
+		{"m-diag-dbmon-oceanbase", "m-diag-rdbms", "OceanBase监控", "/ops/db-monitor/oceanbase", "um.sidebar.ops-db-monitor-oceanbase", "查看 OceanBase 监控", "histogram", 5},
+		{"m-diag-dist", "m-diag", "分布式 SQL", "", "um.sidebar.diag-dist", "查看分布式 SQL 监控", "monitor", 30},
+		{"m-diag-dbmon-tidb", "m-diag-dist", "TiDB监控", "/ops/db-monitor/tidb", "um.sidebar.ops-db-monitor-tidb", "查看 TiDB 监控", "coin", 1},
+		{"m-diag-dbmon-cockroach", "m-diag-dist", "CockroachDB监控", "/ops/db-monitor/cockroachdb", "um.sidebar.ops-db-monitor-cockroach", "查看 CockroachDB 监控", "monitor", 2},
+		{"m-diag-nosql", "m-diag", "分析与 NoSQL", "", "um.sidebar.diag-nosql", "查看分析与 NoSQL 监控", "databoard", 40},
+		{"m-diag-dbmon-starrocks", "m-diag-nosql", "Starrocks监控", "/ops/db-monitor/starrocks", "um.sidebar.ops-db-monitor-starrocks", "查看 StarRocks 监控", "histogram", 1},
+		{"m-diag-dbmon-clickhouse", "m-diag-nosql", "ClickHouse监控", "/ops/db-monitor/clickhouse", "um.sidebar.ops-db-monitor-clickhouse", "查看 ClickHouse 监控", "databoard", 2},
+		{"m-diag-dbmon-redis", "m-diag-nosql", "Redis监控", "/ops/db-monitor/redis", "um.sidebar.ops-db-monitor-redis", "查看 Redis 监控", "connection", 3},
+		{"m-diag-redis-rdb", "m-diag-nosql", "Redis内存分析", "/ops/redis-rdb", "um.sidebar.ops-redis-rdb", "查看 Redis RDB 内存分析", "search", 4},
+		{"m-diag-dbmon-mongodb", "m-diag-nosql", "MongoDB监控", "/ops/db-monitor/mongodb", "um.sidebar.ops-db-monitor-mongodb", "查看 MongoDB 监控", "coin", 5},
+		{"m-diag-dbmon-cassandra", "m-diag-nosql", "Cassandra监控", "/ops/db-monitor/cassandra", "um.sidebar.ops-db-monitor-cassandra", "查看 Cassandra 监控", "databoard", 6},
+		{"m-diag-dbmon-es", "m-diag-nosql", "ES监控", "/ops/db-monitor/elasticsearch", "um.sidebar.ops-db-monitor-es", "查看 Elasticsearch 监控", "search", 7},
+		{"m-diag-infra", "m-diag", "中间件与基础设施", "", "um.sidebar.diag-infra", "查看中间件与基础设施监控", "connection", 50},
+		{"m-diag-dbmon-kafka", "m-diag-infra", "Kafka监控", "/ops/db-monitor/kafka", "um.sidebar.ops-db-monitor-kafka", "查看 Kafka 监控", "files", 1},
+		{"m-diag-dbmon-debezium", "m-diag-infra", "Debezium监控", "/ops/db-monitor/debezium", "um.sidebar.ops-db-monitor-debezium", "查看 Debezium 监控", "connection", 2},
+		{"m-diag-dbmon-host", "m-diag-infra", "主机监控", "/ops/db-monitor/host", "um.sidebar.ops-db-monitor-host", "查看主机监控", "monitor", 3},
+		{"m-diag-dbmon-dolphin", "m-diag-infra", "海豚监控", "/ops/db-monitor/dolphinscheduler", "um.sidebar.ops-db-monitor-dolphin", "查看海豚监控", "histogram", 4},
+	}
+	for _, it := range items {
+		m := &Menu{
+			ID: it.ID, ParentID: it.Parent, Title: it.Title, Path: it.Path,
+			URN: it.URN, PermissionDesc: it.Perm, Icon: it.Icon, SortOrder: it.Sort, Enabled: true,
+			CreatedAt: now, UpdatedAt: now,
+		}
+		if err := d.EnsureMenu(m); err != nil {
+			return err
+		}
+		if err := d.GrantMenuFollowingParent(m.ID, m.ParentID); err != nil {
+			return err
+		}
+	}
+	log.Printf("seed: typed db-monitor menus ensured")
 	return nil
 }
 

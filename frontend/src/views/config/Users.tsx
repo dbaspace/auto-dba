@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
-import { Button, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag, message } from 'antd'
+import { Button, Form, Input, Modal, Popconfirm, Select, Space, Tag, message } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
 import api from '../../api/request'
 import Auth from '../../components/Auth'
 import { Perm } from '../../hooks/usePermission'
@@ -195,7 +196,7 @@ export default function Users() {
         </Auth>
       </div>
       <div className="ops-table">
-        <Table
+        <ResponsiveTable
           rowKey={(r) => r.id || r.username}
           dataSource={rows}
           bordered

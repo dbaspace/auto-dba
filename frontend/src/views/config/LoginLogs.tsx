@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
-import { Button, Input, Pagination, Select, Space, Table, Tag } from 'antd'
+import { Button, Input, Pagination, Select, Space, Tag } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
 import api from '../../api/request'
 import './LoginLogs.css'
 
@@ -91,7 +92,7 @@ export default function LoginLogs() {
         </Button>
       </div>
       <div className="ops-table">
-        <Table
+        <ResponsiveTable
           rowKey={(r) => `${r.logged_at}-${r.username}-${r.ip}`}
           dataSource={rows}
           loading={loading}

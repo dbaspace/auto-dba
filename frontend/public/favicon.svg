@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 320" fill="none">
+  <defs>
+    <linearGradient id="kp-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1B4F8C"/>
+      <stop offset="1" stop-color="#3B8DFF"/>
+    </linearGradient>
+    <linearGradient id="kp-cy" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#00E5FF"/>
+      <stop offset="1" stop-color="#2F80FF"/>
+    </linearGradient>
+    <linearGradient id="kp-pu" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8B5CF6"/>
+      <stop offset="1" stop-color="#FF4FD8"/>
+    </linearGradient>
+  </defs>
+  <rect width="320" height="320" rx="80" fill="url(#kp-bg)"/>
+  <ellipse cx="160" cy="160" rx="125" ry="46" fill="none" stroke="#8B5CF6" stroke-width="5" opacity=".55" transform="rotate(-18 160 160)"/>
+  <ellipse cx="160" cy="160" rx="125" ry="46" fill="none" stroke="#00E5FF" stroke-width="5" opacity=".55" transform="rotate(42 160 160)"/>
+  <path d="M160 50 L252 92 L252 182 C252 232 204 270 160 286 C116 270 68 232 68 182 L68 92 Z" fill="none" stroke="url(#kp-cy)" stroke-width="10" stroke-linejoin="round"/>
+  <ellipse cx="160" cy="130" rx="46" ry="16" fill="#00E5FF"/>
+  <rect x="114" y="130" width="92" height="42" fill="#00E5FF" opacity=".5"/>
+  <ellipse cx="160" cy="172" rx="46" ry="16" fill="#00E5FF"/>
+  <circle cx="160" cy="160" r="24" fill="#fff" opacity=".96"/>
+  <circle cx="160" cy="154" r="10" fill="#1E3A5F"/>
+  <rect x="156" y="160" width="8" height="22" rx="4" fill="#1E3A5F"/>
+  <g fill="url(#kp-pu)">
+    <rect x="238" y="88" width="30" height="9" rx="4.5"/>
+    <rect x="248.5" y="77.5" width="9" height="30" rx="4.5"/>
+  </g>
+  <circle cx="48" cy="220" r="10" fill="#00E5FF"/>
+  <circle cx="282" cy="128" r="10" fill="#8B5CF6"/>
+</svg>

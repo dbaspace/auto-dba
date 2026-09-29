@@ -1,0 +1,43 @@
+.cluster-deploy-hub {
+  padding: 12px 16px;
+}
+
+.cluster-deploy-hub .engine-card {
+  min-height: 240px;
+  display: flex;
+  flex-direction: column;
+}
+
+.cluster-deploy-hub .engine-card .ant-card-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+.cluster-deploy-hub .engine-card-disabled {
+  opacity: 0.72;
+}
+
+.cluster-deploy-hub .engine-card-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.cluster-deploy-hub .engine-family {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--ant-color-text-tertiary, #999);
+}
+
+.cluster-deploy-hub .engine-desc {
+  color: var(--ant-color-text-secondary, #666);
+  min-height: 56px;
+  margin-bottom: 12px;
+  flex: 1;
+}
+
+.cluster-deploy-hub .cluster-deploy-agents .ant-table {
+  font-size: 13px;
+}

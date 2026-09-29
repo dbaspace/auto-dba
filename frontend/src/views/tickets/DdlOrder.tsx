@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import {
+  useNavigate } from 'react-router-dom'
 import {
   Alert,
   Button,
@@ -12,11 +13,11 @@ import {
   Select,
   Space,
   Spin,
-  Table,
   Tabs,
   Tooltip,
   message,
 } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs, { Dayjs } from 'dayjs'
 import api from '../../api/request'
@@ -866,7 +867,7 @@ export default function DdlOrder() {
                         message="分库/分表模式下仅做语法与规范校验，不校验表是否存在于单个库"
                       />
                     )}
-                    <Table
+                    <ResponsiveTable
                       dataSource={checkRows}
                       columns={checkColumns}
                       size="small"
@@ -884,7 +885,7 @@ export default function DdlOrder() {
                 children: (
                   <Spin spinning={structureLoading}>
                     {structureRows.length ? (
-                      <Table
+                      <ResponsiveTable
                         dataSource={structureRows}
                         columns={structureColumns}
                         size="small"

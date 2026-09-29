@@ -1,6 +1,6 @@
 /* Kafka 工单：对齐 DDL 左右分栏 */
 .kafka-order {
-  background: #fafafa;
+  background: var(--app-page-bg, #fafafa);
 }
 
 .kafka-split-form {

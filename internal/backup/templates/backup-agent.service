@@ -1,0 +1,13 @@
+[Unit]
+Description=auto-dba Platform Agent
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory={{REMOTE_DIR}}
+ExecStart={{REMOTE_DIR}}/platform-agent -listen {{LISTEN}} -workdir {{WORKDIR}} -user {{USER}} -pass {{PASS}}
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

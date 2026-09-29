@@ -1,13 +1,16 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { Provider } from 'react-redux'
-import { ConfigProvider } from 'antd'
-import zhCN from 'antd/locale/zh_CN'
 import { RouterProvider } from 'react-router-dom'
 import 'dayjs/locale/zh-cn'
 import { store } from './store'
 import router from './router'
+import { AppearanceProvider } from './theme/AppearanceProvider'
+import { applyAppearanceToDom, readAppearance } from './theme/appearance'
 import './styles/global.css'
+
+// 首屏前应用主题，减少闪烁
+applyAppearanceToDom(readAppearance())
 
 function loginHashURL(query: string): string {
   const q = query.startsWith('?') || query.startsWith('#') ? query.replace(/^[#?]/, '') : query
@@ -68,19 +71,9 @@ function mountApp() {
   ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
     <React.StrictMode>
       <Provider store={store}>
-        <ConfigProvider
-          locale={zhCN}
-          theme={{
-            token: {
-              colorPrimary: '#4f5fb8',
-              colorLink: '#2563eb',
-              borderRadius: 2,
-              fontSize: 12,
-            },
-          }}
-        >
+        <AppearanceProvider>
           <RouterProvider router={router} />
-        </ConfigProvider>
+        </AppearanceProvider>
       </Provider>
     </React.StrictMode>,
   )

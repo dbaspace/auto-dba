@@ -29,6 +29,11 @@ export const Perm = {
     edit: 'um.action.environments.edit',
     delete: 'um.action.environments.delete',
   },
+  monitorTags: {
+    create: 'um.action.monitor-tags.create',
+    edit: 'um.action.monitor-tags.edit',
+    delete: 'um.action.monitor-tags.delete',
+  },
   connectors: {
     create: 'um.action.connectors.create',
     edit: 'um.action.connectors.edit',
@@ -92,6 +97,13 @@ export const Perm = {
     run: 'um.action.archive.run',
     stop: 'um.action.archive.stop',
     settingsEdit: 'um.action.archive-settings.edit',
+  },
+  sqlInsight: {
+    collect: 'um.action.sql-insight.collect',
+    awrGenerate: 'um.action.sql-insight.awr-generate',
+    spaceCollect: 'um.action.sql-insight.space-collect',
+    analyze: 'um.action.sql-insight.analyze',
+    settings: 'um.sidebar.config-sql-insight',
   },
 } as const
 

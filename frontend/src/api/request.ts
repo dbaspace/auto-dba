@@ -38,6 +38,7 @@ client.interceptors.response.use(
     if (status === 401) {
       localStorage.removeItem('token')
       localStorage.removeItem('user')
+      sessionStorage.removeItem('auto-dba-query-workspace')
       if (location.hash.includes('/login')) {
         message.error(msg)
       } else {

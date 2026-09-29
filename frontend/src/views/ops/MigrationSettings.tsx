@@ -1,29 +1,20 @@
 import React, { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import {
+  Alert,
   Button,
   Card,
   Form,
   Input,
   InputNumber,
-  Modal,
   Space,
   Switch,
+  Tag,
   Tooltip,
   message,
 } from 'antd'
 import api from '../../api/request'
 import './MigrationSettings.css'
-
-interface OSSConfig {
-  endpoint: string
-  bucket: string
-  prefix: string
-  access_key: string
-  secret_key: string
-  retention_days: number
-  chunk_size_mb: number
-}
 
 interface PerfConfig {
   max_concurrent_tasks: number
@@ -43,18 +34,6 @@ const perfFields: { key: keyof PerfConfig; label: string; min: number; max: numb
   { key: 'schedule_tolerance_min', label: '定时触发容忍窗口（分钟）', min: 1, max: 60 },
 ]
 
-function emptyOSS(): OSSConfig {
-  return {
-    endpoint: '',
-    bucket: '',
-    prefix: 'migration',
-    access_key: '',
-    secret_key: '',
-    retention_days: 7,
-    chunk_size_mb: 100,
-  }
-}
-
 function emptyPerf(): PerfConfig {
   return {
     max_concurrent_tasks: 3,
@@ -70,13 +49,11 @@ export default function MigrationSettings() {
   const navigate = useNavigate()
   const [loading, setLoading] = useState(false)
   const [savingApproval, setSavingApproval] = useState(false)
-  const [savingOSS, setSavingOSS] = useState(false)
   const [savingPerf, setSavingPerf] = useState(false)
-  const [testing, setTesting] = useState(false)
-  const [testOk, setTestOk] = useState(false)
 
   const [approval, setApproval] = useState({ approval_enabled: true, approver_user_ids: '' })
-  const [oss, setOss] = useState<OSSConfig>(emptyOSS())
+  const [ossConfigured, setOssConfigured] = useState(false)
+  const [ossEnvs, setOssEnvs] = useState<string[]>([])
   const [perf, setPerf] = useState<PerfConfig>(emptyPerf())
 
   async function load() {
@@ -88,9 +65,9 @@ export default function MigrationSettings() {
         approval_enabled: row.approval_enabled !== false,
         approver_user_ids: row.approver_user_ids || '',
       })
-      setOss({ ...emptyOSS(), ...(row.oss || {}) })
+      setOssConfigured(Boolean(row.oss_configured))
+      setOssEnvs(Array.isArray(row.oss_envs) ? row.oss_envs : [])
       setPerf({ ...emptyPerf(), ...(row.performance || {}) })
-      setTestOk(false)
     } finally {
       setLoading(false)
     }
@@ -108,61 +85,6 @@ export default function MigrationSettings() {
     } finally {
       setSavingApproval(false)
     }
-  }
-
-  function ossBody() {
-    return {
-      endpoint: oss.endpoint,
-      bucket: oss.bucket,
-      prefix: oss.prefix,
-      access_key: oss.access_key,
-      secret_key: oss.secret_key,
-      retention_days: oss.retention_days,
-      chunk_size_mb: oss.chunk_size_mb,
-    }
-  }
-
-  async function testOSS() {
-    setTesting(true)
-    try {
-      const { data } = await api.post('/migration/oss/test', ossBody(), { timeout: 20000 })
-      const ok = Boolean(data.ok || data.success || data.connected)
-      setTestOk(ok)
-      const msg = data.message || data.error_message || (ok ? 'OSS 连接成功' : '连接失败')
-      if (ok) message.success(msg)
-      else message.error(msg)
-    } catch (e: any) {
-      setTestOk(false)
-      message.error(e?.response?.data?.message || e?.message || '连接失败')
-    } finally {
-      setTesting(false)
-    }
-  }
-
-  async function doSaveOSS() {
-    setSavingOSS(true)
-    try {
-      await api.put('/migration/settings', { oss: ossBody() })
-      message.success('已保存')
-      setTestOk(false)
-      await load()
-    } finally {
-      setSavingOSS(false)
-    }
-  }
-
-  function saveOSS() {
-    if (!testOk) {
-      Modal.confirm({
-        title: '尚未通过连接测试',
-        content: '尚未通过连接测试，仍要保存当前 OSS 配置吗？',
-        okText: '仍要保存',
-        cancelText: '取消',
-        onOk: doSaveOSS,
-      })
-      return
-    }
-    doSaveOSS()
   }
 
   async function savePerf() {
@@ -226,69 +148,33 @@ export default function MigrationSettings() {
         </Card>
 
         <Card className="panel" bordered title="OSS 配置">
-          <Form layout="vertical">
-            <Form.Item label="OSS 访问地址">
-              <Input
-                placeholder="https://oss-cn-hangzhou.aliyuncs.com"
-                value={oss.endpoint}
-                onChange={(e) => setOss((o) => ({ ...o, endpoint: e.target.value }))}
-              />
-            </Form.Item>
-            <Form.Item label="存储桶名称">
-              <Input value={oss.bucket} onChange={(e) => setOss((o) => ({ ...o, bucket: e.target.value }))} />
-            </Form.Item>
-            <Form.Item label="文件路径前缀">
-              <Input
-                placeholder="migration"
-                value={oss.prefix}
-                onChange={(e) => setOss((o) => ({ ...o, prefix: e.target.value }))}
-              />
-            </Form.Item>
-            <Form.Item label="AccessKey ID">
-              <Input.Password
-                placeholder="脱敏展示，修改请重新输入"
-                autoComplete="new-password"
-                value={oss.access_key}
-                onChange={(e) => setOss((o) => ({ ...o, access_key: e.target.value }))}
-              />
-            </Form.Item>
-            <Form.Item label="AccessKey Secret">
-              <Input.Password
-                placeholder="脱敏展示，修改请重新输入"
-                autoComplete="new-password"
-                value={oss.secret_key}
-                onChange={(e) => setOss((o) => ({ ...o, secret_key: e.target.value }))}
-              />
-            </Form.Item>
-            <Form.Item label="临时文件保留天数">
-              <InputNumber
-                min={1}
-                max={3650}
-                style={{ width: '100%' }}
-                value={oss.retention_days}
-                onChange={(v) => setOss((o) => ({ ...o, retention_days: Number(v) }))}
-              />
-            </Form.Item>
-            <Form.Item label="单文件分片大小 (MB)">
-              <InputNumber
-                min={1}
-                max={10240}
-                style={{ width: '100%' }}
-                value={oss.chunk_size_mb}
-                onChange={(v) => setOss((o) => ({ ...o, chunk_size_mb: Number(v) }))}
-              />
-            </Form.Item>
-            <Form.Item>
-              <div className="actions">
-                <Button loading={testing} onClick={testOSS}>
-                  连接测试
-                </Button>
-                <Button type="primary" loading={savingOSS} onClick={saveOSS}>
-                  保存
-                </Button>
-              </div>
-            </Form.Item>
-          </Form>
+          <Alert
+            type="info"
+            showIcon
+            className="mb"
+            message={
+              <span>
+                OSS 按环境在 <Link to="/config/oss">配置中心 → OSS 配置</Link> 维护；创建迁移任务选择「OSS
+                中转」时按任务环境引用。
+              </span>
+            }
+          />
+          <Space direction="vertical" size={4} style={{ width: '100%' }}>
+            <div>
+              状态：
+              {ossConfigured ? <Tag color="success">已有环境配置</Tag> : <Tag color="warning">尚未配置</Tag>}
+            </div>
+            {ossEnvs.length > 0 ? (
+              <div className="hint">已配置环境：{ossEnvs.join('、')}</div>
+            ) : (
+              <div className="hint">请先到配置中心为各环境录入 OSS。</div>
+            )}
+            <div>
+              <Button type="link" style={{ padding: 0 }} onClick={() => navigate('/config/oss')}>
+                前往配置中心
+              </Button>
+            </div>
+          </Space>
         </Card>
 
         <Card className="panel last" bordered title="全局性能参数">

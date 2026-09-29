@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Button, Checkbox, Input, Modal, Pagination, Radio, Select, Space, Table, Tabs, Tag, message } from 'antd'
+import { Button, Checkbox, Input, Modal, Pagination, Radio, Select, Space, Tabs, Tag, message } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
 import api from '../../api/request'
 import DbTypeIcon from '../../components/DbTypeIcon'
 import './Databases.css'
@@ -77,7 +78,7 @@ export default function Databases() {
   const [activeType, setActiveType] = useState('')
   const [instances, setInstances] = useState<InstanceRow[]>([])
   const [rows, setRows] = useState<DatabaseRow[]>([])
-  const [instanceId, setInstanceId] = useState<string>('')
+  const [dbNameQ, setDbNameQ] = useState('')
   const [visible, setVisible] = useState(false)
   const [form, setForm] = useState<DatabaseRow>({})
   const [liveDbs, setLiveDbs] = useState<LiveDb[]>([])
@@ -137,14 +138,15 @@ export default function Databases() {
   }, [form.id, form.instance_id, instances, tabInstances])
 
   const filteredRows = useMemo(() => {
+    const q = dbNameQ.trim().toLowerCase()
     return rows.filter((r) => {
       const dbType = instanceType(r.instance_id)
       if (activeType && !matchType(dbType, activeType)) return false
-      if (instanceId && r.instance_id !== instanceId) return false
+      if (q && !String(r.db_name || '').toLowerCase().includes(q)) return false
       return true
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, activeType, instanceId, instances, knownTypes])
+  }, [rows, activeType, dbNameQ, instances, knownTypes])
 
   const pagedRows = useMemo(() => {
     const start = (page - 1) * pageSize
@@ -153,7 +155,7 @@ export default function Databases() {
 
   useEffect(() => {
     setPage(1)
-  }, [activeType, instanceId])
+  }, [activeType, dbNameQ])
 
   useEffect(() => {
     const maxPage = Math.max(1, Math.ceil(filteredRows.length / pageSize) || 1)
@@ -250,15 +252,13 @@ export default function Databases() {
       setLiveDbs([])
       setLiveHint('')
     } else {
-      const pref = instanceId && matchType(instanceType(instanceId), activeType) ? instanceId : ''
-      const inst = instances.find((i) => i.id === pref)
       setForm({
-        instance_id: pref,
+        instance_id: '',
         db_names: [],
-        approvers: defaultApprovers(inst),
+        approvers: defaultApprovers(),
         ...emptyMeta(),
       })
-      loadLiveDbs(pref)
+      loadLiveDbs()
     }
     setVisible(true)
   }
@@ -353,16 +353,13 @@ export default function Databases() {
     <div className="ops-page">
       <div className="ops-filters">
         <div className="filter-item">
-          <span className="label">实例：</span>
-          <Select
-            value={instanceId || undefined}
+          <span className="label">库名：</span>
+          <Input
+            value={dbNameQ}
+            placeholder="请输入库名"
             allowClear
-            showSearch
-            placeholder="请选择实例"
-            optionFilterProp="label"
-            style={{ minWidth: 220 }}
-            options={tabInstances.map((i) => ({ value: i.id as string, label: i.name }))}
-            onChange={(v) => setInstanceId(v || '')}
+            onChange={(e) => setDbNameQ(e.target.value)}
+            onPressEnter={load}
           />
         </div>
         <div className="toolbar" style={{ margin: 0, flexShrink: 0 }}>
@@ -379,9 +376,8 @@ export default function Databases() {
         activeKey={activeType}
         onChange={(k) => {
           setActiveType(k)
-          if (instanceId && !matchType(instanceType(instanceId), k)) {
-            setInstanceId('')
-          }
+          setDbNameQ('')
+          setPage(1)
         }}
         items={tabs.map((t) => ({
           key: t.value,
@@ -396,7 +392,7 @@ export default function Databases() {
         }))}
       />
       <div className="ops-table">
-        <Table
+        <ResponsiveTable
           rowKey={(r) => r.id || r.db_name || ''}
           dataSource={pagedRows}
           bordered

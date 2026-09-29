@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Button, Input, InputNumber, Select, Switch, Table, message } from 'antd'
+import { Button, Input, InputNumber, Select, Switch, message } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
 import { CheckCircleOutlined, ReloadOutlined } from '@ant-design/icons'
 import api from '../../api/request'
 
@@ -177,7 +178,7 @@ export default function RedisCommandRulesPanel() {
           <p>关闭开关后该命令不可用于 Redis 工单；可调整最少参数个数。</p>
         </div>
         <div ref={tableWrapRef} className="redis-cmd-table-wrap">
-          <Table
+          <ResponsiveTable
             size="small"
             bordered
             loading={loading}

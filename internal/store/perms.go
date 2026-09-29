@@ -24,6 +24,9 @@ const (
 	URNEnvironmentsCreate = "um.action.environments.create"
 	URNEnvironmentsEdit   = "um.action.environments.edit"
 	URNEnvironmentsDelete = "um.action.environments.delete"
+	URNMonitorTagsCreate  = "um.action.monitor-tags.create"
+	URNMonitorTagsEdit    = "um.action.monitor-tags.edit"
+	URNMonitorTagsDelete  = "um.action.monitor-tags.delete"
 	URNConnectorsCreate   = "um.action.connectors.create"
 	URNConnectorsEdit     = "um.action.connectors.edit"
 	URNConnectorsDelete   = "um.action.connectors.delete"
@@ -68,6 +71,15 @@ const (
 	URNArchiveRun          = "um.action.archive.run"
 	URNArchiveStop         = "um.action.archive.stop"
 	URNArchiveSettingsEdit = "um.action.archive-settings.edit"
+
+	URNCmdbEdit   = "um.action.cmdb.edit"
+	URNCmdbImport = "um.action.cmdb.import"
+	URNCmdbSync   = "um.action.cmdb.sync"
+
+	URNSqlInsightCollect      = "um.action.sql-insight.collect"
+	URNSqlInsightAwrGenerate  = "um.action.sql-insight.awr-generate"
+	URNSqlInsightSpaceCollect = "um.action.sql-insight.space-collect"
+	URNSqlInsightAnalyze      = "um.action.sql-insight.analyze"
 )
 
 func IsActionURN(urn string) bool {

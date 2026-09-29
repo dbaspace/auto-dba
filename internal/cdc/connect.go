@@ -44,6 +44,8 @@ func ResolveConnectBaseURL(override, workerURL, connectorHost, cfgURL string) st
 	return ""
 }
 
+// ResolveConnectBase 注册表 dbz_host 优先于任务 extra 中创建时固化的 connect_base_url，
+// 否则 Debezium 服务迁址后任务仍指向旧地址。
 func (o *Orchestrator) ResolveConnectBase(extra map[string]string) string {
 	dbz := ""
 	if o != nil && o.Store != nil && extra != nil {
@@ -62,7 +64,7 @@ func (o *Orchestrator) ResolveConnectBase(extra map[string]string) string {
 		extraURL = extra["connect_base_url"]
 		worker = extra["worker_url"]
 	}
-	return ResolveConnectBaseURL(extraURL, worker, dbz, cfgURL)
+	return ResolveConnectBaseURL(dbz, extraURL, worker, cfgURL)
 }
 
 func (o *Orchestrator) persistConnectBase(extra map[string]string) string {
@@ -158,8 +160,9 @@ func connectGetStatus(ctx context.Context, base, name string) (map[string]any, e
 	if code >= 300 {
 		msg := strings.TrimSpace(string(raw))
 		if len(out) == 0 {
-			return map[string]any{"ok": false, "message": fmt.Sprintf("debezium GET status -> %d %s", code, msg)}, nil
+			return map[string]any{"ok": false, "http_status": code, "message": fmt.Sprintf("debezium GET status -> %d %s", code, msg)}, nil
 		}
+		out["http_status"] = code
 		return out, fmt.Errorf("debezium GET status -> %d %s", code, msg)
 	}
 	return out, nil
@@ -192,6 +195,143 @@ func EnsureDebeziumConnector(ctx context.Context, base, name string, cfg map[str
 	}
 	err = fmt.Errorf("POST %s/connectors: status %d: %s", NormalizeConnectBaseURL(base), code, strings.TrimSpace(string(raw)))
 	return fmt.Errorf("create connector: %w", explainDebeziumConnectError(err, cfg))
+}
+
+// connectRestartBackoff 为 409（rebalance 中）时的重试间隔；变量便于单测缩短。
+var connectRestartBackoff = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}
+
+// connectRestartConnectorAndTasks 连同 Task 一起重启：Debezium PG 的复制连接由 Task 持有，
+// 不带 includeTasks 的 restart 只重启 Connector 对象，slot 的 active_pid 不会变。
+// Connect 3.0+（KIP-745）返回 202；旧版忽略参数返回 204，此时逐个 POST tasks/{id}/restart。
+func connectRestartConnectorAndTasks(ctx context.Context, base, name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("connector 名称为空")
+	}
+	esc := url.PathEscape(name)
+	code, err := connectPostRetry(ctx, base, "/connectors/"+esc+"/restart?includeTasks=true&onlyFailed=false")
+	if err != nil {
+		return err
+	}
+	if code == http.StatusAccepted {
+		return nil
+	}
+	ids, err := connectTaskIDs(ctx, base, name)
+	if err != nil {
+		return fmt.Errorf("connector %s 已重启，但读取 task 列表失败: %w", name, err)
+	}
+	for _, id := range ids {
+		if _, err := connectPostRetry(ctx, base, fmt.Sprintf("/connectors/%s/tasks/%d/restart", esc, id)); err != nil {
+			return fmt.Errorf("重启 %s task %d: %w", name, id, err)
+		}
+	}
+	return nil
+}
+
+func connectPostRetry(ctx context.Context, base, path string) (int, error) {
+	for attempt := 0; ; attempt++ {
+		raw, code, err := connectDo(ctx, base, http.MethodPost, path, nil)
+		if err != nil {
+			return 0, err
+		}
+		if code/100 == 2 {
+			return code, nil
+		}
+		msg := fmt.Errorf("POST %s -> %d %s", path, code, strings.TrimSpace(string(raw)))
+		if code != http.StatusConflict || attempt >= len(connectRestartBackoff) {
+			return code, msg
+		}
+		select {
+		case <-ctx.Done():
+			return code, fmt.Errorf("%v（等待重试时超时）", msg)
+		case <-time.After(connectRestartBackoff[attempt]):
+		}
+	}
+}
+
+type connectStatusResp struct {
+	Connector struct {
+		State string `json:"state"`
+		Trace string `json:"trace"`
+	} `json:"connector"`
+	Tasks []struct {
+		ID    int    `json:"id"`
+		State string `json:"state"`
+		Trace string `json:"trace"`
+	} `json:"tasks"`
+}
+
+func connectFetchStatus(ctx context.Context, base, name string) (*connectStatusResp, error) {
+	raw, code, err := connectDo(ctx, base, http.MethodGet, "/connectors/"+url.PathEscape(name)+"/status", nil)
+	if err != nil {
+		return nil, err
+	}
+	if code/100 != 2 {
+		return nil, fmt.Errorf("GET status -> %d %s", code, strings.TrimSpace(string(raw)))
+	}
+	var st connectStatusResp
+	if err := json.Unmarshal(raw, &st); err != nil {
+		return nil, fmt.Errorf("解析 status: %w", err)
+	}
+	return &st, nil
+}
+
+func connectTaskIDs(ctx context.Context, base, name string) ([]int, error) {
+	st, err := connectFetchStatus(ctx, base, name)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]int, 0, len(st.Tasks))
+	for _, t := range st.Tasks {
+		ids = append(ids, t.ID)
+	}
+	return ids, nil
+}
+
+var errNotSettled = fmt.Errorf("connector 未在限定时间内进入 RUNNING")
+
+// connectWaitPoll 为轮询间隔；变量便于单测缩短。
+var connectWaitPoll = time.Second
+
+// connectWaitRunning 等待 connector 与全部 task 进入 RUNNING；任一 FAILED 立即返回带 trace 首行的错误，超时返回 errNotSettled。
+func connectWaitRunning(ctx context.Context, base, name string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		select {
+		case <-ctx.Done():
+			return errNotSettled
+		case <-time.After(connectWaitPoll):
+		}
+		st, err := connectFetchStatus(ctx, base, name)
+		if err == nil {
+			if strings.EqualFold(st.Connector.State, "FAILED") {
+				return fmt.Errorf("connector %s FAILED: %s", name, firstLine(st.Connector.Trace))
+			}
+			running := strings.EqualFold(st.Connector.State, "RUNNING") && len(st.Tasks) > 0
+			for _, t := range st.Tasks {
+				if strings.EqualFold(t.State, "FAILED") {
+					return fmt.Errorf("connector %s task %d FAILED: %s", name, t.ID, firstLine(t.Trace))
+				}
+				if !strings.EqualFold(t.State, "RUNNING") {
+					running = false
+				}
+			}
+			if running {
+				return nil
+			}
+		}
+		if time.Now().After(deadline) {
+			return errNotSettled
+		}
+	}
+}
+
+func firstLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return strings.TrimSpace(s[:i])
+	}
+	return s
 }
 
 func explainDebeziumConnectError(rawErr error, cfg map[string]string) error {

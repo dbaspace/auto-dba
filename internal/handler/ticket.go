@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -41,6 +43,9 @@ type ticketCheckReq struct {
 	DBType     string `json:"db_type"`
 	InstanceID string `json:"instance_id"`
 	DBName     string `json:"db_name"`
+	// 分库/分表：SQL 为待前缀展开的模板，字面表名通常不存在，跳过库表存在性校验。
+	ShardDB    bool `json:"shard_db"`
+	ShardTable bool `json:"shard_table"`
 }
 
 type ticketSubmitReq struct {
@@ -99,8 +104,9 @@ func (h *TicketHandler) canActOnTarget(instanceID, dbName, username string) (boo
 	if inst == nil {
 		return false, targetActDenyInstanceMissing, "实例未登记，请先在「配置 → 实例」中登记", nil
 	}
+	instApprovers := store.ExpandApproverNames(inst.Approvers)
 	if strings.TrimSpace(dbName) == "" {
-		if len(inst.Approvers) == 0 || usernameInList(username, inst.Approvers) {
+		if len(instApprovers) == 0 || usernameInList(username, instApprovers) {
 			return true, targetActAllow, "", nil
 		}
 		return false, targetActDenyNotApprover, "当前用户不在实例审批人名单中", nil
@@ -112,13 +118,14 @@ func (h *TicketHandler) canActOnTarget(instanceID, dbName, username string) (boo
 	if dbEnt == nil {
 		return false, targetActDenyDBNotRegistered, "库未登记，请先在「配置 → 已登记库」中登记 " + dbName, nil
 	}
-	if len(dbEnt.Approvers) > 0 {
-		if usernameInList(username, dbEnt.Approvers) {
+	dbApprovers := store.ExpandApproverNames(dbEnt.Approvers)
+	if len(dbApprovers) > 0 {
+		if usernameInList(username, dbApprovers) {
 			return true, targetActAllow, "", nil
 		}
 		return false, targetActDenyNotApprover, "当前用户不在库级审批人名单中", nil
 	}
-	if len(inst.Approvers) == 0 || usernameInList(username, inst.Approvers) {
+	if len(instApprovers) == 0 || usernameInList(username, instApprovers) {
 		return true, targetActAllow, "", nil
 	}
 	return false, targetActDenyNotApprover, "当前用户不在实例审批人名单中", nil
@@ -127,11 +134,11 @@ func (h *TicketHandler) canActOnTarget(instanceID, dbName, username string) (boo
 func (h *TicketHandler) resolveApprovers(instanceID, dbName string) []string {
 	if dbName != "" {
 		if dbEnt, _ := h.Store.FindDatabase(instanceID, dbName); dbEnt != nil && len(dbEnt.Approvers) > 0 {
-			return dbEnt.Approvers
+			return store.ExpandApproverNames(dbEnt.Approvers)
 		}
 	}
 	if inst, _ := h.Store.GetInstance(instanceID); inst != nil {
-		return inst.Approvers
+		return store.ExpandApproverNames(inst.Approvers)
 	}
 	return nil
 }
@@ -170,23 +177,38 @@ func (h *TicketHandler) GetTargetApprovers(c *gin.Context) {
 		Type string `json:"type"`
 		Name string `json:"name"`
 	}
-	out := []item{}
 	seen := map[string]bool{}
-	for _, name := range list {
-		if seen[name] {
-			continue
+	out := make([]item, 0)
+	add := func(name string) {
+		for _, n := range store.ExpandApproverNames([]string{name}) {
+			key := strings.ToLower(n)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			out = append(out, item{Type: "user", Name: n})
 		}
-		seen[name] = true
-		out = append(out, item{Type: "user", Name: name})
+	}
+	if strings.EqualFold(strings.TrimSpace(c.Query("issue_type")), store.IssueTypeMigration) {
+		if allowed := h.migrationApproverWhitelist(); len(allowed) > 0 {
+			for _, name := range allowed {
+				if len(list) == 0 || usernameInList(name, list) {
+					add(name)
+				}
+			}
+			c.JSON(http.StatusOK, gin.H{"data": out})
+			return
+		}
+	}
+	for _, name := range list {
+		add(name)
 	}
 	if len(out) == 0 {
 		if def, _ := h.Store.GetGlobalArg("sync_default_approver"); def != "" {
-			out = append(out, item{Type: "user", Name: def})
+			add(def)
 		}
 		for _, u := range users {
-			if !seen[u.Username] {
-				out = append(out, item{Type: "user", Name: u.Username})
-			}
+			add(u.Username)
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{"data": out})
@@ -198,7 +220,29 @@ func (h *TicketHandler) CheckSQL(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, h.checkTicketSQL(req.SQLContent, req.Type, req.DBType, req.InstanceID, req.DBName))
+	skipSchema := skipDDLSchemaCheck(req.ShardDB, req.ShardTable)
+	c.JSON(http.StatusOK, h.checkTicketSQL(req.SQLContent, req.Type, req.DBType, req.InstanceID, req.DBName, skipSchema))
+}
+
+// skipDDLSchemaCheck 分库/分表模式下仅做语法与规范校验，不连库校验对象是否存在。
+func skipDDLSchemaCheck(shardDB, shardTable bool) bool {
+	return shardDB || shardTable
+}
+
+// ddlShardSkipSchema 从 need_rollback JSON 解析分库/分表标记。
+func ddlShardSkipSchema(needRollback string) bool {
+	raw := strings.TrimSpace(needRollback)
+	if raw == "" {
+		return false
+	}
+	var extra struct {
+		ShardDB    bool `json:"shard_db"`
+		ShardTable bool `json:"shard_table"`
+	}
+	if json.Unmarshal([]byte(raw), &extra) != nil {
+		return false
+	}
+	return skipDDLSchemaCheck(extra.ShardDB, extra.ShardTable)
 }
 
 func (h *TicketHandler) resolveReviewEngine(dbType, instanceID string) string {
@@ -235,10 +279,11 @@ func (h *TicketHandler) loadReviewRules(engine string) []sqlcheck.Rule {
 	return toCheckRules(list)
 }
 
-func (h *TicketHandler) checkTicketSQL(sqlContent, issueType, dbType, instanceID, dbName string) sqlcheck.Result {
+func (h *TicketHandler) checkTicketSQL(sqlContent, issueType, dbType, instanceID, dbName string, skipSchemaCheck bool) sqlcheck.Result {
 	engine := h.resolveReviewEngine(dbType, instanceID)
 	issueType = strings.ToLower(strings.TrimSpace(issueType))
-	if engine == "mysql" && (issueType == store.IssueTypeDDL || issueType == store.IssueTypeDML) {
+	// 分库/分表：模板表名通常不存在于代表库，跳过 goInception 库表存在性审核，仅静态规则。
+	if !skipSchemaCheck && engine == "mysql" && (issueType == store.IssueTypeDDL || issueType == store.IssueTypeDML) {
 		if res, used := h.checkViaGoInception(sqlContent, instanceID, dbName); used {
 			return res
 		}
@@ -402,7 +447,8 @@ func (h *TicketHandler) Submit(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "审核人须在目标库/实例 approvers 列表中"})
 		return
 	}
-	res := h.checkTicketSQL(req.SQLContent, req.Type, req.DBType, req.InstanceID, req.DBName)
+	skipSchema := req.Type == store.IssueTypeDDL && ddlShardSkipSchema(req.NeedRollback)
+	res := h.checkTicketSQL(req.SQLContent, req.Type, req.DBType, req.InstanceID, req.DBName, skipSchema)
 	if !res.OK {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "SQL 校验未通过", "details": res})
 		return
@@ -505,7 +551,15 @@ func (h *TicketHandler) GetDetail(c *gin.Context) {
 		return
 	}
 	it = h.maybeFinishApprovedCreateDB(c.Request.Context(), it)
-	c.JSON(http.StatusOK, gin.H{"data": it})
+	user := middleware.Username(c)
+	priv := middleware.IsPrivileged(middleware.Role(c))
+	canApprove := it.Status == store.StatusPending && h.Store.CanApproveIssue(it, user, priv)
+	canTransfer := it.Status == store.StatusPending && strings.EqualFold(it.Submitter, user)
+	c.JSON(http.StatusOK, gin.H{
+		"data": it,
+		"can_approve":  canApprove,
+		"can_transfer": canTransfer,
+	})
 }
 
 func (h *TicketHandler) Approve(c *gin.Context) {
@@ -519,9 +573,16 @@ func (h *TicketHandler) Approve(c *gin.Context) {
 		return
 	}
 	user := middleware.Username(c)
-	if it.AssignedTo != "" && !strings.EqualFold(it.AssignedTo, user) && !middleware.IsPrivileged(middleware.Role(c)) {
-		c.JSON(http.StatusForbidden, gin.H{"message": "仅指定审批人或管理员可批准"})
+	priv := middleware.IsPrivileged(middleware.Role(c))
+	if !h.Store.CanApproveIssue(it, user, priv) {
+		c.JSON(http.StatusForbidden, gin.H{"message": "仅指定审批人、超级审核白名单或管理员可批准"})
 		return
+	}
+	viaWhitelist := !priv && !strings.EqualFold(it.AssignedTo, user) && h.Store.IsGlobalApprover(user)
+	if viaWhitelist {
+		hist := store.AppendAssigneeTransferHistory(it.AssigneeTransferHistory, store.FormatWhitelistApprovalLine(user, "approved"))
+		_ = h.Store.UpdateIssueAssignee(it.ID, it.AssignedTo, hist)
+		it.AssigneeTransferHistory = hist
 	}
 	if err := h.Store.UpdateIssueStatus(it.ID, store.StatusApproved, ""); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
@@ -545,17 +606,22 @@ func (h *TicketHandler) Approve(c *gin.Context) {
 		return
 	}
 	if ticketexec.ShouldAutoRun(it.IssueType) && !scheduledInFuture(it.ScheduledAt) {
-		if err := h.executeTicket(c.Request.Context(), it); err != nil {
-			c.JSON(http.StatusOK, gin.H{"data": it, "message": "已通过，自动执行失败: " + err.Error()})
+		if err := h.beginAsyncAutoExec(it); err != nil {
+			NotifyIssueAwaitExecAsync(h.Store, h.Secret, it)
+			c.JSON(http.StatusOK, gin.H{"data": it, "message": "已通过，启动后台执行失败: " + err.Error()})
 			return
 		}
-	}
-	if err := h.finishCreateDBAfterExec(c.Request.Context(), it); err != nil {
-		c.JSON(http.StatusOK, gin.H{"data": it, "message": "已通过并执行建库，但写入账号失败: " + err.Error()})
+		if latest, err := h.Store.GetIssue(it.ID); err == nil && latest != nil {
+			it = latest
+		}
+		c.JSON(http.StatusOK, gin.H{"data": it, "message": "已通过，正在后台执行"})
 		return
 	}
 	if latest, err := h.Store.GetIssue(it.ID); err == nil && latest != nil {
 		it = latest
+	}
+	if it.Status == store.StatusApproved {
+		NotifyIssueAwaitExecAsync(h.Store, h.Secret, it)
 	}
 	c.JSON(http.StatusOK, gin.H{"data": it})
 }
@@ -570,6 +636,21 @@ func (h *TicketHandler) Reject(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"message": "工单不存在"})
 		return
 	}
+	if it.Status != store.StatusPending {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "仅待审批工单可驳回"})
+		return
+	}
+	user := middleware.Username(c)
+	priv := middleware.IsPrivileged(middleware.Role(c))
+	if !h.Store.CanApproveIssue(it, user, priv) {
+		c.JSON(http.StatusForbidden, gin.H{"message": "仅指定审批人、超级审核白名单或管理员可驳回"})
+		return
+	}
+	viaWhitelist := !priv && !strings.EqualFold(it.AssignedTo, user) && h.Store.IsGlobalApprover(user)
+	if viaWhitelist {
+		hist := store.AppendAssigneeTransferHistory(it.AssigneeTransferHistory, store.FormatWhitelistApprovalLine(user, "rejected"))
+		_ = h.Store.UpdateIssueAssignee(it.ID, it.AssignedTo, hist)
+	}
 	if err := h.Store.UpdateIssueStatus(it.ID, store.StatusRejected, req.Reason); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -579,6 +660,126 @@ func (h *TicketHandler) Reject(c *gin.Context) {
 	_ = h.syncCDCAfterIssue(it, store.StatusRejected)
 	_ = h.syncMigrationAfterIssue(it, store.StatusRejected)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// TransferAssignee PUT /tickets/:id/assignee — 仅提交者在 pending 时可更换审核人。
+func (h *TicketHandler) TransferAssignee(c *gin.Context) {
+	var req struct {
+		AssignedTo string `json:"assigned_to"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	newAssignee := strings.TrimSpace(req.AssignedTo)
+	if newAssignee == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "assigned_to 必填"})
+		return
+	}
+	it, err := h.Store.GetIssue(c.Param("id"))
+	if err != nil || it == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "工单不存在"})
+		return
+	}
+	if it.Status != store.StatusPending {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "仅待审批状态可转移审核人"})
+		return
+	}
+	user := middleware.Username(c)
+	if !strings.EqualFold(it.Submitter, user) {
+		c.JSON(http.StatusForbidden, gin.H{"message": "仅提交者可转移审核人"})
+		return
+	}
+	if strings.EqualFold(it.AssignedTo, newAssignee) {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "新审核人与当前审核人相同"})
+		return
+	}
+	if errMsg := h.validateTransferAssignee(it, newAssignee); errMsg != "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": errMsg})
+		return
+	}
+	hist := store.AppendAssigneeTransferHistory(
+		it.AssigneeTransferHistory,
+		store.FormatAssigneeTransferLine(it.AssignedTo, newAssignee, user),
+	)
+	if err := h.Store.UpdateIssueAssignee(it.ID, newAssignee, hist); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	it.AssignedTo = newAssignee
+	it.AssigneeTransferHistory = hist
+	h.syncMigrationAssigneeAfterTransfer(it, newAssignee)
+	NotifyIssueAssigneeChangedAsync(h.Store, h.Secret, it)
+	c.JSON(http.StatusOK, gin.H{"data": it})
+}
+
+func (h *TicketHandler) validateTransferAssignee(it *store.Issue, newAssignee string) string {
+	if it == nil {
+		return "工单不存在"
+	}
+	if strings.EqualFold(strings.TrimSpace(it.Submitter), newAssignee) {
+		return "不能将审核人转给提交人本人"
+	}
+	switch it.IssueType {
+	case store.IssueTypeCreateDB:
+		users, _ := h.Store.ListUsers()
+		for _, u := range users {
+			if strings.EqualFold(u.Username, newAssignee) {
+				return ""
+			}
+		}
+		def, _ := h.Store.GetGlobalArg("sync_default_approver")
+		if strings.EqualFold(strings.TrimSpace(def), newAssignee) {
+			return ""
+		}
+		return "新审核人未登记"
+	case store.IssueTypeMigration:
+		if !h.migrationApproverAllowed(newAssignee) {
+			return "审核人不在迁移审批人列表"
+		}
+		approvers := h.resolveApprovers(it.InstanceID, it.DBName)
+		if len(approvers) > 0 && !usernameInList(newAssignee, approvers) {
+			return "审核人不在审批人列表"
+		}
+		return ""
+	default:
+		approvers := h.resolveApprovers(it.InstanceID, it.DBName)
+		if len(approvers) > 0 && !usernameInList(newAssignee, approvers) {
+			return "审核人不在审批人列表"
+		}
+		return ""
+	}
+}
+
+// migrationApproverWhitelist 返回 migration_approver_user_ids；未配置时为 nil（不限制）。
+func (h *TicketHandler) migrationApproverWhitelist() []string {
+	raw, _ := h.Store.GetGlobalArg("migration_approver_user_ids")
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	return store.ParseApproverWhitelist(raw)
+}
+
+func (h *TicketHandler) migrationApproverAllowed(name string) bool {
+	allowed := h.migrationApproverWhitelist()
+	return len(allowed) == 0 || usernameInList(name, allowed)
+}
+
+func (h *TicketHandler) syncMigrationAssigneeAfterTransfer(it *store.Issue, newAssignee string) {
+	if h == nil || h.Store == nil || it == nil || it.IssueType != store.IssueTypeMigration {
+		return
+	}
+	m := regexp.MustCompile(`(?i)^migration\s+([0-9a-fA-F-]{36})`).FindStringSubmatch(strings.TrimSpace(it.SQLContent))
+	if len(m) < 2 {
+		return
+	}
+	t, err := h.Store.GetMigration(m[1])
+	if err != nil || t == nil {
+		return
+	}
+	t.AssignedApprover = newAssignee
+	t.AssignedApproverLogin = newAssignee
+	_ = h.Store.UpdateMigration(t)
 }
 
 func (h *TicketHandler) Cancel(c *gin.Context) {
@@ -618,6 +819,10 @@ func (h *TicketHandler) Execute(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"message": "工单不存在"})
 		return
 	}
+	if ticketexec.IsExecuting(it.Status) {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "工单正在后台执行中，请稍后刷新"})
+		return
+	}
 	if !ticketexec.CanRetry(it.Status) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "仅已通过或执行失败的工单可执行"})
 		return
@@ -654,21 +859,98 @@ func (h *TicketHandler) Execute(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true, "message": "已标记执行"})
 		return
 	}
-	if err := h.executeTicket(c.Request.Context(), it); err != nil {
+	if err := h.beginAsyncAutoExec(it); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error(), "data": it})
 		return
 	}
 	if latest, err := h.Store.GetIssue(it.ID); err == nil && latest != nil {
 		it = latest
 	}
-	if err := h.finishCreateDBAfterExec(c.Request.Context(), it); err != nil {
-		c.JSON(http.StatusOK, gin.H{"ok": it.Status == store.StatusExecuted, "data": it, "message": "建库已执行，但写入账号失败: " + err.Error()})
+	c.JSON(http.StatusOK, gin.H{"ok": true, "data": it, "message": "已开始后台执行"})
+}
+
+// beginAsyncAutoExec 将 DDL/DML/建库执行放到后台，避免 HTTP WriteTimeout 切断大 SQL。
+func (h *TicketHandler) beginAsyncAutoExec(it *store.Issue) error {
+	if h == nil || h.Store == nil || it == nil {
+		return errors.New("工单无效")
+	}
+	if ticketexec.IsExecuting(it.Status) {
+		return errors.New("工单正在执行中")
+	}
+	if err := h.Store.UpdateIssueStatus(it.ID, store.StatusRunning, ""); err != nil {
+		return err
+	}
+	it.Status = store.StatusRunning
+	id := it.ID
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("ticket async exec panic %s: %v", id, r)
+				h.failAsyncIssue(id, fmt.Sprintf("执行异常: %v", r))
+			}
+		}()
+		latest, err := h.Store.GetIssue(id)
+		if err != nil || latest == nil {
+			log.Printf("ticket async exec load %s: %v", id, err)
+			msg := "加载工单失败"
+			if err != nil {
+				msg = "加载工单失败: " + err.Error()
+			}
+			h.failAsyncIssue(id, msg)
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), asyncExecMaxWait(h.Store, latest))
+		defer cancel()
+		if err := h.executeTicket(ctx, latest); err != nil {
+			log.Printf("ticket async exec %s: %v", id, err)
+			h.failAsyncIssue(id, err.Error())
+			return
+		}
+		if cur, e := h.Store.GetIssue(id); e == nil && cur != nil {
+			if err := h.finishCreateDBAfterExec(ctx, cur); err != nil {
+				log.Printf("ticket async createdb account %s: %v", id, err)
+			}
+		}
+	}()
+	return nil
+}
+
+// asyncExecMaxWait 后台执行总墙钟；DDL 多数据源串行，含长耗时语句时按数据源数放宽。
+func asyncExecMaxWait(st *store.DB, it *store.Issue) time.Duration {
+	targets := 1
+	if it.IssueType == store.IssueTypeDDL {
+		targets = len(ddlDataSourceIDs(it.NeedRollback, it.InstanceID))
+	}
+	return ticketexec.AsyncMaxWait(it.SQLContent, targets, st.TicketDDLLongStmtTimeout())
+}
+
+// failAsyncIssue 后台失败时写入 failed + exec_result，避免长期卡在 running 且无结果。
+func (h *TicketHandler) failAsyncIssue(id, msg string) {
+	if h == nil || h.Store == nil || strings.TrimSpace(id) == "" {
 		return
 	}
-	if latest, err := h.Store.GetIssue(it.ID); err == nil && latest != nil {
-		it = latest
+	cur, err := h.Store.GetIssue(id)
+	if err != nil || cur == nil {
+		_ = h.Store.UpdateIssueStatus(id, store.StatusFailed, msg)
+		return
 	}
-	c.JSON(http.StatusOK, gin.H{"ok": it.Status == store.StatusExecuted, "data": it})
+	// 已由 persistExec 落成终态则不再覆盖
+	if !ticketexec.IsExecuting(cur.Status) {
+		return
+	}
+	res := ticketexec.FailBeforeExec(msg, ticketexec.Record{
+		InstanceID: cur.InstanceID, DB: cur.DBName, SQL: "(后台执行)",
+	})
+	res.Summary = "后台执行异常终止"
+	res.ChangeID = prevChangeID(cur.ExecuteResult)
+	if err := h.Store.UpdateIssueExec(id, store.StatusFailed, ticketexec.ToJSON(res)); err != nil {
+		log.Printf("ticket async fail persist %s: %v", id, err)
+		_ = h.Store.UpdateIssueStatus(id, store.StatusFailed, msg)
+		return
+	}
+	cur.Status = store.StatusFailed
+	cur.ExecuteResult = ticketexec.ToJSON(res)
+	NotifyIssueExecFailedAsync(h.Store, h.Secret, cur, msg)
 }
 
 func (h *TicketHandler) syncArchiveAfterIssue(it *store.Issue, issueStatus string) error {
@@ -838,21 +1120,34 @@ func (h *TicketHandler) executeTicket(ctx context.Context, it *store.Issue) erro
 	if it.IssueType == store.IssueTypeRedis {
 		return h.executeRedisTicket(ctx, it)
 	}
+	if it.IssueType == store.IssueTypeHA {
+		return h.executeHATicket(ctx, it)
+	}
+	if it.IssueType == store.IssueTypeSrCluster {
+		return h.executeSrClusterTicket(ctx, it)
+	}
+	if it.IssueType == store.IssueTypeDbDeploy {
+		return h.executeDbDeployTicket(ctx, it)
+	}
 	inst, err := h.Store.GetInstance(it.InstanceID)
 	if err != nil {
 		return err
 	}
 	if inst == nil {
-		res := &ticketexec.Result{Success: false, Message: "工单实例不存在"}
+		res := ticketexec.FailBeforeExec("工单实例不存在: "+it.InstanceID, ticketexec.Record{
+			InstanceID: it.InstanceID, DB: it.DBName,
+		})
 		return h.persistExec(it, res)
 	}
-	check := h.checkTicketSQL(it.SQLContent, it.IssueType, inst.DBType, it.InstanceID, it.DBName)
+	check := h.checkTicketSQL(it.SQLContent, it.IssueType, inst.DBType, it.InstanceID, it.DBName, false)
 	if !check.OK {
 		return h.persistExec(it, reviewGateResult(check))
 	}
 	t, err := h.execTarget(inst, it.DBName)
 	if err != nil {
-		res := &ticketexec.Result{Success: false, Message: err.Error()}
+		res := ticketexec.FailBeforeExec(err.Error(), ticketexec.Record{
+			InstanceID: inst.ID, InstanceName: inst.Name, Host: inst.Host, DB: it.DBName, Port: inst.Port,
+		})
 		return h.persistExec(it, res)
 	}
 	res := ticketexec.Run(ctx, it.IssueType, it.SQLContent, t)
@@ -921,6 +1216,13 @@ func (h *TicketHandler) executeDDLTicket(ctx context.Context, it *store.Issue) e
 		return h.persistExec(it, &ticketexec.Result{Success: false, Message: "工单未指定实例"})
 	}
 	merged := &ticketexec.Result{StartedAt: time.Now().UTC().Format(time.RFC3339), Success: true}
+	var prev *ticketexec.Result
+	stmtN := 0
+	if len(ids) > 1 {
+		prev = ticketexec.Parse(it.ExecuteResult)
+		stmtN = len(sqlcheck.SplitSQL(it.SQLContent))
+	}
+	var skipped []string
 	for _, id := range ids {
 		inst, err := h.Store.GetInstance(id)
 		if err != nil {
@@ -929,7 +1231,16 @@ func (h *TicketHandler) executeDDLTicket(ctx context.Context, it *store.Issue) e
 		if inst == nil {
 			merged.Success = false
 			merged.Message = "实例不存在: " + id
+			mergeExecResult(merged, ticketexec.FailBeforeExec(merged.Message, ticketexec.Record{
+				InstanceID: id, DB: it.DBName,
+			}))
 			break
+		}
+		// 多数据源重试：上次已全部成功的数据源不再执行
+		if done := ddlDoneSource(prev, id, it.DBName, stmtN); done != nil {
+			mergeExecResult(merged, done)
+			skipped = append(skipped, inst.Name)
+			continue
 		}
 		// 执行前再确认库仍已登记（与提交硬约束一致）
 		dbEnt, err := h.Store.FindDatabase(id, it.DBName)
@@ -945,7 +1256,8 @@ func (h *TicketHandler) executeDDLTicket(ctx context.Context, it *store.Issue) e
 			})
 			break
 		}
-		check := h.checkTicketSQL(it.SQLContent, it.IssueType, inst.DBType, id, it.DBName)
+		skipSchema := ddlShardSkipSchema(it.NeedRollback)
+		check := h.checkTicketSQL(it.SQLContent, it.IssueType, inst.DBType, id, it.DBName, skipSchema)
 		if !check.OK {
 			gate := reviewGateResult(check)
 			tagExecRecords(gate, id, inst.Name)
@@ -981,7 +1293,41 @@ func (h *TicketHandler) executeDDLTicket(ctx context.Context, it *store.Issue) e
 	if merged.Success && merged.Summary == "" {
 		merged.Summary = "DDL 已在全部目标实例执行"
 	}
+	if len(skipped) > 0 {
+		note := "重试跳过此前已全部成功的数据源：" + strings.Join(skipped, "、")
+		if merged.Summary != "" {
+			note = merged.Summary + "；" + note
+		}
+		merged.Summary = note
+	}
 	return h.persistExec(it, merged)
+}
+
+func (h *TicketHandler) executeHATicket(ctx context.Context, it *store.Issue) error {
+	haH := &HAHandler{Store: h.Store, Secret: h.Secret}
+	res, err := haH.ExecuteHATicket(ctx, it)
+	if err != nil {
+		return err
+	}
+	return h.persistExec(it, res)
+}
+
+func (h *TicketHandler) executeSrClusterTicket(ctx context.Context, it *store.Issue) error {
+	srH := &SrClusterHandler{Store: h.Store, Secret: h.Secret}
+	res, err := srH.ExecuteSrClusterTicket(ctx, it)
+	if err != nil {
+		return err
+	}
+	return h.persistExec(it, res)
+}
+
+func (h *TicketHandler) executeDbDeployTicket(ctx context.Context, it *store.Issue) error {
+	dbH := &DbDeployHandler{Store: h.Store, Secret: h.Secret}
+	res, err := dbH.ExecuteDbDeployTicket(ctx, it)
+	if err != nil {
+		return err
+	}
+	return h.persistExec(it, res)
 }
 
 func (h *TicketHandler) executeRedisTicket(ctx context.Context, it *store.Issue) error {
@@ -1072,13 +1418,24 @@ func (h *TicketHandler) persistExec(it *store.Issue, res *ticketexec.Result) err
 	if res != nil && res.Success {
 		status = store.StatusExecuted
 	}
-	if err := h.Store.UpdateIssueExec(it.ID, status, ticketexec.ToJSON(res)); err != nil {
+	payload := ticketexec.ToJSON(res)
+	if err := h.Store.UpdateIssueExec(it.ID, status, payload); err != nil {
 		return err
 	}
 	it.Status = status
-	it.ExecuteResult = ticketexec.ToJSON(res)
+	it.ExecuteResult = payload
 	if res != nil {
 		it.Exec = res
+	}
+	if status == store.StatusFailed {
+		msg := ""
+		if res != nil {
+			msg = strings.TrimSpace(res.Message)
+			if msg == "" {
+				msg = strings.TrimSpace(res.Summary)
+			}
+		}
+		NotifyIssueExecFailedAsync(h.Store, h.Secret, it, msg)
 	}
 	return nil
 }

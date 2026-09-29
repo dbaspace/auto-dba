@@ -1,6 +1,6 @@
 /* DQL 工单：对齐 DDL 左右分栏 */
 .dql-page {
-  background: #fafafa;
+  background: var(--app-page-bg, #fafafa);
 }
 
 .dql-split-form {
@@ -75,7 +75,7 @@
   display: inline-block;
   margin: 4px 0 0 4px;
   padding: 2px 8px;
-  background: #fff;
+  background: var(--app-content-bg, #fff);
   border: 1px solid #e5e7eb;
   border-radius: 4px;
   color: #374151;

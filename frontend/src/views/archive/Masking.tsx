@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
-import { Alert, Button, Checkbox, Select, Steps, Table, Tag, message } from 'antd'
+import { Alert, Button, Checkbox, Select, Steps, Tag, message } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
 import type { ColumnsType } from 'antd/es/table'
 import './archive.css'
 
@@ -81,7 +82,7 @@ export default function Masking() {
           className="mb"
           message="按字段配置脱敏算法后随归档任务执行。当前为独立工作台配置向导。"
         />
-        <Table
+        <ResponsiveTable
           rowKey={(r) => r.field}
           className="mb"
           dataSource={rows}

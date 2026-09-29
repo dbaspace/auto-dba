@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Button, Form, Input, Modal, Pagination, Radio, Select, Space, Table, Tag, message } from 'antd'
+import { Button, Form, Input, Modal, Pagination, Radio, Select, Space, Tag, message } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
 import api from '../../api/request'
 import './Connectors.css'
 
@@ -171,13 +172,13 @@ export default function Connectors() {
       </div>
       <p className="hint">维护 Debezium Connect 集群。环境来自「环境管理」，Kafka 地址来自已登记的 Kafka 实例。</p>
       <div className="ops-table">
-        <Table
+        <ResponsiveTable
           rowKey={(r) => r.id || r.dbz_host || ''}
           dataSource={pagedRows}
           loading={loading}
           bordered
           pagination={false}
-          scroll={{ y: '100%' }}
+          scroll={{ x: 'max-content', y: '100%' }}
           style={{ height: '100%' }}
           columns={[
             { title: 'dbz_host', dataIndex: 'dbz_host', width: 240, ellipsis: true },

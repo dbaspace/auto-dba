@@ -118,20 +118,20 @@
   min-width: 0;
 }
 .table-wrap .menu-row.lv-0 > td {
-  background: #f5f7fa;
+  background: var(--app-sider-active-bg, #f5f7fa);
 }
 .table-wrap .menu-row.lv-0 .name-text {
   font-weight: 600;
   color: #303133;
 }
 .table-wrap .menu-row.lv-1 > td {
-  background: #fff;
+  background: var(--app-content-bg, #fff);
 }
 .table-wrap .menu-row.lv-1 .name-text {
   color: #303133;
 }
 .table-wrap .menu-row.lv-2 > td {
-  background: #fafafa;
+  background: var(--app-page-bg, #fafafa);
 }
 .table-wrap .menu-row.lv-2 .name-text {
   color: #606266;

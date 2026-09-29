@@ -1,6 +1,6 @@
 .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
 .lab { font-size: 13px; color: #6b7280; }
-.search-panel { background: #f5f7fa; border: 1px solid #e5e7eb; border-radius: 6px; padding: 12px; margin-bottom: 12px; }
+.search-panel { background: var(--app-color-primary-soft, #f5f7fa); border: 1px solid var(--app-border, #e5e7eb); border-radius: 6px; padding: 12px; margin-bottom: 12px; }
 .search-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .search-actions { display: flex; gap: 8px; }
 .placeholder { padding: 48px 0; text-align: center; color: #9ca3af; }

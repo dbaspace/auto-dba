@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import {
+  Link,
+  useNavigate } from 'react-router-dom'
 import {
   Alert,
   Button,
@@ -11,10 +13,10 @@ import {
   Radio,
   Select,
   Steps,
-  Table,
   Tag,
   message,
 } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
 import dayjs from 'dayjs'
 import api from '../../api/request'
 import { useWorkOrderDraft } from '../../hooks/useWorkOrderDraft'
@@ -54,6 +56,7 @@ interface Settings {
   approval_enabled?: boolean
   approver_user_ids?: string
   oss_configured?: boolean
+  oss_envs?: string[]
   performance?: { batch_size?: number; default_speed_limit?: number }
 }
 
@@ -140,6 +143,7 @@ export default function MigrationCreate() {
     approval_enabled: true,
     approver_user_ids: '',
     oss_configured: false,
+    oss_envs: [],
   })
   const [extraApprovers, setExtraApprovers] = useState<string[]>([])
   const [form, setForm] = useState<MigForm>(emptyForm())
@@ -336,7 +340,7 @@ export default function MigrationCreate() {
       ])
       setInstances(instRes.data.data || [])
       const envs = (envRes.data.data || [])
-        .map((e: any) => e.name || e.code || e.id)
+        .map((e: any) => e.code || e.name || e.id)
         .filter(Boolean)
       if (envs.length) setEnvOptions(envs)
       const s: Settings = { ...setRes.data.data }
@@ -376,6 +380,31 @@ export default function MigrationCreate() {
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  useEffect(() => {
+    if (!form.env) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const { data } = await api.get('/migration/settings', { params: { env: form.env } })
+        if (cancelled) return
+        const row = data.data || {}
+        setSettings((prev) => ({
+          ...prev,
+          oss_configured: Boolean(row.oss_configured),
+          oss_envs: Array.isArray(row.oss_envs) ? row.oss_envs : prev.oss_envs,
+        }))
+      } catch {
+        /* ignore */
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [form.env])
+
+  const ossReadyForEnv =
+    Boolean(settings.oss_configured) || (settings.oss_envs || []).includes(form.env)
 
   return (
     <div className="mig-create">
@@ -597,12 +626,17 @@ export default function MigrationCreate() {
                     <Radio value="direct">直连流式传输</Radio>
                     <Radio value="oss">OSS 中转</Radio>
                   </Radio.Group>
-                  {form.transfer_mode === 'oss' && !settings.oss_configured && (
+                  {form.transfer_mode === 'oss' && !ossReadyForEnv && (
                     <Alert
                       type="warning"
                       showIcon
                       className="mt"
-                      message="请先在迁移设置中配置 OSS 连接信息"
+                      message={
+                        <span>
+                          请先在 <Link to="/config/oss">配置中心 → OSS 配置</Link> 中为环境「{form.env}
+                          」配置连接信息
+                        </span>
+                      }
                     />
                   )}
                 </Form.Item>
@@ -652,7 +686,7 @@ export default function MigrationCreate() {
                 </Button>
               </div>
               {precheckItems.length > 0 && (
-                <Table
+                <ResponsiveTable
                   className="mb"
                   rowKey={(_, idx) => String(idx)}
                   bordered

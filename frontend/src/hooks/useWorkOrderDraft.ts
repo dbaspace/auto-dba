@@ -22,6 +22,10 @@ interface Options {
 export function useWorkOrderDraft({ type, label, path, getValues, applyValues, enabled = true }: Options) {
   const timerRef = useRef<number>(0)
   const skipSaveRef = useRef(false)
+  /** 提交成功清草稿后禁止卸载/pagehide 再写回 */
+  const clearedRef = useRef(false)
+  const enabledRef = useRef(enabled)
+  enabledRef.current = enabled
   const getValuesRef = useRef(getValues)
   const applyValuesRef = useRef(applyValues)
   getValuesRef.current = getValues
@@ -29,7 +33,7 @@ export function useWorkOrderDraft({ type, label, path, getValues, applyValues, e
 
   const persist = useCallback(
     (silent: boolean) => {
-      if (!enabled || skipSaveRef.current) return false
+      if (!enabledRef.current || skipSaveRef.current || clearedRef.current) return false
       const userId = currentDraftOwnerId()
       if (!userId) {
         if (!silent) message.warning('未登录，无法保存本地草稿')
@@ -46,14 +50,23 @@ export function useWorkOrderDraft({ type, label, path, getValues, applyValues, e
       }
       return ok
     },
-    [enabled, type, label, path],
+    [type, label, path],
   )
 
-  const schedulePersist = useCallback(() => {
-    if (!enabled || skipSaveRef.current) return
+  const persistRef = useRef(persist)
+  persistRef.current = persist
+
+  const flushPersist = useCallback(() => {
     window.clearTimeout(timerRef.current)
-    timerRef.current = window.setTimeout(() => persist(true), 800)
-  }, [enabled, persist])
+    timerRef.current = 0
+    persistRef.current(true)
+  }, [])
+
+  const schedulePersist = useCallback(() => {
+    if (!enabledRef.current || skipSaveRef.current || clearedRef.current) return
+    window.clearTimeout(timerRef.current)
+    timerRef.current = window.setTimeout(() => persistRef.current(true), 800)
+  }, [])
 
   const restoreDraft = useCallback(() => {
     if (!enabled) return false
@@ -62,6 +75,7 @@ export function useWorkOrderDraft({ type, label, path, getValues, applyValues, e
     const draft = loadWorkOrderDraft(type, userId)
     if (!draft) return false
     skipSaveRef.current = true
+    clearedRef.current = false
     try {
       applyValuesRef.current(draft.values || {})
       const toastKey = `${type}:${userId}`
@@ -81,20 +95,28 @@ export function useWorkOrderDraft({ type, label, path, getValues, applyValues, e
 
   const saveNow = useCallback(() => {
     window.clearTimeout(timerRef.current)
+    timerRef.current = 0
+    clearedRef.current = false
     return persist(false)
   }, [persist])
 
   const clearOnSubmitSuccess = useCallback(() => {
     window.clearTimeout(timerRef.current)
+    timerRef.current = 0
+    clearedRef.current = true
+    skipSaveRef.current = true
     const userId = currentDraftOwnerId()
     if (userId) clearWorkOrderDraft(type, userId)
   }, [type])
 
   useEffect(() => {
+    const onPageHide = () => flushPersist()
+    window.addEventListener('pagehide', onPageHide)
     return () => {
-      window.clearTimeout(timerRef.current)
+      window.removeEventListener('pagehide', onPageHide)
+      flushPersist()
     }
-  }, [])
+  }, [flushPersist])
 
   return { restoreDraft, saveNow, clearOnSubmitSuccess, schedulePersist }
 }

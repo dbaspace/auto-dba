@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Button, Table, Tag } from 'antd'
+import { Button, Tag } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
 import type { ColumnsType } from 'antd/es/table'
 import api from '../../api/request'
 import './archive.css'
@@ -77,7 +78,7 @@ export default function RunHistory() {
             <Button onClick={load}>刷新</Button>
           </div>
         </div>
-        <Table
+        <ResponsiveTable
           rowKey={(r) => r.id ?? r.name ?? Math.random()}
           dataSource={runs}
           columns={columns}

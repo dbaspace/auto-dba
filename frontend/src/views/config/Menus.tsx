@@ -1,13 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Button, Input, InputNumber, Modal, Radio, Select, Switch, Table, message } from 'antd'
+import { Button, Input, InputNumber, Modal, Radio, Select, Switch, message } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
 import { CaretRightOutlined, CaretDownOutlined } from '@ant-design/icons'
 import api from '../../api/request'
 import Auth from '../../components/Auth'
 import { Perm } from '../../hooks/usePermission'
 import { PAGE_ROUTES } from '../../constants/routes'
 import { resolveMenuIcon } from '../../components/MenuIcon'
-import { resolveMenuKind, MenuKindTag, isActionMenu } from '../../utils/menuKind.tsx'
-import type { MenuKind } from '../../utils/menuKind.tsx'
+import { resolveMenuKind, MenuKindTag, isActionMenu } from '../../utils/menuKind'
+import type { MenuKind } from '../../utils/menuKind'
 import './Menus.css'
 
 interface MenuNode {
@@ -46,7 +47,8 @@ const MENU_ICON_OPTIONS = [
   'dashboard', 'odometer', 'databoard', 'tickets', 'list', 'document', 'download',
   'edit', 'share', 'key', 'plus', 'refresh', 'connection', 'upload', 'sort', 'lock',
   'clock', 'folder', 'location', 'monitor', 'search', 'cpu', 'grid', 'files',
-  'histogram', 'coin', 'setting', 'menu', 'user', 'user-filled', 'warning',
+  'histogram', 'coin', 'setting', 'menu', 'user', 'user-filled', 'team', 'login',
+  'safety', 'audit', 'warning',
 ]
 
 function emptyForm(): MenuForm {
@@ -244,7 +246,7 @@ export default function Menus() {
       </div>
       <div className="table-wrap">
         {ready && (
-          <Table
+          <ResponsiveTable
             rowKey="id"
             dataSource={visibleRows}
             bordered

@@ -1,0 +1,319 @@
+.dbmon-page {
+  min-height: 100%;
+  background: var(--app-content-bg, #fff);
+  color: var(--app-text, #1f2937);
+  padding: 12px 16px 32px;
+  border-radius: 8px;
+}
+
+.dbmon-toolbar {
+  display: flex;
+  align-items: center;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  background: var(--app-content-bg, #fff);
+  border: 1px solid var(--app-border, #e5e7eb);
+  border-radius: 6px;
+}
+
+.dbmon-label {
+  color: var(--app-text-secondary, #8c8c8c);
+  font-size: 13px;
+}
+
+.dbmon-range-presets {
+  display: inline-flex;
+  flex-wrap: wrap;
+  border: 1px solid var(--app-border, #d9d9d9);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--app-content-bg, #fff);
+}
+
+.dbmon-range-preset {
+  margin: 0;
+  padding: 4px 10px;
+  border: 0;
+  border-right: 1px solid var(--app-border, #d9d9d9);
+  background: transparent;
+  color: var(--app-text, #1f2937);
+  font-size: 13px;
+  line-height: 22px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.dbmon-range-preset:last-child {
+  border-right: 0;
+}
+
+.dbmon-range-preset:hover {
+  background: var(--app-hover-bg, #f5f5f5);
+}
+
+.dbmon-range-preset.is-active {
+  background: var(--app-hover-bg, #e8e8e8);
+  font-weight: 600;
+}
+
+.dbmon-section {
+  margin-bottom: 10px;
+  border: 1px solid var(--app-border, #e5e7eb);
+  border-radius: 6px;
+  background: var(--app-content-bg, #fff);
+  overflow: hidden;
+}
+
+.dbmon-section-hd {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  color: var(--app-text, #1f2937);
+  font-size: 14px;
+  font-weight: 600;
+  padding: 10px 14px;
+  cursor: pointer;
+}
+
+.dbmon-section-hd:hover {
+  color: var(--app-color-primary, #1677ff);
+}
+
+.dbmon-section-bd {
+  padding: 8px 12px 14px;
+  border-top: 1px solid var(--app-border, #e5e7eb);
+}
+
+.dbmon-kpi-row {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.dbmon-kpi-row.settings {
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+}
+
+.dbmon-kpi {
+  background: var(--app-page-bg, #f0f2f5);
+  border: 1px solid var(--app-border, #e5e7eb);
+  border-radius: 4px;
+  padding: 10px 12px;
+  min-height: 72px;
+}
+
+.dbmon-kpi-title {
+  color: var(--app-text-secondary, #8c8c8c);
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
+.dbmon-kpi-value {
+  color: var(--app-color-primary, #1677ff);
+  font-size: 18px;
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.dbmon-kpi-value.is-error {
+  color: #cf1322;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.dbmon-chart-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 200px;
+  color: var(--app-text-secondary, #8c8c8c);
+  font-size: 13px;
+}
+
+.dbmon-chart-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.dbmon-chart {
+  background: var(--app-page-bg, #f0f2f5);
+  border: 1px solid var(--app-border, #e5e7eb);
+  border-radius: 4px;
+  padding: 8px 10px 4px;
+  min-height: 280px;
+}
+
+.dbmon-chart.full {
+  grid-column: 1 / -1;
+}
+
+.dbmon-chart-title {
+  color: var(--app-text, #1f2937);
+  font-size: 13px;
+  margin-bottom: 4px;
+  padding-left: 4px;
+}
+
+.dbmon-chart-wrap {
+  position: relative;
+}
+
+.dbmon-chart-wrap--split {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  min-height: 0;
+}
+
+.dbmon-chart-plot {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.dbmon-legend-panel {
+  flex: 0 0 var(--dbmon-legend-w, 260px);
+  width: var(--dbmon-legend-w, 260px);
+  max-width: 48%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding-top: 2px;
+}
+
+.dbmon-legend-hdr {
+  position: absolute;
+  top: 2px;
+  right: 8px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  /* 与 chartOption LEGEND_VAL_COL*2+gap 对齐，由 --dbmon-legend-hdr-w 动态覆盖 */
+  width: var(--dbmon-legend-hdr-w, 168px);
+  box-sizing: border-box;
+  pointer-events: none;
+}
+
+.dbmon-chart-wrap--split .dbmon-legend-hdr {
+  position: static;
+  flex: 0 0 auto;
+  width: 100%;
+  padding: 0 2px 4px;
+  pointer-events: none;
+}
+
+.dbmon-legend-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 0 2px 4px;
+  overscroll-behavior: contain;
+}
+
+.dbmon-legend-row {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) var(--dbmon-legend-val-w, 88px) var(--dbmon-legend-val-w, 88px);
+  align-items: center;
+  column-gap: 6px;
+  width: 100%;
+  margin: 0;
+  padding: 3px 2px;
+  border: 0;
+  background: transparent;
+  color: var(--app-text-secondary, #6b7280);
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  line-height: 16px;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 2px;
+}
+
+.dbmon-legend-row:hover {
+  background: var(--app-hover-bg, rgba(0, 0, 0, 0.04));
+}
+
+.dbmon-legend-row.is-off {
+  opacity: 0.38;
+}
+
+.dbmon-legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.dbmon-legend-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--app-text, #374151);
+}
+
+.dbmon-legend-val {
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dbmon-legend-sort {
+  pointer-events: auto;
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+  color: var(--app-text-secondary, #8c8c8c);
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  line-height: 16px;
+  text-align: right;
+  cursor: pointer;
+  border-radius: 2px;
+}
+
+.dbmon-legend-sort:hover {
+  color: var(--app-color-primary, #1677ff);
+}
+
+.dbmon-legend-sort.is-active {
+  color: var(--app-color-primary, #1677ff);
+  font-weight: 600;
+}
+
+.dbmon-page .ant-empty-description {
+  color: var(--app-text-secondary, #8c8c8c);
+}
+
+.dbmon-placeholder-page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 360px;
+  padding: 48px 16px;
+  border: 1px solid var(--app-border, #e5e7eb);
+  border-radius: 6px;
+  background: var(--app-content-bg, #fff);
+}
+
+@media (max-width: 1100px) {
+  .dbmon-kpi-row {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .dbmon-chart-grid {
+    grid-template-columns: 1fr;
+  }
+  .dbmon-chart.full {
+    grid-column: auto;
+  }
+}

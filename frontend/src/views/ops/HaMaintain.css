@@ -1,0 +1,56 @@
+.ha-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  gap: 12px;
+  padding: 0 4px 12px;
+}
+
+.ha-toolbar {
+  flex: 0 0 auto;
+}
+
+.ha-split {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) 1fr;
+  gap: 12px;
+  min-height: 420px;
+}
+
+.ha-list,
+.ha-detail {
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 8px;
+  padding: 8px;
+  min-height: 0;
+  overflow: auto;
+  background: var(--bg-elevated, #fff);
+}
+
+.ha-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.ha-row-active td {
+  background: rgba(22, 119, 255, 0.06) !important;
+}
+
+.ha-muted {
+  color: #888;
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.ha-change {
+  padding: 8px 0;
+}
+
+@media (max-width: 900px) {
+  .ha-split {
+    grid-template-columns: 1fr;
+  }
+}

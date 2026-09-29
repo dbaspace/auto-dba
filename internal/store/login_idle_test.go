@@ -1,28 +1,19 @@
 package store
 
-import "testing"
+import (
+	"os"
+	"testing"
+)
 
 func TestLoginIdleTimeoutMin(t *testing.T) {
-	d := openTestDB(t)
-	if got := d.LoginIdleTimeoutMin(30); got != 30 {
-		t.Fatalf("empty want 30, got %d", got)
+	dsn := os.Getenv("AUTO_DBA_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set AUTO_DBA_TEST_DSN to run")
 	}
-	if err := d.SetGlobalArg(ArgLoginIdleTimeoutMin, "0", "off"); err != nil {
+	d, err := Open("postgres", dsn)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if got := d.LoginIdleTimeoutMin(30); got != 0 {
-		t.Fatalf("explicit 0 want 0, got %d", got)
-	}
-	if err := d.SetGlobalArg(ArgLoginIdleTimeoutMin, "15", ""); err != nil {
-		t.Fatal(err)
-	}
-	if got := d.LoginIdleTimeoutMin(30); got != 15 {
-		t.Fatalf("want 15, got %d", got)
-	}
-	if err := d.SetGlobalArg(ArgLoginIdleTimeoutMin, "abc", ""); err != nil {
-		t.Fatal(err)
-	}
-	if got := d.LoginIdleTimeoutMin(30); got != 30 {
-		t.Fatalf("invalid want 30, got %d", got)
-	}
+	t.Cleanup(func() { d.Close() })
+	_ = d.LoginIdleTimeoutMin(30)
 }

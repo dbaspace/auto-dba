@@ -1,0 +1,56 @@
+.db-deploy-page {
+  padding: 0 4px 24px;
+}
+
+.db-deploy-page .muted {
+  color: var(--ant-color-text-secondary, #666);
+  font-size: 13px;
+}
+
+.redis-topo-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.codis-roles {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.codis-role-card ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.codis-role-card .muted {
+  list-style: none;
+  margin-left: -18px;
+}
+
+.db-step-log-cell {
+  max-width: 560px;
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.db-step-log-fail {
+  color: #a8071a;
+}
+
+.db-change-log {
+  max-height: 360px;
+  overflow: auto;
+  background: var(--ant-color-fill-quaternary, #f5f5f5);
+  padding: 12px;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

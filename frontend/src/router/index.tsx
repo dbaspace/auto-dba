@@ -21,9 +21,12 @@ import KafkaOrder from '../views/ops/KafkaOrder'
 import RedisOrder from '../views/ops/RedisOrder'
 import SlotList from '../views/ops/SlotList'
 import Multilang from '../views/ops/Multilang'
-import ExternalStatus from '../views/ops/ExternalStatus'
+import DolphinOps from '../views/ops/DolphinOps'
+import SrNodes from '../views/ops/SrNodes'
 import Sessions from '../views/ops/Sessions'
 import SqlInsight from '../views/ops/SqlInsight'
+import DbMonitor from '../views/ops/DbMonitor'
+import RedisRdb from '../views/ops/redis-rdb/RedisRdb'
 import Migration from '../views/ops/Migration'
 import MigrationCreate from '../views/ops/MigrationCreate'
 import MigrationDetail from '../views/ops/MigrationDetail'
@@ -36,9 +39,13 @@ import Regions from '../views/config/Regions'
 import Users from '../views/config/Users'
 import Roles from '../views/config/Roles'
 import GlobalArgs from '../views/config/GlobalArgs'
+import SqlInsightSettings from '../views/config/SqlInsightSettings'
 import LoginLogs from '../views/config/LoginLogs'
 import QueryAudits from '../views/config/QueryAudits'
 import Connectors from '../views/config/Connectors'
+import MonitorTargets from '../views/config/MonitorTargets'
+import FeAdmin from '../views/config/FeAdmin'
+import DsAdmin from '../views/config/DsAdmin'
 import AuthConfig from '../views/config/AuthConfig'
 import ReviewRules from '../views/config/ReviewRules'
 import Instances from '../views/config/Instances'
@@ -57,6 +64,21 @@ import KafkaQuery from '../views/query/KafkaQuery'
 import RedisQuery from '../views/query/RedisQuery'
 import CommonQuery from '../views/query/CommonQuery'
 import Terminal from '../views/ops/Terminal'
+import HaMaintain from '../views/ops/HaMaintain'
+import ClusterDeployHub from '../views/ops/ClusterDeployHub'
+import ClusterDeployEngine from '../views/ops/ClusterDeployEngine'
+import BackupPolicies from '../views/backup/Policies'
+import BackupRuns from '../views/backup/Runs'
+import BackupSettings from '../views/backup/Settings'
+import PlatformAgent from '../views/config/PlatformAgent'
+import OssUpload from '../views/config/OssUpload'
+import CmdbAssets from '../views/cmdb/Assets'
+import CmdbTopology from '../views/cmdb/Topology'
+import CmdbTags from '../views/cmdb/Tags'
+import CmdbDiscover from '../views/cmdb/Discover'
+import CmdbImportExport from '../views/cmdb/ImportExport'
+import CmdbAudit from '../views/cmdb/Audit'
+import CmdbSync from '../views/cmdb/Sync'
 
 /** 旧路径带 :id 时转发到新路径 */
 function RedirectWithId({ toPrefix }: { toPrefix: string }) {
@@ -157,27 +179,70 @@ const router = createHashRouter([
       { path: 'metadata/database/search/serviceOperations/archiverManager/archivetaskMonitor', element: <Navigate to="/ops/archive/monitor" replace /> },
       { path: 'metadata/database/search/serviceOperations/archiverManager/archivetaskSetting', element: <Navigate to="/ops/archive/settings" replace /> },
 
+      { path: 'ops/backup', element: <Navigate to="/ops/backup/policies" replace /> },
+      { path: 'ops/backup/policies', element: <BackupPolicies /> },
+      { path: 'ops/backup/runs', element: <BackupRuns /> },
+      { path: 'ops/backup/settings', element: <BackupSettings /> },
+
       { path: 'ops/sql-insight', element: <SqlInsight /> },
+      { path: 'ops/redis-rdb', element: <RedisRdb /> },
+      { path: 'ops/db-monitor', element: <Navigate to="/ops/db-monitor/postgres" replace /> },
+      { path: 'ops/db-monitor/postgres', element: <DbMonitor engine="postgres" /> },
+      { path: 'ops/db-monitor/mysql', element: <DbMonitor engine="mysql" /> },
+      { path: 'ops/db-monitor/redis', element: <DbMonitor engine="redis" /> },
+      { path: 'ops/db-monitor/starrocks', element: <DbMonitor engine="starrocks" /> },
+      { path: 'ops/db-monitor/clickhouse', element: <DbMonitor engine="clickhouse" /> },
+      { path: 'ops/db-monitor/kafka', element: <DbMonitor engine="kafka" /> },
+      { path: 'ops/db-monitor/tidb', element: <DbMonitor engine="tidb" /> },
+      { path: 'ops/db-monitor/cockroachdb', element: <DbMonitor engine="cockroachdb" /> },
+      { path: 'ops/db-monitor/cassandra', element: <DbMonitor engine="cassandra" /> },
+      { path: 'ops/db-monitor/oceanbase', element: <DbMonitor engine="oceanbase" /> },
+      { path: 'ops/db-monitor/host', element: <DbMonitor engine="host" /> },
+      { path: 'ops/db-monitor/mongodb', element: <DbMonitor engine="mongodb" /> },
+      { path: 'ops/db-monitor/oracle', element: <DbMonitor engine="oracle" /> },
+      { path: 'ops/db-monitor/elasticsearch', element: <DbMonitor engine="elasticsearch" /> },
+      { path: 'ops/db-monitor/sqlserver', element: <DbMonitor engine="sqlserver" /> },
+      { path: 'ops/db-monitor/debezium', element: <DbMonitor engine="debezium" /> },
+      { path: 'ops/db-monitor/dolphinscheduler', element: <DbMonitor engine="dolphinscheduler" /> },
       { path: 'metadata/database/search/serviceOperations/activitysnapshot', element: <Navigate to="/ops/sql-insight" replace /> },
       { path: 'database/search/serviceOperations/activitysnapshot', element: <Navigate to="/ops/sql-insight" replace /> },
       { path: 'ops/sessions', element: <Sessions /> },
       { path: 'metadata/database/search/serviceOperations/process', element: <Navigate to="/ops/sessions" replace /> },
       { path: 'database/search/serviceOperations/process', element: <Navigate to="/ops/sessions" replace /> },
       { path: 'ops/multilang', element: <Multilang /> },
-      { path: 'ops/dolphin', element: <ExternalStatus kind="dolphin" /> },
-      { path: 'ops/sr', element: <ExternalStatus kind="sr" /> },
+      { path: 'ops/dolphin', element: <DolphinOps /> },
+      { path: 'ops/sr', element: <SrNodes /> },
+      { path: 'ops/cluster-deploy', element: <ClusterDeployHub /> },
+      { path: 'ops/cluster-deploy/:engine', element: <ClusterDeployEngine /> },
+      { path: 'ops/sr-cluster', element: <Navigate to="/ops/cluster-deploy/starrocks" replace /> },
       { path: 'ops/terminal', element: <Terminal /> },
+      { path: 'ops/ha', element: <HaMaintain /> },
+
+      { path: 'cmdb/assets', element: <CmdbAssets /> },
+      { path: 'cmdb/topology', element: <CmdbTopology /> },
+      { path: 'cmdb/tags', element: <CmdbTags /> },
+      { path: 'cmdb/discover', element: <CmdbDiscover /> },
+      { path: 'cmdb/import-export', element: <CmdbImportExport /> },
+      { path: 'cmdb/audit', element: <CmdbAudit /> },
+      { path: 'cmdb/sync', element: <CmdbSync /> },
 
       { path: 'config/instances', element: <Instances /> },
       { path: 'config/regions', element: <Regions /> },
       { path: 'config/environments', element: <Environments /> },
+      { path: 'config/tags', element: <Navigate to="/cmdb/tags" replace /> },
       { path: 'config/connectors', element: <Connectors /> },
+      { path: 'config/agents', element: <PlatformAgent /> },
+      { path: 'config/oss', element: <OssUpload /> },
+      { path: 'config/monitor-targets', element: <MonitorTargets /> },
+      { path: 'config/fe-admin', element: <FeAdmin /> },
+      { path: 'config/ds-admin', element: <DsAdmin /> },
       { path: 'metadata/database/manage/connector', element: <Navigate to="/config/connectors" replace /> },
       { path: 'config/databases', element: <Databases /> },
       { path: 'config/accounts', element: <Accounts /> },
       { path: 'metadata/database/manage/account', element: <Navigate to="/config/accounts" replace /> },
       { path: 'database/manage/account', element: <Navigate to="/config/accounts" replace /> },
       { path: 'config/review-rules', element: <ReviewRules /> },
+      { path: 'config/sql-insight', element: <SqlInsightSettings /> },
       { path: 'metadata/database/manage/goinception', element: <Navigate to="/config/review-rules" replace /> },
       { path: 'database/manage/goinception', element: <Navigate to="/config/review-rules" replace /> },
       { path: 'config/args', element: <GlobalArgs /> },
@@ -187,6 +252,7 @@ const router = createHashRouter([
       { path: 'config/login-logs', element: <LoginLogs /> },
       { path: 'config/query-audits', element: <QueryAudits /> },
       { path: 'config/ldap', element: <AuthConfig /> },
+      { path: '*', element: null },
     ],
   },
   { path: '*', element: <Navigate to="/" replace /> },

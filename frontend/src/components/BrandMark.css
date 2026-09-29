@@ -1,0 +1,68 @@
+.brand-mark {
+  display: inline-flex;
+  line-height: 0;
+  flex-shrink: 0;
+}
+
+.brand-mark-icon {
+  display: block;
+  flex-shrink: 0;
+}
+
+.brand-lockup {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  user-select: none;
+}
+
+.brand-lockup-compact {
+  justify-content: center;
+}
+
+.brand-wordmark {
+  display: inline-flex;
+  align-items: baseline;
+  font-weight: 800;
+  font-size: 16px;
+  letter-spacing: 0.2px;
+  line-height: 1.05;
+  white-space: nowrap;
+}
+
+.brand-kee {
+  background: linear-gradient(90deg, #0a1240 0%, #2f80ff 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.brand-plus {
+  background: linear-gradient(90deg, #8b5cf6 0%, #ff4fd8 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* 深色侧栏：Kee 近白 */
+html[data-color-mode='dark'] .brand-kee,
+html[data-theme-preset='business-black'] .brand-kee {
+  background: none;
+  -webkit-background-clip: unset;
+  background-clip: unset;
+  color: #f5f5f0;
+}
+
+.app-sider-brand .brand-lockup {
+  width: 100%;
+}
+
+.app-sider-brand .brand-wordmark {
+  font-size: 15px;
+}
+
+.brand-wordmark-login {
+  font-size: 22px;
+}

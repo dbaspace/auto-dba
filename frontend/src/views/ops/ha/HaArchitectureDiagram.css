@@ -1,0 +1,207 @@
+.ha-arch {
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 10px;
+  padding: 14px 16px 16px;
+  background: linear-gradient(180deg, #fafbfc 0%, #f3f5f7 100%);
+  margin-bottom: 12px;
+}
+
+.ha-arch--card {
+  padding: 10px 12px;
+  margin-bottom: 0;
+}
+
+.ha-arch--template {
+  opacity: 0.95;
+}
+
+.ha-arch-empty {
+  color: #6b7280;
+  font-size: 13px;
+  padding: 20px 8px;
+  text-align: center;
+}
+
+.ha-arch-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.ha-arch-hint {
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.ha-arch-layer {
+  position: relative;
+}
+
+.ha-arch-layer-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #4b5563;
+  margin-bottom: 8px;
+  letter-spacing: 0.02em;
+}
+
+.ha-arch-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: center;
+}
+
+.ha-arch-vline {
+  width: 2px;
+  height: 14px;
+  margin: 8px auto;
+  background: repeating-linear-gradient(
+    to bottom,
+    #9ca3af 0 3px,
+    transparent 3px 6px
+  );
+}
+
+.ha-arch-dash-hint {
+  text-align: center;
+  font-size: 11px;
+  color: #9ca3af;
+  margin-bottom: 4px;
+}
+
+.ha-arch-node {
+  min-width: 128px;
+  max-width: 200px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #d1d5db;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.ha-arch--card .ha-arch-node {
+  min-width: 100px;
+  padding: 8px 10px;
+}
+
+.ha-arch-node-badge {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #6b7280;
+  margin-bottom: 4px;
+}
+
+.ha-arch-node-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #111827;
+  word-break: break-all;
+}
+
+.ha-arch-node-sub {
+  font-size: 11px;
+  color: #6b7280;
+  margin-top: 2px;
+  word-break: break-all;
+}
+
+.ha-arch-node--mgr.is-primary {
+  border-color: #93c5fd;
+  background: #eff6ff;
+}
+
+.ha-arch-node--mgr.is-standby {
+  border-style: dashed;
+  border-color: #c4b5fd;
+  background: #f5f3ff;
+}
+
+.ha-arch-node--mgr.is-ghost {
+  opacity: 0.65;
+}
+
+.ha-arch-node--vip {
+  margin: 0 auto;
+  text-align: center;
+  border-color: #67e8f9;
+  background: #ecfeff;
+}
+
+.ha-arch-node--manual {
+  margin: 0 auto;
+  text-align: center;
+  color: #6b7280;
+  font-size: 12px;
+  border-style: dashed;
+  max-width: 320px;
+}
+
+.ha-arch-node--db.tone-ok {
+  border-color: #86efac;
+  background: #f0fdf4;
+}
+
+.ha-arch-node--db.tone-warn {
+  border-color: #fcd34d;
+  background: #fffbeb;
+}
+
+.ha-arch-node--db.tone-bad {
+  border-color: #fca5a5;
+  background: #fef2f2;
+}
+
+.ha-arch-node--db.tone-neutral {
+  border-color: #d1d5db;
+}
+
+.ha-arch-data {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+
+.ha-arch-col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+}
+
+.ha-arch-col--replicas {
+  flex-direction: row;
+  flex-wrap: wrap;
+  max-width: 440px;
+}
+
+.ha-arch-arrows {
+  font-size: 11px;
+  color: #6b7280;
+  padding: 0 4px;
+  position: relative;
+}
+
+.ha-arch-arrows::before {
+  content: '→';
+  display: block;
+  text-align: center;
+  font-size: 18px;
+  line-height: 1;
+  color: #9ca3af;
+}
+
+@media (max-width: 640px) {
+  .ha-arch-col--replicas {
+    max-width: 100%;
+  }
+  .ha-arch-arrows::before {
+    content: '↓';
+  }
+}

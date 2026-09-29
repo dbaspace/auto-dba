@@ -20,6 +20,11 @@ db:
   driver: postgres
   # 本地填写，勿提交真实账号密码
   dsn: "postgres://user:password@127.0.0.1:5432/db_autosql?sslmode=disable"
+  # 元库连接池（防耗尽 PostgreSQL max_connections）
+  max_open_conns: 50
+  max_idle_conns: 10
+  conn_max_lifetime_sec: 1800
+  conn_max_idle_time_sec: 300
 
 cdc:
   enabled: false
@@ -38,6 +43,16 @@ flashback:
   tencent_secret_key: ""
   tencent_region: ""
 
+backup:
+  workdir: /tmp/auto-dba-backup
+  # 开发/小规模可 true；生产建议 false + 登记/下发 Backup Agent
+  allow_embedded: true
+  # 平台侧 linux 制品（先执行 deploy/backup-agent/build.sh）
+  agent_artifact: deploy/backup-agent/bin/platform-agent
+  # SSH 用户须可写；勿用无权限的 /opt（除非已 chown）
+  agent_remote_dir: /home/sysadmin/auto-dba/platform-agent
+  agent_listen_port: 8090
+
 external:
   dolphinscheduler_url: ""
   starrocks_fe_url: ""
@@ -48,6 +63,23 @@ terminal:
   enabled: true
   ssh_user: ""
   ssh_identity_file: config/terminal/id_ed25519
+  # Agent SSH 下发的主机密钥校验：
+  #   accept-new（默认）首次连接自动记录指纹，之后指纹变化才拒绝（同 OpenSSH StrictHostKeyChecking=accept-new）
+  #   strict 必须预先登记指纹；insecure 不校验（仅开发）
+  ssh_host_key_policy: accept-new
+  # 平台自管 known_hosts，空则 config/terminal/known_hosts（不读 ~/.ssh/known_hosts）
+  ssh_known_hosts_file: ""
+  # 兼容旧配置：true 等同 ssh_host_key_policy: insecure，生产保持 false
+  ssh_insecure_host_key: false
   scripts_dir: ""
   static_dir: ""
   max_lifetime_sec: 1800
+
+# 可拆分微服务（K8s Pod 互通）
+# mode: embed|remote|off；remote 时填 url
+services:
+  db_monitor:
+    mode: embed
+    url: ""
+    host: "0.0.0.0"
+    port: 8801

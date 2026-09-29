@@ -1,22 +1,25 @@
 .ldap-page {
-  max-width: 880px;
+  width: 100%;
+  min-width: 0;
+  background: var(--app-content-bg, #fff);
 }
 
 .ldap-form {
-  background: #fff;
+  background: var(--app-content-bg, #fff);
   padding: 8px 24px 24px;
+  max-width: 880px;
 }
 
 .ldap-section-title {
   margin: 8px 0 16px;
-  color: #1f2937;
+  color: var(--app-text, #1f2937);
   font-size: 15px;
   font-weight: 600;
 }
 
 .ldap-divider {
   margin: 8px 0 20px;
-  border-color: #f0f0f0;
+  border-color: var(--app-border, #f0f0f0);
 }
 
 .ldap-form .ant-form-item {
@@ -29,7 +32,7 @@
 }
 
 .field-hint {
-  color: #9ca3af;
+  color: var(--app-text-secondary, #9ca3af);
   font-size: 12px;
   line-height: 1.5;
 }

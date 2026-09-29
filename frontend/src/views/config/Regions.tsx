@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
-import { Button, Form, Input, Modal, Select, Space, Table, message } from 'antd'
+import { Button, Form, Input, Modal, Select, Space, message } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
 import api from '../../api/request'
 
 interface EnvRow {
@@ -121,7 +122,7 @@ export default function Regions() {
       </div>
       <p className="hint">区域编码唯一。同一区域（如 beijing）请编辑后勾选多个环境，不要重复新增。</p>
       <div className="ops-table">
-        <Table
+        <ResponsiveTable
           rowKey={(r) => r.id || r.code || ''}
           dataSource={rows}
           bordered

@@ -44,7 +44,7 @@ func applyExtraDDLRules(stmt, upper, kw string, dbType string, byName map[string
 	if enabled(byName, "DDLReindexRefreshConcurrently") && (reReindex.MatchString(upper) || reRefreshMat.MatchString(upper)) && !strings.Contains(upper, "CONCURRENTLY") {
 		add(catalogHit("DDLReindexRefreshConcurrently", "REINDEX / REFRESH MATERIALIZED VIEW 建议 CONCURRENTLY"))
 	}
-	if isCreate && !isCTAS && enabled(byName, "DDLRequireUpdateTime") {
+	if isCreate && !isCTAS && dbType != "postgres" && enabled(byName, "DDLRequireUpdateTime") {
 		add(checkRequireUpdateTime(stmt, byName))
 	}
 	if isCreate && !isCTAS && enabled(byName, "DDLForeignKeyPolicy") {
@@ -109,19 +109,18 @@ func checkIndexNameSpec(stmt, upper string) *ruleHit {
 
 func checkRequireUpdateTime(stmt string, byName map[string]Rule) *ruleHit {
 	r, _ := ruleOf(byName, "DDLRequireUpdateTime")
-	col := ruleField(r.Value, "column", "update_time")
-	if col == "" {
-		col = "update_time"
-	}
+	candidates := updateTimeColumnCandidates(r.Value)
 	body := createTableBody(stmt)
 	if body == "" {
 		return nil
 	}
-	re := regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(col) + `\b`)
-	if !re.MatchString(body) {
-		return errID("DDLRequireUpdateTime", "建表必须包含时间字段 "+col)
+	for _, col := range candidates {
+		re := regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(col) + `\b`)
+		if re.MatchString(body) {
+			return nil
+		}
 	}
-	return nil
+	return errID("DDLRequireUpdateTime", "建表必须包含时间字段（须含 "+strings.Join(candidates, " / ")+" 之一）")
 }
 
 func checkForeignKeyPolicy(upper string, byName map[string]Rule) *ruleHit {

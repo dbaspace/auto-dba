@@ -558,8 +558,11 @@ func (h *MigrationHandler) Approve(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"message": "创建人不能审批自己的任务"})
 		return
 	}
-	if t.AssignedApprover != "" && t.AssignedApprover != user {
-		c.JSON(http.StatusForbidden, gin.H{"message": "仅指定审核人可审批"})
+	priv := middleware.IsPrivileged(middleware.Role(c))
+	okAssignee := t.AssignedApprover == "" || strings.EqualFold(t.AssignedApprover, user) ||
+		(t.AssignedApproverLogin != "" && strings.EqualFold(t.AssignedApproverLogin, user))
+	if !okAssignee && !priv && !h.Store.IsGlobalApprover(user) {
+		c.JSON(http.StatusForbidden, gin.H{"message": "仅指定审核人、超级审核白名单或管理员可审批"})
 		return
 	}
 	var req struct {
@@ -580,6 +583,14 @@ func (h *MigrationHandler) Approve(c *gin.Context) {
 func (h *MigrationHandler) Reject(c *gin.Context) {
 	t := h.loadTask(c)
 	if t == nil {
+		return
+	}
+	user := middleware.Username(c)
+	priv := middleware.IsPrivileged(middleware.Role(c))
+	okAssignee := t.AssignedApprover == "" || strings.EqualFold(t.AssignedApprover, user) ||
+		(t.AssignedApproverLogin != "" && strings.EqualFold(t.AssignedApproverLogin, user))
+	if !okAssignee && !priv && !h.Store.IsGlobalApprover(user) {
+		c.JSON(http.StatusForbidden, gin.H{"message": "仅指定审核人、超级审核白名单或管理员可驳回"})
 		return
 	}
 	var req struct {
@@ -804,16 +815,67 @@ func (h *MigrationHandler) Update(c *gin.Context) {
 		return
 	}
 	var req struct {
-		AssignedApprover string `json:"assigned_approver"`
-		Description      string `json:"description"`
-		Name             string `json:"name"`
+		AssignedApprover      string `json:"assigned_approver"`
+		AssignedApproverLogin string `json:"assigned_approver_login"`
+		Description           string `json:"description"`
+		Name                  string `json:"name"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "参数无效"})
 		return
 	}
-	if req.AssignedApprover != "" {
-		t.AssignedApprover = req.AssignedApprover
+	newApprover := strings.TrimSpace(req.AssignedApprover)
+	if newApprover == "" {
+		newApprover = strings.TrimSpace(req.AssignedApproverLogin)
+	}
+	user := middleware.Username(c)
+	approval := strings.ToLower(strings.TrimSpace(t.ApprovalStatus))
+	if newApprover != "" {
+		switch approval {
+		case "pending":
+			if !strings.EqualFold(t.CreatedBy, user) {
+				c.JSON(http.StatusForbidden, gin.H{"message": "待审批时仅创建人可转移审核人"})
+				return
+			}
+			cur := strings.TrimSpace(t.AssignedApprover)
+			if cur == "" {
+				cur = strings.TrimSpace(t.AssignedApproverLogin)
+			}
+			if strings.EqualFold(cur, newApprover) {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "新审核人与当前审核人相同"})
+				return
+			}
+			if strings.EqualFold(strings.TrimSpace(t.CreatedBy), newApprover) {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "不能将审核人转给提交人本人"})
+				return
+			}
+			th := &TicketHandler{Store: h.Store}
+			if !th.migrationApproverAllowed(newApprover) {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "审核人不在迁移审批人列表"})
+				return
+			}
+			if approvers := th.resolveApprovers(t.SourceID, t.SourceDB); len(approvers) > 0 && !usernameInList(newApprover, approvers) {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "审核人不在实例/库审批人名单中"})
+				return
+			}
+			t.AssignedApprover = newApprover
+			t.AssignedApproverLogin = newApprover
+			if t.IssueID != "" {
+				if issue, _ := h.Store.GetIssue(t.IssueID); issue != nil && issue.Status == store.StatusPending {
+					hist := store.AppendAssigneeTransferHistory(
+						issue.AssigneeTransferHistory,
+						store.FormatAssigneeTransferLine(issue.AssignedTo, newApprover, user),
+					)
+					_ = h.Store.UpdateIssueAssignee(issue.ID, newApprover, hist)
+				}
+			}
+		case "", "draft", "none":
+			t.AssignedApprover = newApprover
+			t.AssignedApproverLogin = newApprover
+		default:
+			c.JSON(http.StatusBadRequest, gin.H{"message": "当前审批状态不可修改审核人"})
+			return
+		}
 	}
 	if req.Description != "" {
 		t.Description = req.Description
@@ -829,33 +891,106 @@ func (h *MigrationHandler) Update(c *gin.Context) {
 }
 
 func (h *MigrationHandler) GetSettings(c *gin.Context) {
-	ids, _ := h.Store.GetGlobalArg("migration_approver_user_ids")
+	s := h.Store.GetMigrationSettings()
+	env := strings.TrimSpace(c.Query("env"))
+	if env == "" {
+		env = strings.TrimSpace(c.Query("environment"))
+	}
+	oss := s.OSS
+	ossConfigured := s.OSS.Configured
+	if env != "" {
+		ossConfigured = h.Store.ResolveMigrationOSSConfigured(env)
+		if row, err := h.Store.GetOSSSettingByEnv(env); err == nil && row != nil {
+			oss = store.MigrationOSSSettings{
+				Endpoint:      row.Endpoint,
+				Bucket:        row.Bucket,
+				Prefix:        row.Prefix,
+				AccessKey:     row.AccessKey,
+				SecretKey:     row.SecretKey,
+				RetentionDays: row.RetentionDays,
+				ChunkSizeMB:   row.ChunkSizeMB,
+				Configured:    row.Configured,
+			}
+		} else if !ossConfigured {
+			oss = store.MigrationOSSSettings{Configured: false}
+		} else {
+			// 回退 legacy：脱敏
+			if oss.AccessKey != "" {
+				oss.AccessKey = "********"
+			}
+			if oss.SecretKey != "" {
+				oss.SecretKey = "********"
+			}
+			oss.Configured = true
+		}
+	} else {
+		if oss.AccessKey != "" {
+			oss.AccessKey = "********"
+		}
+		if oss.SecretKey != "" {
+			oss.SecretKey = "********"
+		}
+		// 无 env 时：任一环境或 legacy 已配置即视为可用摘要
+		if envs, err := h.Store.ListConfiguredOSSEnvs(); err == nil && len(envs) > 0 {
+			ossConfigured = true
+		}
+	}
+	ossEnvs, _ := h.Store.ListConfiguredOSSEnvs()
+	if ossEnvs == nil {
+		ossEnvs = []string{}
+	}
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{
-		"approval_enabled":  h.Store.BoolArg("migration_approval_enabled", false),
-		"approver_user_ids": ids,
+		"approval_enabled":  s.ApprovalEnabled,
+		"approver_user_ids": s.ApproverUserIDs,
+		"oss":               oss,
+		"oss_configured":    ossConfigured,
+		"oss_envs":          ossEnvs,
+		"performance":       s.Performance,
 	}})
 }
 
 func (h *MigrationHandler) PutSettings(c *gin.Context) {
 	var req struct {
-		ApprovalEnabled bool   `json:"approval_enabled"`
-		ApproverUserIDs string `json:"approver_user_ids"`
+		ApprovalEnabled *bool                        `json:"approval_enabled"`
+		ApproverUserIDs *string                      `json:"approver_user_ids"`
+		OSS             *store.MigrationOSSSettings  `json:"oss"`
+		Performance     *store.MigrationPerfSettings `json:"performance"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "参数无效"})
 		return
 	}
-	val := "false"
-	if req.ApprovalEnabled {
-		val = "true"
-	}
-	if err := h.Store.SetGlobalArg("migration_approval_enabled", val, "数据迁移是否走审批"); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+	if req.ApprovalEnabled == nil && req.ApproverUserIDs == nil && req.OSS == nil && req.Performance == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "参数无效"})
 		return
 	}
-	if err := h.Store.SetGlobalArg("migration_approver_user_ids", strings.TrimSpace(req.ApproverUserIDs), "数据迁移审核人登录名，逗号分隔"); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
-		return
+	if req.ApprovalEnabled != nil {
+		val := "false"
+		if *req.ApprovalEnabled {
+			val = "true"
+		}
+		if err := h.Store.SetGlobalArg(store.ArgMigrationApprovalEnabled, val, "数据迁移是否走审批"); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+			return
+		}
+	}
+	if req.ApproverUserIDs != nil {
+		if err := h.Store.SetGlobalArg(store.ArgMigrationApproverUserIDs, strings.TrimSpace(*req.ApproverUserIDs), "数据迁移审核人登录名，逗号分隔"); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+			return
+		}
+	}
+	if req.OSS != nil {
+		if err := h.Store.SaveMigrationOSS(*req.OSS); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+			return
+		}
+	}
+	if req.Performance != nil {
+		if err := h.Store.SaveMigrationPerf(*req.Performance); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+			return
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }

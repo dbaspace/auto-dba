@@ -60,7 +60,7 @@
   font-size: 14px;
   line-height: 1.5714285714285714;
   list-style: none;
-  background: #ffffff;
+  background: var(--app-content-bg, #fff);
   border-radius: 8px;
   border: 1px solid #f0f0f0;
   overflow: hidden;

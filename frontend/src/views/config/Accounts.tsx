@@ -8,11 +8,11 @@ import {
   Modal,
   Select,
   Space,
-  Table,
   Tabs,
   Tag,
   message,
 } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
 import api from '../../api/request'
 import Auth from '../../components/Auth'
 import { Perm } from '../../hooks/usePermission'
@@ -336,7 +336,7 @@ export default function Accounts() {
         </div>
       </div>
       <div className="ops-table">
-        <Table
+        <ResponsiveTable
           rowKey={(r) => r.id || `${r.username}-${r.db_name}`}
           dataSource={filteredRows}
           loading={loading}

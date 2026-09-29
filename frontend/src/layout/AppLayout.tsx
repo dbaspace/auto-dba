@@ -1,91 +1,69 @@
-import React, { useEffect, useMemo, useState } from 'react'
-import { Layout, Menu } from 'antd'
-import type { MenuProps } from 'antd'
-import { Outlet, useLocation, useNavigate } from 'react-router-dom'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Layout, Tooltip } from 'antd'
+import { useLocation, useNavigate } from 'react-router-dom'
+import { CloseOutlined, MenuFoldOutlined, MenuUnfoldOutlined } from '@ant-design/icons'
 import api from '../api/request'
 import { resolveMenuIcon } from '../components/MenuIcon'
+import { BrandWordmark } from '../components/BrandMark'
 import { useAppDispatch, useAppSelector } from '../store'
 import { setUser, MenuNode } from '../store/authSlice'
-import { firstAllowed } from '../constants/routes'
+import {
+  activateTab,
+  closeTab,
+  HOME_PATH,
+  makeHomeTab,
+  openTab,
+  pruneUnauthorizedTabs,
+  reorderTabs,
+  tabKey,
+  titleForPath,
+} from '../store/tabsSlice'
+import { collectPaths, pathAllowed } from '../constants/routes'
 import UserAccountMenu from './UserAccountMenu'
 import UserWatermark from '../components/UserWatermark'
 import useIdleLogout from '../hooks/useIdleLogout'
+import NavFlyout from './NavFlyout'
+import AppearancePopover from './AppearancePopover'
+import { TabPagePanel } from '../router/appPages'
+import { readSiderCollapsed, writeSiderCollapsed } from '../theme/appearance'
+import './NavFlyout.css'
 
 const { Sider, Header, Content } = Layout
 
-function buildMenuItems(nodes: MenuNode[]): MenuProps['items'] {
-  return (nodes || [])
-    .map((n) => {
-      if (n.children?.length) {
-        return {
-          key: n.id || n.title,
-          icon: resolveMenuIcon(n.icon),
-          label: n.title,
-          children: buildMenuItems(n.children),
-        }
-      }
-      if (n.path) {
-        return {
-          key: n.path,
-          icon: resolveMenuIcon(n.icon),
-          label: n.title,
-        }
-      }
-      return null
-    })
-    .filter(Boolean) as MenuProps['items']
+const SIDER_WIDTH = 220
+const SIDER_COLLAPSED_WIDTH = 64
+/** 离开侧栏/弹层后关闭延迟，避免移向弹层时闪关 */
+const FLYOUT_CLOSE_MS = 400
+/** 悬停切换/打开延迟，掠过邻项不误切 */
+const FLYOUT_SWITCH_MS = 250
+
+function topLevelMenus(nodes: MenuNode[] | undefined): MenuNode[] {
+  return (nodes || []).filter((n) => n.title)
 }
 
-/** menus 指纹：变化时 remount Menu，避免 defaultOpenKeys 陈旧 */
-function menusFingerprint(nodes: MenuNode[] | undefined): string {
-  const parts: string[] = []
-  const walk = (list: MenuNode[] | undefined) => {
-    for (const n of list || []) {
-      parts.push(`${n.id || ''}|${n.path || ''}|${n.title || ''}`)
-      if (n.children?.length) walk(n.children)
-    }
-  }
-  walk(nodes)
-  return String(parts.length) + ':' + parts.join(';')
-}
-
-function findMenuTrail(nodes: MenuNode[] | undefined, path: string, trail: MenuNode[] = []): MenuNode[] {
-  if (!path) return []
-  let best: MenuNode[] = []
+function findTopForPath(nodes: MenuNode[] | undefined, path: string): MenuNode | null {
   for (const n of nodes || []) {
-    const next = [...trail, n]
-    if (n.path && (n.path === path || path.startsWith(n.path + '/'))) {
-      const deeper = findMenuTrail(n.children, path, next)
-      const hit = deeper.length ? deeper : next
-      if (hit.length > best.length) best = hit
-      continue
-    }
+    if (n.path && (n.path === path || path.startsWith(n.path + '/'))) return n
     if (n.children?.length) {
-      const hit = findMenuTrail(n.children, path, next)
-      if (hit.length > best.length) best = hit
+      const hit = findInTree(n.children, path)
+      if (hit) return n
     }
   }
-  return best
+  return null
 }
 
-function firstPath(nodes: MenuNode[] | undefined): string {
+function findInTree(nodes: MenuNode[] | undefined, path: string): boolean {
   for (const n of nodes || []) {
-    if (n.path) return n.path
-    const c = firstPath(n.children)
-    if (c) return c
+    if (n.path && (n.path === path || path.startsWith(n.path + '/'))) return true
+    if (n.children?.length && findInTree(n.children, path)) return true
   }
-  return '/403'
+  return false
 }
 
-function collectOpenKeys(nodes: MenuNode[] | undefined, path: string, acc: string[] = []): string[] {
-  for (const n of nodes || []) {
-    if (n.children?.length) {
-      const hit = findMenuTrail([n], path)
-      if (hit.length) acc.push(n.id || n.title)
-      collectOpenKeys(n.children, path, acc)
-    }
-  }
-  return acc
+function displayTitle(n: MenuNode): string {
+  if (n.path === HOME_PATH || n.id === 'm-dashboard') return '工作台'
+  if (n.title === '仪表盘' && (!n.children || !n.children.length)) return '工作台'
+  return n.title
 }
 
 export default function AppLayout() {
@@ -94,24 +72,130 @@ export default function AppLayout() {
   const dispatch = useAppDispatch()
   const user = useAppSelector((s) => s.auth.user)
   const menus = useAppSelector((s) => s.auth.menus)
+  const tabs = useAppSelector((s) => s.tabs.tabs)
+  const activeKey = useAppSelector((s) => s.tabs.activeKey)
+  const activeTab = useMemo(() => tabs.find((t) => t.key === activeKey), [tabs, activeKey])
+  const hideUserWatermark = (activeTab?.path || location.pathname) === '/ops/dolphin'
 
   useIdleLogout(user?.login_idle_timeout_min as number | undefined)
 
   const path = location.pathname
-  const activeMenu = useMemo(() => {
-    if (path.startsWith('/ops/flashback/history/')) return '/ops/flashback/history'
-    return path
-  }, [path])
+  const search = location.search || ''
+  const tops = useMemo(() => topLevelMenus(menus), [menus])
+  const activeTop = useMemo(() => findTopForPath(menus, path), [menus, path])
 
-  const menuItems = useMemo(() => buildMenuItems(menus), [menus])
-  const menuKey = useMemo(() => menusFingerprint(menus), [menus])
-  const routeOpenKeys = useMemo(() => collectOpenKeys(menus, activeMenu), [menus, activeMenu])
-  const [openKeys, setOpenKeys] = useState<string[]>([])
+  const [flyoutId, setFlyoutId] = useState<string | null>(null)
+  const [collapsed, setCollapsed] = useState(() => readSiderCollapsed())
+  const flyoutCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const flyoutOpenTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const flyoutIdRef = useRef<string | null>(null)
+  flyoutIdRef.current = flyoutId
+  const flyoutGroup = useMemo(
+    () => tops.find((t) => (t.id || t.title) === flyoutId) || null,
+    [tops, flyoutId],
+  )
 
-  // menus / 当前路由变化时，合并路径所需的展开项（保留用户手动展开）
+  const siderWidth = collapsed ? SIDER_COLLAPSED_WIDTH : SIDER_WIDTH
+  const flyoutAnchor = siderWidth + 8
+
+  const cancelFlyoutOpen = useCallback(() => {
+    if (flyoutOpenTimer.current) {
+      clearTimeout(flyoutOpenTimer.current)
+      flyoutOpenTimer.current = null
+    }
+  }, [])
+
+  const cancelFlyoutClose = useCallback(() => {
+    if (flyoutCloseTimer.current) {
+      clearTimeout(flyoutCloseTimer.current)
+      flyoutCloseTimer.current = null
+    }
+  }, [])
+
+  const scheduleFlyoutClose = useCallback(() => {
+    cancelFlyoutOpen()
+    cancelFlyoutClose()
+    flyoutCloseTimer.current = setTimeout(() => {
+      flyoutCloseTimer.current = null
+      setFlyoutId(null)
+    }, FLYOUT_CLOSE_MS)
+  }, [cancelFlyoutClose, cancelFlyoutOpen])
+
+  const scheduleFlyoutOpen = useCallback(
+    (id: string) => {
+      cancelFlyoutClose()
+      if (flyoutIdRef.current === id) {
+        cancelFlyoutOpen()
+        return
+      }
+      cancelFlyoutOpen()
+      flyoutOpenTimer.current = setTimeout(() => {
+        flyoutOpenTimer.current = null
+        setFlyoutId(id)
+      }, FLYOUT_SWITCH_MS)
+    },
+    [cancelFlyoutClose, cancelFlyoutOpen],
+  )
+
+  const closeFlyout = useCallback(() => {
+    cancelFlyoutOpen()
+    cancelFlyoutClose()
+    setFlyoutId(null)
+  }, [cancelFlyoutClose, cancelFlyoutOpen])
+
+  useEffect(
+    () => () => {
+      cancelFlyoutOpen()
+      cancelFlyoutClose()
+    },
+    [cancelFlyoutClose, cancelFlyoutOpen],
+  )
+
+  const openPage = useCallback(
+    (toPath: string, title?: string, opts?: { replace?: boolean; search?: string }) => {
+      if (!toPath || !toPath.startsWith('/')) return
+      const allowed = collectPaths(menus)
+      if (allowed.length && !pathAllowed(toPath, allowed)) {
+        navigate('/403')
+        return
+      }
+      const nextSearch = opts?.search || ''
+      const normalizedSearch =
+        nextSearch && !nextSearch.startsWith('?') && nextSearch !== '' ? `?${nextSearch}` : nextSearch
+      dispatch(openTab({ path: toPath, search: normalizedSearch, title, menus }))
+      const to = toPath + (normalizedSearch || '')
+      if (toPath !== path || (normalizedSearch || '') !== (search || '')) {
+        navigate(to, { replace: opts?.replace })
+      }
+      closeFlyout()
+    },
+    [closeFlyout, dispatch, menus, navigate, path, search],
+  )
+
   useEffect(() => {
-    setOpenKeys((prev) => Array.from(new Set([...prev, ...routeOpenKeys])))
-  }, [routeOpenKeys, menuKey])
+    dispatch(pruneUnauthorizedTabs({ menus }))
+  }, [menus, dispatch])
+
+  useEffect(() => {
+    if (!path || path === '/403' || path === '/login') return
+    const allowed = collectPaths(menus)
+    if (allowed.length && !pathAllowed(path, allowed)) return
+    const key = tabKey(path, search)
+    const exists = tabs.some((t) => t.key === key)
+    if (exists) {
+      if (activeKey !== key) dispatch(activateTab(key))
+      return
+    }
+    dispatch(
+      openTab({
+        path,
+        search,
+        title: titleForPath(path, menus),
+        menus,
+      }),
+    )
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [path, search, menus, dispatch])
 
   useEffect(() => {
     let mounted = true
@@ -122,6 +206,7 @@ export default function AppLayout() {
         if (!mounted) return
         localStorage.setItem('user', JSON.stringify(u))
         dispatch(setUser(u))
+        dispatch(pruneUnauthorizedTabs({ menus: u.menus || [] }))
       } catch {
         /* ignore */
       }
@@ -135,83 +220,268 @@ export default function AppLayout() {
     }
   }, [dispatch])
 
-  function goPath(index: string) {
-    if (!index || !index.startsWith('/')) return
-    if (index === path) return
-    navigate(index)
+  function toggleCollapsed() {
+    setCollapsed((c) => {
+      const next = !c
+      writeSiderCollapsed(next)
+      return next
+    })
+    closeFlyout()
+  }
+
+  function onTopEnter(n: MenuNode) {
+    if (n.children?.length) {
+      scheduleFlyoutOpen(n.id || n.title)
+    }
+  }
+
+  function onTopClick(n: MenuNode) {
+    if (n.children?.length) {
+      cancelFlyoutOpen()
+      cancelFlyoutClose()
+      setFlyoutId((cur) => ((n.id || n.title) === cur ? cur : n.id || n.title))
+      return
+    }
+    if (n.path) openPage(n.path, displayTitle(n))
+  }
+
+  function onTabClick(key: string) {
+    const tab = tabs.find((t) => t.key === key)
+    if (!tab) return
+    dispatch(activateTab(key))
+    const to = tab.path + (tab.search || '')
+    if (location.pathname + (location.search || '') !== to) {
+      navigate(to)
+    }
+  }
+
+  function onTabClose(e: React.MouseEvent, key: string) {
+    e.stopPropagation()
+    const idx = tabs.findIndex((t) => t.key === key)
+    const tab = tabs[idx]
+    if (!tab || !tab.closable) return
+    const wasActive = activeKey === key
+    let nextTo = ''
+    if (wasActive) {
+      const next = tabs[idx + 1] || tabs[idx - 1] || tabs.find((t) => !t.closable) || makeHomeTab(menus)
+      nextTo = next.path + (next.search || '')
+    }
+    dispatch(closeTab(key))
+    if (wasActive && nextTo) navigate(nextTo)
+  }
+
+  const dragTabKeyRef = useRef<string | null>(null)
+  const [dragOverKey, setDragOverKey] = useState<string | null>(null)
+
+  function onTabDragStart(e: React.DragEvent, key: string, closable: boolean) {
+    if (!closable) {
+      e.preventDefault()
+      return
+    }
+    dragTabKeyRef.current = key
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/plain', key)
+    try {
+      e.dataTransfer.setData('application/x-app-tab', key)
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function onTabDragOver(e: React.DragEvent, key: string, closable: boolean) {
+    if (!dragTabKeyRef.current || !closable) return
+    if (dragTabKeyRef.current === key) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    if (dragOverKey !== key) setDragOverKey(key)
+  }
+
+  function onTabDrop(e: React.DragEvent, toKey: string, closable: boolean) {
+    e.preventDefault()
+    e.stopPropagation()
+    const fromKey = dragTabKeyRef.current || e.dataTransfer.getData('text/plain')
+    setDragOverKey(null)
+    dragTabKeyRef.current = null
+    if (!fromKey || !closable || fromKey === toKey) return
+    dispatch(reorderTabs({ fromKey, toKey }))
+  }
+
+  function onTabDragEnd() {
+    dragTabKeyRef.current = null
+    setDragOverKey(null)
   }
 
   function goHome() {
-    navigate(firstPath(menus))
+    const home = makeHomeTab(menus)
+    openPage(home.path, home.title)
   }
+
+  const collapseBtn = (
+    <button type="button" className="app-sider-footer-btn" onClick={toggleCollapsed} aria-label={collapsed ? '展开菜单' : '收起菜单'}>
+      {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+      <span className="app-sider-label">收起菜单</span>
+    </button>
+  )
 
   return (
     <Layout style={{ height: '100%', width: '100%', overflow: 'hidden', position: 'relative' }}>
-      <UserWatermark />
+      {!hideUserWatermark && <UserWatermark />}
       <Sider
-        width={220}
-        className="app-sider"
+        width={SIDER_WIDTH}
+        collapsedWidth={SIDER_COLLAPSED_WIDTH}
+        collapsed={collapsed}
+        trigger={null}
+        collapsible
+        className={`app-sider${collapsed ? ' is-collapsed' : ''}`}
         style={{
-          background: '#fff',
+          background: 'var(--app-sider-bg)',
           overflow: 'hidden',
-          borderRight: '1px solid #f0f0f0',
+          borderRight: '1px solid var(--app-border)',
           height: '100%',
         }}
       >
-        <div
-          onClick={goHome}
-          style={{
-            height: 56,
-            color: '#1f2937',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontWeight: 700,
-            letterSpacing: '0.5px',
-            cursor: 'pointer',
-            flexShrink: 0,
-            borderBottom: '1px solid #f0f0f0',
-          }}
-        >
-          auto-dba
+        <div className="app-sider-brand" onClick={goHome} title="KeePlus">
+          <BrandWordmark collapsed={collapsed} />
         </div>
-        <div className="app-sider-menu">
-          <Menu
-            key={menuKey}
-            theme="light"
-            mode="inline"
-            selectedKeys={[activeMenu]}
-            openKeys={openKeys}
-            onOpenChange={(keys) => setOpenKeys(keys as string[])}
-            items={menuItems}
-            style={{ background: '#fff', borderRight: 'none' }}
-            onClick={({ key }) => goPath(String(key))}
-          />
+        <div
+          className="app-sider-menu"
+          style={{ padding: '8px 0' }}
+          onMouseLeave={scheduleFlyoutClose}
+        >
+          {tops.map((n) => {
+            const id = n.id || n.title
+            const title = displayTitle(n)
+            const selected =
+              !!activeTop &&
+              (activeTop.id || activeTop.title) === id &&
+              (!flyoutId || flyoutId === id)
+            const flyoutOpen = flyoutId === id
+            const btn = (
+              <button
+                type="button"
+                className={`app-sider-top-item${selected ? ' active' : ''}${flyoutOpen ? ' flyout-open' : ''}`}
+                onMouseEnter={() => onTopEnter(n)}
+                onClick={() => onTopClick(n)}
+              >
+                <span style={{ display: 'inline-flex', width: 18 }}>{resolveMenuIcon(n.icon)}</span>
+                <span className="app-sider-label">{title}</span>
+              </button>
+            )
+            return (
+              <div key={id}>
+                {collapsed ? (
+                  <Tooltip title={title} placement="right">
+                    {btn}
+                  </Tooltip>
+                ) : (
+                  btn
+                )}
+              </div>
+            )
+          })}
+        </div>
+        <div className="app-sider-footer">
+          <AppearancePopover collapsed={collapsed} onOpenChange={(open) => open && closeFlyout()} />
+          {collapsed ? (
+            <Tooltip title="展开菜单" placement="right">
+              {collapseBtn}
+            </Tooltip>
+          ) : (
+            collapseBtn
+          )}
         </div>
       </Sider>
-      <Layout style={{ minWidth: 0, minHeight: 0 }}>
+
+      <NavFlyout
+        group={flyoutGroup}
+        open={!!flyoutGroup}
+        activePath={path}
+        activeSearch={search}
+        anchorLeft={flyoutAnchor}
+        onClose={closeFlyout}
+        onHoverChange={(inside) => {
+          if (inside) {
+            cancelFlyoutOpen()
+            cancelFlyoutClose()
+          } else {
+            scheduleFlyoutClose()
+          }
+        }}
+        onSelect={(p, title, nextSearch) => openPage(p, title, { search: nextSearch })}
+      />
+
+      <Layout style={{ minWidth: 0, minHeight: 0, background: 'var(--app-page-bg)' }}>
         <Header
           style={{
-            height: 56,
-            lineHeight: '56px',
-            background: '#fff',
+            height: 'var(--app-header-height)',
+            lineHeight: 'var(--app-header-height)',
+            background: 'var(--app-header-bg)',
             display: 'flex',
             alignItems: 'center',
             gap: 16,
             padding: '0 16px',
             flexShrink: 0,
-            borderBottom: '1px solid #f0f0f0',
+            borderBottom: '1px solid var(--app-border)',
           }}
         >
           <div style={{ flex: 1 }} />
           <UserAccountMenu user={user} />
         </Header>
-        <Content style={{ flex: '1 1 0', minHeight: 0, minWidth: 0, overflow: 'auto', padding: 8, background: '#fff' }}>
-          <Outlet />
+
+        <div className="app-tab-bar">
+          {tabs.map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              className={`app-tab${t.key === activeKey ? ' active' : ''}${dragOverKey === t.key ? ' drag-over' : ''}${t.closable ? ' is-draggable' : ' is-pinned'}`}
+              draggable={t.closable}
+              onDragStart={(e) => onTabDragStart(e, t.key, t.closable)}
+              onDragOver={(e) => onTabDragOver(e, t.key, t.closable)}
+              onDrop={(e) => onTabDrop(e, t.key, t.closable)}
+              onDragEnd={onTabDragEnd}
+              onClick={() => onTabClick(t.key)}
+              title={t.closable ? `${t.title}（可拖动排序）` : t.title}
+            >
+              <span className="app-tab-title">{t.title}</span>
+              {t.closable ? (
+                <span
+                  className="app-tab-close"
+                  role="button"
+                  tabIndex={0}
+                  aria-label="关闭"
+                  draggable={false}
+                  onClick={(e) => onTabClose(e, t.key)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') onTabClose(e as unknown as React.MouseEvent, t.key)
+                  }}
+                >
+                  <CloseOutlined style={{ fontSize: 10 }} />
+                </span>
+              ) : null}
+            </button>
+          ))}
+        </div>
+
+        <Content
+          style={{
+            flex: '1 1 0',
+            minHeight: 0,
+            minWidth: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            padding: 0,
+            background: 'var(--app-content-bg)',
+          }}
+        >
+          <div className="app-tab-panels">
+            {tabs.map((t) => (
+              <div key={t.key} className={`app-tab-panel${t.key === activeKey ? ' active' : ''}`}>
+                <TabPagePanel pathname={t.path} search={t.search} />
+              </div>
+            ))}
+          </div>
         </Content>
       </Layout>
     </Layout>
   )
 }
-
-export { firstAllowed }

@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>auto-dba 模块关系图</title>
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        primaryColor: '#e8f0ea',
+        primaryTextColor: '#1a2e22',
+        primaryBorderColor: '#3d6b4f',
+        secondaryColor: '#f3efe6',
+        tertiaryColor: '#f7f5f0',
+        lineColor: '#5a6b5e',
+        fontFamily: 'IBM Plex Sans, Source Han Sans SC, Noto Sans SC, sans-serif',
+      },
+      flowchart: { curve: 'basis', padding: 16, htmlLabels: true },
+    });
+  </script>
+  <style>
+    :root {
+      --bg: #f4f1eb;
+      --ink: #1c241e;
+      --muted: #5c6a60;
+      --card: #fffdf8;
+      --line: #d4cdc8;
+      --accent: #2f6b4a;
+      --accent-soft: #e6f0ea;
+      --warm: #c4783a;
+      --blue: #3a5f7a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      font-family: "IBM Plex Sans", "Source Han Sans SC", "Noto Sans SC", system-ui, sans-serif;
+      background:
+        radial-gradient(ellipse 80% 50% at 10% -10%, #dfece4 0%, transparent 55%),
+        radial-gradient(ellipse 60% 40% at 100% 0%, #efe6d6 0%, transparent 50%),
+        var(--bg);
+      line-height: 1.5;
+    }
+    header {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 2.5rem 1.5rem 1rem;
+    }
+    header h1 {
+      margin: 0 0 0.35rem;
+      font-size: clamp(1.75rem, 3vw, 2.25rem);
+      font-weight: 650;
+      letter-spacing: -0.02em;
+    }
+    header p {
+      margin: 0;
+      max-width: 52rem;
+      color: var(--muted);
+      font-size: 1.02rem;
+    }
+    nav.toc {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 0.75rem 1.5rem 1.25rem;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem 0.75rem;
+    }
+    nav.toc a {
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 0.9rem;
+      border-bottom: 1px solid transparent;
+    }
+    nav.toc a:hover { border-bottom-color: var(--accent); }
+    main {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 0 1.5rem 3.5rem;
+      display: grid;
+      gap: 1.75rem;
+    }
+    section.panel {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 1.25rem 1.35rem 1.5rem;
+      box-shadow: 0 1px 0 rgba(28, 36, 30, 0.04);
+    }
+    section.panel h2 {
+      margin: 0 0 0.35rem;
+      font-size: 1.2rem;
+      font-weight: 650;
+    }
+    section.panel .lead {
+      margin: 0 0 1rem;
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+    .mermaid {
+      background: #faf8f4;
+      border-radius: 8px;
+      padding: 0.75rem;
+      overflow-x: auto;
+    }
+    .grid-modules {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+      gap: 0.85rem;
+    }
+    .mod {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 0.85rem 0.95rem;
+      background: #fff;
+    }
+    .mod h3 {
+      margin: 0 0 0.35rem;
+      font-size: 0.98rem;
+      color: var(--accent);
+    }
+    .mod ul {
+      margin: 0;
+      padding-left: 1.1rem;
+      font-size: 0.82rem;
+      color: var(--muted);
+    }
+    .mod code {
+      font-size: 0.75rem;
+      color: var(--blue);
+      background: #eef3f6;
+      padding: 0.05rem 0.3rem;
+      border-radius: 4px;
+    }
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem 1.25rem;
+      font-size: 0.82rem;
+      color: var(--muted);
+      margin-bottom: 0.75rem;
+    }
+    .legend span::before {
+      content: "";
+      display: inline-block;
+      width: 0.7rem;
+      height: 0.7rem;
+      border-radius: 2px;
+      margin-right: 0.35rem;
+      vertical-align: -0.05rem;
+    }
+    .lg-core::before { background: #3d6b4f; }
+    .lg-biz::before { background: #3a5f7a; }
+    .lg-ext::before { background: #c4783a; }
+    .lg-data::before { background: #6b5a3d; }
+    footer {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 0 1.5rem 2.5rem;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+    @media (max-width: 640px) {
+      header { padding-top: 1.5rem; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>auto-dba 模块关系图</h1>
+    <p>
+      面向 DBA / 开发的运维自助工作台：业务对象（实例、库、账号、审批人）登记在本系统内，
+      工单、查询、同步、迁移、闪回、归档、备份与诊断都围绕这些登记对象执行。
+      本页梳理前端、控制面、领域模块与外部系统之间的依赖关系。
+    </p>
+  </header>
+
+  <nav class="toc">
+    <a href="#arch">总体架构</a>
+    <a href="#domain">领域模块</a>
+    <a href="#ticket">工单与执行</a>
+    <a href="#data-plane">数据面</a>
+    <a href="#catalog">模块目录</a>
+  </nav>
+
+  <main>
+    <section class="panel" id="arch">
+      <h2>总体架构</h2>
+      <p class="lead">前后端分离：React 页面 → Gin API → 领域引擎 → 元数据库 / 业务库 / 外部组件。</p>
+      <div class="legend">
+        <span class="lg-core">控制面</span>
+        <span class="lg-biz">业务域</span>
+        <span class="lg-ext">外部系统</span>
+        <span class="lg-data">数据存储</span>
+      </div>
+      <pre class="mermaid">
+flowchart TB
+  subgraph clients [访问端]
+    Browser[浏览器]
+  end
+
+  subgraph fe [前端_frontend]
+    Vite[React_AntD_Vite]
+  end
+
+  subgraph api [控制面_cmd_auto-dba]
+    Gin[Gin_Router_Handler]
+    MW[鉴权_RBAC_空闲退出]
+    Store[store_元数据读写]
+  end
+
+  subgraph domains [领域引擎]
+    Ticket[工单_ticketexec_sqlcheck]
+    Query[查询_Kafka_Redis]
+    CDC[CDC_Orchestrator]
+    Mig[dbmig_迁移_结构对比]
+    Backup[backup_Agent下发]
+    Flash[flashback]
+    Archive[archive]
+    HA[ha_控制器]
+    Diag[sqlinsight_awr_dbmonitor]
+    Term[terminal_sshx]
+    CMDB[cmdb]
+  end
+
+  subgraph meta [元数据]
+    PG[(PostgreSQL_DSN)]
+  end
+
+  subgraph targets [已登记目标]
+    DBInst[PG_MySQL_等实例]
+    Host[host_主机]
+  end
+
+  subgraph external [外部组件]
+    Agent[Backup_Agent]
+    MHA[MHA_Agent_等HA]
+    Debezium[Debezium_Kafka_SR]
+    SMTP[SMTP邮件]
+    LDAP[LDAP_SSO]
+  end
+
+  Browser --> Vite
+  Vite -->|"/api 代理"| Gin
+  Gin --> MW --> Store
+  Gin --> Ticket & Query & CDC & Mig & Backup & Flash & Archive & HA & Diag & Term & CMDB
+  Store --> PG
+  Ticket --> DBInst
+  Query --> DBInst
+  CDC --> Debezium
+  Mig --> DBInst
+  Backup --> Agent
+  Agent --> DBInst
+  Flash --> DBInst
+  Archive --> DBInst
+  HA --> MHA
+  Term --> Host
+  Backup -.->|SSH下发| Host
+  MW --> LDAP
+  Ticket -.-> SMTP
+  Backup -.-> SMTP
+      </pre>
+    </section>
+
+    <section class="panel" id="domain">
+      <h2>侧栏能力 → 代码落点</h2>
+      <p class="lead">按产品目录看模块边界；箭头表示「依赖 / 调用」。</p>
+      <pre class="mermaid">
+flowchart LR
+  subgraph config [配置与治理]
+    Inst[实例_已登记库]
+    RBAC[用户_角色_菜单]
+    Auth[认证配置_LDAP_SSO_邮件]
+    Args[全局参数_审核规则]
+  end
+
+  subgraph work [日常作业]
+    Dash[仪表盘]
+    Tickets[工单DDL_DML_DQL_等]
+    Qry[数据查询]
+  end
+
+  subgraph sync [同步与迁移]
+    CdcUI[CDC任务]
+    MigUI[数据迁移]
+    Cmp[表结构对比]
+  end
+
+  subgraph secure [数据安全]
+    Bak[备份策略_Agent]
+    Fb[闪回]
+    Arc[归档]
+  end
+
+  subgraph ops [平台运维_诊断]
+    SI[SQL洞察_会话]
+    Mon[库监控]
+    TermUI[主机终端]
+    HaUI[HA维护]
+  end
+
+  Inst --> Tickets & Qry & CdcUI & MigUI & Bak & Fb & Arc & SI & Mon
+  RBAC --> Dash & Tickets & Bak
+  Auth --> RBAC
+  Args --> Tickets
+  Bak -->|Agent执行| Hosts[host实例]
+  TermUI --> Hosts
+  HaUI -->|控制器HTTP| ExtHA[外部HA组件]
+      </pre>
+    </section>
+
+    <section class="panel" id="ticket">
+      <h2>工单闭环</h2>
+      <p class="lead">提交 → 审核规则 → 审批 → 异步执行 → 通知；结果收敛后落库。</p>
+      <pre class="mermaid">
+sequenceDiagram
+  participant U as 用户
+  participant FE as 前端
+  participant API as Handler
+  participant Check as sqlcheck
+  participant Exec as ticketexec
+  participant DB as 目标实例
+  participant Mail as SMTP
+
+  U->>FE: 提交工单
+  FE->>API: POST ticket
+  API->>Check: SQL审核
+  Check-->>API: 通过或驳回
+  API-->>FE: 待审批
+  U->>API: 审批通过
+  API->>Exec: 异步执行
+  Exec->>DB: 执行DDL_DML等
+  Exec-->>API: 收敛结果落库
+  API->>Mail: 失败或待执行超时通知
+      </pre>
+    </section>
+
+    <section class="panel" id="data-plane">
+      <h2>备份 / CDC / HA 数据面关系</h2>
+      <p class="lead">控制面编排，执行面在 Agent 或外部组件；与闪回、归档互补而不互相替代。</p>
+      <pre class="mermaid">
+flowchart TB
+  Platform[auto-dba控制面]
+
+  subgraph backupFlow [备份]
+    Policy[策略_调度]
+    Stor[local_S3存储]
+    BA[Backup_Agent]
+    Policy --> BA
+    BA -->|dump_basebackup_xtrabackup| BizDB1[业务库]
+    BA --> Stor
+    Platform --> Policy
+  end
+
+  subgraph cdcFlow [CDC]
+    Orch[cdc_Orchestrator]
+    Deb[Debezium_Connect]
+    Kfk[Kafka]
+    SR[StarRocks]
+    Orch --> Deb --> Kfk --> SR
+    Platform --> Orch
+  end
+
+  subgraph haFlow [HA]
+    HaCtl[HA集群登记]
+    Ctrl[Orchestrator_MHA_Patroni_Sentinel]
+    HaCtl -->|计划切换| Ctrl
+    Platform --> HaCtl
+  end
+
+  Flashback[闪回_WAL短时恢复]
+  Archive[归档_行级迁出]
+  Platform --- Flashback
+  Platform --- Archive
+      </pre>
+    </section>
+
+    <section class="panel" id="catalog">
+      <h2>模块目录速查</h2>
+      <p class="lead">主要 Go 包与前端视图对应关系（非穷尽）。</p>
+      <div class="grid-modules">
+        <article class="mod">
+          <h3>控制面</h3>
+          <ul>
+            <li><code>cmd/auto-dba</code> 入口</li>
+            <li><code>internal/server</code> 组装依赖</li>
+            <li><code>internal/router</code> 路由</li>
+            <li><code>internal/handler</code> HTTP</li>
+            <li><code>internal/store</code> 元数据</li>
+            <li><code>internal/middleware</code> JWT / RBAC</li>
+          </ul>
+        </article>
+        <article class="mod">
+          <h3>工单与审核</h3>
+          <ul>
+            <li><code>ticketexec</code> 异步执行</li>
+            <li><code>sqlcheck</code> / <code>goinception</code></li>
+            <li><code>notify</code> / <code>mail</code></li>
+            <li>前端 <code>views/tickets</code></li>
+          </ul>
+        </article>
+        <article class="mod">
+          <h3>查询</h3>
+          <ul>
+            <li>SQL / Kafka / Redis 查询 Handler</li>
+            <li><code>kafka</code> <code>redisquery</code> <code>rediscmd</code></li>
+            <li>前端 <code>views/query</code></li>
+          </ul>
+        </article>
+        <article class="mod">
+          <h3>同步与迁移</h3>
+          <ul>
+            <li><code>internal/cdc</code></li>
+            <li><code>internal/dbmig</code></li>
+            <li>前端 <code>views/ops/Cdc*</code> <code>Migration*</code></li>
+          </ul>
+        </article>
+        <article class="mod">
+          <h3>备份</h3>
+          <ul>
+            <li><code>internal/backup</code> 策略/执行/下发</li>
+            <li><code>internal/sshx</code> Go SSH/SFTP</li>
+            <li><code>deploy/backup-agent</code></li>
+            <li>前端 <code>views/backup</code></li>
+          </ul>
+        </article>
+        <article class="mod">
+          <h3>闪回 / 归档</h3>
+          <ul>
+            <li><code>internal/flashback</code></li>
+            <li><code>internal/archive</code></li>
+            <li>前端 <code>views/flashback</code> <code>views/archive</code></li>
+          </ul>
+        </article>
+        <article class="mod">
+          <h3>诊断与监控</h3>
+          <ul>
+            <li><code>sqlinsight</code> <code>awr</code> <code>pgspace</code></li>
+            <li><code>dbmonitor</code> / <code>cmd/db-monitor</code></li>
+            <li><code>pgdiag</code> 会话</li>
+          </ul>
+        </article>
+        <article class="mod">
+          <h3>运维接入</h3>
+          <ul>
+            <li><code>terminal</code> Web SSH</li>
+            <li>HA Handler + <code>deploy/mha-agent</code></li>
+            <li><code>cmdb</code> 资产门面</li>
+          </ul>
+        </article>
+        <article class="mod">
+          <h3>配置与权限</h3>
+          <ul>
+            <li>实例 / 库 / 环境 / 机房</li>
+            <li>用户角色菜单、审核规则</li>
+            <li><code>ssoauth</code> LDAP / SSO</li>
+            <li>前端 <code>views/config</code> <code>views/cmdb</code></li>
+          </ul>
+        </article>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    文档来源：docs/features.md、docs/backup.md、docs/ha.md、docs/terminal.md、docs/cmdb.md。
+    本地打开本文件即可浏览；需联网加载 Mermaid CDN。生成日期以仓库为准。
+  </footer>
+</body>
+</html>

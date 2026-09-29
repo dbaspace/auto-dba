@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Button, Input, Modal, Pagination, Select, Switch, Table, Tag } from 'antd'
+import { Button, Input, Modal, Pagination, Select, Switch, Tag } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
 import type { ColumnsType } from 'antd/es/table'
 import { message } from 'antd'
 import api from '../../api/request'
@@ -254,7 +255,7 @@ export default function Sessions() {
 
       {tab === 'list' ? (
         <div className="ops-table">
-          <Table
+          <ResponsiveTable
             rowKey={(r) => String(r.pid)}
             loading={loading}
             dataSource={sessionPageRows}
@@ -267,7 +268,7 @@ export default function Sessions() {
         </div>
       ) : (
         <div className="ops-table">
-          <Table
+          <ResponsiveTable
             rowKey={(r, i) => `${r.pid}-${i}`}
             loading={loading}
             dataSource={lockPageRows}

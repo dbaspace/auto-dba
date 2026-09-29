@@ -254,10 +254,18 @@ func (o *Orchestrator) stepAddTableDebezium(ctx context.Context, t, parent *stor
 		if err := o.PutConnectorConfig(ctx, parentExtra, name, cfg); err != nil {
 			return err
 		}
-		_ = o.connectAction(ctx, parentExtra, "POST", "/connectors/"+name+"/restart", nil)
+		o.restartConnectorBestEffort(ctx, t, parentExtra, name)
 	}
-	_ = t
 	return nil
+}
+
+// restartConnectorBestEffort 用于 PUT config 之后：Connect 已因 task config 变化重建 Task，这里失败只告警。
+func (o *Orchestrator) restartConnectorBestEffort(ctx context.Context, t *store.CDCTask, extra map[string]string, name string) {
+	if err := connectRestartConnectorAndTasks(ctx, o.ResolveConnectBase(extra), name); err != nil {
+		o.appendLog(t, "WARN", "debezium", "重启 connector "+name+" 失败："+err.Error())
+		return
+	}
+	o.appendLog(t, "INFO", "debezium", "已重启 connector 及其 task："+name)
 }
 
 func (o *Orchestrator) applyAlterSchema(ctx context.Context, t *store.CDCTask) error {
@@ -470,7 +478,7 @@ func (o *Orchestrator) applyRemoveTable(ctx context.Context, t *store.CDCTask) e
 						_ = o.Store.UpdateCDCStatus(t.ID, store.StatusFailed, t.ApprovalStatus)
 						return err
 					}
-					_ = o.connectAction(ctx, parentExtra, "POST", "/connectors/"+name+"/restart", nil)
+					o.restartConnectorBestEffort(ctx, t, parentExtra, name)
 				}
 			}
 		}

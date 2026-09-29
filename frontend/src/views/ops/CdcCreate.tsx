@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import {
+  useNavigate,
+  useSearchParams } from 'react-router-dom'
 import {
   Alert,
   Button,
@@ -18,11 +20,11 @@ import {
   Select,
   Steps,
   Switch,
-  Table,
   Tag,
   Tooltip,
   message,
 } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
 import { SearchOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import api from '../../api/request'
@@ -2120,7 +2122,7 @@ export default function CdcCreate() {
                 <div className={`precheck-box ${precheckOk ? 'ok' : 'bad'}`}>{precheckMsg}</div>
               )}
               {precheckChecks.length > 0 && (
-                <Table
+                <ResponsiveTable
                   className="mt"
                   size="small"
                   rowKey={(r: PrecheckCheck, i) => `${r.name || ''}_${i}`}
@@ -2527,7 +2529,7 @@ export default function CdcCreate() {
                 }
               />
             )}
-            <Table
+            <ResponsiveTable
               size="small"
               rowKey="id"
               dataSource={parentCandidates}
@@ -2752,7 +2754,7 @@ export default function CdcCreate() {
                   }
                 >
                   {diffWarning && <Alert type="warning" showIcon className="mb" message={diffWarning} />}
-                  <Table
+                  <ResponsiveTable
                     size="small"
                     rowKey={(r: any) => `${r.target_table}_${r.name}`}
                     dataSource={alterDiffRows}

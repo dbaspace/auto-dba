@@ -148,7 +148,9 @@ func AggregatePipelineStatus(ctx context.Context, st *store.DB, secret string, o
 				stMap = map[string]any{}
 			}
 			state := connectorStateOf(stMap)
-			if err != nil {
+			if ConnectorStatusNotFound(stMap) {
+				state = PresenceNotFound
+			} else if err != nil {
 				state = "UNKNOWN"
 				stMap["error"] = err.Error()
 			}
@@ -254,6 +256,8 @@ func AggregatePipelineStatus(ctx context.Context, st *store.DB, secret string, o
 			reason = "源端 PG 不可达"
 		case !publication.Exists:
 			reason = "Publication 不存在"
+		case worst == PresenceNotFound:
+			reason = "Debezium Connector 缺失，需重新初始化"
 		case strings.EqualFold(worst, "FAILED") || strings.EqualFold(worst, "PAUSED"):
 			reason = "Debezium Connector " + worst
 		case kafka.State == "UNREACHABLE" || kafka.State == "MISSING":
@@ -316,6 +320,20 @@ func AggregatePipelineStatus(ctx context.Context, st *store.DB, secret string, o
 		out["connector"] = primaryConn
 	}
 	return out
+}
+
+// ConnectorStatusNotFound Connect GET /connectors/{name}/status 明确返回 404。
+func ConnectorStatusNotFound(st map[string]any) bool {
+	if st == nil {
+		return false
+	}
+	switch v := st["http_status"].(type) {
+	case int:
+		return v == 404
+	case float64:
+		return v == 404
+	}
+	return false
 }
 
 func connectorStateOf(st map[string]any) string {
@@ -472,7 +490,9 @@ func ListRoutineLoadStates(ctx context.Context, db *sql.DB, targetDB string, tab
 		if stateIdx < 0 {
 			stateIdx = indexFold(cols, "STATE")
 		}
+		found := false
 		for rows.Next() {
+			found = true
 			vals := make([]any, len(cols))
 			ptrs := make([]any, len(cols))
 			for i := range vals {
@@ -489,6 +509,9 @@ func ListRoutineLoadStates(ctx context.Context, db *sql.DB, targetDB string, tab
 			}
 		}
 		rows.Close()
+		if !found {
+			item.State = "NOT_FOUND"
+		}
 		out = append(out, item)
 	}
 	return out

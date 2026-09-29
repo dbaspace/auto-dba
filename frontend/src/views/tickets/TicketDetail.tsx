@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Avatar, Button, Descriptions, Input, Modal, Select, Table, Tag, message } from 'antd'
+import { Alert, Avatar, Button, Descriptions, Input, Modal, Select, Tag, message } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
 import api from '../../api/request'
 import DdlExecImpact from './DdlExecImpact'
 import './TicketDetail.css'
@@ -60,13 +61,23 @@ export default function TicketDetail() {
   const params = useParams()
 
   const [item, setItem] = useState<any>(null)
+  const [canApproveFlag, setCanApproveFlag] = useState(false)
+  const [canTransferFlag, setCanTransferFlag] = useState(false)
   const [inst, setInst] = useState<any>(null)
+  const [envByInstanceId, setEnvByInstanceId] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(false)
   const [acting, setActing] = useState(false)
   const [downloading, setDownloading] = useState(false)
   const [comment, setComment] = useState('')
   const [fmtVisible, setFmtVisible] = useState(false)
   const [fileFormat, setFileFormat] = useState('csv')
+  const [transferOpen, setTransferOpen] = useState(false)
+  const [transferBusy, setTransferBusy] = useState(false)
+  const [transferTo, setTransferTo] = useState<string | undefined>()
+  const [approverOptions, setApproverOptions] = useState<{ value: string; label: string }[]>([])
+  const [transferLoading, setTransferLoading] = useState(false)
+  const [transferLoadFailed, setTransferLoadFailed] = useState(false)
+  const envFetchedRef = useRef<Set<string>>(new Set())
 
   // 使用 ref 存放最新 item，供导出等异步逻辑读取，避免闭包过期
   const itemRef = useRef<any>(null)
@@ -120,10 +131,12 @@ export default function TicketDetail() {
       { key: 'db', label: '数据库', kind: 'db-tag', value: dbPath },
     ]
     if (it.sql_content) {
+      const clusterOp =
+        it.issue_type === 'sr_cluster' || it.issue_type === 'db_deploy' || it.issue_type === 'ha'
       fields.push({
         key: 'sql',
         label:
-          it.issue_type === 'flashback' || it.issue_type === 'cdc_sync' || it.issue_type === 'migration'
+          it.issue_type === 'flashback' || it.issue_type === 'cdc_sync' || it.issue_type === 'migration' || clusterOp
             ? '任务摘要'
             : '执行SQL',
         kind: 'sql',
@@ -132,7 +145,7 @@ export default function TicketDetail() {
       fields.push({
         key: 'schedule',
         label:
-          it.issue_type === 'flashback' || it.issue_type === 'cdc_sync' || it.issue_type === 'migration'
+          it.issue_type === 'flashback' || it.issue_type === 'cdc_sync' || it.issue_type === 'migration' || clusterOp
             ? '执行方式'
             : 'SQL执行时间',
         kind: 'schedule',
@@ -143,9 +156,15 @@ export default function TicketDetail() {
               ? '审批通过后自动执行 CDC 同步'
               : it.issue_type === 'migration'
                 ? '审批通过后由后端按启动方式自动执行'
-                : it.scheduled_at
-                  ? `定时 ${fmtTime(it.scheduled_at)}`
-                  : '审批完立即执行',
+                : it.issue_type === 'sr_cluster'
+                  ? '审批通过后自动执行 StarRocks 集群变更'
+                  : it.issue_type === 'db_deploy'
+                    ? '审批通过后自动执行数据库集群部署变更'
+                    : it.issue_type === 'ha'
+                      ? '审批通过后自动执行高可用变更'
+                      : it.scheduled_at
+                        ? `定时 ${fmtTime(it.scheduled_at)}`
+                        : '审批完立即执行',
       })
     }
     if (it.issue_type === 'createdb' && createdbExtra) {
@@ -179,9 +198,10 @@ export default function TicketDetail() {
 
   const canApprove = useMemo(() => {
     if (item?.status !== 'pending') return false
+    if (canApproveFlag) return true
     if (isPrivileged()) return true
     return String(item?.assigned_to || '').toLowerCase() === String(me.username || '').toLowerCase()
-  }, [item])
+  }, [item, canApproveFlag])
 
   const canCancel = useMemo(() => {
     if (item?.status !== 'pending') return false
@@ -190,6 +210,12 @@ export default function TicketDetail() {
       String(item?.submitter_name || '').toLowerCase() === String(me.username || '').toLowerCase()
     )
   }, [item])
+
+  const canTransfer = useMemo(() => {
+    if (item?.status !== 'pending') return false
+    if (canTransferFlag) return true
+    return String(item?.submitter_name || '').toLowerCase() === String(me.username || '').toLowerCase()
+  }, [item, canTransferFlag])
 
   const isDQL = useMemo(() => item?.issue_type === 'dql', [item])
   const isFlashback = useMemo(() => item?.issue_type === 'flashback', [item])
@@ -235,12 +261,65 @@ export default function TicketDetail() {
   const execObj = useMemo(() => item?.exec || {}, [item])
   const execSkipped = useMemo(() => Boolean(execObj?.skipped), [execObj])
   const execSummary = useMemo(() => execObj?.summary || execObj?.message || '', [execObj])
+  // 失败时优先展示具体错误（message），摘要只是「部分执行后失败」之类的概括
+  const execErrorText = useMemo(
+    () => String(execObj?.message || execObj?.summary || '').trim(),
+    [execObj],
+  )
+  const execFailed = item?.status === 'failed'
+  const execRecords = useMemo(
+    () => (Array.isArray(execObj?.records) ? execObj.records : []),
+    [execObj],
+  )
+
+  // SR / 通用 DB 集群变更：工单等待变更结束，步骤写在 exec.records
+  const isClusterChange = item?.issue_type === 'sr_cluster' || item?.issue_type === 'db_deploy'
+  const clusterChangeLink = useMemo(() => {
+    const changeId = String(execObj?.change_id || '').trim()
+    if (!isClusterChange || !changeId) return ''
+    let payload: any = {}
+    try {
+      payload = JSON.parse(item?.sql_content || '{}') || {}
+    } catch {
+      /* keep empty */
+    }
+    const engine = item?.issue_type === 'sr_cluster' ? 'starrocks' : String(payload.engine || '').trim()
+    if (!engine) return ''
+    const q = new URLSearchParams({ change: changeId })
+    if (payload.cluster_id) q.set('cluster', String(payload.cluster_id))
+    return `/ops/cluster-deploy/${encodeURIComponent(engine)}?${q.toString()}`
+  }, [isClusterChange, execObj, item])
+
+  const ddlDataSourceIds = useMemo(() => {
+    const raw = item?.need_rollback
+    if (!raw || !SQL_TYPES.has(item?.issue_type)) return [] as string[]
+    try {
+      const parsed = JSON.parse(raw)
+      const ids = Array.isArray(parsed?.data_source_ids) ? parsed.data_source_ids : []
+      return ids.map((id: any) => String(id || '').trim()).filter(Boolean)
+    } catch {
+      return [] as string[]
+    }
+  }, [item])
+
+  const neededInstanceIds = useMemo(() => {
+    const set = new Set<string>()
+    const primary = String(item?.instance_id || '').trim()
+    if (primary) set.add(primary)
+    for (const id of ddlDataSourceIds) set.add(id)
+    for (const r of execRecords) {
+      const id = String(r?.instance_id || '').trim()
+      if (id) set.add(id)
+    }
+    return [...set]
+  }, [item, ddlDataSourceIds, execRecords])
 
   const showExecCard = useMemo(() => {
     const s = item?.status
     if (s === 'pending' || s === 'rejected' || s === 'canceled') return false
     if (isCreateDB) {
-      return s === 'failed'
+      // 建库：执行中 / 失败 / 成功均展示执行区（running 时轮询结果）
+      return s === 'running' || s === 'failed' || s === 'executed' || s === 'approved'
     }
     return true
   }, [item, isCreateDB])
@@ -263,6 +342,7 @@ export default function TicketDetail() {
     const s = item?.status
     if (s === 'executed') return 'is-done'
     if (s === 'failed') return 'is-danger'
+    if (s === 'running') return 'is-active'
     return 'is-wait'
   }, [item])
 
@@ -275,7 +355,7 @@ export default function TicketDetail() {
 
   const wfExecClass = useMemo(() => {
     const s = item?.status
-    if (s === 'approved') return 'is-current'
+    if (s === 'approved' || s === 'running') return 'is-current'
     if (s === 'executed') return 'is-ok'
     if (s === 'failed') return 'is-fail'
     return 'is-idle'
@@ -293,6 +373,7 @@ export default function TicketDetail() {
     const s = item?.status
     if (s === 'executed') return isDQL ? '已导出' : execSkipped ? '已跳过连库' : '已执行'
     if (s === 'failed') return '执行失败'
+    if (s === 'running') return '后台执行中'
     if (s === 'approved')
       return isDQL
         ? '点击下载'
@@ -308,7 +389,7 @@ export default function TicketDetail() {
     () =>
       item?.scheduled_at
         ? '已预约，等待定时或手动执行'
-        : '审批通过后将自动执行；若未触发可手动执行',
+        : '审批通过后将自动后台执行；若未触发可手动执行',
     [item],
   )
 
@@ -316,7 +397,9 @@ export default function TicketDetail() {
     () =>
       item?.status === 'executed' || item?.status === 'failed'
         ? '暂无数据'
-        : '暂无数据，执行后获取',
+        : item?.status === 'running'
+          ? '正在后台执行，完成后自动刷新结果'
+          : '暂无数据，执行后获取',
     [item],
   )
 
@@ -327,7 +410,11 @@ export default function TicketDetail() {
     try {
       const { data } = await api.get('/tickets/' + params.id)
       setItem(data.data)
+      setCanApproveFlag(Boolean(data.can_approve))
+      setCanTransferFlag(Boolean(data.can_transfer))
       setInst(null)
+      setEnvByInstanceId({})
+      envFetchedRef.current = new Set()
       if (data.data?.instance_id) {
         try {
           const instRes = await api.get('/instances/' + data.data.instance_id)
@@ -338,6 +425,80 @@ export default function TicketDetail() {
       }
     } finally {
       setLoading(false)
+    }
+  }
+
+  async function openTransfer() {
+    if (!item) return
+    setTransferTo(undefined)
+    setApproverOptions([])
+    setTransferLoadFailed(false)
+    setTransferLoading(true)
+    setTransferOpen(true)
+    try {
+      const res = item.issue_type === 'createdb'
+        ? await api.get('/create-db/approvers')
+        : await api.get('/tickets/target-approvers', {
+          params: {
+            instance_id: item.instance_id || '',
+            db_name: item.db_name || '',
+            issue_type: item.issue_type || '',
+          },
+        })
+      const payload = res.data
+      const list = Array.isArray(payload) ? payload : payload?.data
+      if (!Array.isArray(list)) {
+        setTransferLoadFailed(true)
+        return
+      }
+      const names: string[] = list
+        .map((x: any) => (typeof x === 'string' ? x : x?.name || x?.username))
+        .filter(Boolean)
+      // 拆分逗号拼接脏数据后并集去重
+      const seen = new Set<string>()
+      const uniq: string[] = []
+      for (const raw of names) {
+        for (const part of String(raw).split(/[,，\s]+/)) {
+          const n = part.trim()
+          if (!n) continue
+          const key = n.toLowerCase()
+          if (seen.has(key)) continue
+          seen.add(key)
+          uniq.push(n)
+        }
+      }
+      const excluded = new Set([
+        String(item.assigned_to || '').toLowerCase(),
+        String(item.submitter_name || '').toLowerCase(),
+      ])
+      setApproverOptions(
+        uniq
+          .filter((n) => !excluded.has(n.toLowerCase()))
+          .map((n) => ({ value: n, label: n })),
+      )
+    } catch (e: any) {
+      setTransferLoadFailed(true)
+      message.error(e?.response?.data?.message || e.message || '加载候选人失败')
+    } finally {
+      setTransferLoading(false)
+    }
+  }
+
+  async function submitTransfer() {
+    if (!item || !transferTo) {
+      message.warning('请选择新审核人')
+      return
+    }
+    setTransferBusy(true)
+    try {
+      await api.put(`/tickets/${item.id}/assignee`, { assigned_to: transferTo })
+      message.success('已更换审核人')
+      setTransferOpen(false)
+      await load()
+    } catch (e: any) {
+      message.error(e?.response?.data?.message || e.message)
+    } finally {
+      setTransferBusy(false)
     }
   }
 
@@ -450,6 +611,85 @@ export default function TicketDetail() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // 后台执行中轮询详情，直到成功/失败
+  useEffect(() => {
+    if (item?.status !== 'running' || !params.id) return
+    const timer = window.setInterval(async () => {
+      try {
+        const { data } = await api.get('/tickets/' + params.id)
+        const next = data.data
+        if (!next) return
+        setItem(next)
+        if (typeof data.can_approve === 'boolean') setCanApproveFlag(data.can_approve)
+        if (typeof data.can_transfer === 'boolean') setCanTransferFlag(data.can_transfer)
+        if (next.status !== 'running') {
+          window.clearInterval(timer)
+        }
+      } catch {
+        /* ignore */
+      }
+    }, 3000)
+    return () => window.clearInterval(timer)
+  }, [item?.status, params.id])
+
+  // 多实例执行结果：按 instance_id 解析各自 idc，避免全部套用工单主实例环境
+  useEffect(() => {
+    let cancelled = false
+    async function fillEnvByInstance() {
+      if (!neededInstanceIds.length) return
+
+      const nextSeed: Record<string, string> = {}
+      if (inst?.id && inst?.idc) {
+        const id = String(inst.id).trim()
+        const idc = String(inst.idc).trim()
+        if (id && idc) {
+          nextSeed[id] = idc
+          envFetchedRef.current.add(id)
+        }
+      }
+
+      const missing = neededInstanceIds.filter((id) => !envFetchedRef.current.has(id))
+      for (const id of missing) envFetchedRef.current.add(id)
+
+      const fetched = await Promise.all(
+        missing.map(async (id) => {
+          try {
+            const res = await api.get('/instances/' + id)
+            const idc = String(res.data?.data?.idc || '').trim()
+            return idc ? ([id, idc] as const) : null
+          } catch {
+            return null
+          }
+        }),
+      )
+      if (cancelled) return
+
+      setEnvByInstanceId((prev) => {
+        let changed = false
+        const next = { ...prev }
+        for (const [id, idc] of Object.entries(nextSeed)) {
+          if (next[id] !== idc) {
+            next[id] = idc
+            changed = true
+          }
+        }
+        for (const pair of fetched) {
+          if (!pair) continue
+          const [id, idc] = pair
+          if (next[id] !== idc) {
+            next[id] = idc
+            changed = true
+          }
+        }
+        return changed ? next : prev
+      })
+    }
+    fillEnvByInstance()
+    return () => {
+      cancelled = true
+    }
+  }, [neededInstanceIds, inst])
+
   return (
     <div className="review-page">
       {item && (
@@ -487,7 +727,14 @@ export default function TicketDetail() {
               <div className="flow-card-body">
                 {item.status === 'pending' ? (
                   <>
-                    <div className="approver-line">审批人员：{item.assigned_to || '-'}</div>
+                    <div className="approver-line">
+                      审批人员：{item.assigned_to || '-'}
+                      {canTransfer && (
+                        <Button type="link" size="small" style={{ padding: '0 0 0 8px' }} onClick={() => { void openTransfer() }}>
+                          更换审核人
+                        </Button>
+                      )}
+                    </div>
                     <div className="timeout-hint">提交后超过 8 小时未审核完成，系统将自动取消</div>
                     <div className="remark-box">
                       <div className="remark-label">附言：</div>
@@ -601,7 +848,17 @@ export default function TicketDetail() {
                   </div>
                 ) : (
                   <div className="flow-card-body exec-body">
-                    {item.status === 'approved' ? (
+                    {item.status === 'running' && isClusterChange ? (
+                      <>
+                        <div className="exec-wait">集群变更执行中…</div>
+                        <div className="user-sub">{execObj?.summary || '等待变更结束后同步最终状态'}</div>
+                      </>
+                    ) : item.status === 'running' ? (
+                      <>
+                        <div className="exec-wait">正在后台执行大 SQL，请勿重复点击</div>
+                        <div className="user-sub">页面将自动刷新执行结果</div>
+                      </>
+                    ) : item.status === 'approved' ? (
                       <>
                         <div className="exec-wait">{scheduledWaitText}</div>
                         <Button
@@ -616,7 +873,12 @@ export default function TicketDetail() {
                     ) : item.status === 'failed' ? (
                       <>
                         <div className="status-text danger">执行失败</div>
-                        <div className="user-sub">{execSummary || fmtTime(item.updated_at)}</div>
+                        {execObj?.summary && execObj.summary !== execErrorText ? (
+                          <div className="user-sub">{execObj.summary}</div>
+                        ) : null}
+                        <div className="user-sub exec-fail-msg" title={execErrorText}>
+                          {execErrorText || fmtTime(item.updated_at)}
+                        </div>
                         <Button
                           type="primary"
                           size="small"
@@ -634,6 +896,11 @@ export default function TicketDetail() {
                         <div className="user-sub">{execSummary || fmtTime(item.updated_at)}</div>
                       </>
                     ) : null}
+                    {clusterChangeLink && (
+                      <Button size="small" onClick={() => navigate(clusterChangeLink)}>
+                        查看变更日志
+                      </Button>
+                    )}
                   </div>
                 )}
               </div>
@@ -679,6 +946,53 @@ export default function TicketDetail() {
               ))}
             </Descriptions>
 
+            {isClusterChange && showExecCard && (
+              <>
+                <div className="sec-title mt">
+                  集群变更步骤
+                  {execObj?.change_id ? (
+                    <span className="user-sub" style={{ marginLeft: 8, fontWeight: 400 }}>
+                      change_id {String(execObj.change_id).slice(0, 8)}
+                    </span>
+                  ) : null}
+                </div>
+                <div className="impact-card">
+                  {execFailed && execErrorText ? (
+                    <Alert type="error" showIcon style={{ marginBottom: 8 }} message={execErrorText} />
+                  ) : null}
+                  <ResponsiveTable
+                    dataSource={execRecords}
+                    bordered
+                    size="small"
+                    rowKey={(r: any, i) => String(r?.order ?? i)}
+                    pagination={false}
+                    locale={{ emptyText: execEmptyText }}
+                    columns={[
+                      { title: '#', dataIndex: 'order', width: 56 },
+                      { title: '步骤', dataIndex: 'sql', onCell: () => ({ style: { minWidth: 220 } }) },
+                      {
+                        title: '状态',
+                        dataIndex: 'status',
+                        width: 100,
+                        render: (s: string) => (
+                          <Tag color={s === 'success' ? 'success' : s === 'failed' ? 'error' : s === 'running' ? 'processing' : 'default'}>
+                            {s || '-'}
+                          </Tag>
+                        ),
+                      },
+                      { title: '开始', dataIndex: 'started_at', width: 170, render: (v: string) => fmtTime(v) },
+                      { title: '结束', dataIndex: 'ended_at', width: 170, render: (v: string) => fmtTime(v) },
+                      {
+                        title: '错误',
+                        dataIndex: 'error_message',
+                        render: (v: string) => (v ? <pre className="cluster-step-err">{v}</pre> : '-'),
+                      },
+                    ]}
+                  />
+                </div>
+              </>
+            )}
+
             {showSqlImpact && (
               <>
                 <div className="sec-title mt">预检测SQL影响</div>
@@ -687,7 +1001,7 @@ export default function TicketDetail() {
                     <span className="db-pill">数据库</span>
                     <span className="db-path">{dbPath}</span>
                   </div>
-                  <Table
+                  <ResponsiveTable
                     dataSource={precheckRows}
                     bordered
                     size="small"
@@ -710,11 +1024,14 @@ export default function TicketDetail() {
                 <div className="sec-title mt">执行SQL影响</div>
                 <div className="impact-card">
                   <DdlExecImpact
-                    records={Array.isArray(execObj?.records) ? execObj.records : []}
+                    records={execRecords}
                     env={dbEnv}
+                    envByInstanceId={envByInstanceId}
                     fallbackDb={item?.db_name}
                     fallbackHost={inst?.host}
-                    execMessage={execSummary}
+                    execMessage={execErrorText}
+                    execFailed={execFailed}
+                    rollbackSummary={execObj?.rolled_back ? String(execObj?.summary || '') : ''}
                     emptyText={execEmptyText}
                   />
                 </div>
@@ -749,6 +1066,48 @@ export default function TicketDetail() {
             { label: 'JSON', value: 'json' },
             { label: 'SQL', value: 'sql' },
           ]}
+        />
+      </Modal>
+
+      <Modal
+        open={transferOpen}
+        title="更换审核人"
+        destroyOnClose
+        confirmLoading={transferBusy}
+        onCancel={() => setTransferOpen(false)}
+        onOk={() => { void submitTransfer() }}
+        okText="确认更换"
+        okButtonProps={{ disabled: transferLoading || approverOptions.length === 0 }}
+      >
+        <div style={{ marginBottom: 8 }}>当前审核人：{item?.assigned_to || '-'}</div>
+        {!transferLoading && transferLoadFailed && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 8 }}
+            message="候选人加载失败，请重试"
+            action={<Button size="small" type="link" onClick={() => { void openTransfer() }}>重试</Button>}
+          />
+        )}
+        {!transferLoading && !transferLoadFailed && approverOptions.length === 0 && (
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 8 }}
+            message="暂无其他候选人，请联系管理员在实例/库上配置审批人"
+          />
+        )}
+        <Select
+          showSearch
+          allowClear
+          loading={transferLoading}
+          disabled={transferLoading || approverOptions.length === 0}
+          placeholder="选择新审核人"
+          style={{ width: '100%' }}
+          options={approverOptions}
+          value={transferTo}
+          onChange={(v) => setTransferTo(v)}
+          filterOption={(input, opt) => String(opt?.label || '').toLowerCase().includes(input.toLowerCase())}
         />
       </Modal>
     </div>

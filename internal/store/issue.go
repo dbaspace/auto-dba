@@ -14,7 +14,8 @@ import (
 func ValidIssueType(t string) bool {
 	switch t {
 	case IssueTypeDDL, IssueTypeDML, IssueTypeDCL, IssueTypeDQL, IssueTypeKafka,
-		IssueTypeCDC, IssueTypeArchive, IssueTypeFlashback, IssueTypeMigration, IssueTypeMullang, IssueTypeCreateDB:
+		IssueTypeCDC, IssueTypeArchive, IssueTypeFlashback, IssueTypeMigration, IssueTypeMullang, IssueTypeCreateDB,
+		IssueTypeHA, IssueTypeRedis, IssueTypeBackupRestore, IssueTypeSrCluster, IssueTypeDbDeploy:
 		return true
 	default:
 		return false
@@ -45,12 +46,13 @@ func (d *DB) CreateIssue(it *Issue) error {
 func (d *DB) GetIssue(id string) (*Issue, error) {
 	it := &Issue{}
 	var exec sql.NullString
+	var hist sql.NullString
 	err := d.QueryRow(
-		`SELECT id, ticket_no, issue_type, instance_id, database_id, db_name, sql_content, description, status, submitter, assigned_to, reject_reason, need_rollback, scheduled_at, execute_result, created_at, updated_at
+		`SELECT id, ticket_no, issue_type, instance_id, database_id, db_name, sql_content, description, status, submitter, assigned_to, reject_reason, need_rollback, scheduled_at, execute_result, COALESCE(assignee_transfer_history,'[]'), created_at, updated_at
 		 FROM tbl_issues WHERE id=?`, id,
 	).Scan(
 		&it.ID, &it.TicketNo, &it.IssueType, &it.InstanceID, &it.DatabaseID, &it.DBName, &it.SQLContent, &it.Description,
-		&it.Status, &it.Submitter, &it.AssignedTo, &it.RejectReason, &it.NeedRollback, &it.ScheduledAt, &exec, &it.CreatedAt, &it.UpdatedAt,
+		&it.Status, &it.Submitter, &it.AssignedTo, &it.RejectReason, &it.NeedRollback, &it.ScheduledAt, &exec, &hist, &it.CreatedAt, &it.UpdatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -59,6 +61,10 @@ func (d *DB) GetIssue(id string) (*Issue, error) {
 		return nil, err
 	}
 	it.ExecuteResult = exec.String
+	it.AssigneeTransferHistory = hist.String
+	if it.AssigneeTransferHistory == "" {
+		it.AssigneeTransferHistory = "[]"
+	}
 	it.Type = it.IssueType
 	attachIssueExec(it)
 	return it, nil

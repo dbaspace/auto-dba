@@ -3,6 +3,7 @@ import { message } from 'antd'
 import { useNavigate } from 'react-router-dom'
 import { useAppDispatch } from '../store'
 import { clearAuth } from '../store/authSlice'
+import { resetTabs } from '../store/tabsSlice'
 
 const LAST_ACTIVITY_KEY = 'last_activity_at'
 const CHECK_MS = 15_000
@@ -45,6 +46,8 @@ export default function useIdleLogout(timeoutMin: number | undefined | null) {
       loggingOut.current = true
       clearLastActivity()
       dispatch(clearAuth())
+      dispatch(resetTabs({}))
+      sessionStorage.removeItem('auto-dba-query-workspace')
       message.warning('登录已超时，请重新登录')
       navigate('/login', { replace: true })
     }

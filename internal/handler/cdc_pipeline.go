@@ -285,12 +285,21 @@ func (h *CDCHandler) Connector(c *gin.Context) {
 	extra := cdcExtraMap(root.Description)
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 8*time.Second)
 	defer cancel()
-	cfg := h.loadCurrentConnectorConfig(ctx, root)
+	o := h.orch()
+	presence := o.TaskConnectorPresence(ctx, root)
+	missing := presence.State == cdc.PresenceNotFound
+	cfg := map[string]string{}
+	if !missing {
+		cfg = h.loadCurrentConnectorConfig(ctx, root)
+	}
 	state := ""
-	workerURL := cdc.NormalizeConnectBaseURL(extra["connect_base_url"])
+	workerURL := cdc.NormalizeConnectBaseURL(o.ResolveConnectBase(extra))
 	var tasks []any
-	if name := extra["connector_name"]; name != "" {
-		if st, _ := h.orch().ConnectorStatus(ctx, extra, name); st != nil {
+	if name := extra["connector_name"]; name != "" && !missing {
+		if st, _ := o.ConnectorStatus(ctx, extra, name); st != nil {
+			if cdc.ConnectorStatusNotFound(st) {
+				missing = true
+			}
 			if s, ok := st["connector"].(map[string]any); ok {
 				if v, ok := s["state"].(string); ok {
 					state = v
@@ -319,8 +328,9 @@ func (h *CDCHandler) Connector(c *gin.Context) {
 	if tasks == nil {
 		tasks = []any{}
 	}
-	c.JSON(http.StatusOK, gin.H{"data": gin.H{
-		"name": extra["connector_name"], "config": cdc.MaskConfigMap(cfg),
+	data := gin.H{
+		"task_id": root.ID,
+		"name":    extra["connector_name"], "config": cdc.MaskConfigMap(cfg),
 		"template": extra["debezium_template"], "debezium_mode": extra["debezium_mode"],
 		"state": state, "config_key_count": len(cfg),
 		"connector_id":     extra["connector_id"],
@@ -328,7 +338,29 @@ func (h *CDCHandler) Connector(c *gin.Context) {
 		"tasks":                   tasks,
 		"kafka_bootstrap_servers": extra["kafka_bootstrap_servers"],
 		"message_schema_mode":     extra["message_schema_mode"],
-	}})
+		"connector_missing":       missing,
+		"can_reinit":              false,
+	}
+	if missing {
+		data["state"] = cdc.PresenceNotFound
+		data["missing_connectors"] = presence.Missing
+		data["warning"] = cdcConnectorMissingWarning
+		if ok, _ := cdc.ReinitEligibleStatus(root); ok {
+			data["can_reinit"] = true
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"data": data})
+}
+
+const cdcConnectorMissingWarning = "Kafka Connect 上未找到该 Connector（可能 Debezium 服务已重建），可通过“重新初始化”补齐"
+
+// rejectIfConnectorMissing Connector 缺失时 PUT /config 会用脱敏密码新建 Connector，须走重新初始化。
+func (h *CDCHandler) rejectIfConnectorMissing(c *gin.Context, ctx context.Context, root *store.CDCTask) bool {
+	if p := h.orch().TaskConnectorPresence(ctx, root); p.State == cdc.PresenceNotFound {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Connector 在 Debezium Connect 上不存在（" + strings.Join(p.Missing, ",") + "），请使用「重新初始化」补齐"})
+		return true
+	}
+	return false
 }
 
 func (h *CDCHandler) ConnectorRuntimeStatus(c *gin.Context) {
@@ -341,9 +373,11 @@ func (h *CDCHandler) ConnectorRuntimeStatus(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 12*time.Second)
 	defer cancel()
 	pipe := cdc.AggregatePipelineStatus(ctx, h.Store, h.Secret, h.orch(), root)
+	worst := connectorWorstState(pipe)
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{
 		"connectors": pipe["connectors"], "connector": pipe["connector"],
-		"worst_state": connectorWorstState(pipe),
+		"worst_state": worst, "state": worst, "aggregated_state": worst,
+		"connector_missing": worst == cdc.PresenceNotFound,
 	}})
 }
 

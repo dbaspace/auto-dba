@@ -1,12 +1,27 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Button, DatePicker, Form, Input, Select, Space, Table, Tooltip, message } from 'antd'
+import { Button, DatePicker, Form, Input, Select, Space, Tooltip, message } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
 import dayjs, { Dayjs } from 'dayjs'
 import api from '../../api/request'
 import { buildEnvOptions } from '../../utils/env'
 import DbTypeIcon from '../../components/DbTypeIcon'
 import { useWorkOrderDraft } from '../../hooks/useWorkOrderDraft'
 import './CreateDb.css'
+
+function unionApproverNames(raws: string[]) {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const raw of raws) {
+    for (const name of String(raw || '').split(/[,，\s]+/)) {
+      const n = name.trim()
+      if (!n || seen.has(n)) continue
+      seen.add(n)
+      out.push(n)
+    }
+  }
+  return out
+}
 
 const permissionOps = [
   { label: '读操作', value: 'r' },
@@ -290,15 +305,18 @@ export default function CreateDb() {
         const instList = instRes.data.data || []
         setInstances(instList)
         setEnvOptions(buildEnvOptions(envRes.data.data || [], instList))
-        const names = (apprRes.data.data || []).map((a: any) => a.name || a).filter(Boolean)
-        const uniq = [...new Set(names)] as string[]
+        const uniq = unionApproverNames(
+          (apprRes.data.data || []).map((a: any) => String(a?.name || a || '')),
+        )
         setApprovers(uniq)
         const def = uniq[0] || ''
         setDefaultReviewer(def)
         setForm((f) => {
-          if (!f.assigned_to && def) {
-            antdForm.setFieldsValue({ assigned_to: def })
-            return { ...f, assigned_to: def }
+          const picked = unionApproverNames([f.assigned_to]).find((n) => uniq.includes(n)) || ''
+          const next = picked || def
+          if (next && next !== f.assigned_to) {
+            antdForm.setFieldsValue({ assigned_to: next })
+            return { ...f, assigned_to: next }
           }
           return f
         })
@@ -510,7 +528,7 @@ export default function CreateDb() {
             <Button onClick={beautify}>SQL美化</Button>
           </div>
           <p className="hint">编辑框内可检测、美化 SQL。仅允许 CREATE DATABASE。</p>
-          <Table
+          <ResponsiveTable
             rowKey={(_, i) => String(i)}
             size="small"
             bordered

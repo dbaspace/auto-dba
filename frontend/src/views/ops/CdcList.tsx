@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import {
+  useNavigate,
+  useSearchParams } from 'react-router-dom'
 import {
   Alert,
   Badge,
@@ -10,7 +12,6 @@ import {
   Popover,
   Select,
   Space,
-  Table,
   Tabs,
   Tag,
   Tooltip,
@@ -18,6 +19,7 @@ import {
   message,
   Modal,
 } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
 import {
   DeleteOutlined,
   EyeOutlined,
@@ -26,10 +28,14 @@ import {
   PlusOutlined,
   RedoOutlined,
   ReloadOutlined,
+  SyncOutlined,
 } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import api from '../../api/request'
+import { usePermission } from '../../hooks/usePermission'
 import { navigateToWorkOrderCreate } from '../../utils/workOrderDraft'
+import CdcReinitModal from './CdcReinitModal'
+import CdcReinitBatchModal from './CdcReinitBatchModal'
 import {
   approvalText,
   decodeCdcExtra,
@@ -48,7 +54,7 @@ import {
 const { Title, Text } = Typography
 
 const RUNNING_STATUSES = new Set([
-  'init', 'running', 'paused', 'error', 'failed', 'creating', 'provisioning', 'configuring',
+  'init', 'running', 'paused', 'error', 'failed', 'creating', 'provisioning', 'configuring', 'reinitializing',
 ])
 const TYPE_ALL = [
   { label: '初始化', value: 'init' },
@@ -106,6 +112,9 @@ export default function CdcList() {
   const [filterType, setFilterType] = useState('init')
   const [filterQ, setFilterQ] = useState('')
   const [visibleCols, setVisibleCols] = useState<string[]>(loadCols())
+  const [reinitTask, setReinitTask] = useState<any>(null)
+  const [batchOpen, setBatchOpen] = useState(false)
+  const { isAdmin } = usePermission()
 
   const instMap = useMemo(() => {
     const m = new Map<string, any>()
@@ -262,7 +271,8 @@ export default function CdcList() {
     }
     const run = async () => {
       const { data } = await api.post(`/cdc-sync/tasks/${row.id}/${kind}`)
-      message.info(data.message || '已更新')
+      if (data?.data?.status === 'reinitializing') message.success('已提交，正在重新初始化')
+      else message.info(data.message || '已更新')
       await load()
     }
     if (kind === 'pause') {
@@ -314,11 +324,28 @@ export default function CdcList() {
     })
   }
 
+  async function refreshTasks() {
+    const { data } = await api.get('/cdc-sync/tasks', { silent: true }).catch(() => ({ data: null as any }))
+    if (!data) return
+    setAllRows((prev) => {
+      const pipes = new Map(prev.map((r) => [r.id, r._pipeline]))
+      return (data.data || []).map((r: any) => ({ ...r, _pipeline: pipes.get(r.id) }))
+    })
+  }
+
   // 初始化 & tab 切换
   useEffect(() => {
     load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  const hasReinitializing = allRows.some((r) => r.status === 'reinitializing')
+  useEffect(() => {
+    if (!hasReinitializing) return
+    const id = window.setInterval(() => void refreshTasks(), 3000)
+    return () => window.clearInterval(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasReinitializing])
 
   useEffect(() => {
     const t = searchParams.get('tab')
@@ -455,7 +482,7 @@ export default function CdcList() {
       key: 'status',
       width: 100,
       render: (_: any, row: any) => {
-        const unhealthy = row._pipeline?.healthy === false
+        const unhealthy = row._pipeline?.healthy === false && row.status !== 'reinitializing'
         return (
           <Tag color={unhealthy ? 'error' : statusTagColor(row.status)}>
             {unhealthy ? '异常' : statusText(row.status)}
@@ -509,7 +536,7 @@ export default function CdcList() {
     columns.push({
       title: '操作',
       key: 'op',
-      width: 280,
+      width: 360,
       fixed: 'right',
       render: (_: any, row: any) => (
         <Space size={0} wrap={false} className="cdc-row-ops">
@@ -566,7 +593,20 @@ export default function CdcList() {
               重试
             </Button>
           )}
-          {row.task_type === 'init' && !isPending(row) && (
+          {row.can_reinit && !isPending(row) && (
+            <Tooltip title="Debezium Connector 在 Connect 上缺失，按原配置补齐资源">
+              <Button
+                type="link"
+                size="small"
+                className="!px-1"
+                icon={<SyncOutlined />}
+                onClick={() => setReinitTask(row)}
+              >
+                重新初始化
+              </Button>
+            </Tooltip>
+          )}
+          {row.task_type === 'init' && !isPending(row) && row.status !== 'reinitializing' && (
             <Button
               type="link"
               size="small"
@@ -607,6 +647,11 @@ export default function CdcList() {
           CDC 同步任务
         </Title>
         <Space>
+          {isAdmin && (
+            <Button icon={<SyncOutlined />} onClick={() => setBatchOpen(true)}>
+              按 Debezium 服务重新初始化
+            </Button>
+          )}
           <Button onClick={() => goCreate('remove_table')}>移除同步表</Button>
           <Button onClick={() => goCreate('alter_schema')}>源表加列</Button>
           <Button onClick={() => goCreate('add_table')}>新增同步表</Button>
@@ -715,7 +760,7 @@ export default function CdcList() {
         </p>
       )}
 
-      <Table
+      <ResponsiveTable
         rowKey="id"
         size="small"
         loading={loading}
@@ -737,6 +782,13 @@ export default function CdcList() {
           },
         }}
       />
+      <CdcReinitModal
+        open={!!reinitTask}
+        task={reinitTask}
+        onClose={() => setReinitTask(null)}
+        onSubmitted={() => void refreshTasks()}
+      />
+      <CdcReinitBatchModal open={batchOpen} onClose={() => setBatchOpen(false)} onSubmitted={() => void refreshTasks()} />
     </div>
   )
 }

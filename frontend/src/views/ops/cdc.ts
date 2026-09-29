@@ -228,6 +228,7 @@ export function statusText(s: string): string {
       rejected: '已驳回',
       canceled: '已撤销',
       cancelled: '已撤销',
+      reinitializing: '重新初始化中',
     }[s] || s || '—'
   )
 }
@@ -235,6 +236,7 @@ export function statusText(s: string): string {
 // AntD Tag status 颜色
 export function statusTagColor(s: string): string {
   if (s === 'running') return 'success'
+  if (s === 'reinitializing') return 'processing'
   if (s === 'paused' || s === 'pending' || s === 'init' || s === 'creating' || s === 'provisioning') return 'warning'
   if (s === 'error' || s === 'failed' || s === 'rejected') return 'error'
   return 'default'
@@ -310,6 +312,13 @@ export function connectorWorkerURL(extra: CdcExtra, detail: any): string {
   return /^https?:\/\//i.test(raw) ? raw : `http://${raw}`
 }
 
+/** 全链路节点状态文案：Connector 在 Connect 上 404 显示「缺失」 */
+export function pipelineStateText(state: any): string {
+  const st = String(state || '').toUpperCase()
+  if (st === 'NOT_FOUND') return '缺失'
+  return String(state || '')
+}
+
 // PipelineVisualization 节点色调（CSS class）
 export function pipelineNodeTone(state: any): string {
   const st = String(state || '').toUpperCase()
@@ -354,6 +363,7 @@ export const LOG_STEP_OPTIONS = [
   { value: 'manual', label: '人工操作' },
   { value: 'pause', label: '暂停' },
   { value: 'delete', label: '删除' },
+  { value: 'reinit', label: '重新初始化' },
 ]
 
 export function logStepText(step: string): string {
@@ -816,12 +826,15 @@ export function isSensitiveConfigKey(key: any): boolean {
 
 export function formatOperationType(source: string): string {
   return (
-    { ui_save: '修改', restore: '恢复', add_table: '新增表', remove_table: '移除表' }[source] ||
+    { ui_save: '修改', restore: '恢复', add_table: '新增表', remove_table: '移除表', reinit: '重新初始化' }[source] ||
     (source ? '修改' : '—')
   )
 }
 
 // AntD Tag 颜色
 export function operationTypeTagColor(source: string): string {
-  return { restore: 'orange', add_table: 'green', remove_table: 'red', ui_save: 'default' }[source] || 'default'
+  return (
+    { restore: 'orange', add_table: 'green', remove_table: 'red', ui_save: 'default', reinit: 'purple' }[source] ||
+    'default'
+  )
 }

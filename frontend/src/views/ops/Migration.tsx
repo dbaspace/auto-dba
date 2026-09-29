@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import {
+  useNavigate } from 'react-router-dom'
 import {
   Button,
   DatePicker,
@@ -10,10 +11,10 @@ import {
   Progress,
   Select,
   Space,
-  Table,
   Tag,
   message,
 } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
 import type { ColumnsType } from 'antd/es/table'
 import type { Dayjs } from 'dayjs'
 import api from '../../api/request'
@@ -451,7 +452,7 @@ export default function Migration() {
         </Form.Item>
       </Form>
 
-      <Table
+      <ResponsiveTable
         rowKey="id"
         loading={loading}
         bordered

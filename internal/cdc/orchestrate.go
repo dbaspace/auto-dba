@@ -4,10 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"auto-dba/internal/config"
 	"auto-dba/internal/dbmig"
@@ -58,6 +60,12 @@ func StepLabel(step string) string {
 		return "暂停"
 	case "delete":
 		return "删除"
+	case "reinit":
+		return "重新初始化"
+	case "prepare":
+		return "准备"
+	case "rebind":
+		return "换绑 Debezium 服务"
 	default:
 		return step
 	}
@@ -102,6 +110,14 @@ func (o *Orchestrator) Apply(ctx context.Context, taskID, fromStep string) error
 	fromStep = strings.ToLower(strings.TrimSpace(fromStep))
 	if extra["error_step"] != "" && fromStep == "" {
 		fromStep = extra["error_step"]
+	}
+	if fromStep == "reinit" {
+		// 上次重新初始化失败：按默认参数（snapshot 沿用原值、恢复 RL、沿用当前绑定）重做，而不是重跑创建编排。
+		if _, err := o.acquireReinit(taskID); err != nil {
+			return err
+		}
+		defer reinitRunning.Delete(taskID)
+		return o.Reinit(ctx, taskID, ReinitRequest{})
 	}
 	for i, s := range steps {
 		if fromStep != "" && s == fromStep {
@@ -186,14 +202,70 @@ func (o *Orchestrator) Restart(ctx context.Context, taskID string) error {
 	if err != nil || t == nil {
 		return fmt.Errorf("任务不存在")
 	}
+	if !cdcTaskApproved(t) {
+		return fmt.Errorf("CDC 任务须审批通过后才能执行")
+	}
+	switch strings.TrimSpace(t.TaskType) {
+	case "alter_schema", "remove_table", "add_table", "delete_task":
+		return o.Apply(ctx, taskID, "debezium")
+	}
 	extra := parseTaskExtra(t.Description)
-	if base := o.persistConnectBase(extra); base != "" {
-		for _, name := range o.taskConnectorNames(t, extra) {
-			_ = o.connectAction(ctx, extra, "POST", "/connectors/"+name+"/restart", nil)
+	base := o.persistConnectBase(extra)
+	names := o.taskConnectorNames(t, extra)
+	if base == "" || len(names) == 0 {
+		return o.Apply(ctx, taskID, "debezium")
+	}
+	for _, name := range names {
+		if !connectConnectorExists(ctx, base, name) {
+			o.appendLog(t, "INFO", "debezium", "connector "+name+" 不存在，从 Debezium 步骤重新编排")
+			return o.Apply(ctx, taskID, "debezium")
 		}
 	}
-	return o.Apply(ctx, taskID, "debezium")
+	// 不写 error_step：编排已走完的任务若标记 debezium，下次续跑会重复 CREATE ROUTINE LOAD。
+	fail := func(err error) error {
+		o.appendLog(t, "ERROR", "debezium", "重启失败："+err.Error())
+		o.saveExtra(t, extra)
+		_ = o.Store.UpdateCDCStatus(t.ID, store.StatusFailed, t.ApprovalStatus)
+		return err
+	}
+	wasPaused := t.Status == store.StatusPaused
+	for _, name := range names {
+		if wasPaused {
+			if err := o.connectAction(ctx, extra, "PUT", "/connectors/"+name+"/resume", nil); err != nil {
+				return fail(fmt.Errorf("恢复 connector %s: %w", name, err))
+			}
+		}
+		if err := connectRestartConnectorAndTasks(ctx, base, name); err != nil {
+			return fail(err)
+		}
+		o.appendLog(t, "INFO", "debezium", "已重启 connector 及其 task："+name)
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, connectorSettleTimeout)
+	defer cancel()
+	for _, name := range names {
+		err := connectWaitRunning(waitCtx, base, name, connectorSettleTimeout)
+		switch {
+		case err == nil:
+			o.appendLog(t, "INFO", "debezium", "connector "+name+" 及其 task 已 RUNNING")
+		case errors.Is(err, errNotSettled):
+			o.appendLog(t, "WARN", "debezium", fmt.Sprintf("connector %s 在 %s 内未全部进入 RUNNING，请稍后在详情页确认状态", name, connectorSettleTimeout))
+		default:
+			return fail(err)
+		}
+	}
+	if extra["error_step"] != "" {
+		// 上次编排未走完（例如 Routine Load 未建成），重启后从失败步骤续跑。
+		return o.Apply(ctx, taskID, "")
+	}
+	o.routineLoadAction(ctx, t, extra, "RESUME")
+	extra["pipeline_status"] = "running"
+	o.saveExtra(t, extra)
+	o.appendLog(t, "INFO", "restart", "任务已重启")
+	return o.Store.UpdateCDCStatus(t.ID, store.StatusRunning, t.ApprovalStatus)
 }
+
+// connectorSettleTimeout 须小于 handler 的 45s 超时，给重启请求与 Routine Load 留出余量。
+const connectorSettleTimeout = 25 * time.Second
 
 func (o *Orchestrator) runStep(ctx context.Context, t *store.CDCTask, extra map[string]string, step string) error {
 	switch step {
@@ -304,16 +376,15 @@ func (o *Orchestrator) ensurePublicationAndSlot(ctx context.Context, inst *store
 	}
 	if _, err := db.ExecContext(ctx, pubSQL); err != nil {
 		low := strings.ToLower(err.Error())
-		if addOnly && (strings.Contains(low, "already") || strings.Contains(low, "duplicate")) {
+		switch {
+		case addOnly && (strings.Contains(low, "already") || strings.Contains(low, "duplicate")):
 			return nil
-		}
-		if !addOnly && strings.Contains(low, "already exists") {
-			return nil
-		}
-		if addOnly {
+		case addOnly:
 			return fmt.Errorf("ALTER PUBLICATION 失败: %w", err)
+		case !strings.Contains(low, "already exists"):
+			return fmt.Errorf("创建 publication 失败: %w", err)
 		}
-		return fmt.Errorf("创建 publication 失败: %w", err)
+		// publication 已存在（例如上次编排建完 publication 后失败）仍须确保 slot 存在。
 	}
 	if addOnly {
 		return nil
@@ -360,33 +431,30 @@ func qualifyPGTables(schema string, tables []string) []string {
 	return qTables
 }
 
+// stepDebezium 每个 shard binding 一个 Connector，下发时注入源实例真实密码；extra 副本保持脱敏。
 func (o *Orchestrator) stepDebezium(ctx context.Context, t *store.CDCTask, extra map[string]string) error {
-	src, _ := o.Store.GetInstance(t.SourceID)
-	in := PreviewInput{
-		Name: t.Name, SourceDB: t.SourceDB, SourceSchema: extra["source_schema"],
-		DebeziumMode: extra["debezium_mode"], SnapshotMode: extra["snapshot_mode"],
-		FilterDeleteEvents: extra["filter_delete_events"] == "true",
-		PublicationName:    extra["publication_name"], SlotName: extra["slot_name"],
-		TopicPrefix: extra["topic_prefix"], Tables: splitCSV(extra["tables"]),
+	plans, err := BuildTaskConnectorPlans(o.Store, o.Secret, t, extra, extra["snapshot_mode"])
+	if err != nil {
+		return err
 	}
-	if src != nil {
-		in.PGHost = strings.TrimSpace(src.Host)
-		if in.PGHost == "" {
-			in.PGHost = strings.TrimSpace(src.DomainName)
-		}
-		in.PGPort, in.PGUser = src.Port, src.Username
+	if strings.TrimSpace(extra["connector_name"]) == "" {
+		extra["connector_name"] = plans[0].ConnectorName
 	}
-	out := BuildPreview(in)
-	cfgJSON, _ := json.Marshal(out.Config)
-	extra["debezium_config"] = string(cfgJSON)
-	extra["connector_name"] = out.PublicationName
-	extra["debezium_template"] = out.Template
-	if !o.Cfg.Enabled || strings.TrimSpace(o.Cfg.DebeziumURL) == "" {
-		o.appendLog(t, "INFO", "debezium", "Debezium 未配置，仅生成 connector 配置")
+	extra["debezium_config"] = MarshalConfigMap(hubConnectorCopy(plans, extra))
+	extra["debezium_template"] = TemplateName(defaultStr(extra["debezium_mode"], ModeAfterOnly))
+	base := o.persistConnectBase(extra)
+	if base == "" {
+		o.appendLog(t, "INFO", "debezium", "未解析到 Debezium Connect 地址（连接器 dbz_host / 任务覆盖 / cdc.debezium_url 均空），仅生成 connector 配置")
 		return nil
 	}
-	body := map[string]any{"name": extra["connector_name"], "config": out.Config}
-	return o.connectAction(ctx, extra, "POST", "/connectors", body)
+	defer InvalidateConnectorList(base)
+	for _, p := range plans {
+		if err := EnsureDebeziumConnector(ctx, base, p.ConnectorName, p.Config); err != nil {
+			return fmt.Errorf("connector %s: %w", p.ConnectorName, err)
+		}
+		o.appendLog(t, "INFO", "debezium", fmt.Sprintf("connector %s 已就绪（db=%s slot=%s）", p.ConnectorName, p.DbName, p.SlotName))
+	}
+	return nil
 }
 
 func (o *Orchestrator) applyTargetSQL(ctx context.Context, t *store.CDCTask, sqlText string) error {

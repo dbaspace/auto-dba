@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -69,6 +70,54 @@ func (h *InsightHandler) SnapshotStats(c *gin.Context) {
 		"total":     total,
 		"current":   current,
 		"page_size": pageSize,
+	})
+}
+
+func (h *InsightHandler) SnapshotSummary(c *gin.Context) {
+	start := strings.TrimSpace(c.Query("start_time"))
+	end := strings.TrimSpace(c.Query("end_time"))
+	if start == "" || end == "" {
+		now := time.Now().UTC()
+		if end == "" {
+			end = now.Format(time.RFC3339)
+		}
+		if start == "" {
+			start = now.Add(-24 * time.Hour).Format(time.RFC3339)
+		}
+	}
+	topN, _ := strconv.Atoi(c.DefaultQuery("top_n", "10"))
+	if topN <= 0 {
+		topN = 10
+	}
+	if topN > 50 {
+		topN = 50
+	}
+
+	sum, err := h.Store.SummaryPGActivity(store.PGActivitySummaryFilter{
+		InstanceID: c.Query("instance_id"),
+		StartTime:  start,
+		EndTime:    end,
+		PDb:        c.Query("p_db"),
+		PUser:      c.Query("p_user"),
+		TopN:       topN,
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"data": gin.H{
+			"time_range": gin.H{
+				"start": start,
+				"end":   end,
+			},
+			"state_distribution": sum.StateDistribution,
+			"duration_buckets":   sum.DurationBuckets,
+			"top_databases":      sum.TopDatabases,
+			"top_users":          sum.TopUsers,
+			"top_instances":      sum.TopInstances,
+			"trend":              sum.Trend,
+		},
 	})
 }
 

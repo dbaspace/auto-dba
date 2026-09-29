@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Button, Input, Modal, Select, Table, Tabs, Tag, Typography, message } from 'antd'
+import { Button, Input, Modal, Select, Tabs, Tag, Typography, message } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
 import { StopOutlined } from '@ant-design/icons'
 import axios from 'axios'
 import api from '../../api/request'
@@ -84,6 +85,7 @@ export default function KafkaTopicQueryModal({
   const [loading, setLoading] = useState(false)
   const [metaLoading, setMetaLoading] = useState(false)
   const queryAbortRef = useRef<AbortController | null>(null)
+  const loadedTabs = useRef<Set<string>>(new Set())
   const [messages, setMessages] = useState<KafkaMessage[]>([])
   const [partitionRows, setPartitionRows] = useState<PartitionRow[]>([])
   const [configRows, setConfigRows] = useState<ConfigRow[]>([])
@@ -121,7 +123,7 @@ export default function KafkaTopicQueryModal({
   const sortedMessages = useMemo(() => applySearchFilter(messages), [messages, searchFields])
 
   async function loadPartitions() {
-    if (!instanceId || !topicName) return
+    if (!instanceId || !topicName) return false
     setMetaLoading(true)
     try {
       const { data } = await api.get(`/instances/${instanceId}/kafka/topics/${topicPath()}/partitions`)
@@ -138,23 +140,26 @@ export default function KafkaTopicQueryModal({
         if (list.some((p) => String(p.id) === prev)) return prev
         return list.length ? String(list[0].id) : '0'
       })
+      return true
     } catch {
       setPartitionOptions([])
       setPartitionRows([])
+      return false
     } finally {
       setMetaLoading(false)
     }
   }
 
-  async function loadMessages(partitionOverride?: string) {
-    if (!instanceId || !topicName) return
+  async function loadMessages(partitionOverride?: string, sortOverride?: string) {
+    if (!instanceId || !topicName) return false
     queryAbortRef.current?.abort()
     const ac = new AbortController()
     queryAbortRef.current = ac
     setLoading(true)
     const part = partitionOverride !== undefined ? partitionOverride : partition
+    const sort = sortOverride !== undefined ? sortOverride : sortOrder
     try {
-      const params: Record<string, any> = { limit: 100, sort: sortOrder }
+      const params: Record<string, any> = { limit: 100, sort }
       if (offsetInput !== '' && offsetInput !== '-1') params.offset = offsetInput
       if (part !== '') params.partition = part
       const { data } = await api.get(
@@ -163,15 +168,16 @@ export default function KafkaTopicQueryModal({
       )
       if (data?.canceled) {
         message.info(data.message || '查询已终止')
-        return
+        return true
       }
       setMessages(data.data || [])
+      return true
     } catch (err: any) {
       if (axios.isCancel(err) || err?.code === 'ERR_CANCELED' || err?.name === 'CanceledError') {
-        message.info('查询已终止')
-        return
+        return true
       }
       setMessages([])
+      return false
     } finally {
       if (queryAbortRef.current === ac) queryAbortRef.current = null
       setLoading(false)
@@ -179,28 +185,32 @@ export default function KafkaTopicQueryModal({
   }
 
   async function loadConfigs() {
-    if (!instanceId || !topicName) return
+    if (!instanceId || !topicName) return false
     setMetaLoading(true)
     try {
       const { data } = await api.get(`/instances/${instanceId}/kafka/topics/${topicPath()}/configs`)
       setConfigRows(data.data || [])
+      return true
     } catch {
       setConfigRows([])
       message.error('加载 Configs 失败')
+      return false
     } finally {
       setMetaLoading(false)
     }
   }
 
   async function loadLogs() {
-    if (!instanceId || !topicName) return
+    if (!instanceId || !topicName) return false
     setMetaLoading(true)
     try {
       const { data } = await api.get(`/instances/${instanceId}/kafka/topics/${topicPath()}/logs`)
       setLogRows(data.data || [])
+      return true
     } catch {
       setLogRows([])
       message.error('加载 Logs 失败')
+      return false
     } finally {
       setMetaLoading(false)
     }
@@ -274,35 +284,43 @@ export default function KafkaTopicQueryModal({
     URL.revokeObjectURL(a.href)
   }
 
-  function loadTabData(tab: string) {
-    if (tab === 'data') loadMessages()
-    else if (tab === 'partitions') loadPartitions()
-    else if (tab === 'configs') loadConfigs()
-    else if (tab === 'logs') loadLogs()
+  function loadTabData(tab: string, partitionOverride?: string) {
+    if (tab === 'consumerGroups') return
+    if (loadedTabs.current.has(tab)) return
+    loadedTabs.current.add(tab)
+    const undo = () => loadedTabs.current.delete(tab)
+    if (tab === 'data') {
+      loadMessages(partitionOverride).then((ok) => { if (!ok) undo() })
+    } else if (tab === 'partitions') {
+      loadPartitions().then((ok) => { if (!ok) undo() })
+    } else if (tab === 'configs') {
+      loadConfigs().then((ok) => { if (!ok) undo() })
+    } else if (tab === 'logs') {
+      loadLogs().then((ok) => { if (!ok) undo() })
+    }
   }
 
   useEffect(() => {
-    if (visible && instanceId && topicName) {
-      const tab = initialTab || 'data'
-      setActiveTab(tab)
-      const preferred =
-        initialPartition != null && Number(initialPartition) >= 0
-          ? String(initialPartition)
-          : undefined
-      if (preferred !== undefined) setPartition(preferred)
-      loadPartitions()
-      if (tab === 'data') loadMessages(preferred)
-      else loadTabData(tab)
-    } else {
+    if (!(visible && instanceId && topicName)) {
       queryAbortRef.current?.abort()
+      return
     }
+    loadedTabs.current = new Set()
+    setMessages([])
+    setPartitionRows([])
+    setPartitionOptions([])
+    setConfigRows([])
+    setLogRows([])
+    const tab = initialTab || 'data'
+    setActiveTab(tab)
+    const preferred =
+      initialPartition != null && Number(initialPartition) >= 0
+        ? String(initialPartition)
+        : undefined
+    if (preferred !== undefined) setPartition(preferred)
+    loadTabData(tab, preferred)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible])
-
-  useEffect(() => {
-    if (visible && instanceId && topicName && activeTab === 'data') loadMessages()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sortOrder, partition])
+  }, [visible, instanceId, topicName])
 
   useEffect(() => () => {
     queryAbortRef.current?.abort()
@@ -322,7 +340,7 @@ export default function KafkaTopicQueryModal({
   function renderMetaTable() {
     if (activeTab === 'partitions') {
       return (
-        <Table
+        <ResponsiveTable
           dataSource={partitionRows}
           rowKey={(r) => String(r.id)}
           size="small"
@@ -352,7 +370,7 @@ export default function KafkaTopicQueryModal({
     }
     if (activeTab === 'configs') {
       return (
-        <Table
+        <ResponsiveTable
           dataSource={configRows}
           rowKey={(r) => r.name}
           size="small"
@@ -386,7 +404,7 @@ export default function KafkaTopicQueryModal({
     }
     if (activeTab === 'logs') {
       return (
-        <Table
+        <ResponsiveTable
           dataSource={logRows}
           rowKey={(r) => `${r.broker}-${r.partition}-${r.topic}`}
           size="small"
@@ -439,16 +457,33 @@ export default function KafkaTopicQueryModal({
             <Select
               value={sortOrder}
               style={{ width: 110 }}
-              onChange={setSortOrder}
+              onChange={(v) => {
+                setSortOrder(v)
+                loadedTabs.current.add('data')
+                loadMessages(partition, v).then((ok) => {
+                  if (!ok) loadedTabs.current.delete('data')
+                })
+              }}
               options={[{ label: 'Oldest', value: 'oldest' }, { label: 'Newest', value: 'newest' }]}
             />
             <span className="lab">Partition</span>
             <Select
               value={partition}
               style={{ width: 110 }}
-              onChange={setPartition}
+              onChange={(v) => {
+                setPartition(v)
+                loadedTabs.current.add('data')
+                loadMessages(v).then((ok) => {
+                  if (!ok) loadedTabs.current.delete('data')
+                })
+              }}
               options={[
                 { label: 'All', value: '' },
+                ...(initialPartition != null &&
+                Number(initialPartition) >= 0 &&
+                !partitionOptions.some((p) => String(p.id) === String(initialPartition))
+                  ? [{ label: String(initialPartition), value: String(initialPartition) }]
+                  : []),
                 ...partitionOptions.map((p) => ({ label: String(p.id), value: String(p.id) })),
               ]}
             />
@@ -495,7 +530,7 @@ export default function KafkaTopicQueryModal({
             </div>
           ) : null}
 
-          <Table
+          <ResponsiveTable
             dataSource={sortedMessages}
             rowKey={(_, i) => String(i)}
             size="small"

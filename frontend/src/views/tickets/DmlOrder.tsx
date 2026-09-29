@@ -1,15 +1,17 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import {
+  useNavigate,
+  useSearchParams } from 'react-router-dom'
 import {
   Button,
   DatePicker,
   Form,
   Input,
   Select,
-  Table,
   Tooltip,
   message,
 } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs, { Dayjs } from 'dayjs'
 import api from '../../api/request'
@@ -680,7 +682,7 @@ export default function DmlOrder() {
             <Button onClick={beautify}>SQL美化</Button>
           </div>
           <p className="hint">编辑框内可检测、美化 SQL</p>
-          <Table
+          <ResponsiveTable
             dataSource={checkRows}
             columns={checkColumns}
             size="small"

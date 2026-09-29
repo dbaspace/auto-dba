@@ -12,10 +12,10 @@ import {
   Pagination,
   Row,
   Select,
-  Table,
   Tag,
   message,
 } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs, { Dayjs } from 'dayjs'
 import api from '../../api/request'
@@ -954,7 +954,7 @@ export default function Flashback() {
               </a>
             </div>
             {recentTasks.length ? (
-              <Table
+              <ResponsiveTable
                 rowKey={(r) => r.id}
                 size="small"
                 bordered
@@ -1295,7 +1295,7 @@ ALTER TABLE schema.table REPLICA IDENTITY DEFAULT;`}</pre>
             />
             <Button onClick={load}>刷新</Button>
           </div>
-          <Table
+          <ResponsiveTable
             rowKey={(r) => r.id}
             size="small"
             bordered
@@ -1381,7 +1381,7 @@ ALTER TABLE schema.table REPLICA IDENTITY DEFAULT;`}</pre>
             </Auth>
             <span className="meta">{selectedSQLs.length ? `已选 ${selectedSQLs.length} 条` : '未选'}</span>
           </div>
-          <Table
+          <ResponsiveTable
             rowKey={(r) => r.seq ?? r.statement}
             bordered
             size="small"

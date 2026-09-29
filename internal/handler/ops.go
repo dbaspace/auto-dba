@@ -59,6 +59,9 @@ func (h *CDCHandler) List(c *gin.Context) {
 	if list == nil {
 		list = []store.CDCTask{}
 	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
+	h.orch().AnnotateReinit(ctx, list)
+	cancel()
 	for i := range list {
 		list[i].Description = normalizeCDCDescription(list[i].Description)
 	}
@@ -71,6 +74,11 @@ func (h *CDCHandler) Get(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"message": "任务不存在"})
 		return
 	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
+	one := []store.CDCTask{*t}
+	h.orch().AnnotateReinit(ctx, one)
+	cancel()
+	t.CanReinit, t.ConnectorMissing = one[0].CanReinit, one[0].ConnectorMissing
 	t.Description = normalizeCDCDescription(t.Description)
 	c.JSON(http.StatusOK, gin.H{"data": t})
 }
@@ -635,6 +643,14 @@ func (h *CDCHandler) Action(status, approval string) gin.HandlerFunc {
 		}
 		if status == store.StatusRunning && !cdcApproved(t) {
 			c.JSON(http.StatusBadRequest, gin.H{"message": "CDC 任务须审批通过后才能执行"})
+			return
+		}
+		if t.Status == store.StatusReinitializing {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "任务正在重新初始化，请稍后再操作"})
+			return
+		}
+		if strings.Contains(c.Request.URL.Path, "/retry") && cdc.ParseTaskExtra(t.Description)["error_step"] == "reinit" {
+			h.retryReinit(c, t)
 			return
 		}
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 45*time.Second)

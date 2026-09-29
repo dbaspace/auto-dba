@@ -1,0 +1,75 @@
+.redis-rdb-page {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+
+.redis-rdb-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.redis-rdb-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 10px;
+}
+
+.redis-rdb-card {
+  padding: 10px 12px;
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 6px;
+  background: var(--panel-bg, #fff);
+}
+
+.redis-rdb-card .label {
+  font-size: 12px;
+  color: var(--text-secondary, #6b7280);
+  margin-bottom: 4px;
+}
+
+.redis-rdb-card .value {
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.redis-rdb-hint {
+  font-size: 12px;
+  color: var(--text-secondary, #6b7280);
+}
+
+.redis-rdb-advice {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.redis-rdb-advice-item {
+  padding: 10px 12px;
+  border-left: 3px solid #94a3b8;
+  background: var(--panel-bg, #f8fafc);
+  border-radius: 0 6px 6px 0;
+}
+
+.redis-rdb-advice-item.warn {
+  border-left-color: #f59e0b;
+}
+
+.redis-rdb-advice-item.critical {
+  border-left-color: #ef4444;
+}
+
+.redis-rdb-advice-item .title {
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+.redis-rdb-advice-item .detail,
+.redis-rdb-advice-item .suggest {
+  font-size: 13px;
+  color: var(--text-secondary, #4b5563);
+}

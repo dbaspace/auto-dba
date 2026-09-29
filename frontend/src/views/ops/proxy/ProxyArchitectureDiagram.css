@@ -1,0 +1,183 @@
+.proxy-arch {
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 10px;
+  padding: 14px 16px 16px;
+  background: linear-gradient(180deg, #fafbfc 0%, #f3f5f7 100%);
+  margin-bottom: 12px;
+}
+
+.proxy-arch--compact {
+  padding: 10px 12px;
+  margin: 0 0 8px;
+}
+
+.proxy-arch-empty {
+  color: #6b7280;
+  font-size: 13px;
+  padding: 16px 8px;
+  text-align: center;
+}
+
+.proxy-arch-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.proxy-arch-hint {
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.proxy-arch-flow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 8px 4px;
+}
+
+.proxy-arch-layer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 120px;
+}
+
+.proxy-arch-layer--rs {
+  min-width: 160px;
+  max-width: 520px;
+  flex: 1 1 200px;
+}
+
+.proxy-arch-layer-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #4b5563;
+  margin-bottom: 8px;
+  letter-spacing: 0.02em;
+  text-align: center;
+}
+
+.proxy-arch-arrow {
+  align-self: center;
+  padding: 28px 6px 0;
+  font-size: 11px;
+  color: #6b7280;
+  text-align: center;
+  min-width: 52px;
+}
+
+.proxy-arch-arrow::before {
+  content: '→';
+  display: block;
+  font-size: 18px;
+  line-height: 1;
+  color: #9ca3af;
+  margin-bottom: 2px;
+}
+
+.proxy-arch-node {
+  min-width: 120px;
+  max-width: 200px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #d1d5db;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  text-align: center;
+}
+
+.proxy-arch--compact .proxy-arch-node {
+  min-width: 100px;
+  padding: 8px 10px;
+}
+
+.proxy-arch-node-badge {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #6b7280;
+  margin-bottom: 4px;
+}
+
+.proxy-arch-node-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #111827;
+  word-break: break-all;
+}
+
+.proxy-arch-node-sub {
+  font-size: 11px;
+  color: #6b7280;
+  margin-top: 2px;
+  word-break: break-all;
+}
+
+.proxy-arch-node-weight {
+  margin-top: 4px;
+  font-size: 10px;
+  color: #2563eb;
+  font-weight: 600;
+}
+
+.proxy-arch-node--client {
+  border-style: dashed;
+  border-color: #c4b5fd;
+  background: #f5f3ff;
+}
+
+.proxy-arch-node--vip {
+  border-color: #67e8f9;
+  background: #ecfeff;
+}
+
+.proxy-arch-node--proxy {
+  border-color: #93c5fd;
+  background: #eff6ff;
+}
+
+.proxy-arch-node--rs {
+  border-color: #86efac;
+  background: #f0fdf4;
+}
+
+.proxy-arch-node--rs.is-backup {
+  border-style: dashed;
+  border-color: #fcd34d;
+  background: #fffbeb;
+}
+
+.proxy-arch-node--empty-rs {
+  border-style: dashed;
+  color: #9ca3af;
+  font-size: 12px;
+}
+
+.proxy-arch-rs-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+}
+
+@media (max-width: 720px) {
+  .proxy-arch-flow {
+    flex-direction: column;
+    align-items: center;
+  }
+  .proxy-arch-arrow {
+    padding: 4px 0;
+    min-width: auto;
+  }
+  .proxy-arch-arrow::before {
+    content: '↓';
+  }
+  .proxy-arch-layer--rs {
+    max-width: 100%;
+  }
+}

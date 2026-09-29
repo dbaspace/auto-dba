@@ -223,7 +223,7 @@ func TestCheckTicketSQLUsesStoreReviewRules(t *testing.T) {
 	for _, c := range cases {
 		c := c
 		t.Run(c.name, func(t *testing.T) {
-			res := h.checkTicketSQL(c.sql, c.typ, c.db, "", "")
+			res := h.checkTicketSQL(c.sql, c.typ, c.db, "", "", false)
 			if res.OK != c.wantOK {
 				t.Fatalf("ok=%v want %v stmts=%+v", res.OK, c.wantOK, res.Statements)
 			}

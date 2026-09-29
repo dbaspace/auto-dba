@@ -25,7 +25,7 @@
 .sql-title {
   font-size: 15px;
   font-weight: 500;
-  color: #111827;
+  color: var(--app-text, #111827);
   margin-bottom: 8px;
   flex-shrink: 0;
 }

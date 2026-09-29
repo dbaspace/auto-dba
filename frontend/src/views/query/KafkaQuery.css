@@ -1,5 +1,5 @@
 .kafka-query { height: 100%; }
-.kafka-query .layout { display: flex; flex: 1; min-height: 0; background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden; }
+.kafka-query .layout { display: flex; flex: 1; min-height: 0; background: var(--app-content-bg, #fff); border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden; }
 .kafka-query .side { width: 260px; flex-shrink: 0; border-right: 1px solid #e5e7eb; display: flex; flex-direction: column; padding: 12px; }
 .kafka-query .side-head { font-weight: 600; margin-bottom: 10px; }
 .kafka-query .mb { margin-bottom: 8px; }

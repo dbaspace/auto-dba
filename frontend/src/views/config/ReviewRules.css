@@ -1,5 +1,5 @@
 .review-page {
-  background: #fff;
+  background: var(--app-content-bg, #fff);
   flex: 1;
   min-height: 0;
 }
@@ -13,7 +13,7 @@
   padding: 16px 16px 4px;
   border: 1px solid #e5e7eb;
   border-radius: 8px;
-  background: #fafafa;
+  background: var(--app-page-bg, #fafafa);
 }
 
 .gi-head h2 {

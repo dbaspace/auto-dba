@@ -1,9 +1,20 @@
 /* MigrationCreate 样式：由旧 MigrationCreate.vue <style scoped> 迁移 */
 .mig-create {
-  max-width: 1400px;
-  margin: 0 auto;
-  padding-bottom: 32px;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 16px 16px 32px;
   overflow: auto;
+  background: var(--app-content-bg, #fff);
+  box-sizing: border-box;
+}
+.mig-create-inner,
+.mig-create .ops-title,
+.mig-create .white-card,
+.mig-create .mig-nav {
+  max-width: 1400px;
+  margin-left: auto;
+  margin-right: auto;
 }
 .mig-create .ops-title {
   display: flex;
@@ -18,7 +29,7 @@
   color: #111827;
 }
 .mig-create .white-card {
-  background: #fff;
+  background: var(--app-content-bg, #fff);
   border: 1px solid #f0f0f0;
   border-radius: 8px;
   padding: 20px;

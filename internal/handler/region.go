@@ -174,7 +174,78 @@ func applyInstanceLocation(st *store.DB, it *store.Instance) error {
 		return errLocationUnbound
 	}
 	it.IDC = env.Code
+	syncInstanceMonitorTags(it, env.Code)
 	return nil
+}
+
+// syncInstanceMonitorTags 规范：tags 中 idc= 必须等于环境管理 code；
+// Redis / StarRocks / ClickHouse / Kafka 缺 domain= 时用域名或主机补齐。
+func syncInstanceMonitorTags(it *store.Instance, envCode string) {
+	envCode = strings.TrimSpace(envCode)
+	if envCode == "" {
+		return
+	}
+	tags := make([]string, 0, len(it.Tags)+2)
+	hasDomain := false
+	for _, raw := range it.Tags {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		k, _, ok := splitInstanceTagKV(raw)
+		if ok && strings.EqualFold(k, "idc") {
+			continue // 稍后统一写入 idc=envCode
+		}
+		if ok && strings.EqualFold(k, "domain") {
+			hasDomain = true
+		}
+		tags = append(tags, raw)
+	}
+	tags = append(tags, "idc="+envCode)
+
+	if !hasDomain && needsDomainTag(it.DBType) {
+		if d := firstInstanceDomain(it); d != "" {
+			tags = append(tags, "domain="+d)
+		}
+	}
+	it.Tags = tags
+}
+
+func needsDomainTag(dbType string) bool {
+	switch strings.ToLower(strings.TrimSpace(dbType)) {
+	case "redis", "starrocks", "clickhouse", "kafka":
+		return true
+	default:
+		return false
+	}
+}
+
+func firstInstanceDomain(it *store.Instance) string {
+	if it == nil {
+		return ""
+	}
+	if d := strings.TrimSpace(it.DomainName); d != "" {
+		return d
+	}
+	for _, d := range it.Domains {
+		if v := strings.TrimSpace(d); v != "" {
+			return v
+		}
+	}
+	return strings.TrimSpace(it.Host)
+}
+
+func splitInstanceTagKV(raw string) (key, val string, ok bool) {
+	i := strings.IndexByte(raw, '=')
+	if i <= 0 {
+		return "", "", false
+	}
+	key = strings.TrimSpace(raw[:i])
+	val = strings.TrimSpace(raw[i+1:])
+	if key == "" || val == "" {
+		return "", "", false
+	}
+	return key, val, true
 }
 
 var (

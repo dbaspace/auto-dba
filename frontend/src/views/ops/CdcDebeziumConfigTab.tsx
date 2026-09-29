@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Button, Drawer, Input, Modal, Pagination, Space, Table, Tag, message } from 'antd'
+import { Alert, Button, Drawer, Input, Modal, Pagination, Space, Tag, message } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
 import type { ColumnsType } from 'antd/es/table'
 import api from '../../api/request'
-import { formatOperationType, isSensitiveConfigKey, operationTypeTagColor } from './cdc'
+import { formatOperationType, isSensitiveConfigKey, operationTypeTagColor, pipelineStateText } from './cdc'
 import './CdcDebeziumConfigTab.css'
 
 interface ConfigRow {
@@ -16,13 +17,15 @@ interface Props {
   extra: any
   pending?: boolean
   onUpdated?: () => void
+  /** Connector 在 Connect 上缺失时打开重新初始化弹窗 */
+  onReinit?: () => void
 }
 
 function stateColor(s: string): string {
   const u = String(s || '').toUpperCase()
   if (u === 'RUNNING') return 'success'
   if (u === 'PAUSED' || u === 'UNASSIGNED') return 'warning'
-  if (u === 'FAILED') return 'error'
+  if (u === 'FAILED' || u === 'NOT_FOUND') return 'error'
   return 'default'
 }
 function fmtTime(t: any): string {
@@ -49,7 +52,7 @@ function isLong(row: ConfigRow) {
   return String(row.value || '').length > 80 || /\.list$/.test(row.key || '')
 }
 
-export default function CdcDebeziumConfigTab({ taskId, extra, pending = false, onUpdated }: Props) {
+export default function CdcDebeziumConfigTab({ taskId, extra, pending = false, onUpdated, onReinit }: Props) {
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [editing, setEditing] = useState(false)
@@ -81,6 +84,7 @@ export default function CdcDebeziumConfigTab({ taskId, extra, pending = false, o
     )
   }, [rows, keyword])
   const prettyJSON = useMemo(() => JSON.stringify(rowsToConfig(rows), null, 2), [rows])
+  const missing = !!detail.connector_missing
 
   async function load() {
     if (!taskId) return
@@ -305,7 +309,7 @@ export default function CdcDebeziumConfigTab({ taskId, extra, pending = false, o
           <Button type="link" size="small" onClick={() => showDiff(r)}>
             对比
           </Button>
-          <Button type="link" size="small" danger onClick={() => beginRestore(r)}>
+          <Button type="link" size="small" danger disabled={missing} onClick={() => beginRestore(r)}>
             恢复
           </Button>
         </Space>
@@ -318,7 +322,7 @@ export default function CdcDebeziumConfigTab({ taskId, extra, pending = false, o
       <div className="dbz-summary">
         <div className="dbz-summary-title">
           <strong>{detail.name || extra.connector_name || '—'}</strong>
-          {detail.state && <Tag color={stateColor(detail.state)}>{detail.state}</Tag>}
+          {detail.state && <Tag color={stateColor(detail.state)}>{pipelineStateText(detail.state)}</Tag>}
           {(detail.debezium_mode || extra.debezium_mode) && (
             <Tag color="blue" bordered={false}>
               模式：{detail.debezium_mode || extra.debezium_mode}
@@ -330,6 +334,26 @@ export default function CdcDebeziumConfigTab({ taskId, extra, pending = false, o
           <span>模板：{detail.template || extra.debezium_template || '—'}</span>
         </div>
       </div>
+      {missing && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message={detail.warning || 'Kafka Connect 上未找到该 Connector，可通过“重新初始化”补齐'}
+          description={
+            (detail.missing_connectors || []).length
+              ? `缺失：${detail.missing_connectors.join('、')}（Connect：${detail.connect_base_url || '—'}）`
+              : undefined
+          }
+          action={
+            detail.can_reinit && onReinit ? (
+              <Button size="small" type="primary" onClick={onReinit}>
+                重新初始化
+              </Button>
+            ) : undefined
+          }
+        />
+      )}
 
       <div className="dbz-toolbar">
         <Input
@@ -351,7 +375,7 @@ export default function CdcDebeziumConfigTab({ taskId, extra, pending = false, o
             JSON视图
           </Button>
           {!editing ? (
-            <Button size="small" type="primary" disabled={pending} onClick={() => setEditing(true)}>
+            <Button size="small" type="primary" disabled={pending || missing} onClick={() => setEditing(true)}>
               保存
             </Button>
           ) : (
@@ -377,14 +401,14 @@ export default function CdcDebeziumConfigTab({ taskId, extra, pending = false, o
         </div>
       </div>
 
-      <Table
+      <ResponsiveTable
         rowKey={(r) => r.key + (r.isNew ? '__new' : '')}
         loading={loading}
         size="small"
         columns={cfgColumns}
         dataSource={filteredRows}
         pagination={false}
-        scroll={{ y: 520 }}
+        scroll={{ x: 'max-content', y: 520 }}
         locale={{ emptyText: '暂无配置' }}
       />
       {editing && (
@@ -396,10 +420,10 @@ export default function CdcDebeziumConfigTab({ taskId, extra, pending = false, o
       )}
 
       <Drawer title="配置版本历史" width={960} open={historyOpen} onClose={() => setHistoryOpen(false)} destroyOnClose>
-        <Button className="mb" disabled={versions.length < 2} onClick={() => beginRestore(versions[1])}>
+        <Button className="mb" disabled={versions.length < 2 || missing} onClick={() => beginRestore(versions[1])}>
           恢复上一版
         </Button>
-        <Table
+        <ResponsiveTable
           rowKey="id"
           loading={verLoading}
           size="small"
@@ -432,12 +456,12 @@ export default function CdcDebeziumConfigTab({ taskId, extra, pending = false, o
       </Modal>
 
       <Modal title="版本配置" open={detailOpen} footer={null} width={720} onCancel={() => setDetailOpen(false)}>
-        <Table
+        <ResponsiveTable
           rowKey="key"
           size="small"
           dataSource={detailRows}
           pagination={false}
-          scroll={{ y: 420 }}
+          scroll={{ x: 'max-content', y: 420 }}
           columns={[
             { title: 'Key', dataIndex: 'key' },
             { title: 'Value', dataIndex: 'value' },
@@ -446,12 +470,12 @@ export default function CdcDebeziumConfigTab({ taskId, extra, pending = false, o
       </Modal>
 
       <Modal title="与当前配置对比" open={diffOpen} footer={null} width={860} onCancel={() => setDiffOpen(false)}>
-        <Table
+        <ResponsiveTable
           rowKey="key"
           size="small"
           dataSource={diffRows}
           pagination={false}
-          scroll={{ y: 420 }}
+          scroll={{ x: 'max-content', y: 420 }}
           columns={[
             { title: 'Key', dataIndex: 'key', width: 200 },
             { title: '变化', dataIndex: 'kind', width: 80 },

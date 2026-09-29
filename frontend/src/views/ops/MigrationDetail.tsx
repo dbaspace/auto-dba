@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import {
+  useParams } from 'react-router-dom'
 import { useNavigate } from 'react-router-dom'
 import {
   Alert,
@@ -13,11 +14,11 @@ import {
   Radio,
   Select,
   Spin,
-  Table,
   Tabs,
   Tag,
   message,
 } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
 import api from '../../api/request'
 import './MigrationDetail.css'
 
@@ -640,7 +641,7 @@ export default function MigrationDetail() {
                         { label: '跳过', value: 'skipped' },
                       ]}
                     />
-                    <Table
+                    <ResponsiveTable
                       rowKey={(_, idx) => String(idx)}
                       bordered
                       pagination={false}
@@ -744,7 +745,7 @@ export default function MigrationDetail() {
                 key: 'precheck',
                 label: '预检',
                 children: (
-                  <Table
+                  <ResponsiveTable
                     rowKey={(_, idx) => String(idx)}
                     bordered
                     pagination={false}
@@ -778,7 +779,7 @@ export default function MigrationDetail() {
                     <Button type="primary" loading={verifying} onClick={triggerVerify}>
                       触发校验
                     </Button>
-                    <Table
+                    <ResponsiveTable
                       className="mt"
                       rowKey={(_, idx) => String(idx)}
                       bordered

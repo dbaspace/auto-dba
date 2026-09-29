@@ -3,7 +3,7 @@
   height: 100%;
   max-height: 100%;
   padding: 16px 20px;
-  background: #fff;
+  background: var(--app-content-bg, #fff);
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
@@ -21,7 +21,7 @@
   color: #374151;
   font-size: 13px;
 }
-.back-link:hover { background: #f9fafb; }
+.back-link:hover { background: var(--app-page-bg, #f9fafb); }
 .review-split {
   flex: 1;
   min-height: 0;
@@ -76,6 +76,23 @@
 .user-avatar { background: #6366f1; }
 .user-name { color: #111827; font-size: 14px; }
 .user-sub { color: #9ca3af; font-size: 12px; }
+.user-sub.exec-fail-msg {
+  color: #b91c1c;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 120px;
+  overflow: auto;
+}
+.cluster-step-err {
+  margin: 0;
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  color: #b91c1c;
+  background: transparent;
+}
 .flow-card {
   margin: 8px 0 16px;
   border: 1px solid #fcd34d;
@@ -111,7 +128,7 @@
 .remark-box {
   padding: 10px;
   border: 1px solid #e5e7eb;
-  background: #fff;
+  background: var(--app-content-bg, #fff);
 }
 .remark-label { font-size: 13px; margin-bottom: 6px; }
 .remark-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
@@ -137,7 +154,7 @@
   padding: 10px 12px;
   border: 1px solid #e5e7eb;
   border-radius: 6px;
-  background: #fff;
+  background: var(--app-content-bg, #fff);
 }
 .wf-node.is-current { border-color: #f59e0b; background: #fffbeb; }
 .wf-node.is-ok { border-color: #86efac; background: #f0fdf4; }
@@ -165,7 +182,7 @@
 .sec-title.mt { margin-top: 28px; }
 .apply-desc .ant-descriptions-item-label {
   width: 140px;
-  background: #fafafa;
+  background: var(--app-page-bg, #fafafa);
   color: #4b5563;
 }
 .sql-pre {
@@ -207,7 +224,7 @@
   padding: 10px 12px;
   margin-bottom: 12px;
   border: 1px solid #e5e7eb;
-  background: #f8fafc;
+  background: var(--app-page-bg, #f8fafc);
 }
 .ddl-exec-impact .exec-banner.is-success {
   border-color: #bbf7d0;
@@ -261,7 +278,7 @@
 }
 .ddl-exec-impact .exec-tabs button {
   border: 1px solid #e5e7eb;
-  background: #fff;
+  background: var(--app-content-bg, #fff);
   border-radius: 4px;
   padding: 2px 10px;
   cursor: pointer;
@@ -287,4 +304,17 @@
   color: #b91c1c;
   margin-bottom: 8px;
   font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.ddl-exec-impact .exec-inst-note {
+  color: #92400e;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+.ddl-exec-impact .exec-cell-error {
+  display: block;
+  max-width: 480px;
+  white-space: pre-wrap;
+  word-break: break-word;
 }

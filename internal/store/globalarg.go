@@ -10,6 +10,10 @@ import (
 
 const ArgLoginIdleTimeoutMin = "login_idle_timeout_min"
 const ArgUserWatermarkEnabled = "user_watermark_enabled"
+const ArgIssueGlobalApproverWhitelist = "issue_global_approver_whitelist"
+const ArgTicketDDLLongStmtTimeoutMinutes = "ticket_ddl_long_stmt_timeout_minutes"
+
+const defaultTicketDDLLongStmtTimeout = 6 * time.Hour
 
 func (d *DB) ListGlobalArgs() ([]GlobalArg, error) {
 	rows, err := d.Query(`SELECT key, value, description, updated_at FROM tbl_global_args ORDER BY key`)
@@ -105,6 +109,22 @@ func (d *DB) LoginIdleTimeoutMin(def int) int {
 		return def
 	}
 	return n
+}
+
+// TicketDDLLongStmtTimeout DDL 工单长耗时语句单条超时；未配置、非法或 <=0 时为 6 小时。
+func (d *DB) TicketDDLLongStmtTimeout() time.Duration {
+	if d == nil {
+		return defaultTicketDDLLongStmtTimeout
+	}
+	v, err := d.GetGlobalArg(ArgTicketDDLLongStmtTimeoutMinutes)
+	if err != nil {
+		return defaultTicketDDLLongStmtTimeout
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || n <= 0 {
+		return defaultTicketDDLLongStmtTimeout
+	}
+	return time.Duration(n) * time.Minute
 }
 
 // UserWatermarkEnabled 是否开启用户水印。未配置时默认关闭。

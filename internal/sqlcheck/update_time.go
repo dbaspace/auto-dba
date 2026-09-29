@@ -1,6 +1,7 @@
 package sqlcheck
 
 import (
+	"encoding/json"
 	"regexp"
 	"strings"
 )
@@ -17,10 +18,7 @@ func applyRequireUpdateTimeRules(stmts []string, byName map[string]Rule, res *Re
 		return
 	}
 	r, _ := ruleOf(byName, "DDLRequireUpdateTime")
-	colName := strings.ToLower(strings.TrimSpace(ruleField(r.Value, "column", "update_time")))
-	if colName == "" {
-		colName = "update_time"
-	}
+	candidates := updateTimeColumnCandidates(r.Value)
 	allowed := ruleStringSlice(r.Value, "allowed_types", []string{
 		"timestamp", "timestamptz", "timestamp without time zone", "timestamp with time zone",
 	})
@@ -51,6 +49,7 @@ func applyRequireUpdateTimeRules(stmts []string, byName map[string]Rule, res *Re
 		}
 	}
 
+	candLabel := strings.Join(candidates, " / ")
 	for i, stmt := range stmts {
 		upper := strings.ToUpper(stripSQLComments(stmt))
 		if !reCreateTable.MatchString(upper) || reCreateTableAS.MatchString(upper) {
@@ -64,23 +63,105 @@ func applyRequireUpdateTimeRules(stmts []string, byName map[string]Rule, res *Re
 		}
 		var missing []string
 
-		colDef, hasCol := findCreateTableColumnDef(stmt, colName)
-		if !hasCol {
-			missing = append(missing, "缺少列 "+colName+"（时间类型）")
-		} else if !pgTimeTypeAllowed(columnDataType(colDef), allowed) {
-			missing = append(missing, "列 "+colName+" 类型须为时间类型，当前为 "+columnDataType(colDef))
+		matched := ""
+		for _, colName := range candidates {
+			colDef, hasCol := findCreateTableColumnDef(stmt, colName)
+			if !hasCol {
+				continue
+			}
+			if !pgTimeTypeAllowed(columnDataType(colDef), allowed) {
+				continue
+			}
+			matched = colName
+			break
+		}
+		if matched == "" {
+			// 区分「完全没有候选列」与「有列但类型不对」
+			var typeMismatches []string
+			for _, colName := range candidates {
+				colDef, hasCol := findCreateTableColumnDef(stmt, colName)
+				if !hasCol {
+					continue
+				}
+				typeMismatches = append(typeMismatches, "列 "+colName+" 类型须为时间类型，当前为 "+columnDataType(colDef))
+			}
+			if len(typeMismatches) > 0 {
+				missing = append(missing, typeMismatches...)
+			} else {
+				missing = append(missing, "缺少时间列（须含 "+candLabel+" 之一，且为允许的时间类型）")
+			}
 		}
 		if !triggerOK[tblKey] {
 			missing = append(missing, "缺少 BEFORE UPDATE FOR EACH ROW 触发器（需在工单中包含 CREATE TRIGGER ... BEFORE UPDATE ON "+display+" FOR EACH ROW ...）")
 		}
-		if !createTableHasColumnIndex(stmt, colName, indexedCols[tblKey]) {
-			missing = append(missing, "列 "+colName+" 缺少索引（需 CREATE INDEX ... ON "+display+" ("+colName+") 或 UNIQUE）")
+		if matched != "" && !createTableHasColumnIndex(stmt, matched, indexedCols[tblKey]) {
+			missing = append(missing, "列 "+matched+" 缺少索引（需 CREATE INDEX ... ON "+display+" ("+matched+") 或 UNIQUE）")
 		}
 		if len(missing) == 0 {
 			continue
 		}
-		markStmt(res, i, errID("DDLRequireUpdateTime", "建表须满足 "+colName+" 规范："+strings.Join(missing, "；")))
+		label := matched
+		if label == "" {
+			label = candLabel
+		}
+		markStmt(res, i, errID("DDLRequireUpdateTime", "建表须满足 "+label+" 规范："+strings.Join(missing, "；")))
 	}
+}
+
+// updateTimeColumnCandidates 解析规则中的时间列名：支持逗号/中文逗号分隔，任一命中即可。
+// JSON 数组形态（"column":["a","b"]）优先按数组读取，避免 ruleField→asString 把数组 marshal
+// 成 `["a","b"]` 后逗号拆分失败。
+func updateTimeColumnCandidates(ruleValue string) []string {
+	if xs := columnCandidatesFromJSONArray(ruleValue); len(xs) > 0 {
+		return parseUpdateTimeColumnCandidates(strings.Join(xs, ","))
+	}
+	raw := strings.TrimSpace(ruleField(ruleValue, "column", ""))
+	return parseUpdateTimeColumnCandidates(raw)
+}
+
+func columnCandidatesFromJSONArray(ruleValue string) []string {
+	s := strings.TrimSpace(ruleValue)
+	if !strings.HasPrefix(s, "{") {
+		return nil
+	}
+	var o map[string]any
+	if json.Unmarshal([]byte(s), &o) != nil {
+		return nil
+	}
+	v, ok := o["column"]
+	if !ok {
+		return nil
+	}
+	switch v.(type) {
+	case []any, []string:
+		return asStringSlice(v)
+	default:
+		return nil
+	}
+}
+
+func parseUpdateTimeColumnCandidates(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return []string{"update_time"}
+	}
+	raw = strings.ReplaceAll(raw, "，", ",")
+	parts := strings.Split(raw, ",")
+	seen := map[string]bool{}
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		name := strings.ToLower(strings.TrimSpace(p))
+		name = strings.Trim(name, `"'`+"`")
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	if len(out) == 0 {
+		return []string{"update_time"}
+	}
+	return out
 }
 
 func parseCreateIndexCols(norm string) (table string, cols []string, ok bool) {

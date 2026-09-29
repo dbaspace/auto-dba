@@ -169,6 +169,9 @@ func openPostgres(ctx context.Context, host string, port int, user, password, db
 	if err != nil {
 		return nil, err
 	}
+	db.SetMaxOpenConns(2)
+	db.SetMaxIdleConns(0)
+	db.SetConnMaxLifetime(2 * time.Hour)
 	if err := db.PingContext(ctx); err != nil {
 		db.Close()
 		return nil, err
@@ -192,6 +195,9 @@ func openMySQL(ctx context.Context, host string, port int, user, password, dbNam
 	if err != nil {
 		return nil, err
 	}
+	db.SetMaxOpenConns(2)
+	db.SetMaxIdleConns(0)
+	db.SetConnMaxLifetime(2 * time.Hour)
 	if err := db.PingContext(ctx); err != nil {
 		db.Close()
 		return nil, err

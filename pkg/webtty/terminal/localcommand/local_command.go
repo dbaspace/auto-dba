@@ -12,7 +12,6 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/creack/pty"
 	"github.com/pkg/errors"
 )
 
@@ -67,7 +66,7 @@ func New(ctx context.Context, command string, argv []string, options ...Option) 
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
 
-	pty, err := pty.Start(cmd)
+	pty, err := startWithPty(cmd)
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to start command `%s`", command)
 	}

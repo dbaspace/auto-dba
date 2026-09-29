@@ -144,11 +144,13 @@ type Issue struct {
 	AssignedTo    string `json:"assigned_to"`
 	RejectReason  string `json:"reject_reason,omitempty"`
 	NeedRollback  string `json:"need_rollback,omitempty"`
-	ScheduledAt   string `json:"scheduled_at,omitempty"`
-	ExecuteResult string `json:"-"`
-	Exec          any    `json:"exec,omitempty"`
-	CreatedAt     string `json:"created_at"`
-	UpdatedAt     string `json:"updated_at"`
+	// AssigneeTransferHistory JSON 字符串数组，如 ["a->b by=a at=..."]
+	AssigneeTransferHistory string `json:"assignee_transfer_history,omitempty"`
+	ScheduledAt             string `json:"scheduled_at,omitempty"`
+	ExecuteResult           string `json:"-"`
+	Exec                    any    `json:"exec,omitempty"`
+	CreatedAt               string `json:"created_at"`
+	UpdatedAt               string `json:"updated_at"`
 }
 
 type CDCConnectorConfigVersion struct {
@@ -193,6 +195,9 @@ type CDCTask struct {
 	Description    string `json:"description,omitempty"`
 	CreatedAt      string `json:"created_at"`
 	UpdatedAt      string `json:"updated_at"`
+	// 展示用（非表字段）：Connector 在 Connect 上 NOT_FOUND 且状态允许时可重新初始化
+	CanReinit        bool `json:"can_reinit,omitempty"`
+	ConnectorMissing bool `json:"connector_missing,omitempty"`
 }
 
 type SyncSlot struct {
@@ -541,6 +546,42 @@ type PGActivityStatFilter struct {
 	Limit      int
 }
 
+// PGActivitySummaryFilter 可视汇总查询条件。
+type PGActivitySummaryFilter struct {
+	InstanceID string
+	StartTime  string
+	EndTime    string
+	PDb        string
+	PUser      string
+	TopN       int
+}
+
+type PGActivityKV struct {
+	Name  string `json:"name"`
+	Count int64  `json:"count"`
+}
+
+type PGActivityDurationBucket struct {
+	Label string   `json:"label"`
+	Min   *float64 `json:"min"`
+	Max   *float64 `json:"max"`
+	Count int64    `json:"count"`
+}
+
+type PGActivityTrendPoint struct {
+	Time  string `json:"time"`
+	Count int64  `json:"count"`
+}
+
+type PGActivitySummary struct {
+	StateDistribution []PGActivityKV             `json:"state_distribution"`
+	DurationBuckets   []PGActivityDurationBucket `json:"duration_buckets"`
+	TopDatabases      []PGActivityKV             `json:"top_databases"`
+	TopUsers          []PGActivityKV             `json:"top_users"`
+	TopInstances      []PGActivityKV             `json:"top_instances"`
+	Trend             []PGActivityTrendPoint     `json:"trend"`
+}
+
 type PGSession struct {
 	PID             int64  `json:"pid"`
 	Datname         string `json:"datname"`
@@ -584,6 +625,79 @@ type QueryAudit struct {
 	CreatedAt    string `json:"created_at"`
 }
 
+// HACluster 高可用集群登记（独立于 Instance，不改动实例表语义）
+type HACluster struct {
+	ID                    string   `json:"id"`
+	Name                  string   `json:"name"`
+	Engine                string   `json:"engine"` // mysql | postgres | redis
+	EnvID                 string   `json:"env_id"`
+	Mode                  string   `json:"mode"` // async_repl | patroni | sentinel | manual
+	ControllerID          string   `json:"controller_id,omitempty"`
+	StandbyControllerIDs  []string `json:"standby_controller_ids,omitempty"`
+	MaintStatus           string   `json:"maint_status"` // normal | maintaining
+	VIP                   string   `json:"vip,omitempty"`
+	Remark                string   `json:"remark,omitempty"`
+	CreatedBy             string   `json:"created_by,omitempty"`
+	UpdatedBy             string   `json:"updated_by,omitempty"`
+	CreatedAt             string   `json:"created_at"`
+	UpdatedAt             string   `json:"updated_at"`
+	Members               []HAMember `json:"members,omitempty"`
+}
+
+type HAMember struct {
+	ID         string `json:"id"`
+	ClusterID  string `json:"cluster_id"`
+	InstanceID string `json:"instance_id"`
+	Role       string `json:"role"` // primary | replica | sentinel | unknown
+	Priority   int    `json:"priority"`
+	Enabled    bool   `json:"enabled"`
+	CreatedAt  string `json:"created_at"`
+	UpdatedAt  string `json:"updated_at"`
+	// 展示用（非表字段）
+	InstanceName string `json:"instance_name,omitempty"`
+	Host         string `json:"host,omitempty"`
+	Port         int    `json:"port,omitempty"`
+	DBType       string `json:"db_type,omitempty"`
+}
+
+type HAController struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Engine      string `json:"engine"` // mysql | postgres | redis
+	Kind        string `json:"kind"`   // orchestrator | patroni | sentinel | mha
+	EnvID       string `json:"env_id"`
+	BaseURL     string `json:"base_url"`
+	Username    string `json:"username,omitempty"`
+	PasswordEnc string `json:"-"`
+	PasswordSet bool   `json:"password_set"`
+	AgentID     string `json:"agent_id,omitempty"` // 关联配置中心平台 Agent
+	Remark      string `json:"remark,omitempty"`
+	CreatedBy   string `json:"created_by,omitempty"`
+	UpdatedBy   string `json:"updated_by,omitempty"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
+	// 展示用：被多少集群引用为主控 / 备控
+	RefPrimary int `json:"ref_primary,omitempty"`
+	RefStandby int `json:"ref_standby,omitempty"`
+}
+
+type HATask struct {
+	ID               string `json:"id"`
+	ClusterID        string `json:"cluster_id"`
+	IssueID          string `json:"issue_id,omitempty"`
+	Action           string `json:"action"` // switchover | enter_maint | exit_maint
+	Status           string `json:"status"`
+	TargetInstanceID string `json:"target_instance_id,omitempty"`
+	PrecheckJSON     string `json:"precheck_json,omitempty"`
+	StepsJSON        string `json:"steps_json,omitempty"`
+	ResultJSON       string `json:"result_json,omitempty"`
+	Operator         string `json:"operator,omitempty"`
+	CreatedAt        string `json:"created_at"`
+	UpdatedAt        string `json:"updated_at"`
+	ClusterName      string `json:"cluster_name,omitempty"`
+	Engine           string `json:"engine,omitempty"`
+}
+
 const (
 	IssueTypeDDL       = "ddl"
 	IssueTypeDML       = "dml"
@@ -597,6 +711,10 @@ const (
 	IssueTypeMullang   = "mullang"
 	IssueTypeCreateDB  = "createdb"
 	IssueTypeRedis     = "redis"
+	IssueTypeHA            = "ha"
+	IssueTypeBackupRestore = "backup_restore"
+	IssueTypeSrCluster     = "sr_cluster"
+	IssueTypeDbDeploy      = "db_deploy"
 
 	StatusPending        = "pending"
 	StatusApproved       = "approved"
@@ -613,4 +731,5 @@ const (
 	StatusPreChecking    = "pre_checking"
 	StatusPreCheckFailed = "pre_check_failed"
 	StatusSucceeded      = "succeeded"
+	StatusReinitializing = "reinitializing"
 )

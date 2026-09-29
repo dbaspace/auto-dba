@@ -2,6 +2,22 @@ package handler
 
 import "testing"
 
+func TestUnionApproverNames(t *testing.T) {
+	got := unionApproverNames([]string{"admin,dba"}, []string{"admin", "dba", "mayu"})
+	want := []string{"admin", "dba", "mayu"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got %v want %v", got, want)
+		}
+	}
+	if first := unionApproverNames([]string{" admin，dba "}); len(first) != 2 || first[0] != "admin" || first[1] != "dba" {
+		t.Fatalf("split got %v", first)
+	}
+}
+
 func TestGrantPrivileges(t *testing.T) {
 	got := grantPrivileges([]string{"r", "c", "u"})
 	if got != "SELECT, INSERT, UPDATE" {

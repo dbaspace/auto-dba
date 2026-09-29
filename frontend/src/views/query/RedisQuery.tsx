@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Button, Input, Select, Spin, Table, Tag, message } from 'antd'
+import { Button, Input, Select, Spin, Tag, message } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
 import { StopOutlined } from '@ant-design/icons'
 import axios from 'axios'
 import api from '../../api/request'
@@ -282,7 +283,7 @@ export default function RedisQuery() {
                   {textBlob ? (
                     <pre className="result-pre">{textBlob}</pre>
                   ) : (
-                    <Table
+                    <ResponsiveTable
                       dataSource={resultRows}
                       rowKey="__k"
                       size="small"

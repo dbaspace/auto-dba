@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
-import { Button, Form, Input, Modal, Space, Table, message } from 'antd'
+import { Button, Form, Input, Modal, Space, message } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
 import api from '../../api/request'
 
 interface EnvRow {
@@ -73,12 +74,12 @@ export default function Environments() {
       </div>
       <p className="hint">环境可被多个区域绑定。实例上的环境编码会同步到 idc，供工单按环境筛选。</p>
       <div className="ops-table">
-        <Table
+        <ResponsiveTable
           rowKey={(r) => r.id || r.code || ''}
           dataSource={rows}
           bordered
           pagination={false}
-          scroll={{ y: '100%' }}
+          scroll={{ x: 'max-content', y: '100%' }}
           style={{ height: '100%' }}
           columns={[
             { title: '编码', dataIndex: 'code', width: 160 },

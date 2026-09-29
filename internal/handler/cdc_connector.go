@@ -96,6 +96,9 @@ func (h *CDCHandler) ConnectorUpdate(c *gin.Context) {
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
+	if h.rejectIfConnectorMissing(c, ctx, root) {
+		return
+	}
 	before := h.loadCurrentConnectorConfig(ctx, root)
 	after := cdc.MergeConfigForUpdate(req.Config, before)
 	if err := cdc.ValidateAndNormalizeConnectorCfg(after); err != nil {
@@ -231,6 +234,9 @@ func (h *CDCHandler) ConnectorVersionRestore(c *gin.Context) {
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 45*time.Second)
 	defer cancel()
+	if h.rejectIfConnectorMissing(c, ctx, root) {
+		return
+	}
 	before := h.loadCurrentConnectorConfig(ctx, root)
 	op, ip := cdcRequestActor(c)
 	if _, err := cdc.SaveConnectorConfigVersionIfChanged(h.Store, root.ID, before, cdc.VersionSourceRestore, op, ip); err != nil {

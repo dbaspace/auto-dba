@@ -1,0 +1,29 @@
+.pgspace-empty {
+  min-height: 280px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.pgspace-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  overflow: auto;
+}
+.pgspace-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.pgspace-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.pgspace-tab .muted {
+  color: #6b7280;
+  font-size: 13px;
+}

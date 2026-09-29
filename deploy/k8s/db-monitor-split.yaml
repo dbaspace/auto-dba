@@ -1,0 +1,139 @@
+# 主 API + 数据库监控拆分部署示例（同 Namespace 内 Service DNS 互通）
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: auto-dba-config
+data:
+  config.yaml: |
+    app:
+      name: auto-dba
+      run_mode: release
+      jwt_secret: change-me-shared-with-db-monitor
+      jwt_ttl_hours: 24
+    http:
+      host: "0.0.0.0"
+      port: 8800
+      read_timeout: 30
+      write_timeout: 120
+      serve_static: false
+    db:
+      driver: postgres
+      dsn: "postgres://user:password@postgres:5432/db_autosql?sslmode=disable"
+    services:
+      db_monitor:
+        mode: remote
+        url: "http://auto-dba-db-monitor:8801"
+        host: "0.0.0.0"
+        port: 8801
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auto-dba
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: auto-dba
+  template:
+    metadata:
+      labels:
+        app: auto-dba
+    spec:
+      containers:
+        - name: auto-dba
+          image: auto-dba:latest
+          args: ["start"]
+          ports:
+            - containerPort: 8800
+          env:
+            - name: AUTO_DBA_DB_MONITOR_MODE
+              value: remote
+            - name: AUTO_DBA_DB_MONITOR_URL
+              value: http://auto-dba-db-monitor:8801
+          volumeMounts:
+            - name: cfg
+              mountPath: /app/config
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8800
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8800
+            initialDelaySeconds: 10
+            periodSeconds: 20
+      volumes:
+        - name: cfg
+          configMap:
+            name: auto-dba-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: auto-dba
+spec:
+  selector:
+    app: auto-dba
+  ports:
+    - name: http
+      port: 8800
+      targetPort: 8800
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auto-dba-db-monitor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: auto-dba-db-monitor
+  template:
+    metadata:
+      labels:
+        app: auto-dba-db-monitor
+    spec:
+      containers:
+        - name: db-monitor
+          image: auto-dba-db-monitor:latest
+          args: ["start"]
+          ports:
+            - containerPort: 8801
+          env:
+            - name: AUTO_DBA_DB_MONITOR_PORT
+              value: "8801"
+          volumeMounts:
+            - name: cfg
+              mountPath: /app/config
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8801
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8801
+            initialDelaySeconds: 10
+            periodSeconds: 20
+      volumes:
+        - name: cfg
+          configMap:
+            name: auto-dba-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: auto-dba-db-monitor
+spec:
+  selector:
+    app: auto-dba-db-monitor
+  ports:
+    - name: http
+      port: 8801
+      targetPort: 8801

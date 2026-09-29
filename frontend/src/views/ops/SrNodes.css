@@ -1,0 +1,135 @@
+.sr-nodes-page .dolphin-ops-shell {
+  gap: 0;
+}
+
+.sr-nodes-toolbar {
+  position: relative;
+  flex-shrink: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  padding: 6px 12px;
+  border-bottom: 1px solid #f0f0f0;
+  background: var(--app-content-bg, #fff);
+}
+
+.sr-nodes-toolbar .ant-space {
+  align-items: center;
+}
+
+.sr-nodes-toolbar .ant-space-item {
+  display: inline-flex;
+  align-items: center;
+}
+
+.sr-nodes-toolbar .ant-tabs {
+  display: flex;
+  align-items: center;
+  margin: 0;
+  line-height: 1;
+}
+
+.sr-nodes-toolbar .ant-tabs-nav {
+  margin: 0 !important;
+  height: 32px;
+  align-items: center;
+}
+
+.sr-nodes-toolbar .ant-tabs-nav::before {
+  border-bottom: none;
+}
+
+.sr-nodes-toolbar .ant-tabs-nav-list {
+  align-items: center;
+}
+
+.sr-nodes-toolbar .ant-tabs-tab {
+  padding: 4px 0 !important;
+  margin: 0 12px 0 0 !important;
+  line-height: 24px;
+}
+
+.sr-nodes-toolbar .ant-tabs-tab + .ant-tabs-tab {
+  margin-left: 0 !important;
+}
+
+.sr-nodes-toolbar .ant-tabs-ink-bar {
+  bottom: 0;
+}
+
+.sr-nodes-label {
+  font-size: 13px;
+  color: rgba(0, 0, 0, 0.65);
+  white-space: nowrap;
+  line-height: 32px;
+}
+
+.sr-nodes-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sr-fe-embed-wrap {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #fff;
+  min-height: 0;
+  padding-top: 0 !important;
+}
+
+.sr-fe-tab-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 12px 0;
+  border-bottom: 1px solid #f0f0f0;
+  flex-shrink: 0;
+}
+
+.sr-fe-tab-mark {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  transform: rotate(45deg);
+  border-radius: 2px;
+  background: linear-gradient(135deg, #fcd34d 0%, #fff 45%, #0284c7 100%);
+  box-shadow: 0 0 0 1px rgba(14, 165, 233, 0.25);
+}
+
+.sr-fe-card {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  margin: 8px 12px 12px;
+  padding: 8px 12px;
+  overflow: auto;
+  background: #fff;
+  border: 1px solid #e8e8e8;
+  border-radius: 2px;
+  text-align: left;
+}
+
+.sr-be-frame-wrap {
+  padding-top: 0 !important;
+}
+
+.sr-fe-html-iframe {
+  display: block;
+  width: 100%;
+  min-height: 200px;
+  border: 0;
+  background: #fff;
+}
+
+.sr-fe-pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.6;
+}

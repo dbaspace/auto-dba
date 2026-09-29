@@ -5,25 +5,30 @@ import React, {
   useRef,
   useState,
 } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
+import {
+  useLocation,
+  useNavigate } from 'react-router-dom'
 import {
   Button,
   Input,
   Modal,
   Select,
   Spin,
-  Table,
   Tabs,
   Tag,
+  Tooltip,
   Tree,
   message,
 } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
 import type { DataNode } from 'antd/es/tree'
 import {
   CaretRightOutlined,
+  CloseOutlined,
+  DoubleLeftOutlined,
+  DoubleRightOutlined,
   SearchOutlined,
   StarOutlined,
-  CloseOutlined,
 } from '@ant-design/icons'
 import api from '../../api/request'
 import DbTypeIcon from '../../components/DbTypeIcon'
@@ -224,6 +229,7 @@ export default function CommonQuery() {
   const [activeKey, setActiveKey] = useState(saved.activeKey)
   const [running, setRunning] = useState(false)
   const [leftWidth, setLeftWidth] = useState(saved.leftWidth)
+  const [leftCollapsed, setLeftCollapsed] = useState(false)
   const [editorHeight, setEditorHeight] = useState(saved.editorHeight)
   const [histWidth, setHistWidth] = useState(saved.histWidth)
   const [storeTab, setStoreTab] = useState(() => {
@@ -815,7 +821,10 @@ export default function CommonQuery() {
         <div className="query-wm" aria-hidden="true">
           {Array.from({ length: 30 }).map((_, n) => <span key={n}>{username}</span>)}
         </div>
-        <div className="pane-left" style={{ width: leftWidth }}>
+        <div
+          className={`pane-left${leftCollapsed ? ' is-collapsed' : ''}`}
+          style={{ width: leftCollapsed ? 0 : leftWidth }}
+        >
           <div className="tree-search">
             <Input
               value={keyword}
@@ -849,7 +858,22 @@ export default function CommonQuery() {
             ) : (!treeLoading ? <div className="tree-empty">暂无数据</div> : null)}
           </Spin>
         </div>
-        <div className="gutter-x" onMouseDown={(e) => startDrag('left', e)} />
+        <div
+          className={`gutter-x${leftCollapsed ? ' is-collapsed' : ''}`}
+          onMouseDown={(e) => { if (!leftCollapsed) startDrag('left', e) }}
+        >
+          <Tooltip title={leftCollapsed ? '展开库树' : '收起库树'} placement="right">
+            <button
+              type="button"
+              className="pane-collapse-btn"
+              aria-label={leftCollapsed ? '展开库树' : '收起库树'}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={() => setLeftCollapsed((v) => !v)}
+            >
+              {leftCollapsed ? <DoubleRightOutlined /> : <DoubleLeftOutlined />}
+            </button>
+          </Tooltip>
+        </div>
         <div className="pane-right">
           {!tabs.length ? (
             <div className="empty-main">
@@ -996,7 +1020,7 @@ export default function CommonQuery() {
                       </span>
                       <Button type="primary" size="small" onClick={exportDQL}>导出</Button>
                     </div>
-                    <Table
+                    <ResponsiveTable
                       dataSource={resultRows}
                       rowKey="__k"
                       bordered

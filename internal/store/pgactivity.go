@@ -234,3 +234,126 @@ func (d *DB) ListPGActivityStats(f PGActivityStatFilter) ([]PGActivityStat, int,
 	}
 	return out, total, rows.Err()
 }
+
+func (d *DB) SummaryPGActivity(f PGActivitySummaryFilter) (*PGActivitySummary, error) {
+	where := `WHERE 1=1`
+	var args []any
+	if strings.TrimSpace(f.InstanceID) != "" {
+		where += ` AND instance_id=?`
+		args = append(args, strings.TrimSpace(f.InstanceID))
+	}
+	where, args = appendTimeFilters(where, args, f.StartTime, f.EndTime)
+	if strings.TrimSpace(f.PDb) != "" {
+		where += ` AND p_db=?`
+		args = append(args, strings.TrimSpace(f.PDb))
+	}
+	if strings.TrimSpace(f.PUser) != "" {
+		where += ` AND p_user=?`
+		args = append(args, strings.TrimSpace(f.PUser))
+	}
+
+	topN := f.TopN
+	if topN <= 0 {
+		topN = 10
+	}
+	if topN > 50 {
+		topN = 50
+	}
+
+	res := &PGActivitySummary{
+		StateDistribution: []PGActivityKV{},
+		DurationBuckets:   []PGActivityDurationBucket{},
+		TopDatabases:      []PGActivityKV{},
+		TopUsers:          []PGActivityKV{},
+		TopInstances:      []PGActivityKV{},
+		Trend:             []PGActivityTrendPoint{},
+	}
+
+	var err error
+	if res.StateDistribution, err = d.summaryGroupKV(
+		`COALESCE(NULLIF(state, ''), 'unknown')`, where, args, 0); err != nil {
+		return nil, err
+	}
+	if res.DurationBuckets, err = d.summaryDurationBuckets(where, args); err != nil {
+		return nil, err
+	}
+	if res.TopDatabases, err = d.summaryGroupKV(
+		`COALESCE(NULLIF(p_db, ''), 'unknown')`, where, args, topN); err != nil {
+		return nil, err
+	}
+	if res.TopUsers, err = d.summaryGroupKV(
+		`COALESCE(NULLIF(p_user, ''), 'unknown')`, where, args, topN); err != nil {
+		return nil, err
+	}
+	if res.TopInstances, err = d.summaryGroupKV(
+		`COALESCE(NULLIF(instance_name, ''), host || ':' || port::text)`, where, args, topN); err != nil {
+		return nil, err
+	}
+	if res.Trend, err = d.summaryTrend(where, args); err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+func (d *DB) summaryGroupKV(expr, where string, args []any, limit int) ([]PGActivityKV, error) {
+	q := `SELECT ` + expr + ` AS k, COUNT(*) AS c FROM tbl_pg_activity_snapshots ` +
+		where + ` GROUP BY k ORDER BY c DESC, k ASC`
+	queryArgs := append([]any{}, args...)
+	if limit > 0 {
+		q += ` LIMIT ?`
+		queryArgs = append(queryArgs, limit)
+	}
+	rows, err := d.Query(q, queryArgs...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []PGActivityKV{}
+	for rows.Next() {
+		var kv PGActivityKV
+		if err := rows.Scan(&kv.Name, &kv.Count); err != nil {
+			return nil, err
+		}
+		out = append(out, kv)
+	}
+	return out, rows.Err()
+}
+
+func (d *DB) summaryDurationBuckets(where string, args []any) ([]PGActivityDurationBucket, error) {
+	q := `SELECT
+  COUNT(*) FILTER (WHERE xact_duration < 1) AS b1,
+  COUNT(*) FILTER (WHERE xact_duration >= 1 AND xact_duration < 10) AS b2,
+  COUNT(*) FILTER (WHERE xact_duration >= 10 AND xact_duration < 60) AS b3,
+  COUNT(*) FILTER (WHERE xact_duration >= 60) AS b4
+FROM tbl_pg_activity_snapshots ` + where
+	var b1, b2, b3, b4 int64
+	if err := d.QueryRow(q, args...).Scan(&b1, &b2, &b3, &b4); err != nil {
+		return nil, err
+	}
+	f0, f1, f10, f60 := float64(0), float64(1), float64(10), float64(60)
+	return []PGActivityDurationBucket{
+		{Label: "<1s", Min: &f0, Max: &f1, Count: b1},
+		{Label: "1-10s", Min: &f1, Max: &f10, Count: b2},
+		{Label: "10-60s", Min: &f10, Max: &f60, Count: b3},
+		{Label: ">60s", Min: &f60, Max: nil, Count: b4},
+	}, nil
+}
+
+func (d *DB) summaryTrend(where string, args []any) ([]PGActivityTrendPoint, error) {
+	q := `SELECT collected_at, COUNT(*) AS c FROM tbl_pg_activity_snapshots ` +
+		where + ` GROUP BY collected_at ORDER BY collected_at ASC`
+	rows, err := d.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []PGActivityTrendPoint{}
+	for rows.Next() {
+		var p PGActivityTrendPoint
+		if err := rows.Scan(&p.Time, &p.Count); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}

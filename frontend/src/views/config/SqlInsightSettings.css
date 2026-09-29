@@ -1,0 +1,13 @@
+.sql-insight-settings .settings-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+.sql-insight-settings .settings-form {
+  max-width: 720px;
+}
+.sql-insight-settings .settings-group {
+  margin-bottom: 8px;
+}

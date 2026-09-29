@@ -5,9 +5,9 @@ import api from '../../api/request'
 import { dbLabel } from '../../utils/db'
 import { buildEnvOptions } from '../../utils/env'
 import DbTypeIcon from '../../components/DbTypeIcon'
+import { useWorkOrderDraft } from '../../hooks/useWorkOrderDraft'
 import './DqlExport.css'
 
-const DQL_DRAFT_KEY = 'auto-dba-dql-draft'
 const SENSITIVE =
   /phone|mobile|email|mail|id_card|idcard|身份证|手机|邮箱|password|passwd|secret|token|card_no|bank|身份证号/i
 
@@ -61,6 +61,10 @@ export default function DqlExport() {
   const [extraApprovers, setExtraApprovers] = useState<string[]>([])
   const [rowCount, setRowCount] = useState(0)
   const [resultCols, setResultCols] = useState<string[]>([])
+  const rowCountRef = useRef(rowCount)
+  const resultColsRef = useRef(resultCols)
+  rowCountRef.current = rowCount
+  resultColsRef.current = resultCols
 
   function patchForm(patch: Partial<ReturnType<typeof emptyForm>>) {
     setForm((f) => {
@@ -69,6 +73,41 @@ export default function DqlExport() {
       return next
     })
   }
+
+  const { restoreDraft, saveNow: saveDraft, clearOnSubmitSuccess, schedulePersist } = useWorkOrderDraft({
+    type: 'dql',
+    label: '数据导出',
+    path: '/ops/dql',
+    getValues: () => ({
+      ...formRef.current,
+      row_count: rowCountRef.current,
+      columns: resultColsRef.current,
+    }),
+    applyValues: (d) => {
+      const next = {
+        ...emptyForm(),
+        database_id: d.database_id || '',
+        instance_id: d.instance_id || '',
+        db_name: d.db_name || '',
+        env: d.env || '',
+        db_type: String(d.db_type || '').toLowerCase(),
+        sql_content: d.sql_content || d.sql || '',
+        assigned_to: d.assigned_to || '',
+        need_sensitive_data: !!d.need_sensitive_data,
+        dba_assigned_to: d.dba_assigned_to || '',
+        security_assigned_to: d.security_assigned_to || '',
+        description: d.description || '',
+      }
+      setForm(next)
+      antdForm.setFieldsValue(next)
+      setRowCount(Number(d.row_count || 0))
+      setResultCols(Array.isArray(d.columns) ? d.columns : [])
+    },
+  })
+
+  useEffect(() => {
+    schedulePersist()
+  }, [form, rowCount, resultCols, schedulePersist])
 
   const instMap = useMemo(() => {
     const m: Record<string, any> = {}
@@ -148,27 +187,7 @@ export default function DqlExport() {
   }
 
   function applyDraft() {
-    try {
-      const raw = sessionStorage.getItem(DQL_DRAFT_KEY)
-      if (!raw) return
-      const d = JSON.parse(raw)
-      const next = {
-        ...emptyForm(),
-        database_id: d.database_id || '',
-        instance_id: d.instance_id || '',
-        db_name: d.db_name || '',
-        env: d.env || '',
-        db_type: String(d.db_type || '').toLowerCase(),
-        sql_content: d.sql || '',
-      }
-      setForm(next)
-      antdForm.setFieldsValue(next)
-      setRowCount(Number(d.row_count || 0))
-      setResultCols(Array.isArray(d.columns) ? d.columns : [])
-      sessionStorage.removeItem(DQL_DRAFT_KEY)
-    } catch {
-      sessionStorage.removeItem(DQL_DRAFT_KEY)
-    }
+    restoreDraft()
   }
 
   async function loadMeta() {
@@ -245,6 +264,7 @@ export default function DqlExport() {
         row_count: rowCount,
       })
       message.success('工单创建成功 ' + (data.data?.ticket_no || ''))
+      clearOnSubmitSuccess()
       navigate('/ops/tickets/' + (data.data?.id || ''))
     } finally {
       setSaving(false)
@@ -377,6 +397,7 @@ export default function DqlExport() {
               <Button type="primary" loading={saving} onClick={submit}>
                 提交申请
               </Button>
+              <Button onClick={() => saveDraft()}>保存草稿</Button>
               <Button onClick={() => navigate('/ops/tickets')}>取消</Button>
             </Space>
           </Form.Item>

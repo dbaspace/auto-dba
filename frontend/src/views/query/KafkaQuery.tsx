@@ -1,5 +1,6 @@
-import React, { useEffect, useMemo, useState } from 'react'
-import { Button, Checkbox, Input, Modal, Pagination, Select, Spin, Table, message } from 'antd'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { Button, Checkbox, Input, Modal, Pagination, Select, Spin, message } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
 import api from '../../api/request'
 import KafkaTopicQueryModal from './KafkaTopicQueryModal'
 import './KafkaQuery.css'
@@ -11,11 +12,18 @@ interface Topic {
   last_record?: any
   partition_count?: any
   replication_factor?: any
+  stats?: boolean
 }
 
 export default function KafkaQuery() {
   const [instLoading, setInstLoading] = useState(false)
   const [topicsLoading, setTopicsLoading] = useState(false)
+  const loadSeq = useRef(0)
+  const statsSeq = useRef(0)
+  const topicCache = useRef<Map<string, Topic[]>>(new Map())
+  const liteInflight = useRef<Map<string, Promise<Topic[]>>>(new Map())
+  const liteGen = useRef<Map<string, number>>(new Map())
+  const statsAsked = useRef<Set<string>>(new Set())
   const [instances, setInstances] = useState<any[]>([])
   const [envs, setEnvs] = useState<any[]>([])
   const [keyword, setKeyword] = useState('')
@@ -75,29 +83,68 @@ export default function KafkaQuery() {
     return filteredTopics.slice(start, start + pageSize)
   }, [filteredTopics, page, pageSize])
 
-  function formatCount(n: any) {
-    if (n == null || Number(n) === 0) return '-'
-    return Number(n)
+  function formatCount(row: Topic) {
+    if (!row.stats || row.message_count == null) return '-'
+    return Number(row.message_count)
   }
 
-  function formatSize(bytes: any) {
-    if (bytes == null || Number(bytes) === 0) return '-'
-    const b = Number(bytes)
+  function formatSize(row: Topic) {
+    if (!row.stats || row.size_bytes == null) return '-'
+    const b = Number(row.size_bytes)
+    if (b === 0) return '0 B'
     if (b >= 1073741824) return `${(b / 1073741824).toFixed(1)} GB`
     if (b >= 1048576) return `${(b / 1048576).toFixed(1)} MB`
     if (b >= 1024) return `${(b / 1024).toFixed(1)} KB`
     return `${b} B`
   }
 
-  function formatLastRecord(iso: any) {
-    if (!iso) return '-'
-    const d = new Date(iso)
+  function formatLastRecord(row: Topic) {
+    if (!row.stats || !row.last_record) return '-'
+    const d = new Date(row.last_record)
     return Number.isNaN(d.getTime()) ? '-' : d.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })
+  }
+
+  function topicSkeleton(list: Topic[]): Topic[] {
+    return (list || []).map((t) => ({
+      name: t.name,
+      partition_count: t.partition_count,
+      replication_factor: t.replication_factor,
+    }))
+  }
+
+  function fetchLite(id: string, refresh = false): Promise<Topic[]> {
+    if (refresh) {
+      liteGen.current.set(id, (liteGen.current.get(id) || 0) + 1)
+      topicCache.current.delete(id)
+    } else {
+      const hit = topicCache.current.get(id)
+      if (hit) return Promise.resolve(hit)
+      const pending = liteInflight.current.get(id)
+      if (pending) return pending
+    }
+    const gen = liteGen.current.get(id) || 0
+    const p = api.get(`/instances/${id}/kafka/topics`, {
+      params: refresh ? { lite: 1, refresh: 1 } : { lite: 1 },
+      timeout: 15000,
+      silent: !refresh,
+    }).then(({ data }) => {
+      const list = topicSkeleton(data.data || [])
+      if ((liteGen.current.get(id) || 0) !== gen) return list
+      topicCache.current.set(id, list)
+      return list
+    }).finally(() => {
+      if (liteInflight.current.get(id) === p) liteInflight.current.delete(id)
+    })
+    if (!refresh) liteInflight.current.set(id, p)
+    return p
   }
 
   function selectInstance(inst: any) {
     setSelectedId(inst.id)
     setPage(1)
+    statsSeq.current += 1
+    statsAsked.current = new Set()
+    setTopics(topicCache.current.get(inst.id) || [])
     loadTopics(inst.id)
   }
 
@@ -115,23 +162,85 @@ export default function KafkaQuery() {
       onOk: async () => {
         await api.delete(`/instances/${selectedId}/kafka/topics/${encodeURIComponent(row.name || '')}`)
         message.success('已删除')
-        loadTopics()
+        loadTopics(selectedId, true)
       },
     })
   }
 
-  async function loadTopics(id: string = selectedId) {
+  async function loadTopics(id: string = selectedId, refresh = false) {
     if (!id) return
-    setTopicsLoading(true)
-    try {
-      const { data } = await api.get(`/instances/${id}/kafka/topics`)
-      setTopics(data.data || [])
-    } catch {
+    const seq = ++loadSeq.current
+    const cached = !refresh ? topicCache.current.get(id) : undefined
+    if (refresh) {
+      statsSeq.current += 1
+      statsAsked.current = new Set()
       setTopics([])
+    }
+    if (!cached) setTopicsLoading(true)
+    try {
+      const list = await fetchLite(id, refresh)
+      if (seq !== loadSeq.current) return
+      setTopics((prev) => {
+        if (refresh) return list
+        const prevStats = new Map(prev.filter((t) => t.stats).map((t) => [t.name || '', t]))
+        return list.map((t) => {
+          const old = prevStats.get(t.name || '')
+          if (!old) return t
+          return {
+            ...t,
+            message_count: old.message_count,
+            size_bytes: old.size_bytes,
+            last_record: old.last_record,
+            stats: true,
+          }
+        })
+      })
+    } catch {
+      if (seq !== loadSeq.current) return
+      if (!cached) setTopics([])
     } finally {
-      setTopicsLoading(false)
+      if (seq === loadSeq.current) setTopicsLoading(false)
     }
   }
+
+  const pendingStatsKey = useMemo(() => {
+    return pagedTopics
+      .filter((t) => t.name && !t.stats && !statsAsked.current.has(t.name))
+      .map((t) => t.name)
+      .join('\n')
+  }, [pagedTopics])
+
+  useEffect(() => {
+    if (!selectedId || !pendingStatsKey) return
+    const names = pendingStatsKey.split('\n').filter(Boolean)
+    names.forEach((n) => statsAsked.current.add(n))
+    const seq = ++statsSeq.current
+    const id = selectedId
+    api.post(`/instances/${id}/kafka/topics/stats`, { names }, { timeout: 25000, silent: true })
+      .then(({ data }) => {
+        if (seq !== statsSeq.current) return
+        const rows: Topic[] = data?.data || []
+        const byName = new Map(rows.map((r) => [r.name || '', r]))
+        setTopics((prev) => prev.map((t) => {
+          const name = t.name || ''
+          if (!names.includes(name)) return t
+          const s = byName.get(name)
+          if (!s) return { ...t, stats: true, message_count: 0, size_bytes: 0 }
+          return {
+            ...t,
+            message_count: s.message_count ?? 0,
+            size_bytes: s.size_bytes ?? 0,
+            last_record: s.last_record || '',
+            partition_count: s.partition_count ?? t.partition_count,
+            replication_factor: s.replication_factor ?? t.replication_factor,
+            stats: true,
+          }
+        }))
+      })
+      .catch(() => {
+        names.forEach((n) => statsAsked.current.delete(n))
+      })
+  }, [selectedId, pendingStatsKey])
 
   async function loadMeta() {
     setInstLoading(true)
@@ -142,6 +251,9 @@ export default function KafkaQuery() {
       ])
       setInstances(instRes.data.data || [])
       setEnvs(envRes.data.data || [])
+      for (const inst of instRes.data.data || []) {
+        if (inst?.id) fetchLite(inst.id).catch(() => {})
+      }
     } finally {
       setInstLoading(false)
     }
@@ -189,24 +301,23 @@ export default function KafkaQuery() {
               <div className="toolbar">
                 <strong>{selected?.name || instAddr(selected)}</strong>
                 <span className="muted">{instAddr(selected)}</span>
-                <Button loading={topicsLoading} onClick={() => loadTopics()}>刷新 Topic</Button>
+                <Button loading={topicsLoading} onClick={() => loadTopics(selectedId, true)}>刷新 Topic</Button>
                 <Input value={topicSearch} allowClear placeholder="搜索 Topic" style={{ width: 200 }} onChange={(e) => setTopicSearch(e.target.value)} />
                 <Checkbox checked={hideInternal} onChange={(e) => setHideInternal(e.target.checked)}>隐藏内部 Topic（__ 前缀）</Checkbox>
               </div>
               <div className="ops-table">
-                <Table
+                <ResponsiveTable
                   dataSource={pagedTopics}
                   rowKey={(r) => r.name || ''}
                   size="small"
-                  loading={topicsLoading}
                   pagination={false}
                   scroll={{ y: 'calc(100% - 8px)' }}
-                  locale={{ emptyText: '该实例暂无 Topic' }}
+                  locale={{ emptyText: topicsLoading ? '加载中' : '该实例暂无 Topic' }}
                   columns={[
                     { title: 'Name', dataIndex: 'name', ellipsis: true, width: 220 },
-                    { title: 'Count', width: 90, render: (_, row) => formatCount(row.message_count) },
-                    { title: 'Size', width: 90, render: (_, row) => formatSize(row.size_bytes) },
-                    { title: 'Last Record', width: 160, render: (_, row) => formatLastRecord(row.last_record) },
+                    { title: 'Count', width: 90, render: (_, row) => formatCount(row) },
+                    { title: 'Size', width: 90, render: (_, row) => formatSize(row) },
+                    { title: 'Last Record', width: 160, render: (_, row) => formatLastRecord(row) },
                     { title: 'Partitions', dataIndex: 'partition_count', width: 110 },
                     { title: 'Replications', dataIndex: 'replication_factor', width: 120 },
                     {

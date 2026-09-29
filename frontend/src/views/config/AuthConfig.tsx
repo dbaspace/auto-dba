@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Button, Divider, Form, Input, Radio, Space, Spin, Switch, Tabs, message } from 'antd'
+import { Button, Divider, Form, Input, InputNumber, Radio, Space, Spin, Switch, Tabs, message } from 'antd'
 import api from '../../api/request'
 import './Ldap.css'
 
@@ -742,6 +742,11 @@ function NotifyPanel() {
       const d = data?.data || {}
       form.setFieldsValue({
         email_on_ticket_create: !!d.email_on_ticket_create,
+        email_on_ticket_exec_failed: !!d.email_on_ticket_exec_failed,
+        email_on_ticket_await_exec: !!d.email_on_ticket_await_exec,
+        email_on_ticket_await_exec_stuck: !!d.email_on_ticket_await_exec_stuck,
+        email_on_backup_failed: !!d.email_on_backup_failed,
+        await_exec_stuck_hours: Number(d.await_exec_stuck_hours) > 0 ? Number(d.await_exec_stuck_hours) : 2,
         webhook_enabled: !!d.webhook_enabled,
         webhook_url: d.webhook_url || '',
         wecom_enabled: !!d.wecom_enabled,
@@ -769,6 +774,11 @@ function NotifyPanel() {
       const f = form.getFieldsValue()
       await api.put('/settings/notify', {
         email_on_ticket_create: !!f.email_on_ticket_create,
+        email_on_ticket_exec_failed: !!f.email_on_ticket_exec_failed,
+        email_on_ticket_await_exec: !!f.email_on_ticket_await_exec,
+        email_on_ticket_await_exec_stuck: !!f.email_on_ticket_await_exec_stuck,
+        email_on_backup_failed: !!f.email_on_backup_failed,
+        await_exec_stuck_hours: Number(f.await_exec_stuck_hours) > 0 ? Number(f.await_exec_stuck_hours) : 2,
         webhook_enabled: !!f.webhook_enabled,
         webhook_url: (f.webhook_url || '').trim(),
         wecom_enabled: !!f.wecom_enabled,
@@ -802,6 +812,53 @@ function NotifyPanel() {
           }
         >
           <Switch />
+        </Form.Item>
+        <Form.Item
+          label="工单执行失败通知"
+          name="email_on_ticket_exec_failed"
+          valuePropName="checked"
+          extra={
+            <span className="field-hint">工单执行失败时邮件通知提交人（需 SMTP 与提交人邮箱）</span>
+          }
+        >
+          <Switch />
+        </Form.Item>
+        <Form.Item
+          label="备份失败通知"
+          name="email_on_backup_failed"
+          valuePropName="checked"
+          extra={
+            <span className="field-hint">逻辑备份失败时邮件通知策略创建人（需 SMTP 与用户邮箱）</span>
+          }
+        >
+          <Switch />
+        </Form.Item>
+        <Form.Item
+          label="审批后待执行通知"
+          name="email_on_ticket_await_exec"
+          valuePropName="checked"
+          extra={
+            <span className="field-hint">
+              审批通过后若仍待执行（定时未到、需手动执行等），立即邮件通知提交人
+            </span>
+          }
+        >
+          <Switch />
+        </Form.Item>
+        <Form.Item
+          label="待执行超时告警"
+          name="email_on_ticket_await_exec_stuck"
+          valuePropName="checked"
+          extra={<span className="field-hint">长时间停在「已通过/待执行」时告警提交人（同一工单只发一次）</span>}
+        >
+          <Switch />
+        </Form.Item>
+        <Form.Item
+          label="待执行超时（小时）"
+          name="await_exec_stuck_hours"
+          extra={<span className="field-hint">默认 2 小时；定时工单在预约时间到期后才计入超时</span>}
+        >
+          <InputNumber min={1} max={168} style={{ width: 120 }} />
         </Form.Item>
         <Divider />
         <p className="field-hint" style={{ marginBottom: 12 }}>
@@ -846,7 +903,7 @@ export default function AuthConfig() {
         <h1>认证配置</h1>
       </div>
       <p className="field-hint" style={{ marginBottom: 16 }}>
-        开启哪个模块，登录页即可选择对应认证方式。邮件用于忘记密码与工单通知；通知 Tab 可开关工单创建邮件。
+        开启哪个模块，登录页即可选择对应认证方式。邮件用于忘记密码与工单通知；通知 Tab 可配置创建、执行失败、待执行与超时告警。
       </p>
       <Tabs
         defaultActiveKey="ldap"

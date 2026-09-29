@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Button, Card, Col, Radio, Row, Table } from 'antd'
+import { Button, Card, Col, Radio, Row } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
 import type { ColumnsType } from 'antd/es/table'
 import api from '../../api/request'
 import './archive.css'
@@ -69,7 +70,7 @@ export default function Report() {
         </Row>
         <Card bordered={false}>
           <div style={{ marginBottom: 12 }}>任务明细</div>
-          <Table
+          <ResponsiveTable
             rowKey={(r) => r.id ?? r.name ?? Math.random()}
             dataSource={tasks}
             columns={columns}

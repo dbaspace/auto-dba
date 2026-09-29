@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { Button, Input, Select, Space, Table, Tag } from 'antd'
+import { Button, Input, Select, Space, Tag } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
 import api from '../../api/request'
 import { navigateToWorkOrderCreate } from '../../utils/workOrderDraft'
 
@@ -16,10 +17,14 @@ const TYPES = [
   { value: 'migration', label: '数据迁移' },
   { value: 'mullang', label: '多语模版' },
   { value: 'createdb', label: '新增数据库' },
+  { value: 'ha', label: '高可用变更' },
+  { value: 'sr_cluster', label: 'StarRocks 集群变更' },
+  { value: 'db_deploy', label: '数据库集群部署' },
 ]
 const STATUSES = [
   { value: 'pending', label: '待审批' },
   { value: 'approved', label: '已通过' },
+  { value: 'running', label: '执行中' },
   { value: 'rejected', label: '已驳回' },
   { value: 'canceled', label: '已撤销' },
   { value: 'executed', label: '已执行' },
@@ -40,6 +45,10 @@ function typeText(t: string) {
       migration: '数据迁移',
       mullang: '多语模版',
       createdb: '新增数据库',
+      ha: '高可用变更',
+      redis: 'Redis',
+      sr_cluster: 'StarRocks 集群变更',
+      db_deploy: '数据库集群部署',
     }[t] ||
     t ||
     '-'
@@ -50,6 +59,7 @@ function statusText(s: string) {
     {
       pending: '待审批',
       approved: '已通过',
+      running: '执行中',
       rejected: '已驳回',
       canceled: '已撤销',
       executed: '已执行',
@@ -76,9 +86,12 @@ export default function TicketList() {
   })
   const [rows, setRows] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
 
   async function load(next = filters) {
     setLoading(true)
+    setPage(1)
     try {
       const { data } = await api.get('/tickets', { params: next })
       setRows(data.data || [])
@@ -138,14 +151,25 @@ export default function TicketList() {
         </Space>
       </div>
       <p style={{ margin: '0 0 10px', color: '#b45309', fontSize: 13 }}>已提交工单超过 8 小时仍未审核完成，系统将自动取消。</p>
-      <Table
+      <ResponsiveTable
         rowKey="id"
         loading={loading}
         dataSource={rows}
         size="small"
         bordered
         scroll={{ x: 1100 }}
-        pagination={false}
+        pagination={{
+          current: page,
+          pageSize,
+          total: rows.length,
+          showSizeChanger: true,
+          pageSizeOptions: ['10', '20', '50', '100'],
+          showTotal: (t) => `共 ${t} 条`,
+          onChange: (p, ps) => {
+            setPage(p)
+            setPageSize(ps)
+          },
+        }}
         columns={[
           { title: '单号', dataIndex: 'ticket_no', width: 160 },
           { title: '类型', width: 110, render: (_, r) => typeText(r.issue_type) },

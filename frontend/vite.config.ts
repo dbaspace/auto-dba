@@ -14,8 +14,9 @@ export default defineConfig({
     port: 5174,
     // 开发时把接口转到本机后端
     proxy: {
-      '/api': { target: 'http://127.0.0.1:8800', changeOrigin: true, xfwd: true },
+      '/api': { target: 'http://127.0.0.1:8800', changeOrigin: true, xfwd: true, ws: true },
       '/healthz': { target: 'http://127.0.0.1:8800', changeOrigin: true, xfwd: true },
+      '/starrocks-webroot': { target: 'http://127.0.0.1:8800', changeOrigin: true, xfwd: true },
     },
   },
   preview: {

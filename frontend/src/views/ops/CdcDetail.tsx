@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import {
+  useNavigate,
+  useParams } from 'react-router-dom'
 import {
   Alert,
   Badge,
@@ -15,14 +17,15 @@ import {
   Select,
   Space,
   Switch,
-  Table,
   Tabs,
   Tag,
   message,
 } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
 import type { ColumnsType } from 'antd/es/table'
 import api from '../../api/request'
 import CdcDebeziumConfigTab from './CdcDebeziumConfigTab'
+import CdcReinitModal from './CdcReinitModal'
 import PipelineVisualization, { PipelineNode } from './PipelineVisualization'
 import {
   approvalText,
@@ -44,6 +47,7 @@ import {
   mappingSourceText,
   pipelineBundle,
   pipelineNodeTone,
+  pipelineStateText,
   sameUser,
   statusTagColor,
   statusText,
@@ -107,6 +111,7 @@ export default function CdcDetail() {
   const [diffSubmitting, setDiffSubmitting] = useState(false)
   const [migrateSQL, setMigrateSQL] = useState('')
   const [diffOffset, setDiffOffset] = useState('OFFSET_BEGINNING')
+  const [reinitOpen, setReinitOpen] = useState(false)
 
   const pollRef = useRef<number>(0)
   const tabRef = useRef(tab)
@@ -244,7 +249,7 @@ export default function CdcDetail() {
         detail: conn.name || extra.connector_name || '未上报',
         tone: pipelineNodeTone(conn.state),
         extras: [
-          { label: '状态', value: conn.state || '—' },
+          { label: '状态', value: pipelineStateText(conn.state) || '—' },
           { label: '模式', value: extra.debezium_mode || conn.debezium_mode || '—' },
           ...((conn.tasks || []).length
             ? [
@@ -443,7 +448,10 @@ export default function CdcDetail() {
   useEffect(() => {
     window.clearInterval(pollRef.current)
     const should =
-      pending || ['running', 'init', 'creating', 'configuring', 'provisioning', 'failed', 'error'].includes(task.status)
+      pending ||
+      ['running', 'init', 'creating', 'configuring', 'provisioning', 'failed', 'error', 'reinitializing'].includes(
+        task.status,
+      )
     if (!should || !taskID()) return
     pollRef.current = window.setInterval(() => {
       const tid = taskID()
@@ -463,7 +471,7 @@ export default function CdcDetail() {
         .then(({ data }) => setTask((prev: any) => data.data || prev))
         .catch(() => {})
       if (tabRef.current === 'logs') loadLogs()
-    }, 8000)
+    }, task.status === 'reinitializing' ? 3000 : 8000)
     return () => window.clearInterval(pollRef.current)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [task.status, task.approval_status, task.id])
@@ -640,7 +648,8 @@ export default function CdcDetail() {
 
   async function act(kind: string) {
     const { data } = await api.post(`/cdc-sync/tasks/${task.id}/${kind}`)
-    message.info(data.message || '已更新')
+    if (data?.data?.status === 'reinitializing') message.success('已提交，正在重新初始化')
+    else message.info(data.message || '已更新')
     await load()
   }
 
@@ -835,8 +844,20 @@ export default function CdcDetail() {
               重试
             </Button>
           )}
+          {task.can_reinit && !pending && <Button onClick={() => setReinitOpen(true)}>重新初始化</Button>}
         </div>
       </div>
+      <CdcReinitModal open={reinitOpen} task={task} onClose={() => setReinitOpen(false)} onSubmitted={load} />
+
+      {task.status === 'reinitializing' && (
+        <Alert
+          type="info"
+          showIcon
+          className="cdc-banner"
+          message="正在重新初始化"
+          description="后台正在按原配置补齐 Publication / Slot / Kafka Topic / Connector / StarRocks，完成后状态变为运行中；进度见「日志」页签（步骤：重新初始化）。"
+        />
+      )}
 
       {pending && (
         <Alert
@@ -856,13 +877,17 @@ export default function CdcDetail() {
           }
         />
       )}
-      {(errorStep || extra.error_message) && (
+      {(errorStep || extra.error_message) && task.status !== 'reinitializing' && (
         <Alert
           type="error"
           showIcon
           className="cdc-banner"
-          message={errorStep ? `任务异常（${errorStep}）` : '任务异常'}
-          description={extra.error_message || '可在操作列点击「重试」从该失败步骤起点续跑。'}
+          message={errorStep === 'reinit' ? '重新初始化失败' : errorStep ? `任务异常（${errorStep}）` : '任务异常'}
+          description={
+            errorStep === 'reinit'
+              ? `${extra.error_message || ''}${extra.error_message ? '。' : ''}可点击「重试」按默认参数（快照沿用原配置、恢复 Routine Load、沿用当前绑定）重新发起；需要换参数请点「重新初始化」。`
+              : extra.error_message || '可在操作列点击「重试」从该失败步骤起点续跑。'
+          }
         />
       )}
       {extra.auto_create_table === false && !task.target_instance_id && (
@@ -1092,7 +1117,7 @@ export default function CdcDetail() {
           )}
           <PipelineVisualization nodes={pipelineNodes} onOpenConnector={openConnectorRuntime} />
           {(pipe.routine_loads || []).length > 0 && (
-            <Table
+            <ResponsiveTable
               rowKey={(r: any) => r.name || r.table}
               size="small"
               className="mt"
@@ -1152,7 +1177,7 @@ export default function CdcDetail() {
             </div>
           }
         >
-          <Table
+          <ResponsiveTable
             rowKey={(r) => r.target_table || r.name}
             size="small"
             columns={mapColumns}
@@ -1198,7 +1223,7 @@ export default function CdcDetail() {
           }
         >
           {publication.message && <Alert type="warning" showIcon className="mb" message={publication.message} />}
-          <Table
+          <ResponsiveTable
             rowKey="name"
             dataSource={pubTableRows}
             pagination={false}
@@ -1213,7 +1238,15 @@ export default function CdcDetail() {
 
       {tab === 'debezium' && (
         <Card size="small" className="cdc-card wide">
-          {task.id && <CdcDebeziumConfigTab taskId={task.id} extra={extra} pending={pending} onUpdated={load} />}
+          {task.id && (
+            <CdcDebeziumConfigTab
+              taskId={task.id}
+              extra={extra}
+              pending={pending}
+              onUpdated={load}
+              onReinit={task.task_type === 'init' ? () => setReinitOpen(true) : undefined}
+            />
+          )}
         </Card>
       )}
 
@@ -1259,7 +1292,7 @@ export default function CdcDetail() {
             </Button>
             <Button onClick={() => loadLogs()}>刷新</Button>
           </div>
-          <Table
+          <ResponsiveTable
             rowKey={(r) => r.id || `${r.created_at || r.at}-${r.step}`}
             dataSource={logs}
             pagination={false}
@@ -1369,7 +1402,7 @@ export default function CdcDetail() {
         ]}
       >
         <Alert type="info" showIcon className="mb" message="对比 PG 有而 StarRocks 无的列；提交后走 alter_schema 审批。" />
-        <Table
+        <ResponsiveTable
           rowKey="name"
           size="small"
           dataSource={diffCols}
@@ -1417,7 +1450,7 @@ export default function CdcDetail() {
           <Descriptions.Item label="Worker">{runtime.worker_id || workerURL || '—'}</Descriptions.Item>
         </Descriptions>
         {(runtime.tasks || []).length > 0 && (
-          <Table
+          <ResponsiveTable
             rowKey="id"
             size="small"
             style={{ marginTop: 12 }}

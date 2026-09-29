@@ -21,6 +21,7 @@ import {
 import api from '../api/request'
 import { useAppDispatch } from '../store'
 import { patchUser, clearAuth, CurrentUser } from '../store/authSlice'
+import { resetTabs } from '../store/tabsSlice'
 import { clearLastActivity } from '../hooks/useIdleLogout'
 import { clearSharedLegacyDrafts } from '../utils/workOrderDraft'
 
@@ -127,7 +128,9 @@ export default function UserAccountMenu({ user }: Props) {
       onOk() {
         clearLastActivity()
         dispatch(clearAuth())
+        dispatch(resetTabs({}))
         sessionStorage.removeItem('auto-dba-dml-prefill')
+        sessionStorage.removeItem('auto-dba-query-workspace')
         clearSharedLegacyDrafts()
         navigate('/login')
       },

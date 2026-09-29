@@ -1,10 +1,12 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	_ "github.com/jackc/pgx/v4/stdlib"
 )
@@ -14,7 +16,67 @@ type DB struct {
 	driver string
 }
 
-func Open(driver, dsn string) (*DB, error) {
+// PoolSettings 元库连接池参数；零值字段在 Open 时使用默认。
+type PoolSettings struct {
+	MaxOpenConns    int
+	MaxIdleConns    int
+	ConnMaxLifetime  time.Duration
+	ConnMaxIdleTime time.Duration
+}
+
+const (
+	defaultMaxOpenConns    = 50
+	defaultMaxIdleConns    = 10
+	defaultConnMaxLifetime  = 30 * time.Minute
+	defaultConnMaxIdleTime = 5 * time.Minute
+	defaultPingTimeout     = 10 * time.Second
+)
+
+func DefaultPoolSettings() PoolSettings {
+	return PoolSettings{
+		MaxOpenConns:    defaultMaxOpenConns,
+		MaxIdleConns:    defaultMaxIdleConns,
+		ConnMaxLifetime:  defaultConnMaxLifetime,
+		ConnMaxIdleTime: defaultConnMaxIdleTime,
+	}
+}
+
+func applyPool(db *sql.DB, p PoolSettings) {
+	def := DefaultPoolSettings()
+	maxOpen := p.MaxOpenConns
+	if maxOpen <= 0 {
+		maxOpen = def.MaxOpenConns
+	}
+	maxIdle := p.MaxIdleConns
+	if maxIdle <= 0 {
+		maxIdle = def.MaxIdleConns
+	}
+	if maxIdle > maxOpen {
+		maxIdle = maxOpen
+	}
+	lifetime := p.ConnMaxLifetime
+	if lifetime <= 0 {
+		lifetime = def.ConnMaxLifetime
+	}
+	idleTime := p.ConnMaxIdleTime
+	if idleTime <= 0 {
+		idleTime = def.ConnMaxIdleTime
+	}
+	db.SetMaxOpenConns(maxOpen)
+	db.SetMaxIdleConns(maxIdle)
+	db.SetConnMaxLifetime(lifetime)
+	db.SetConnMaxIdleTime(idleTime)
+}
+
+func (d *DB) Ping() error {
+	if d == nil || d.db == nil {
+		return fmt.Errorf("db not open")
+	}
+	return d.db.Ping()
+}
+
+// Open 打开元库。可选传入 PoolSettings；省略时使用默认池上限。
+func Open(driver, dsn string, pool ...PoolSettings) (*DB, error) {
 	if driver == "" {
 		driver = "postgres"
 	}
@@ -28,16 +90,24 @@ func Open(driver, dsn string) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := db.Ping(); err != nil {
+	var p PoolSettings
+	if len(pool) > 0 {
+		p = pool[0]
+	}
+	applyPool(db, p)
+
+	pingCtx, cancel := context.WithTimeout(context.Background(), defaultPingTimeout)
+	defer cancel()
+	if err := db.PingContext(pingCtx); err != nil {
 		db.Close()
 		return nil, err
 	}
 	d := &DB{db: db, driver: driver}
-	if err := d.migrate(); err != nil {
+	if err := d.migrateFast(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
-	if err := d.seed(); err != nil {
+	if err := d.seedFast(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("seed: %w", err)
 	}
@@ -60,7 +130,13 @@ func ensurePostgresDatabase(dsn string) error {
 		return fmt.Errorf("open postgres: %w", err)
 	}
 	defer adb.Close()
-	if err := adb.Ping(); err != nil {
+	adb.SetMaxOpenConns(1)
+	adb.SetMaxIdleConns(0)
+	adb.SetConnMaxLifetime(30 * time.Second)
+
+	pingCtx, cancel := context.WithTimeout(context.Background(), defaultPingTimeout)
+	defer cancel()
+	if err := adb.PingContext(pingCtx); err != nil {
 		return fmt.Errorf("ping postgres: %w", err)
 	}
 	var exists int

@@ -481,7 +481,27 @@ func (d *DB) ensureIssueExecResultColumn() error {
 			return err
 		}
 	}
+	if err := d.ensureIssueAssigneeTransferHistoryColumn(); err != nil {
+		return err
+	}
 	return d.ensureLoginLogsTable()
+}
+
+func (d *DB) ensureIssueAssigneeTransferHistoryColumn() error {
+	var n int
+	err := d.db.QueryRow(`
+		SELECT COUNT(1) FROM information_schema.columns
+		WHERE table_name = 'tbl_issues' AND column_name = 'assignee_transfer_history'
+	`).Scan(&n)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		if _, err := d.db.Exec(`ALTER TABLE tbl_issues ADD COLUMN assignee_transfer_history TEXT NOT NULL DEFAULT '[]'`); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (d *DB) ensureLoginLogsTable() error {
@@ -537,7 +557,520 @@ func (d *DB) ensureLoginLogsTable() error {
 	if err := d.ensureLoginAttemptTable(); err != nil {
 		return err
 	}
-	return d.ensureTerminalSessionsTable()
+	if err := d.ensureTerminalSessionsTable(); err != nil {
+		return err
+	}
+	if err := d.ensurePGSpaceTables(); err != nil {
+		return err
+	}
+	if err := d.ensureAWRTables(); err != nil {
+		return err
+	}
+	if err := d.ensureSqlInsightTables(); err != nil {
+		return err
+	}
+	if err := d.ensureHATables(); err != nil {
+		return err
+	}
+	if err := d.ensureBackupTables(); err != nil {
+		return err
+	}
+	if err := d.ensureSrClusterTables(); err != nil {
+		return err
+	}
+	if err := d.ensureDbDeployTables(); err != nil {
+		return err
+	}
+	if err := d.ensureMonitorRegistryTables(); err != nil {
+		return err
+	}
+	if err := d.ensureOSSSettingsTable(); err != nil {
+		return err
+	}
+	if err := d.ensureOSSUploadTables(); err != nil {
+		return err
+	}
+	return d.ensureCmdbTables()
+}
+
+func (d *DB) ensureOSSSettingsTable() error {
+	_, err := d.db.Exec(`CREATE TABLE IF NOT EXISTS tbl_oss_settings (
+		id TEXT PRIMARY KEY,
+		environment TEXT NOT NULL DEFAULT '',
+		cloud_product TEXT NOT NULL DEFAULT '',
+		endpoint TEXT NOT NULL DEFAULT '',
+		bucket TEXT NOT NULL DEFAULT '',
+		prefix TEXT NOT NULL DEFAULT 'migration',
+		access_key TEXT NOT NULL DEFAULT '',
+		secret_enc TEXT NOT NULL DEFAULT '',
+		retention_days INTEGER NOT NULL DEFAULT 7,
+		chunk_size_mb INTEGER NOT NULL DEFAULT 100,
+		created_by TEXT NOT NULL DEFAULT '',
+		updated_by TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL DEFAULT '',
+		updated_at TEXT NOT NULL DEFAULT '',
+		UNIQUE (environment)
+	)`)
+	if err != nil {
+		return err
+	}
+	_, err = d.db.Exec(`ALTER TABLE tbl_oss_settings ADD COLUMN IF NOT EXISTS cloud_product TEXT NOT NULL DEFAULT ''`)
+	return err
+}
+
+func (d *DB) ensureMonitorRegistryTables() error {
+	_, err := d.db.Exec(`CREATE TABLE IF NOT EXISTS tbl_monitor_job (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		template TEXT NOT NULL DEFAULT '直连类型监控模板',
+		collector TEXT NOT NULL DEFAULT '',
+		scheme TEXT NOT NULL DEFAULT 'http',
+		status TEXT NOT NULL DEFAULT 'active',
+		monitor_type TEXT NOT NULL DEFAULT 'direct',
+		metrics_path TEXT NOT NULL DEFAULT '/metrics',
+		scrape_interval TEXT NOT NULL DEFAULT '1m',
+		scrape_timeout TEXT NOT NULL DEFAULT '10s',
+		labels_json TEXT NOT NULL DEFAULT '{}',
+		description TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL DEFAULT '',
+		updated_at TEXT NOT NULL DEFAULT '',
+		UNIQUE (name)
+	)`)
+	if err != nil {
+		return err
+	}
+	_, err = d.db.Exec(`CREATE TABLE IF NOT EXISTS tbl_monitor_target_group (
+		id TEXT PRIMARY KEY,
+		job_id TEXT NOT NULL,
+		endpoints TEXT NOT NULL DEFAULT '',
+		labels_json TEXT NOT NULL DEFAULT '{}',
+		description TEXT NOT NULL DEFAULT '',
+		sort_order INTEGER NOT NULL DEFAULT 0,
+		created_at TEXT NOT NULL DEFAULT '',
+		updated_at TEXT NOT NULL DEFAULT ''
+	)`)
+	if err != nil {
+		return err
+	}
+	_, err = d.db.Exec(`CREATE INDEX IF NOT EXISTS idx_monitor_tg_job ON tbl_monitor_target_group(job_id)`)
+	if err != nil {
+		return err
+	}
+	_, err = d.db.Exec(`CREATE TABLE IF NOT EXISTS tbl_fe_admin (
+		id TEXT PRIMARY KEY,
+		task_name TEXT NOT NULL DEFAULT '',
+		environment TEXT NOT NULL DEFAULT '',
+		domain TEXT NOT NULL DEFAULT '',
+		port INTEGER NOT NULL DEFAULT 0,
+		fe_node TEXT NOT NULL DEFAULT '',
+		username TEXT NOT NULL DEFAULT '',
+		password_enc TEXT NOT NULL DEFAULT '',
+		created_by TEXT NOT NULL DEFAULT '',
+		updated_by TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL DEFAULT '',
+		updated_at TEXT NOT NULL DEFAULT '',
+		UNIQUE (environment, domain, username)
+	)`)
+	if err != nil {
+		return err
+	}
+	_, err = d.db.Exec(`CREATE TABLE IF NOT EXISTS tbl_ds_admin (
+		id TEXT PRIMARY KEY,
+		environment TEXT NOT NULL DEFAULT '',
+		login_url TEXT NOT NULL DEFAULT '',
+		username TEXT NOT NULL DEFAULT '',
+		password_enc TEXT NOT NULL DEFAULT '',
+		created_by TEXT NOT NULL DEFAULT '',
+		updated_by TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL DEFAULT '',
+		updated_at TEXT NOT NULL DEFAULT '',
+		UNIQUE (environment)
+	)`)
+	if err != nil {
+		return err
+	}
+	_, err = d.db.Exec(`CREATE TABLE IF NOT EXISTS tbl_monitor_label_tags (
+		id TEXT PRIMARY KEY,
+		key TEXT NOT NULL UNIQUE,
+		name TEXT NOT NULL DEFAULT '',
+		values_json TEXT NOT NULL DEFAULT '[]',
+		description TEXT NOT NULL DEFAULT '',
+		sort_order INTEGER NOT NULL DEFAULT 0,
+		created_at TEXT NOT NULL DEFAULT '',
+		updated_at TEXT NOT NULL DEFAULT ''
+	)`)
+	return err
+}
+
+func (d *DB) ensureAWRTables() error {
+	_, err := d.db.Exec(`CREATE TABLE IF NOT EXISTS tbl_db_awr_reports (
+		id            BIGSERIAL     PRIMARY KEY,
+		report_date   DATE          NOT NULL,
+		instance_id   VARCHAR(255),
+		instance_name VARCHAR(255),
+		host          VARCHAR(255)  NOT NULL,
+		port          INTEGER       NOT NULL,
+		source        VARCHAR(32)   NOT NULL DEFAULT 'unknown',
+		period_start  TIMESTAMPTZ   NOT NULL,
+		period_end    TIMESTAMPTZ   NOT NULL,
+		status        VARCHAR(32)   NOT NULL DEFAULT 'success',
+		severity      VARCHAR(16)   NOT NULL DEFAULT 'none',
+		anomaly_count INTEGER       NOT NULL DEFAULT 0,
+		anomalies     JSONB         NOT NULL DEFAULT '[]'::jsonb,
+		error_message TEXT,
+		sections      JSONB         NOT NULL DEFAULT '{}'::jsonb,
+		created_at    TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+		updated_at    TIMESTAMPTZ,
+		UNIQUE (report_date, host, port)
+	)`)
+	if err != nil {
+		return err
+	}
+	for _, alt := range []string{
+		`ALTER TABLE tbl_db_awr_reports ADD COLUMN IF NOT EXISTS source        VARCHAR(32)  NOT NULL DEFAULT 'unknown'`,
+		`ALTER TABLE tbl_db_awr_reports ADD COLUMN IF NOT EXISTS severity      VARCHAR(16)  NOT NULL DEFAULT 'none'`,
+		`ALTER TABLE tbl_db_awr_reports ADD COLUMN IF NOT EXISTS anomaly_count INTEGER      NOT NULL DEFAULT 0`,
+		`ALTER TABLE tbl_db_awr_reports ADD COLUMN IF NOT EXISTS anomalies     JSONB        NOT NULL DEFAULT '[]'::jsonb`,
+	} {
+		if _, err := d.db.Exec(alt); err != nil {
+			return err
+		}
+	}
+	for _, idx := range []string{
+		`CREATE INDEX IF NOT EXISTS idx_awr_report_date     ON tbl_db_awr_reports(report_date)`,
+		`CREATE INDEX IF NOT EXISTS idx_awr_report_instance ON tbl_db_awr_reports(instance_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_awr_report_hostport ON tbl_db_awr_reports(host, port)`,
+		`CREATE INDEX IF NOT EXISTS idx_awr_report_severity ON tbl_db_awr_reports(report_date, severity)`,
+	} {
+		if _, err := d.db.Exec(idx); err != nil {
+			return err
+		}
+	}
+
+	_, err = d.db.Exec(`CREATE TABLE IF NOT EXISTS tbl_db_awr_generate_jobs (
+		id               VARCHAR(255) PRIMARY KEY,
+		scope            VARCHAR(16)  NOT NULL,
+		report_date      DATE         NOT NULL,
+		instance_id      VARCHAR(255),
+		host             VARCHAR(255),
+		port             INTEGER,
+		state            VARCHAR(16)  NOT NULL,
+		instances_total  INTEGER      NOT NULL DEFAULT 0,
+		instances_done   INTEGER      NOT NULL DEFAULT 0,
+		current_instance VARCHAR(255),
+		current_stage    VARCHAR(32),
+		reports_written  INTEGER      NOT NULL DEFAULT 0,
+		failed_count     INTEGER      NOT NULL DEFAULT 0,
+		error            TEXT,
+		created_by       VARCHAR(255),
+		started_at       TIMESTAMPTZ,
+		updated_at       TIMESTAMPTZ,
+		finished_at      TIMESTAMPTZ,
+		created_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+	)`)
+	if err != nil {
+		return err
+	}
+	for _, idx := range []string{
+		`CREATE INDEX IF NOT EXISTS idx_awr_gen_job_state   ON tbl_db_awr_generate_jobs(state)`,
+		`CREATE INDEX IF NOT EXISTS idx_awr_gen_job_date    ON tbl_db_awr_generate_jobs(report_date)`,
+		`CREATE INDEX IF NOT EXISTS idx_awr_gen_job_created ON tbl_db_awr_generate_jobs(created_at DESC)`,
+	} {
+		if _, err := d.db.Exec(idx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (d *DB) ensureSqlInsightTables() error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS tbl_sql_insight_metrics (
+			id            VARCHAR(64)   PRIMARY KEY,
+			metric_key    VARCHAR(128)  NOT NULL UNIQUE,
+			name          VARCHAR(255)  NOT NULL,
+			description   TEXT          NOT NULL DEFAULT '',
+			source        VARCHAR(32)   NOT NULL,
+			expr_type     VARCHAR(32)   NOT NULL DEFAULT 'builtin_field',
+			builtin_field VARCHAR(128)  NOT NULL DEFAULT '',
+			unit          VARCHAR(32)   NOT NULL DEFAULT '',
+			stat          VARCHAR(16)   NOT NULL DEFAULT 'avg',
+			scope_host    VARCHAR(255)  NOT NULL DEFAULT '',
+			scope_port    INTEGER       NOT NULL DEFAULT 0,
+			enabled       BOOLEAN       NOT NULL DEFAULT TRUE,
+			system        BOOLEAN       NOT NULL DEFAULT FALSE,
+			created_by    VARCHAR(64)   NOT NULL DEFAULT '',
+			updated_by    VARCHAR(64)   NOT NULL DEFAULT '',
+			created_at    TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+			updated_at    TIMESTAMPTZ
+		)`,
+		`CREATE TABLE IF NOT EXISTS tbl_sql_insight_rules (
+			id              VARCHAR(64)   PRIMARY KEY,
+			name            VARCHAR(255)  NOT NULL,
+			description     TEXT          NOT NULL DEFAULT '',
+			metric_key      VARCHAR(128)  NOT NULL,
+			rule_kind       VARCHAR(32)   NOT NULL,
+			direction       VARCHAR(16)   NOT NULL DEFAULT 'above',
+			warn_threshold  DOUBLE PRECISION,
+			crit_threshold  DOUBLE PRECISION,
+			baseline_window VARCHAR(16)   NOT NULL DEFAULT '30d',
+			zscore_k        DOUBLE PRECISION NOT NULL DEFAULT 3,
+			enabled         BOOLEAN       NOT NULL DEFAULT TRUE,
+			system          BOOLEAN       NOT NULL DEFAULT FALSE,
+			created_by      VARCHAR(64)   NOT NULL DEFAULT '',
+			updated_by      VARCHAR(64)   NOT NULL DEFAULT '',
+			created_at      TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+			updated_at      TIMESTAMPTZ
+		)`,
+		`CREATE TABLE IF NOT EXISTS tbl_sql_insight_analysis_runs (
+			id               VARCHAR(64)   PRIMARY KEY,
+			analysis_date    DATE          NOT NULL,
+			host             VARCHAR(255)  NOT NULL DEFAULT '',
+			port             INTEGER       NOT NULL DEFAULT 0,
+			status           VARCHAR(32)   NOT NULL DEFAULT 'running',
+			severity         VARCHAR(16)   NOT NULL DEFAULT 'none',
+			finding_count    INTEGER       NOT NULL DEFAULT 0,
+			critical_count   INTEGER       NOT NULL DEFAULT 0,
+			warning_count    INTEGER       NOT NULL DEFAULT 0,
+			info_count       INTEGER       NOT NULL DEFAULT 0,
+			error_message    TEXT          NOT NULL DEFAULT '',
+			user_scenario    TEXT          NOT NULL DEFAULT '',
+			scenario_tags    JSONB         NOT NULL DEFAULT '[]'::jsonb,
+			narrative_status VARCHAR(32)   NOT NULL DEFAULT 'skipped',
+			narrative_json   JSONB         NOT NULL DEFAULT '{}'::jsonb,
+			narrative_text   TEXT          NOT NULL DEFAULT '',
+			narrative_source VARCHAR(32)   NOT NULL DEFAULT '',
+			trigger_type     VARCHAR(32)   NOT NULL DEFAULT 'manual',
+			created_by       VARCHAR(64)   NOT NULL DEFAULT '',
+			started_at       TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+			finished_at      TIMESTAMPTZ,
+			created_at       TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE TABLE IF NOT EXISTS tbl_sql_insight_findings (
+			id             VARCHAR(64)   PRIMARY KEY,
+			run_id         VARCHAR(64)   NOT NULL REFERENCES tbl_sql_insight_analysis_runs(id) ON DELETE CASCADE,
+			analysis_date  DATE          NOT NULL,
+			host           VARCHAR(255)  NOT NULL,
+			port           INTEGER       NOT NULL,
+			instance_id    VARCHAR(255)  NOT NULL DEFAULT '',
+			instance_name  VARCHAR(255)  NOT NULL DEFAULT '',
+			metric_key     VARCHAR(128)  NOT NULL,
+			rule_id        VARCHAR(64)   NOT NULL DEFAULT '',
+			rule_kind      VARCHAR(32)   NOT NULL DEFAULT '',
+			severity       VARCHAR(16)   NOT NULL,
+			title          VARCHAR(512)  NOT NULL DEFAULT '',
+			message        TEXT          NOT NULL DEFAULT '',
+			value          DOUBLE PRECISION,
+			threshold      DOUBLE PRECISION,
+			baseline_value DOUBLE PRECISION,
+			unit           VARCHAR(32)   NOT NULL DEFAULT '',
+			evidence       JSONB         NOT NULL DEFAULT '{}'::jsonb,
+			suggestion     TEXT          NOT NULL DEFAULT '',
+			fingerprint    VARCHAR(255)  NOT NULL DEFAULT '',
+			feedback       VARCHAR(16)   NOT NULL DEFAULT '',
+			feedback_note  TEXT          NOT NULL DEFAULT '',
+			feedback_by    VARCHAR(64)   NOT NULL DEFAULT '',
+			feedback_at    TIMESTAMPTZ,
+			created_at     TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE TABLE IF NOT EXISTS tbl_sql_insight_observations (
+			id            BIGSERIAL     PRIMARY KEY,
+			run_id        VARCHAR(64)   NOT NULL DEFAULT '',
+			obs_date      DATE          NOT NULL,
+			host          VARCHAR(255)  NOT NULL,
+			port          INTEGER       NOT NULL,
+			metric_key    VARCHAR(128)  NOT NULL,
+			value         DOUBLE PRECISION NOT NULL,
+			unit          VARCHAR(32)   NOT NULL DEFAULT '',
+			created_at    TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+			UNIQUE (obs_date, host, port, metric_key)
+		)`,
+		`CREATE TABLE IF NOT EXISTS tbl_sql_insight_metric_baselines (
+			id            BIGSERIAL     PRIMARY KEY,
+			host          VARCHAR(255)  NOT NULL,
+			port          INTEGER       NOT NULL,
+			metric_key    VARCHAR(128)  NOT NULL,
+			window_key    VARCHAR(16)   NOT NULL DEFAULT '30d',
+			sample_count  INTEGER       NOT NULL DEFAULT 0,
+			mean_val      DOUBLE PRECISION,
+			stddev_val    DOUBLE PRECISION,
+			p50           DOUBLE PRECISION,
+			p95           DOUBLE PRECISION,
+			p99           DOUBLE PRECISION,
+			min_val       DOUBLE PRECISION,
+			max_val       DOUBLE PRECISION,
+			last_value    DOUBLE PRECISION,
+			updated_at    TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+			UNIQUE (host, port, metric_key, window_key)
+		)`,
+		`CREATE TABLE IF NOT EXISTS tbl_sql_insight_cases (
+			id                   VARCHAR(64)   PRIMARY KEY,
+			fingerprint          VARCHAR(255)  NOT NULL,
+			metric_key           VARCHAR(128)  NOT NULL DEFAULT '',
+			severity             VARCHAR(16)   NOT NULL DEFAULT '',
+			direction            VARCHAR(16)   NOT NULL DEFAULT '',
+			title                VARCHAR(512)  NOT NULL DEFAULT '',
+			root_cause_template  TEXT          NOT NULL DEFAULT '',
+			action_template      TEXT          NOT NULL DEFAULT '',
+			hit_count            INTEGER       NOT NULL DEFAULT 0,
+			confirm_count        INTEGER       NOT NULL DEFAULT 0,
+			dismiss_count        INTEGER       NOT NULL DEFAULT 0,
+			system               BOOLEAN       NOT NULL DEFAULT FALSE,
+			last_seen_at         TIMESTAMPTZ,
+			created_at           TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+		)`,
+	}
+	for _, s := range stmts {
+		if _, err := d.db.Exec(s); err != nil {
+			return err
+		}
+	}
+	for _, idx := range []string{
+		`CREATE INDEX IF NOT EXISTS idx_si_metrics_source ON tbl_sql_insight_metrics(source)`,
+		`CREATE INDEX IF NOT EXISTS idx_si_rules_metric ON tbl_sql_insight_rules(metric_key)`,
+		`CREATE INDEX IF NOT EXISTS idx_si_runs_date ON tbl_sql_insight_analysis_runs(analysis_date)`,
+		`CREATE INDEX IF NOT EXISTS idx_si_findings_run ON tbl_sql_insight_findings(run_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_si_obs_hostport_key ON tbl_sql_insight_observations(host, port, metric_key)`,
+		`CREATE INDEX IF NOT EXISTS idx_si_baseline_hostport ON tbl_sql_insight_metric_baselines(host, port)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_si_cases_fp ON tbl_sql_insight_cases(fingerprint)`,
+	} {
+		if _, err := d.db.Exec(idx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (d *DB) ensurePGSpaceTables() error {
+	_, err := d.db.Exec(`CREATE TABLE IF NOT EXISTS tbl_pg_space_snapshots (
+		id              BIGSERIAL     PRIMARY KEY,
+		collected_at    TIMESTAMPTZ   NOT NULL,
+		instance_id     VARCHAR(255),
+		instance_name   VARCHAR(255),
+		host            VARCHAR(255)  NOT NULL,
+		port            INTEGER       NOT NULL,
+		object_type     VARCHAR(16)   NOT NULL,
+		db_name         VARCHAR(255),
+		schema_name     VARCHAR(255),
+		object_name     VARCHAR(512)  NOT NULL,
+		tablespace_name VARCHAR(255),
+		shard_count     INTEGER       NOT NULL DEFAULT 1,
+		size_bytes      BIGINT,
+		table_bytes     BIGINT,
+		index_bytes     BIGINT,
+		toast_bytes     BIGINT,
+		n_live_tup      BIGINT,
+		n_dead_tup      BIGINT,
+		dead_ratio      DOUBLE PRECISION,
+		bloat_bytes     BIGINT,
+		bloat_ratio     DOUBLE PRECISION,
+		idx_scan        BIGINT,
+		is_unused       BOOLEAN,
+		seq_scan        BIGINT,
+		tbl_idx_scan    BIGINT,
+		heap_blks_read  BIGINT,
+		heap_blks_hit   BIGINT,
+		heap_cache_hit_ratio DOUBLE PRECISION,
+		n_tup_ins       BIGINT,
+		n_tup_upd       BIGINT,
+		n_tup_del       BIGINT,
+		last_vacuum     TIMESTAMPTZ,
+		last_autovacuum TIMESTAMPTZ,
+		last_analyze    TIMESTAMPTZ,
+		last_autoanalyze TIMESTAMPTZ,
+		relfrozenxid_age BIGINT,
+		datfrozenxid_age BIGINT,
+		seq_last_value  BIGINT,
+		seq_max_value   BIGINT,
+		seq_min_value   BIGINT,
+		seq_used_ratio  DOUBLE PRECISION,
+		seq_remaining   BIGINT,
+		seq_cycle       BOOLEAN,
+		created_at      TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+	)`)
+	if err != nil {
+		return err
+	}
+	for _, idx := range []string{
+		`CREATE INDEX IF NOT EXISTS idx_pg_space_snap_collected ON tbl_pg_space_snapshots(collected_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_pg_space_snap_instance  ON tbl_pg_space_snapshots(instance_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_pg_space_snap_hostport  ON tbl_pg_space_snapshots(host, port)`,
+		`CREATE INDEX IF NOT EXISTS idx_pg_space_snap_type_db   ON tbl_pg_space_snapshots(object_type, db_name)`,
+		`CREATE INDEX IF NOT EXISTS idx_pg_space_snap_trend ON tbl_pg_space_snapshots(instance_id, object_type, db_name, object_name, collected_at)`,
+	} {
+		if _, err := d.db.Exec(idx); err != nil {
+			return err
+		}
+	}
+
+	_, err = d.db.Exec(`CREATE TABLE IF NOT EXISTS tbl_pg_space_collect_jobs (
+		id               VARCHAR(255) PRIMARY KEY,
+		scope            VARCHAR(16)  NOT NULL,
+		instance_id      VARCHAR(255),
+		host             VARCHAR(255),
+		port             INTEGER,
+		state            VARCHAR(16)  NOT NULL,
+		instances_total  INTEGER      NOT NULL DEFAULT 0,
+		instances_done   INTEGER      NOT NULL DEFAULT 0,
+		current_instance VARCHAR(255),
+		current_stage    VARCHAR(32),
+		db_total         INTEGER      NOT NULL DEFAULT 0,
+		db_done          INTEGER      NOT NULL DEFAULT 0,
+		current_db       VARCHAR(255),
+		rows_written     INTEGER      NOT NULL DEFAULT 0,
+		error            TEXT,
+		created_by       VARCHAR(255),
+		started_at       TIMESTAMPTZ,
+		updated_at       TIMESTAMPTZ,
+		finished_at      TIMESTAMPTZ,
+		created_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+	)`)
+	if err != nil {
+		return err
+	}
+	for _, idx := range []string{
+		`CREATE INDEX IF NOT EXISTS idx_pg_space_job_state    ON tbl_pg_space_collect_jobs(state)`,
+		`CREATE INDEX IF NOT EXISTS idx_pg_space_job_instance ON tbl_pg_space_collect_jobs(instance_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_pg_space_job_created  ON tbl_pg_space_collect_jobs(created_at DESC)`,
+	} {
+		if _, err := d.db.Exec(idx); err != nil {
+			return err
+		}
+	}
+
+	_, err = d.db.Exec(`CREATE TABLE IF NOT EXISTS tbl_pg_space_advice_latest (
+		id                   BIGSERIAL     PRIMARY KEY,
+		instance_id          VARCHAR(255)  NOT NULL DEFAULT '',
+		instance_name        VARCHAR(255),
+		host                 VARCHAR(255)  NOT NULL,
+		port                 INTEGER       NOT NULL,
+		collected_at         TIMESTAMPTZ   NOT NULL,
+		severity             VARCHAR(16)   NOT NULL DEFAULT 'none',
+		advice_count         INTEGER       NOT NULL DEFAULT 0,
+		reclaimable_bytes    BIGINT        NOT NULL DEFAULT 0,
+		xid_risk_count       INTEGER       NOT NULL DEFAULT 0,
+		sequence_risk_count  INTEGER       NOT NULL DEFAULT 0,
+		vacuum_risk_count    INTEGER       NOT NULL DEFAULT 0,
+		access_risk_count    INTEGER       NOT NULL DEFAULT 0,
+		cache_risk_count     INTEGER       NOT NULL DEFAULT 0,
+		hot_table_count      INTEGER       NOT NULL DEFAULT 0,
+		report               JSONB         NOT NULL,
+		updated_at           TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+		CONSTRAINT uq_pg_space_advice_host_port UNIQUE (host, port)
+	)`)
+	if err != nil {
+		return err
+	}
+	for _, idx := range []string{
+		`CREATE INDEX IF NOT EXISTS idx_pg_space_advice_instance  ON tbl_pg_space_advice_latest(instance_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_pg_space_advice_severity  ON tbl_pg_space_advice_latest(severity)`,
+		`CREATE INDEX IF NOT EXISTS idx_pg_space_advice_collected ON tbl_pg_space_advice_latest(collected_at DESC)`,
+	} {
+		if _, err := d.db.Exec(idx); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (d *DB) ensureLoginAttemptTable() error {

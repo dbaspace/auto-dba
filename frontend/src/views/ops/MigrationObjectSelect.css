@@ -83,7 +83,7 @@
 .batch-box {
   margin-bottom: 8px;
   border: 1px solid #f3f4f6;
-  background: #fafafa;
+  background: var(--app-page-bg, #fafafa);
   border-radius: 6px;
 }
 .batch-sub {

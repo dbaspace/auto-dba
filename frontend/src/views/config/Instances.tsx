@@ -1,15 +1,21 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Button, Input, InputNumber, Modal, Radio, Select, Table, Tabs, Tag, message } from 'antd'
+import { Button, Input, InputNumber, Modal, Radio, Select, Tag, message } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
+import { useLocation, useNavigate } from 'react-router-dom'
 import api from '../../api/request'
 import Auth from '../../components/Auth'
 import { Perm } from '../../hooks/usePermission'
-import DbTypeIcon from '../../components/DbTypeIcon'
+import { useAppDispatch, useAppSelector } from '../../store'
+import { tabKey, updateTabMeta } from '../../store/tabsSlice'
+import {
+  dbTypeFromSearch,
+  instanceTypeSearch,
+  parseInstanceTypes,
+  type InstanceTypeOption,
+} from '../../utils/instanceTypes'
 import './Instances.css'
 
-interface TypeOption {
-  value: string
-  label: string
-}
+type TypeOption = InstanceTypeOption
 
 interface InstanceRow {
   id?: string
@@ -73,24 +79,6 @@ function defaultPort(dbType?: string) {
   return map[String(dbType || '').toLowerCase()] || 5432
 }
 
-function parseInstanceTypes(raw: string): TypeOption[] {
-  try {
-    const arr = JSON.parse(String(raw || '').trim() || '[]')
-    if (!Array.isArray(arr)) return []
-    const seen = new Set<string>()
-    const out: TypeOption[] = []
-    for (const it of arr) {
-      const value = String(it?.value ?? '').trim()
-      if (!value || seen.has(value)) continue
-      seen.add(value)
-      out.push({ value, label: String(it?.label || value).trim() || value })
-    }
-    return out
-  } catch {
-    return []
-  }
-}
-
 function cloudVendorText(v?: string) {
   return ({ tencent: '腾讯云', aliyun: '阿里云', huawei: '华为云', aws: 'AWS' } as Record<string, string>)[String(v || '')] || (v ? v : '自建')
 }
@@ -111,6 +99,10 @@ function normalizeHost(raw?: string) {
 }
 
 export default function Instances() {
+  const location = useLocation()
+  const navigate = useNavigate()
+  const dispatch = useAppDispatch()
+  const activeTabKey = useAppSelector((s) => s.tabs.activeKey)
   const [typeOptions, setTypeOptions] = useState<TypeOption[]>([])
   const [regions, setRegions] = useState<MetaRow[]>([])
   const [regionEnvs, setRegionEnvs] = useState<MetaRow[]>([])
@@ -193,15 +185,22 @@ export default function Instances() {
     return [...set].sort()
   }, [rows])
 
-  function typeCount(value: string) {
-    if (value === OTHER) return rows.filter((r) => r.db_type && !knownTypes.has(r.db_type) && !knownTypes.has(typeKey(r.db_type))).length
-    return rows.filter((r) => typeKey(r.db_type) === typeKey(value) || r.db_type === value).length
-  }
-
   function ensureActiveTab(list: { value: string }[], cur: string) {
     const names = list.map((t) => t.value)
     if (!names.includes(cur)) return names[0] || ''
     return cur
+  }
+
+  function applyTypeToTab(typeValue: string, typeLabel: string) {
+    const nextSearch = typeValue === OTHER ? '' : instanceTypeSearch(typeValue)
+    const title = typeValue === OTHER ? '其他' : typeLabel
+    const curKey = tabKey(location.pathname, location.search || '')
+    dispatch(updateTabMeta({ key: curKey, search: nextSearch, title }))
+    const to = location.pathname + (nextSearch || '')
+    const thisIsActive = activeTabKey === curKey
+    if (thisIsActive && location.pathname + (location.search || '') !== to) {
+      navigate(to, { replace: true })
+    }
   }
 
   async function loadTypes() {
@@ -399,12 +398,24 @@ export default function Instances() {
   }
 
   function remove(row: InstanceRow) {
+    const host = isHostType(row.db_type)
     Modal.confirm({
       title: '提示',
-      content: '删除实例及其已登记库？',
+      content: host
+        ? '删除该主机？若主机上仍有 Agent 或集群节点，需先下线节点、删除 Agent 后再删除主机。'
+        : '删除实例及其已登记库？',
       okButtonProps: { danger: true },
       onOk: async () => {
-        await api.delete('/instances/' + row.id)
+        try {
+          await api.delete('/instances/' + row.id, { silent: true })
+        } catch (e: any) {
+          Modal.error({
+            title: host ? '主机仍被使用，无法删除' : '删除失败',
+            width: 560,
+            content: <div style={{ whiteSpace: 'pre-wrap' }}>{e?.response?.data?.message || e?.message || '删除失败'}</div>,
+          })
+          return
+        }
         await load()
       },
     })
@@ -416,9 +427,22 @@ export default function Instances() {
   }, [])
 
   useEffect(() => {
-    setActiveType((cur) => ensureActiveTab(tabs, cur))
+    if (!tabs.length) return
+    const fromQuery = dbTypeFromSearch(location.search)
+    const next = ensureActiveTab(tabs, fromQuery || activeType)
+    if (next && next !== activeType) setActiveType(next)
+    if (!next) return
+    const label = tabs.find((t) => t.value === next)?.label || next
+    const wantSearch = next === OTHER ? '' : instanceTypeSearch(next)
+    const curSearch = location.search || ''
+    if (curSearch !== wantSearch) {
+      applyTypeToTab(next, label)
+      return
+    }
+    const curKey = tabKey(location.pathname, curSearch)
+    dispatch(updateTabMeta({ key: curKey, title: label }))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tabs])
+  }, [tabs, location.search])
 
   return (
     <div className="ops-page">
@@ -438,27 +462,8 @@ export default function Instances() {
           </Auth>
         </div>
       </div>
-      <Tabs
-        className="inst-tabs"
-        activeKey={activeType}
-        onChange={(k) => {
-          setActiveType(k)
-          setQ('')
-        }}
-        items={tabs.map((t) => ({
-          key: t.value,
-          label: (
-            <span className="tab-label">
-              <DbTypeIcon type={t.value} size={16} />
-              <span>
-                {t.label} ({typeCount(t.value)})
-              </span>
-            </span>
-          ),
-        }))}
-      />
       <div className="ops-table">
-        <Table
+        <ResponsiveTable
           rowKey={(r) => r.id || r.name || ''}
           dataSource={filteredRows}
           bordered
@@ -510,10 +515,11 @@ export default function Instances() {
               width: 130,
               render: (_, row) => row.cloud_region || '—',
             },
-            { title: '审批人', dataIndex: 'approvers', render: (_, row) => (row.approvers || []).join(',') },
+            { title: '审批人', dataIndex: 'approvers', width: 120, render: (_, row) => (row.approvers || []).join(',') || '—' },
             {
               title: '操作',
               width: 220,
+              fixed: 'right' as const,
               render: (_, row) => (
                 <>
                   {isHostType(row.db_type) && (
@@ -656,10 +662,20 @@ export default function Instances() {
                 value={form.tags || []}
                 placeholder="输入后回车，可自定义任意标签"
                 style={{ width: '100%' }}
-                options={usedTags.map((t) => ({ value: t, label: t }))}
+                options={[
+                  ...allEnvs
+                    .map((e) => String(e.code || '').trim())
+                    .filter(Boolean)
+                    .map((code) => ({ value: `idc=${code}`, label: `idc=${code}` })),
+                  ...usedTags
+                    .filter((t) => !/^idc=/i.test(t))
+                    .map((t) => ({ value: t, label: t })),
+                ]}
                 onChange={(v) => setForm((f) => ({ ...f, tags: v }))}
               />
-              <div className="type-hint">可选。可沿用已有标签，也可输入新标签后回车</div>
+              <div className="type-hint">
+                可选。规范：`idc` 须等于所选环境编码（保存时自动同步）；Redis 等可补 `domain=`
+              </div>
             </div>
           </div>
           <div className="fi">

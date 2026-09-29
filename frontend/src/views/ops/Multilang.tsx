@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react'
-import { Button, Table } from 'antd'
+import { Button } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
 import api from '../../api/request'
 
 export default function Multilang() {
@@ -31,12 +32,12 @@ export default function Multilang() {
         </Button>
       </div>
       <div className="ops-table">
-        <Table
+        <ResponsiveTable
           rowKey={(r) => r.id || `${r.name}-${r.created_at}`}
           dataSource={rows}
           bordered
           pagination={false}
-          scroll={{ y: '100%' }}
+          scroll={{ x: 'max-content', y: '100%' }}
           style={{ height: '100%' }}
           columns={[
             { title: '名称', dataIndex: 'name', minWidth: 180 },

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Button, Card, Col, Progress, Row, Table, Tag } from 'antd'
+import { Button, Card, Col, Progress, Row, Tag } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
 import type { ColumnsType } from 'antd/es/table'
 import api from '../../api/request'
 import CreateTaskDialog from './CreateTaskDialog'
@@ -147,7 +148,7 @@ export default function Dashboard() {
                   </Button>
                 </div>
               </div>
-              <Table
+              <ResponsiveTable
                 rowKey={(r) => r.id ?? r.name ?? Math.random()}
                 dataSource={runs}
                 columns={columns}

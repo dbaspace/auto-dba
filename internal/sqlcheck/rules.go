@@ -98,6 +98,9 @@ func CheckTicketWithRules(sqlContent, issueType, dbType string, rules []Rule) Re
 	}
 	if strings.EqualFold(issueType, "ddl") {
 		applyTicketCommentRules(stmts, dbType, byName, &res)
+		if dbType == "postgres" {
+			applyRequireUpdateTimeRules(stmts, byName, &res)
+		}
 		if hit := checkMergeAlterTable(stmts, byName); hit != nil {
 			appendHit(&res, stmts[0], hit)
 			extras = append(extras, StatementRow{Stage: "static", ErrorLevel: hit.Level, Message: hit.Message, SQL: stmts[0], RuleID: hit.RuleID})

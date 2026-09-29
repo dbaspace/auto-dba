@@ -22,9 +22,8 @@ func Precheck(ctx context.Context, st *store.DB, secretKey string, t *store.Migr
 		return items
 	}
 	if t.TransferMode == "oss" {
-		cfg := st.GetMigrationSettings().OSS
-		if !cfg.Configured {
-			add("transfer_mode", "required", "failed", "请先在迁移设置中配置 OSS 连接信息")
+		if !st.ResolveMigrationOSSConfigured(t.Env) {
+			add("transfer_mode", "required", "failed", "请先在配置中心为该环境配置 OSS 连接信息")
 		} else {
 			add("transfer_mode", "required", "passed", "OSS 中转")
 		}

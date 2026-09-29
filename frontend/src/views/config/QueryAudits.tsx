@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
-import { Button, Input, Modal, Pagination, Select, Table, Tag, Typography } from 'antd'
+import { Button, Input, Modal, Pagination, Select, Tag, Typography } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
 import api from '../../api/request'
 import './LoginLogs.css'
 
@@ -147,7 +148,7 @@ export default function QueryAudits() {
         </Button>
       </div>
       <div className="ops-table">
-        <Table
+        <ResponsiveTable
           rowKey={(r) => r.id || `${r.created_at}-${r.username}-${r.statement}`}
           dataSource={rows}
           loading={loading}

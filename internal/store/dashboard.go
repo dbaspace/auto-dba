@@ -286,12 +286,13 @@ func (d *DB) DashboardTodos(f DashboardFilter, viewer string, page, pageSize int
 	if err != nil {
 		return nil, 0, err
 	}
+	seeAllPending := viewer != "" && d.IsGlobalApprover(viewer)
 	var todos []DashboardTodo
 	for _, r := range rows {
 		if r.Status != StatusPending {
 			continue
 		}
-		if viewer != "" && !strings.EqualFold(r.AssignedTo, viewer) {
+		if viewer != "" && !seeAllPending && !strings.EqualFold(r.AssignedTo, viewer) {
 			continue
 		}
 		name := r.Description
@@ -425,6 +426,14 @@ func issueTypeLabel(t string) string {
 		return "多语模版"
 	case IssueTypeCreateDB:
 		return "新增数据库"
+	case IssueTypeRedis:
+		return "Redis"
+	case IssueTypeHA:
+		return "高可用变更"
+	case IssueTypeSrCluster:
+		return "StarRocks 集群变更"
+	case IssueTypeDbDeploy:
+		return "数据库集群部署"
 	default:
 		return t
 	}

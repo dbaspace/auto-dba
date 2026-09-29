@@ -150,3 +150,40 @@ API：
 - 种子动作：`internal/store/seed.go` → `ensureActionMenus`  
 - 类型识别 / Tag：`frontend/src/utils/menuKind.tsx`  
 - 菜单管理 / 角色授权 / 用户：`frontend/src/views/config/Menus.tsx`、`Roles.tsx`、`Users.tsx`  
+
+## 高可用服务维护（增量）
+
+- 页面：`/ops/ha`，URN `um.sidebar.ops-ha`，菜单 ID `m-plat-ha`（挂「平台运维」）
+- 写接口一期挂在页面权限下；后续可细分为 `um.action.ha.submit` / `approve` / `execute` / `controller` 并在路由上补 `RequireURN`
+
+## 集群部署（增量）
+
+- 侧栏显示名「集群部署」：菜单 ID `m-plat-sr-cluster`（沿用），Path `/ops/cluster-deploy`，URN `um.sidebar.ops-cluster-deploy`（原 `um.sidebar.ops-sr-cluster` 由 seed 迁移）
+- 分引擎工作台（同 URN 页面权限）：`/ops/cluster-deploy/starrocks|mysql|postgres|redis|haproxy|nginx|lvs` 等（以 Hub `/db-deploy/engines` 为准）
+- API：`/api/v1/sr-cluster/*`（StarRocks）、`/api/v1/db-deploy/*`（MySQL/PG/Redis·Codis）
+- 详见 [db-cluster.md](db-cluster.md)、[redis-cluster.md](redis-cluster.md)、[sr-cluster.md](sr-cluster.md)
+- Hub：`/ops/cluster-deploy`；StarRocks 工作台：`/ops/cluster-deploy/starrocks`（旧 `/ops/sr-cluster` 前端重定向）
+- 写接口一期仍挂 `/api/v1/sr-cluster/*` 与页面权限；方案见 [sr-cluster.md](sr-cluster.md)
+
+## 数据备份（增量）
+
+- 菜单树挂「数据安全」：`m-safe-bak` → policies / runs / settings（备份存储）
+- 平台 Agent：配置中心 `m-cfg-agent` → `/config/agents`，URN `um.sidebar.config-agents`
+- OSS 配置：配置中心 `m-cfg-oss` → `/config/oss`，URN `um.sidebar.config-oss`（页面标题「对象存储」，含配置与分片上传）
+- 页面 URN：`um.sidebar.ops-backup*`；写接口一期挂页面权限；后续可拆 `um.action.backup.policy.edit` / `run` / `restore`
+
+## SQL 洞察（增量）
+
+- 页面：`/ops/sql-insight`，URN `um.sidebar.ops-sql-insight`，菜单 ID `m-diag-sql`（挂「性能诊断」）
+- 设置页：`/config/sql-insight`，URN `um.sidebar.config-sql-insight`（壳上仅一个「设置」入口，按当前 Tab 深链 `?tab=`）
+- 操作权限（挂 `m-diag-sql` 下）：
+
+| 操作 | Title | URN |
+|------|-------|-----|
+| 手动采集活动快照 | 手动采集活动快照 | `um.action.sql-insight.collect` |
+| 手动生成 AWR | 手动生成 AWR 报告 | `um.action.sql-insight.awr-generate` |
+| 手动采集表空间 | 手动采集表空间 | `um.action.sql-insight.space-collect` |
+| 手动智能分析 | 手动智能分析 | `um.action.sql-insight.analyze` |
+
+- 后端：`POST /pg-activity-snapshots/collect`、`/awr-reports/generate*`、`/pg-space/collect*`、`/sql-insight/analysis/runs` 已绑对应 URN
+- 设置保存走全局参数，按钮需 `um.action.args.edit`

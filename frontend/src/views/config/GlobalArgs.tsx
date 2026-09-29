@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Button, Form, Input, Modal, Pagination, Space, Table, message } from 'antd'
+import { Button, Form, Input, Modal, Pagination, Space, message } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
 import api from '../../api/request'
 import './GlobalArgs.css'
 
@@ -98,7 +99,7 @@ export default function GlobalArgs() {
         </Button>
       </div>
       <div className="ops-table">
-        <Table
+        <ResponsiveTable
           rowKey={(r) => r.key || ''}
           dataSource={pageRows}
           bordered

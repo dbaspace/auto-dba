@@ -3,8 +3,11 @@
   display: flex;
   flex-direction: column;
   height: 100%;
+  width: 100%;
   min-height: 0;
   overflow: auto;
+  background: var(--app-content-bg, #fff);
+  box-sizing: border-box;
 }
 .mig-head {
   display: flex;

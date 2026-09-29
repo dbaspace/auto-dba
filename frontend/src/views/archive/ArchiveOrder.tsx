@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Button, Card, Col, Form, Input, Radio, Row, Select, message } from 'antd'
 import api from '../../api/request'
+import { useWorkOrderDraft } from '../../hooks/useWorkOrderDraft'
 import { encodeCondition } from './archive.ts'
 import './archive.css'
 
@@ -87,6 +88,20 @@ export default function ArchiveOrder() {
     setForm((prev) => ({ ...prev, ...p }))
   }
 
+  const { restoreDraft, saveNow: saveDraft, clearOnSubmitSuccess, schedulePersist } = useWorkOrderDraft({
+    type: 'archive',
+    label: '归档工单',
+    path: '/ops/archive/apply',
+    getValues: () => ({ ...formRef.current }),
+    applyValues: (d) => {
+      setForm({ ...emptyForm(), ...d })
+    },
+  })
+
+  useEffect(() => {
+    schedulePersist()
+  }, [form, schedulePersist])
+
   const sourceInstances = useMemo(() => {
     if (!form.db_type) return instances
     const want = typeKey(form.db_type)
@@ -153,6 +168,7 @@ export default function ArchiveOrder() {
         ),
       })
       message.success('工单已提交，审批通过后按任务执行方式运行')
+      clearOnSubmitSuccess()
       reset()
       navigate('/ops/tickets?type=archive')
     } finally {
@@ -162,6 +178,7 @@ export default function ArchiveOrder() {
 
   useEffect(() => {
     ;(async () => {
+      restoreDraft()
       const [instRes, argRes] = await Promise.all([
         api.get('/instances'),
         api.get('/global-args'),
@@ -183,6 +200,7 @@ export default function ArchiveOrder() {
       setApprovers(list)
       setForm((prev) => (!prev.approver && list.length ? { ...prev, approver: list[0] } : prev))
     })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   return (
@@ -371,6 +389,7 @@ export default function ArchiveOrder() {
                 <Button type="primary" loading={saving} onClick={submit}>
                   提交工单
                 </Button>
+                <Button onClick={() => saveDraft()}>保存草稿</Button>
                 <Button onClick={reset}>重置</Button>
               </div>
             </Form>

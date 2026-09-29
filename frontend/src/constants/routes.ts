@@ -31,18 +31,62 @@ export const PAGE_ROUTES = [
   { path: '/ops/archive/settings', title: '归档系统设置' },
   { path: '/ops/archive/masking', title: '敏感数据脱敏' },
   { path: '/ops/archive/report', title: '归档报表' },
+  { path: '/ops/backup', title: '数据备份' },
+  { path: '/ops/backup/policies', title: '备份策略' },
+  { path: '/ops/backup/runs', title: '备份执行记录' },
+  { path: '/ops/backup/settings', title: '备份存储' },
   { path: '/ops/sql-insight', title: 'SQL 洞察' },
+  { path: '/ops/redis-rdb', title: 'Redis 内存分析' },
+  { path: '/ops/db-monitor/postgres', title: 'Postgres监控' },
+  { path: '/ops/db-monitor/mysql', title: 'MySQL监控' },
+  { path: '/ops/db-monitor/redis', title: 'Redis监控' },
+  { path: '/ops/db-monitor/starrocks', title: 'Starrocks监控' },
+  { path: '/ops/db-monitor/clickhouse', title: 'ClickHouse监控' },
+  { path: '/ops/db-monitor/kafka', title: 'Kafka监控' },
+  { path: '/ops/db-monitor/tidb', title: 'TiDB监控' },
+  { path: '/ops/db-monitor/cockroachdb', title: 'CockroachDB监控' },
+  { path: '/ops/db-monitor/cassandra', title: 'Cassandra监控' },
+  { path: '/ops/db-monitor/oceanbase', title: 'OceanBase监控' },
+  { path: '/ops/db-monitor/host', title: '主机监控' },
+  { path: '/ops/db-monitor/mongodb', title: 'MongoDB监控' },
+  { path: '/ops/db-monitor/oracle', title: 'Oracle监控' },
+  { path: '/ops/db-monitor/elasticsearch', title: 'ES监控' },
+  { path: '/ops/db-monitor/sqlserver', title: 'SQLServer监控' },
+  { path: '/ops/db-monitor/debezium', title: 'Debezium监控' },
+  { path: '/ops/db-monitor/dolphinscheduler', title: '海豚监控' },
   { path: '/ops/sessions', title: '会话管理' },
   { path: '/ops/multilang', title: '多语模版' },
   { path: '/ops/dolphin', title: '海豚管理' },
-  { path: '/ops/sr', title: 'SR 节点' },
+  { path: '/ops/sr', title: 'SR控制台' },
+  { path: '/ops/cluster-deploy/:engine', title: '引擎工作台' },
+  { path: '/ops/cluster-deploy', title: '集群部署' },
+  { path: '/ops/cluster-deploy/haproxy', title: 'HAProxy 代理' },
+  { path: '/ops/cluster-deploy/nginx', title: 'Nginx 代理' },
+  { path: '/ops/cluster-deploy/lvs', title: 'LVS 代理' },
+  { path: '/ops/sr-cluster', title: '集群部署' },
+  { path: '/ops/terminal', title: '主机终端' },
+  { path: '/ops/ha', title: '高可用服务维护' },
+  { path: '/cmdb/assets', title: '资产目录' },
+  { path: '/cmdb/topology', title: '关系拓扑' },
+  { path: '/cmdb/tags', title: 'CMDB 标签' },
+  { path: '/cmdb/discover', title: '发现登记' },
+  { path: '/cmdb/import-export', title: '导入导出' },
+  { path: '/cmdb/audit', title: '变更审计' },
+  { path: '/cmdb/sync', title: '同步任务' },
   { path: '/config/instances', title: '实例' },
   { path: '/config/regions', title: '区域管理' },
   { path: '/config/environments', title: '环境管理' },
+  { path: '/config/tags', title: '标签管理' },
   { path: '/config/connectors', title: '连接器' },
+  { path: '/config/agents', title: '平台 Agent' },
+  { path: '/config/oss', title: '对象存储' },
+  { path: '/config/monitor-targets', title: '监控目标注册' },
+  { path: '/config/fe-admin', title: 'FE管理' },
+  { path: '/config/ds-admin', title: '海豚配置' },
   { path: '/config/databases', title: '已登记库' },
   { path: '/config/accounts', title: '账号管理' },
   { path: '/config/review-rules', title: '审核规则' },
+  { path: '/config/sql-insight', title: 'SQL 洞察设置' },
   { path: '/config/args', title: '全局参数' },
   { path: '/config/menus', title: '菜单管理' },
   { path: '/config/roles', title: '角色授权' },
@@ -72,13 +116,18 @@ export function pathAllowed(path: string, allowed: string[]): boolean {
   if (path === '/config/accounts' || path.includes('/manage/account')) return true
   if (path === '/config/review-rules' || path.includes('/manage/goinception')) return true
   if (path === '/config/connectors' || path.startsWith('/metadata/database/manage/connector')) return true
+  if (path === '/config/monitor-targets' || path === '/config/fe-admin' || path === '/config/ds-admin') return true
   if (path.startsWith('/ops/archive') || path.startsWith('/metadata/database/search/archiverManager')) return true
+  if (path.startsWith('/ops/backup')) return true
   if (path === '/ops/sql-insight' || path.includes('/serviceOperations/activitysnapshot')) return true
+  if (path === '/ops/redis-rdb') return true
+  if (path === '/ops/db-monitor' || path.startsWith('/ops/db-monitor/')) return true
   if (path === '/ops/sessions' || path.includes('/serviceOperations/process')) return true
   if (path === '/ops/slots') return true
   if (path === '/ops/cdc' || path.startsWith('/ops/cdc/') || path.includes('/serviceOperations/cdcSyncTask')) return true
   if (path === '/ops/migration' || path.startsWith('/ops/migration/') || path.includes('/serviceOperations/migration')) return true
   if (path === '/ops/flashback' || path.startsWith('/ops/flashback/') || path.includes('/serviceOperations/flashback')) return true
+  if (path === '/ops/cluster-deploy' || path.startsWith('/ops/cluster-deploy/') || path === '/ops/sr-cluster' || path.startsWith('/ops/sr-cluster/')) return true
   if (allowed.includes(path)) return true
   return allowed.some((p) => p && (path === p || path.startsWith(p + '/')))
 }

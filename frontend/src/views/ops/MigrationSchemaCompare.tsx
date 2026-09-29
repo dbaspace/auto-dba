@@ -10,10 +10,10 @@ import {
   Row,
   Select,
   Space,
-  Table,
   Tag,
   message,
 } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
 import type { ColumnsType } from 'antd/es/table'
 import api from '../../api/request'
 import './Migration.css'
@@ -627,7 +627,7 @@ export default function MigrationSchemaCompare() {
           </Button>
         }
       >
-        <Table
+        <ResponsiveTable
           rowKey="id"
           size="small"
           bordered
@@ -731,7 +731,7 @@ export default function MigrationSchemaCompare() {
                     <pre className="schema-fix-sql-block">{detail.fix_sql}</pre>
                   </Card>
                 )}
-                <Table
+                <ResponsiveTable
                   rowKey={(r) => r.table}
                   size="small"
                   bordered

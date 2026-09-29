@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Button, Card, Modal, Pagination, Table, Tag, message } from 'antd'
+import { Button, Card, Modal, Pagination, Tag, message } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
 import type { ColumnsType } from 'antd/es/table'
 import api from '../../api/request'
 import CreateTaskDialog from './CreateTaskDialog'
@@ -177,7 +178,7 @@ export default function TaskList() {
         </div>
 
         <Card bordered={false} className="panel">
-          <Table
+          <ResponsiveTable
             rowKey={(r) => r.id ?? r.name}
             dataSource={pageRows}
             columns={columns}

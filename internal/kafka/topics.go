@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -137,6 +138,163 @@ func listTopicDetailsLite(ctx context.Context, inst *store.Instance) ([]TopicDet
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
+}
+
+// TopicPageStats 只给指定 Topic 补 Count、Size、Last Record。
+func TopicPageStats(ctx context.Context, inst *store.Instance, names []string) ([]TopicDetail, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	wanted := make([]string, 0, len(names))
+	seen := map[string]struct{}{}
+	for _, n := range names {
+		n = strings.TrimSpace(n)
+		if n == "" {
+			continue
+		}
+		if _, ok := seen[n]; ok {
+			continue
+		}
+		seen[n] = struct{}{}
+		wanted = append(wanted, n)
+		if len(wanted) >= 100 {
+			break
+		}
+	}
+	if len(wanted) == 0 {
+		return []TopicDetail{}, nil
+	}
+
+	cli := kafkaClient(inst)
+	meta, err := cli.Metadata(ctx, &kafkago.MetadataRequest{Topics: wanted})
+	if err != nil {
+		return nil, fmt.Errorf("metadata: %w", err)
+	}
+
+	type agg struct {
+		parts []kafkago.Partition
+		rf    int
+	}
+	byTopic := make(map[string]*agg, len(wanted))
+	offsetReqs := make(map[string][]kafkago.OffsetRequest, len(wanted))
+	for _, t := range meta.Topics {
+		if t.Name == "" || t.Error != nil {
+			continue
+		}
+		if _, ok := seen[t.Name]; !ok {
+			continue
+		}
+		a := &agg{parts: t.Partitions}
+		reqs := make([]kafkago.OffsetRequest, 0, len(t.Partitions)*2)
+		for _, p := range t.Partitions {
+			if a.rf == 0 && len(p.Replicas) > 0 {
+				a.rf = len(p.Replicas)
+			}
+			reqs = append(reqs, kafkago.FirstOffsetOf(p.ID), kafkago.LastOffsetOf(p.ID))
+		}
+		byTopic[t.Name] = a
+		if len(reqs) > 0 {
+			offsetReqs[t.Name] = reqs
+		}
+	}
+
+	type partRange struct {
+		first, last int64
+	}
+	var (
+		sizeByTopicPart map[string]map[int]int64
+		ranges          = map[string]map[int]partRange{}
+		wg              sync.WaitGroup
+	)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		sizeByTopicPart = logSizesForTopics(ctx, inst, meta.Brokers, wanted)
+	}()
+	go func() {
+		defer wg.Done()
+		if len(offsetReqs) == 0 {
+			return
+		}
+		offResp, oerr := cli.ListOffsets(ctx, &kafkago.ListOffsetsRequest{Topics: offsetReqs})
+		if oerr != nil || offResp == nil {
+			return
+		}
+		for topic, parts := range offResp.Topics {
+			m := ranges[topic]
+			if m == nil {
+				m = map[int]partRange{}
+				ranges[topic] = m
+			}
+			for _, p := range parts {
+				cur := m[p.Partition]
+				if p.FirstOffset >= 0 {
+					cur.first = p.FirstOffset
+				}
+				if p.LastOffset >= 0 {
+					cur.last = p.LastOffset
+				}
+				m[p.Partition] = cur
+			}
+		}
+	}()
+	wg.Wait()
+	if sizeByTopicPart == nil {
+		sizeByTopicPart = map[string]map[int]int64{}
+	}
+
+	out := make([]TopicDetail, 0, len(wanted))
+	needs := make([]lastNeed, 0, len(wanted))
+	for _, name := range wanted {
+		a := byTopic[name]
+		if a == nil {
+			continue
+		}
+		d := TopicDetail{
+			Name:              name,
+			PartitionCount:    len(a.parts),
+			ReplicationFactor: a.rf,
+		}
+		newestPart := 0
+		newestLast := int64(-1)
+		for _, p := range a.parts {
+			if r, ok := ranges[name][p.ID]; ok && r.last > r.first {
+				d.MessageCount += r.last - r.first
+				if r.last > newestLast {
+					newestLast = r.last
+					newestPart = p.ID
+				}
+			}
+			if sz := sizeByTopicPart[name][p.ID]; sz > 0 {
+				d.SizeBytes += sz
+			}
+		}
+		if newestLast > 0 {
+			d.LastPartition = newestPart
+			needs = append(needs, lastNeed{topic: name, partition: newestPart, offset: newestLast - 1})
+		}
+		out = append(out, d)
+	}
+	lastMap := fetchLastRecordTimes(ctx, inst, needs)
+	for i := range out {
+		if ts, ok := lastMap[out[i].Name]; ok && !ts.IsZero() {
+			out[i].LastRecord = ts.UTC().Format(time.RFC3339)
+		}
+	}
+	return out, nil
+}
+
+func logSizesForTopics(ctx context.Context, inst *store.Instance, brokers []kafkago.Broker, topics []string) map[string]map[int]int64 {
+	out := map[string]map[int]int64{}
+	for _, e := range fetchTopicLogEntriesFor(ctx, inst, brokers, topics) {
+		m := out[e.Topic]
+		if m == nil {
+			m = map[int]int64{}
+			out[e.Topic] = m
+		}
+		m[e.Partition] += e.SizeBytes
+	}
+	return out
 }
 
 func listTopicDetailsFull(ctx context.Context, inst *store.Instance) ([]TopicDetail, error) {

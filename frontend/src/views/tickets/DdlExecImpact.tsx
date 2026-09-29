@@ -1,7 +1,17 @@
 import React, { useMemo, useState } from 'react'
-import { Table, Tag } from 'antd'
+import { Tag } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
 
 export type DdlExecTab = 'all' | 'ok' | 'fail'
+
+const NO_DETAIL_ERROR = '执行失败但未记录错误详情，请联系管理员查看后端日志'
+
+const STATUS_TAG: Record<string, { color: string; text: string }> = {
+  success: { color: 'success', text: '成功' },
+  failed: { color: 'error', text: '失败' },
+  rolled_back: { color: 'warning', text: '已回滚' },
+  skipped: { color: 'default', text: '跳过' },
+}
 
 function fmtTimeMs(v: any): string {
   if (!v) return '-'
@@ -27,9 +37,11 @@ export interface DdlExecGroup {
   path: string
   ok: boolean
   error: string
+  rolledBack: number
   rows: {
     key: string
     sql: string
+    status: string
     error: string
     start: string
     end: string
@@ -41,6 +53,7 @@ export interface DdlExecGroup {
 export interface DdlExecStats {
   totalSQL: number
   successSQL: number
+  rolledBackSQL: number
   instTotal: number
   instOk: number
   instFail: number
@@ -48,10 +61,18 @@ export interface DdlExecStats {
 
 export function buildDdlExecGroups(
   records: any[] | undefined,
-  opts: { env?: string; fallbackDb?: string; fallbackHost?: string; execMessage?: string },
+  opts: {
+    env?: string
+    envByInstanceId?: Record<string, string>
+    fallbackDb?: string
+    fallbackHost?: string
+    execMessage?: string
+    execFailed?: boolean
+  },
 ): { groups: DdlExecGroup[]; stats: DdlExecStats } {
   const recs = Array.isArray(records) ? records : []
-  const env = String(opts.env || '-').trim() || '-'
+  const fallbackEnv = String(opts.env || '-').trim() || '-'
+  const envById = opts.envByInstanceId || {}
   const map = new Map<string, any[]>()
   const order: string[] = []
 
@@ -67,14 +88,14 @@ export function buildDdlExecGroups(
     map.get(key)!.push(r)
   }
 
-  // 无 records 但有整单消息时，仍展示一个占位块
-  if (!order.length && opts.execMessage) {
+  // 无 records 但有整单消息或已失败时，仍展示一个占位块，避免失败却只显示「暂无数据」
+  if (!order.length && (opts.execMessage || opts.execFailed)) {
     order.push('gate')
     map.set('gate', [
       {
         sql: '(执行)',
         status: 'failed',
-        error_message: opts.execMessage,
+        error_message: opts.execMessage || NO_DETAIL_ERROR,
         host: opts.fallbackHost || '',
         db: opts.fallbackDb || '',
       },
@@ -90,12 +111,15 @@ export function buildDdlExecGroups(
     const name = String(first.instance_name || '').trim()
     const hostPort = host ? (port ? `${host}:${port}` : host) : name || key
     const label = db && hostPort ? `${db} - ${hostPort}` : hostPort || db || key
+    const iid = String(first.instance_id || '').trim()
+    const env = (iid && String(envById[iid] || '').trim()) || fallbackEnv
     const path = `${env} / ${db}${hostPort ? ` · ${hostPort}` : ''}`
     const failed = list.filter((r) => String(r.status || '').toLowerCase() === 'failed')
+    const rolledBack = list.filter((r) => String(r.status || '').toLowerCase() === 'rolled_back').length
     const ok = failed.length === 0 && list.length > 0
     const error =
       (failed[0] && String(failed[0].error_message || '').trim()) ||
-      (!ok ? String(opts.execMessage || '').trim() : '') ||
+      (!ok ? String(opts.execMessage || '').trim() || NO_DETAIL_ERROR : '') ||
       ''
 
     const rows = list.map((r, i) => {
@@ -104,6 +128,7 @@ export function buildDdlExecGroups(
       return {
         key: `${key}-${i}`,
         sql: r.sql || '-',
+        status: String(r.status || '').toLowerCase(),
         error: r.error_message ? String(r.error_message) : '-',
         start: fmtTimeMs(start),
         end: fmtTimeMs(end),
@@ -119,6 +144,7 @@ export function buildDdlExecGroups(
       path,
       ok,
       error,
+      rolledBack,
       rows,
     }
   })
@@ -139,6 +165,7 @@ export function buildDdlExecGroups(
     stats: {
       totalSQL: totalSQL || groups.reduce((n, g) => n + g.rows.length, 0),
       successSQL,
+      rolledBackSQL: groups.reduce((n, g) => n + g.rolledBack, 0),
       instTotal: groups.length,
       instOk,
       instFail,
@@ -154,10 +181,19 @@ const tableColumns = [
     onCell: () => ({ style: { minWidth: 220 } }),
   },
   {
+    title: '状态',
+    dataIndex: 'status',
+    width: 90,
+    render: (v: string) => {
+      const t = STATUS_TAG[v]
+      return t ? <Tag color={t.color}>{t.text}</Tag> : v || '-'
+    },
+  },
+  {
     title: '错误信息',
     dataIndex: 'error',
-    ellipsis: { showTitle: true },
     onCell: () => ({ style: { minWidth: 160 } }),
+    render: (v: string) => <span className="exec-cell-error">{v}</span>,
   },
   { title: '开始执行时间', dataIndex: 'start', width: 190 },
   { title: '结束执行时间', dataIndex: 'end', width: 190 },
@@ -168,10 +204,14 @@ const tableColumns = [
 export default function DdlExecImpact(props: {
   records?: any[]
   env?: string
+  envByInstanceId?: Record<string, string>
   fallbackDb?: string
   fallbackHost?: string
   execMessage?: string
   execSuccess?: boolean
+  execFailed?: boolean
+  /** 事务回滚时后端给出的摘要（第 N 条失败、均未生效） */
+  rollbackSummary?: string
   emptyText?: string
 }) {
   const [tab, setTab] = useState<DdlExecTab>('all')
@@ -179,12 +219,23 @@ export default function DdlExecImpact(props: {
     () =>
       buildDdlExecGroups(props.records, {
         env: props.env,
+        envByInstanceId: props.envByInstanceId,
         fallbackDb: props.fallbackDb,
         fallbackHost: props.fallbackHost,
         execMessage: props.execMessage,
+        execFailed: props.execFailed,
       }),
-    [props.records, props.env, props.fallbackDb, props.fallbackHost, props.execMessage],
+    [
+      props.records,
+      props.env,
+      props.envByInstanceId,
+      props.fallbackDb,
+      props.fallbackHost,
+      props.execMessage,
+      props.execFailed,
+    ],
   )
+  const rolledBack = Boolean(props.rollbackSummary) || stats.rolledBackSQL > 0
 
   const visible = useMemo(() => {
     if (tab === 'ok') return groups.filter((g) => g.ok)
@@ -198,6 +249,7 @@ export default function DdlExecImpact(props: {
 
   const summaryLine = (() => {
     if (!stats.instTotal && !stats.totalSQL) return props.emptyText || '暂无数据，执行后获取'
+    if (hasFail && rolledBack) return props.rollbackSummary || '执行失败，事务已回滚，0 条生效'
     if (hasFail) return `部分失败，已成功 ${stats.successSQL} 条 SQL`
     return `成功 ${stats.successSQL || stats.totalSQL} 条 SQL`
   })()
@@ -291,7 +343,10 @@ export default function DdlExecImpact(props: {
                 <Tag color={g.ok ? 'success' : 'error'}>{g.ok ? '执行成功' : '执行失败'}</Tag>
               </div>
               {!g.ok && g.error ? <div className="exec-inst-error">{g.error}</div> : null}
-              <Table
+              {!g.ok && g.rolledBack > 0 ? (
+                <div className="exec-inst-note">事务已回滚，本库 SQL 均未生效</div>
+              ) : null}
+              <ResponsiveTable
                 dataSource={g.rows}
                 bordered
                 size="small"

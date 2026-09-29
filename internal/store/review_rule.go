@@ -754,7 +754,7 @@ func defaultReviewRules() []reviewRuleSeed {
 		{reviewRuleSeed{Category: "ddl", Name: "DDLBackwardIncompatible", Label: "后向不兼容 DDL（DROP/RENAME）", Value: "true"}, pgOnly},
 		{reviewRuleSeed{Category: "ddl", Name: "DDLForeignKeyPolicy", Label: "外键策略", Value: `{"mode":"off"}`}, pgOnly},
 		{reviewRuleSeed{Category: "ddl", Name: "DDLAddColumnRequireDefault", Label: "ALTER 加列必须有 DEFAULT", Value: "true"}, srOnly},
-		{reviewRuleSeed{Category: "ddl", Name: "DDLRequireUpdateTime", Label: "建表必须有时间字段", Value: `{"enabled":true,"column":"update_time","allowed_types":["timestamp","timestamptz","timestamp without time zone","timestamp with time zone"]}`}, pgOnly},
+		{reviewRuleSeed{Category: "ddl", Name: "DDLRequireUpdateTime", Label: "建表必须有时间字段（column 多个用逗号分隔，满足任一即可）", Value: `{"enabled":true,"column":"update_time","allowed_types":["timestamp","timestamptz","timestamp without time zone","timestamp with time zone"]}`}, pgOnly},
 	}
 	out := make([]reviewRuleSeed, 0, len(mysql)+len(pgsr)*2)
 	for _, it := range mysql {

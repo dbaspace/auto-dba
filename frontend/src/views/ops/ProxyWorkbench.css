@@ -1,0 +1,59 @@
+.proxy-wb {
+  padding: 4px 0 24px;
+}
+
+.proxy-wb-panel {
+  margin-top: 20px;
+  border: 1px solid var(--ant-color-border, #e5e7eb);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--ant-color-bg-container, #fff);
+}
+
+.proxy-wb-panel-hd {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--ant-color-border-secondary, #f0f0f0);
+}
+
+.proxy-wb-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 8px 16px;
+  font-size: 12px;
+  color: var(--ant-color-text-secondary, #6b7280);
+}
+
+.proxy-wb-arch {
+  padding: 0 16px 12px;
+}
+
+.proxy-wb-editor {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
+  font-size: 12px !important;
+  border: none !important;
+  border-radius: 0 !important;
+  border-top: 1px solid var(--ant-color-border-secondary, #f0f0f0) !important;
+}
+
+.proxy-wb-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ant-color-text-secondary, #6b7280);
+}
+
+.proxy-wb-ipvs {
+  margin: 0;
+  max-height: 420px;
+  overflow: auto;
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-all;
+}

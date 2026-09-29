@@ -2,14 +2,17 @@ package ticketexec
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"time"
 
 	"auto-dba/internal/store"
 )
 
 func TestShouldAutoRun(t *testing.T) {
-	if !ShouldAutoRun(store.IssueTypeDDL) || !ShouldAutoRun("dml") || !ShouldAutoRun(store.IssueTypeCreateDB) {
-		t.Fatal("ddl/dml/createdb should auto run")
+	if !ShouldAutoRun(store.IssueTypeDDL) || !ShouldAutoRun("dml") || !ShouldAutoRun(store.IssueTypeCreateDB) || !ShouldAutoRun(store.IssueTypeHA) ||
+		!ShouldAutoRun(store.IssueTypeSrCluster) || !ShouldAutoRun(store.IssueTypeDbDeploy) {
+		t.Fatal("ddl/dml/createdb/ha/sr_cluster/db_deploy should auto run")
 	}
 	if ShouldAutoRun(store.IssueTypeDQL) {
 		t.Fatal("dql should not auto run")
@@ -70,5 +73,35 @@ func TestCanRetry(t *testing.T) {
 	}
 	if CanRetry(store.StatusExecuted) || CanRetry(store.StatusPending) {
 		t.Fatal("executed/pending should not retry")
+	}
+	if CanRetry(store.StatusRunning) || IsExecuting(store.StatusApproved) {
+		t.Fatal("running should not retry; approved is not executing")
+	}
+	if !IsExecuting(store.StatusRunning) {
+		t.Fatal("running should be executing")
+	}
+}
+
+func TestAsyncAutoExecMaxWait(t *testing.T) {
+	if AsyncAutoExecMaxWait < time.Hour {
+		t.Fatalf("async wall clock too short: %v", AsyncAutoExecMaxWait)
+	}
+	if ddlTimeout < time.Hour {
+		t.Fatalf("per-target ddl timeout too short for large SQL: %v", ddlTimeout)
+	}
+}
+
+func TestDisplaySQLTruncate(t *testing.T) {
+	short := "SELECT 1"
+	if displaySQL(short) != short {
+		t.Fatal("short sql should keep intact")
+	}
+	long := strings.Repeat("a", maxSQLLen+50)
+	got := displaySQL(long)
+	if len(got) <= maxSQLLen || !strings.HasSuffix(got, "...") {
+		t.Fatalf("want truncated with ..., got len=%d", len(got))
+	}
+	if got[:maxSQLLen] != long[:maxSQLLen] {
+		t.Fatal("prefix mismatch")
 	}
 }

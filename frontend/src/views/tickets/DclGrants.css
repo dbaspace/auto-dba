@@ -1,6 +1,6 @@
 /* 权限申请：对齐 DDL 左右分栏 */
 .dcl-page {
-  background: #fafafa;
+  background: var(--app-page-bg, #fafafa);
 }
 
 .dcl-split-form {

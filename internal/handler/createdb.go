@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"math/big"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -29,21 +30,44 @@ func (h *CreateDBHandler) ListInstances(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": list})
 }
 
+var approverNameSplit = regexp.MustCompile(`[,，\s]+`)
+
+// unionApproverNames 把逗号拼接的审批人拆开，再与其它来源取并集。相同账号只保留一条，默认审批人在前。
+func unionApproverNames(groups ...[]string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0)
+	for _, group := range groups {
+		for _, raw := range group {
+			for _, name := range approverNameSplit.Split(raw, -1) {
+				name = strings.TrimSpace(name)
+				if name == "" {
+					continue
+				}
+				if _, ok := seen[name]; ok {
+					continue
+				}
+				seen[name] = struct{}{}
+				out = append(out, name)
+			}
+		}
+	}
+	return out
+}
+
 func (h *CreateDBHandler) ListApprovers(c *gin.Context) {
 	def, _ := h.Store.GetGlobalArg("sync_default_approver")
 	users, _ := h.Store.ListUsers()
+	userNames := make([]string, 0, len(users))
+	for _, u := range users {
+		userNames = append(userNames, u.Username)
+	}
 	type item struct {
 		Type string `json:"type"`
 		Name string `json:"name"`
 	}
-	out := []item{}
-	if def != "" {
-		out = append(out, item{Type: "user", Name: def})
-	}
-	for _, u := range users {
-		if u.Username != def {
-			out = append(out, item{Type: "user", Name: u.Username})
-		}
+	out := make([]item, 0)
+	for _, name := range unionApproverNames([]string{def}, userNames) {
+		out = append(out, item{Type: "user", Name: name})
 	}
 	c.JSON(http.StatusOK, gin.H{"data": out})
 }
@@ -147,9 +171,15 @@ func (h *CreateDBHandler) Submit(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": msg})
 		return
 	}
-	approver := strings.TrimSpace(req.AssignedTo)
+	approver := ""
+	if names := unionApproverNames([]string{req.AssignedTo}); len(names) > 0 {
+		approver = names[0]
+	}
 	if approver == "" {
-		approver, _ = h.Store.GetGlobalArg("sync_default_approver")
+		def, _ := h.Store.GetGlobalArg("sync_default_approver")
+		if names := unionApproverNames([]string{def}); len(names) > 0 {
+			approver = names[0]
+		}
 	}
 	if approver == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "审批人必填，或配置全局参数 sync_default_approver"})

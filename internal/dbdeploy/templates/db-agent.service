@@ -1,0 +1,13 @@
+[Unit]
+Description=auto-dba DB Agent
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory={{REMOTE_DIR}}
+ExecStart={{REMOTE_DIR}}/db-agent -listen {{LISTEN}} -user {{USER}} -pass {{PASS}}
+Restart=on-failure
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

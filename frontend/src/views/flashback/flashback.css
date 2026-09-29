@@ -1,15 +1,16 @@
 /* 从 Flashback.vue / FlashbackCloud.vue 的 scoped 样式忠实搬入 */
 .fb-shell {
-  --bg: #eef2f7;
-  --card: #fff;
-  --ink: #1d2a3a;
-  --muted: #6b7a8d;
-  --line: #e4eaf2;
+  --bg: var(--app-content-bg, #fff);
+  --card: var(--app-content-bg, #fff);
+  --ink: var(--app-text, #1d2a3a);
+  --muted: var(--app-text-secondary, #6b7a8d);
+  --line: var(--app-border, #e4eaf2);
   --blue: #2f6fed;
-  --blue-soft: #e8f0fe;
+  --blue-soft: var(--app-color-primary-soft, #e8f0fe);
   --ok: #1f8a4c;
   --fail: #c0352b;
   box-sizing: border-box;
+  width: 100%;
   min-height: 100%;
   height: auto;
   overflow: auto;
@@ -104,7 +105,7 @@
 }
 .fb-shell .chip {
   border: 1px solid var(--line);
-  background: #fff;
+  background: var(--app-content-bg, #fff);
   border-radius: 999px;
   padding: 5px 10px;
   cursor: pointer;
@@ -144,7 +145,7 @@
 .fb-shell .tip pre {
   margin: 0 0 8px;
   padding: 8px 10px;
-  background: #fff;
+  background: var(--app-content-bg, #fff);
   border: 1px solid #d5e2f7;
   border-radius: 8px;
 }
@@ -362,7 +363,15 @@
 
 /* FlashbackCloud.vue scoped 样式 */
 .fb-cloud {
+  width: 100%;
+  max-width: none;
+  background: var(--app-content-bg, #fff);
+  box-sizing: border-box;
+}
+.fb-cloud > * {
   max-width: 960px;
+  margin-left: auto;
+  margin-right: auto;
 }
 .fb-cloud .lead {
   color: #606266;
@@ -386,7 +395,7 @@
   padding: 12px;
   border: 1px solid #f0f0f0;
   border-radius: 8px;
-  background: #fff;
+  background: var(--app-content-bg, #fff);
 }
 .fb-cloud .dot {
   width: 10px;

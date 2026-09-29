@@ -16,6 +16,10 @@ interface Props {
   onChange?: (name: string, value: string) => void
 }
 
+const RULE_HINTS: Record<string, string> = {
+  DDLRequireUpdateTime: 'column 多个用逗号分隔，满足任一即可（也支持 JSON 数组）',
+}
+
 export default function ReviewRuleField({ row, value = '', saving = false, wide = false, onChange }: Props) {
   const bool = useMemo(() => {
     const s = String(row?.value ?? '').trim().toLowerCase()
@@ -23,9 +27,10 @@ export default function ReviewRuleField({ row, value = '', saving = false, wide 
   }, [row])
 
   const checked = useMemo(() => String(value ?? '').trim().toLowerCase() === 'true', [value])
+  const hint = RULE_HINTS[row.name] || ''
 
   return (
-    <div className={`rule-row${wide ? ' is-wide' : ''}`}>
+    <div className={`rule-row${wide ? ' is-wide' : ''}${hint ? ' has-hint' : ''}`}>
       <span className="rule-label" title={`${row.label || row.name}（${row.name}）`}>
         {row.label || '—'}
       </span>
@@ -42,11 +47,12 @@ export default function ReviewRuleField({ row, value = '', saving = false, wide 
             value={value}
             size="small"
             className={wide ? 'rule-input-wide' : 'rule-input'}
-            placeholder="请输入参数值"
+            placeholder={hint || '请输入参数值'}
             disabled={saving}
             onChange={(e) => onChange?.(row.name, e.target.value)}
           />
         )}
+        {hint ? <div className="rule-hint">{hint}</div> : null}
       </div>
     </div>
   )

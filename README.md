@@ -2,7 +2,7 @@
 
 独立的 DBA 运维自助工作台，覆盖工单、查询、CDC、迁移、闪回、归档与权限治理。业务对象登记在本系统内，使用本地登录（可接 LDAP / SSO）、本地实例库表与审批人。
 
-功能按侧栏逐项说明见 [docs/features.md](docs/features.md)。
+功能按侧栏逐项说明见 [docs/features.md](docs/features.md)。模块关系总览见 [docs/architecture.html](docs/architecture.html)。集群部署（StarRocks）方案见 [docs/sr-cluster.md](docs/sr-cluster.md)。
 
 前端为 **React 18 + Ant Design 5 + Redux Toolkit + ahooks + react-router-dom v6 + Tailwind 3**（目录 `frontend/`）。本地为**前后端分离**：改前端不必动后端，改后端不必重新构建前端。
 
@@ -28,6 +28,10 @@ lsof -tiTCP:5175 -sTCP:LISTEN | xargs kill 2>/dev/null || true
 **后端（只提供 API）**
 
 ```bash
+# 推荐：增量编译后启动（比反复 go run 快）
+./scripts/dev-backend.sh
+
+# 或手动
 go build -o bin/auto-dba ./cmd/auto-dba
 ./bin/auto-dba -config config/config.yaml start
 ```
@@ -35,11 +39,12 @@ go build -o bin/auto-dba ./cmd/auto-dba
 默认监听 `0.0.0.0:8800`。健康检查：`GET /healthz`。  
 `http.serve_static` 默认为 `false`，**不要用 8800 打开页面**。
 
-元数据使用 PostgreSQL。复制 `config/config.example.yaml` 为本地 `config/config.yaml` 后填写 `db.dsn`。该文件和 `config/terminal/` 下的终端密钥已忽略，不要提交账号密码或密钥。启动时自动建表并写入种子数据。账号无 CREATEDB 权限，因此不会自动创建新库。
+元数据使用 PostgreSQL。复制 `config/config.example.yaml` 为本地 `config/config.yaml` 后填写 `db.dsn`。该文件和 `config/terminal/` 下的终端密钥已忽略，不要提交账号密码或密钥。  
+启动时按 `schema_version` / `seed_version` 做引导：版本未变则跳过全量 migrate/seed（二次启动通常亚秒～2s 级）；改了 `migrate.go`/`seed.go` 需递增 `internal/store/bootstrap.go` 中的版本常量，或设 `AUTO_DBA_FORCE_BOOTSTRAP=1` 强制重跑。账号无 CREATEDB 权限，因此不会自动创建新库。
 
 首次启动会种子：
 
-- 用户 `admin` / `admin`
+- 用户 `admin` / `admin123`
 - 全局参数（`sync_default_approver=admin`、`sync_approval_enabled`、SQL 约束开关）
 - 示例实例 `127.0.0.1:5432` + 已登记库 `appdb`（审批人 `admin`）
 

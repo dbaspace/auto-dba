@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Button, Select, Table, message } from 'antd'
+import { Button, Select, message } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
 import api from '../../api/request'
 
 type InstanceRow = {
@@ -64,9 +65,9 @@ export default function TerminalPage() {
   }
 
   return (
-    <div style={{ padding: 16 }}>
+    <div className="ops-page" style={{ padding: 16, overflow: 'auto' }}>
       <h2 style={{ marginBottom: 12 }}>主机终端</h2>
-      <p style={{ color: '#666', marginBottom: 16 }}>
+      <p style={{ color: 'var(--app-text-secondary, #666)', marginBottom: 16 }}>
         数据来自「实例管理 → 主机」。需具备菜单权限，且该主机对你可见（全局或已授权）后才能打开 SSH 终端。
       </p>
       <div style={{ display: 'flex', gap: 12, marginBottom: 16, alignItems: 'center' }}>
@@ -87,7 +88,7 @@ export default function TerminalPage() {
           打开终端
         </Button>
       </div>
-      <Table
+      <ResponsiveTable
         rowKey="id"
         loading={loading}
         dataSource={hosts}

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Button, Empty, Modal, Pagination, Skeleton, Table, Tag } from 'antd'
+import { Button, Empty, Modal, Pagination, Skeleton, Tag } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
 import type { ColumnsType } from 'antd/es/table'
 import {
   FileTextOutlined,
@@ -553,7 +554,7 @@ export default function Dashboard() {
               <Button type="link" onClick={() => navigate('/ops/tickets')}>查看全部 &gt;</Button>
             </div>
             <div className="todo-table-wrap">
-              <Table
+              <ResponsiveTable
                 rowKey={(r, i) => String(r.id ?? i)}
                 dataSource={todos}
                 columns={todoColumns}
@@ -771,7 +772,7 @@ export default function Dashboard() {
                     <div className="chart-card">
                       <div className="chart-title">慢查询 Top5</div>
                       {hasAuditSlow ? (
-                        <Table
+                        <ResponsiveTable
                           size="small"
                           pagination={false}
                           rowKey={(r) => r.id || `${r.created_at}-${r.elapsed_ms}`}

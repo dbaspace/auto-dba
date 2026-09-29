@@ -5,7 +5,7 @@ import api from '../api/request'
 import { useAppDispatch } from '../store'
 import { setUser } from '../store/authSlice'
 import loginBg from '../assets/login-bg.jpg'
-import BrandMark from '../components/BrandMark'
+import BrandMark, { BrandWordmark } from '../components/BrandMark'
 
 const MODE_LABEL: Record<string, string> = {
   platform: '平台',
@@ -44,7 +44,7 @@ export default function Login() {
   const [authMode, setAuthMode] = useState('platform')
   const [error, setError] = useState('')
   const [username, setUsername] = useState('admin')
-  const [password, setPassword] = useState('admin')
+  const [password, setPassword] = useState('admin123')
   const [requireCaptcha, setRequireCaptcha] = useState(false)
   const [captchaId, setCaptchaId] = useState('')
   const [captchaImg, setCaptchaImg] = useState('')
@@ -246,11 +246,12 @@ export default function Login() {
       }}
     >
       <Card style={{ width: 'min(400px, 100%)', borderRadius: 16 }}>
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, marginBottom: 16 }}>
           <BrandMark size={56} />
-          <h2 style={{ margin: 0, textAlign: 'center' }}>auto-dba</h2>
+          <h2 style={{ margin: 0, textAlign: 'center' }}>
+            <BrandWordmark textOnly className="brand-wordmark-login" />
+          </h2>
         </div>
-        <p style={{ color: '#909399', fontSize: 13, textAlign: 'center' }}>运维自助独立工作台</p>
         <form
           onSubmit={(e) => {
             e.preventDefault()
@@ -264,7 +265,7 @@ export default function Login() {
               options={modeOptions}
               onChange={(v) => {
                 setAuthMode(v)
-                if (v === 'sso' && (username === 'admin' || password === 'admin')) {
+                if (v === 'sso' && (username === 'admin' || password === 'admin' || password === 'admin123')) {
                   setUsername('')
                   setPassword('')
                 }
@@ -342,7 +343,7 @@ export default function Login() {
           </p>
         )}
         <p style={{ color: '#909399', fontSize: 13, textAlign: 'center', marginTop: 8 }}>
-          {authHint || '默认账号 admin / admin'}
+          {authHint || '默认账号 admin / admin123'}
         </p>
       </Card>
     </div>

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, Button, Checkbox, Input, Table, Tag, message } from 'antd'
+import { Alert, Button, Checkbox, Input, Tag, message } from 'antd'
+import ResponsiveTable from '../../components/ResponsiveTable'
 import {
   ArrowDownOutlined,
   ArrowRightOutlined,
@@ -543,14 +544,14 @@ export default function CdcTableMappingPanel({
                         }
                       />
                     ) : (
-                      <Table
+                      <ResponsiveTable
                         rowKey="name"
                         size="small"
                         loading={!!entry?.loading}
                         dataSource={displayColumns(m)}
                         columns={colDefs as any}
                         pagination={false}
-                        scroll={{ y: 220 }}
+                        scroll={{ x: 'max-content', y: 220 }}
                         locale={{ emptyText: '加载中或暂无字段' }}
                       />
                     )}

@@ -103,3 +103,35 @@ func Ping(ctx context.Context, inst *store.Instance, opt Options) error {
 	defer client.Close()
 	return nil
 }
+
+// InfoSection 返回 INFO <section> 的 key→value 映射（只读探测用）
+func InfoSection(ctx context.Context, inst *store.Instance, opt Options, section string) (map[string]string, error) {
+	client, err := openReadyClient(ctx, inst, opt, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer client.Close()
+	sec := strings.TrimSpace(section)
+	var raw string
+	if sec == "" {
+		raw, err = client.Info(ctx).Result()
+	} else {
+		raw, err = client.Info(ctx, sec).Result()
+	}
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		k, v, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		out[strings.TrimSpace(k)] = strings.TrimSpace(v)
+	}
+	return out, nil
+}

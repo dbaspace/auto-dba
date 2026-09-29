@@ -13,6 +13,14 @@
   min-height: 32px;
   padding: 6px 4px;
 }
+.rule-row.has-hint {
+  height: auto;
+  min-height: 32px;
+  align-items: flex-start;
+  overflow: visible;
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
 .rule-label {
   min-width: 0;
   flex: 1;
@@ -35,4 +43,10 @@
 }
 .rule-input-wide {
   width: 100%;
+}
+.rule-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #6b7280;
 }

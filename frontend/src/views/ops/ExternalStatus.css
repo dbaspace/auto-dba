@@ -4,5 +4,5 @@
   min-height: 480px;
   border: 1px solid #f3f4f6;
   border-radius: 4px;
-  background: #fff;
+  background: var(--app-content-bg, #fff);
 }
