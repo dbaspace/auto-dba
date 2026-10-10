@@ -223,7 +223,7 @@ API：
 
 ## 告警管理（增量）
 
-- 目录：`m-alert`「告警管理」；详见 [alerts.md](alerts.md)。
+- 目录：`m-alert`「告警管理」；能力与分期见 [alerts.md](alerts.md)。
 - 页面与侧栏 URN：
 
 | 页面 | Path | URN |
@@ -232,6 +232,9 @@ API：
 | 历史告警 | `/ops/alerts/history` | `um.sidebar.ops-alerts-history` |
 | 规则管理 | `/ops/alerts/rules` | `um.sidebar.ops-alerts-rules` |
 | 静默管理 | `/ops/alerts/silences` | `um.sidebar.ops-alerts-silences` |
+| 通知路由 | `/ops/alerts/routes` | `um.sidebar.ops-alerts-routes` |
+| 抑制规则 | `/ops/alerts/inhibitions` | `um.sidebar.ops-alerts-inhibitions` |
+| 值班排班 | `/ops/alerts/oncall` | `um.sidebar.ops-alerts-oncall` |
 
 - 操作权限：
 
@@ -240,7 +243,8 @@ API：
 | 认领 / 转派 / 处理中 | 认领告警 | `um.action.alert.claim` | 活跃告警 |
 | 恢复 / 误报关闭 | 关闭告警 | `um.action.alert.resolve` | 活跃告警 |
 | 新建 / 取消静默 | 静默告警 | `um.action.alert.silence` | 活跃告警 |
-| 新建 / 编辑 / 启停规则 | 编辑规则 | `um.action.alert.rule.edit` | 规则管理 |
-| 删除规则 | 删除规则 | `um.action.alert.rule.delete` | 规则管理 |
+| 新建 / 编辑规则、抑制、路由、值班 | 编辑规则 | `um.action.alert.rule.edit` | 规则管理（写接口复用） |
+| 删除规则、抑制、路由、值班 | 删除规则 | `um.action.alert.rule.delete` | 规则管理（写接口复用） |
 
 - 「转待办」复用 `um.action.todo.create`，`source=alert`、`source_ref=告警 ID`。
+- 外发渠道（Webhook / 企微 / 电话 / 邮件）在「认证配置 → 通知」由管理员配置，不单独挂菜单 URN。

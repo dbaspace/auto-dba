@@ -2,6 +2,8 @@
 
 共享部署 + 元库行级 `tenant_id`。默认严格隔离；跨租户仅成员加入、资源授权（grant）或平台审计（impersonate）。
 
+侧栏功能入口与页面说明见 [features.md](features.md#多租户)。生产配置拉取见 [nacos-config.md](nacos-config.md)（与租户无关：Nacos Namespace 是平台部署，不是业务租户）。
+
 ## 模型
 
 | 概念 | 说明 |
@@ -92,7 +94,7 @@ PLATFORM 资源（全局共享）：用户/角色/菜单、LDAP/SSO/SMTP、区�
 2. 租户 A 建实例 `h:3306`，租户 B 可再建同地址；A 的 List/Get/测连看不到 B。
 3. 知 B 的 instance/database/issue/todo/alert/cluster id，在 A 上下文请求 → 404。
 4. 业务租户提交工单，行 `tenant_id` 为当前 tid，不进 default。
-5. 告警规则/告警/静默按租户列表隔离。
+5. 告警规则/告警/静默按租户列表隔离；抑制 / 通知路由 / 值班排班为平台级共享（见 [alerts.md](alerts.md)）。
 6. 跨租 grant 读实例/集群：被授权租户 Get 可见，未授权仍 404。
 7. admin 进入「测试」审计：可见默认租户实例；划拨后实例归属「测试」，dba 成员可见，默认租户侧不再出现。
 8. 跨租 Delete（账号 / Proxy / HA / SR / 部署集群 / 告警规则 / FE·DS·OSS）→ 404，目标行仍在。

@@ -1,10 +1,22 @@
 # auto-dba
 
-独立的 DBA 运维自助工作台，覆盖工单、查询、CDC、迁移、闪回、归档与权限治理。业务对象登记在本系统内，使用本地登录（可接 LDAP / SSO）、本地实例库表与审批人。
+独立的 DBA 运维自助工作台，覆盖工单、查询、CDC、迁移、闪回、归档、集群部署、告警与权限治理。业务对象登记在本系统内，使用本地登录（可接 LDAP / SSO）、本地实例库表与审批人。
 
 功能按侧栏逐项说明见 [docs/features.md](docs/features.md)。模块关系总览见 [docs/architecture.html](docs/architecture.html)。集群部署（StarRocks）方案见 [docs/sr-cluster.md](docs/sr-cluster.md)。
 
 前端为 **React 18 + Ant Design 5 + Redux Toolkit + ahooks + react-router-dom v6 + Tailwind 3**（目录 `frontend/`）。本地为**前后端分离**：改前端不必动后端，改后端不必重新构建前端。
+
+## 能力概览（近期重点）
+
+| 能力 | 说明 | 文档 |
+|------|------|------|
+| **多租户** | 元库行级 `tenant_id` 隔离；登录选租户；成员角色驱动菜单；私有库 ACL 仅本租成员；跨租用 grant 只读；平台管理员可审计并划拨实例/库/集群 | [docs/tenancy.md](docs/tenancy.md) |
+| **Nacos 配置** | 生产可将 `db.dsn` / `jwt_secret` / SSH 私钥放到 Nacos；本地只留引导；支持 ListenConfig 热更。Namespace = 平台部署，≠ 业务「环境管理」 | [docs/nacos-config.md](docs/nacos-config.md) |
+| **告警管理** | 自建 Ruler + Prometheus：规则、静默、抑制、路由、值班；Webhook / 企微 / 电话 / 邮件 | [docs/alerts.md](docs/alerts.md) |
+| **认证** | 本地 / LDAP / SSO（授权码或密码）；LDAP·SSO 首次登录自动建 developer 并挂默认租户 | [docs/features.md](docs/features.md#登录与账号) |
+| **集群与 HA** | StarRocks / MySQL·PG·Redis 部署工作台；接入层代理；高可用维护 | [docs/sr-cluster.md](docs/sr-cluster.md)、[docs/db-cluster.md](docs/db-cluster.md)、[docs/ha.md](docs/ha.md) |
+
+完整侧栏功能目录仍以 [docs/features.md](docs/features.md) 为准。
 
 ## 运行方式：手动维护
 
@@ -85,8 +97,15 @@ PG 闪回生产约定：默认不改 `REPLICA IDENTITY`；DEFAULT 表靠 FPW/堆
 
 ## 相关文档
 
-功能目录与各模块说明见 [docs/features.md](docs/features.md)。
+| 文档 | 内容 |
+|------|------|
+| [docs/features.md](docs/features.md) | 侧栏功能目录与页面说明（含多租户、登录、告警入口） |
+| [docs/tenancy.md](docs/tenancy.md) | 多租户模型、ACL、划拨、grant、API、防串租清单 |
+| [docs/nacos-config.md](docs/nacos-config.md) | Nacos 部署、Namespace、热更、与业务环境区分 |
+| [docs/alerts.md](docs/alerts.md) | 告警 Ruler / 规则 / 静默 / 路由 / 值班 |
+| [docs/rbac-permissions.md](docs/rbac-permissions.md) | 新菜单与操作权限登记（前后端 URN） |
+| [docs/migration-schema-compare.md](docs/migration-schema-compare.md) | 表结构对比 |
+| [docs/sr-cluster.md](docs/sr-cluster.md) / [docs/db-cluster.md](docs/db-cluster.md) / [docs/ha.md](docs/ha.md) | 集群部署与高可用 |
+| [docs/architecture.html](docs/architecture.html) | 模块关系总览 |
 
-菜单 **同步与迁移 → 表结构对比**（`/ops/migration/compare`）：对同族实例（PostgreSQL 互比，或 MySQL/TiDB/OceanBase 互比）做异步结构对比，并生成源→目标、只增不删的修复 SQL。范围与 API 见 [docs/migration-schema-compare.md](docs/migration-schema-compare.md)。
-
-新增页面及页面上的新建/编辑/删除等操作，须在菜单中登记并完成前后端鉴权，见 [docs/rbac-permissions.md](docs/rbac-permissions.md)。
+配置引导示例：[config/config.example.yaml](config/config.example.yaml)、[config/bootstrap.example.yaml](config/bootstrap.example.yaml)（Nacos）。

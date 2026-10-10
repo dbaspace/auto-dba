@@ -176,7 +176,7 @@ Ruler **每规则只查 1 次** Prom，不做按实例 N+1。
 | `tbl_alert_routes` | 路由（列名 `cont` = continue） |
 | `tbl_alert_oncall` | 值班槽 |
 
-多租户：告警规则 / 告警 / 静默按租户隔离，见 [tenancy.md](tenancy.md)。
+多租户：告警规则 / 告警 / 静默按租户隔离，见 [tenancy.md](tenancy.md)。抑制 / 路由 / 值班表当前为平台级（未挂 `tenant_id`），各租户共享配置。
 
 ## 依赖与运维
 

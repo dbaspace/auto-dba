@@ -3,7 +3,9 @@
 平台启动时可选从 Nacos 拉取业务配置（元库 DSN、`jwt_secret`、SSH 私钥等），本地文件只保留**如何连接** Nacos。  
 `auto-dba` 与 `db-monitor` 共用 `config.Load`，同一 DataId。
 
-引导示例：[`config/bootstrap.example.yaml`](../config/bootstrap.example.yaml)、[`config/config.example.yaml`](../config/config.example.yaml)。
+引导示例：[`config/bootstrap.example.yaml`](../config/bootstrap.example.yaml)、[`config/config.example.yaml`](../config/config.example.yaml)。仓库总览入口见 [README](../README.md#能力概览近期重点)。
+
+> **与多租户无关**：Nacos Namespace 表示「这一套进程连哪份平台配置」（开发/生产）。业务侧的租户隔离见 [tenancy.md](tenancy.md)；「环境管理」里的 `test`/`beijing` 等也不是 Nacos Namespace。
 
 ## 单机 Nacos 部署（Docker，可选自建）
 
