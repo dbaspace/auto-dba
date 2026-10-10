@@ -13,6 +13,7 @@ const passwordMask = "******"
 
 type FeAdmin struct {
 	ID          string `json:"id"`
+	TenantID    string `json:"tenant_id,omitempty"`
 	TaskName    string `json:"task_name"`
 	Environment string `json:"environment"`
 	Domain      string `json:"domain"`
@@ -29,6 +30,7 @@ type FeAdmin struct {
 
 type DsAdmin struct {
 	ID          string `json:"id"`
+	TenantID    string `json:"tenant_id,omitempty"`
 	Environment string `json:"environment"`
 	LoginURL    string `json:"login_url"`
 	Username    string `json:"username"`
@@ -79,8 +81,13 @@ func scanDsAdmin(scanner interface {
 }
 
 func (d *DB) ListFeAdmins(env, keyword string) ([]FeAdmin, error) {
+	return d.ListFeAdminsInTenant("", env, keyword)
+}
+
+func (d *DB) ListFeAdminsInTenant(tenantID, env, keyword string) ([]FeAdmin, error) {
 	q := `SELECT ` + feAdminCols + ` FROM tbl_fe_admin WHERE 1=1`
 	var args []any
+	q, args = appendTenantFilter(q, args, tenantID)
 	if e := strings.TrimSpace(env); e != "" {
 		q += ` AND environment=?`
 		args = append(args, e)
@@ -115,6 +122,11 @@ func (d *DB) GetFeAdmin(id string) (*FeAdmin, error) {
 	return it, err
 }
 
+func (d *DB) GetFeAdminInTenant(id, tenantID string) (*FeAdmin, error) {
+	it, err := d.GetFeAdmin(id)
+	return ownedInTenant(d, it, err, "tbl_fe_admin", id, tenantID)
+}
+
 func (d *DB) CreateFeAdmin(it *FeAdmin) error {
 	if it.ID == "" {
 		it.ID = uuid.NewString()
@@ -136,7 +148,7 @@ func (d *DB) CreateFeAdmin(it *FeAdmin) error {
 		return err
 	}
 	it.Password = maskPassword(it.PasswordEnc)
-	return nil
+	return d.AssignTenantID("tbl_fe_admin", it.ID, it.TenantID)
 }
 
 func (d *DB) UpdateFeAdmin(it *FeAdmin) error {
@@ -164,8 +176,13 @@ func (d *DB) DeleteFeAdmin(id string) error {
 }
 
 func (d *DB) ListDsAdmins(env, keyword string) ([]DsAdmin, error) {
+	return d.ListDsAdminsInTenant("", env, keyword)
+}
+
+func (d *DB) ListDsAdminsInTenant(tenantID, env, keyword string) ([]DsAdmin, error) {
 	q := `SELECT ` + dsAdminCols + ` FROM tbl_ds_admin WHERE 1=1`
 	var args []any
+	q, args = appendTenantFilter(q, args, tenantID)
 	if e := strings.TrimSpace(env); e != "" {
 		q += ` AND environment=?`
 		args = append(args, e)
@@ -200,9 +217,22 @@ func (d *DB) GetDsAdmin(id string) (*DsAdmin, error) {
 	return it, err
 }
 
+func (d *DB) GetDsAdminInTenant(id, tenantID string) (*DsAdmin, error) {
+	it, err := d.GetDsAdmin(id)
+	return ownedInTenant(d, it, err, "tbl_ds_admin", id, tenantID)
+}
+
 func (d *DB) GetDsAdminByEnv(env string) (*DsAdmin, error) {
+	return d.GetDsAdminByEnvInTenant(env, "")
+}
+
+func (d *DB) GetDsAdminByEnvInTenant(env, tenantID string) (*DsAdmin, error) {
 	env = strings.TrimSpace(env)
-	it, err := scanDsAdmin(d.QueryRow(`SELECT `+dsAdminCols+` FROM tbl_ds_admin WHERE environment=?`, env))
+	q := `SELECT ` + dsAdminCols + ` FROM tbl_ds_admin WHERE environment=?`
+	args := []any{env}
+	q, args = appendTenantFilter(q, args, tenantID)
+	q += ` ORDER BY updated_at DESC LIMIT 1`
+	it, err := scanDsAdmin(d.QueryRow(q, args...))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -228,7 +258,7 @@ func (d *DB) CreateDsAdmin(it *DsAdmin) error {
 		return err
 	}
 	it.Password = maskPassword(it.PasswordEnc)
-	return nil
+	return d.AssignTenantID("tbl_ds_admin", it.ID, it.TenantID)
 }
 
 func (d *DB) UpdateDsAdmin(it *DsAdmin) error {

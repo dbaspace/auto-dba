@@ -1,0 +1,69 @@
+# Nacos：发布 DataId 后将 enabled 改为 true，dsn/jwt/私钥可只放控制台（见 docs/nacos-config.md）
+nacos:
+  enabled: true
+  server_addr: "10.100.113.151:8848"
+  namespace: "e4dec2e2-4711-432f-9110-cc9b67d66b81"
+  group: DEFAULT_GROUP
+  data_id: auto-dba.yaml
+  username: nacos
+  password: "rWzLDnUOV7"
+
+app:
+  name: auto-dba
+  run_mode: debug
+  jwt_secret: change-me-in-production
+  jwt_ttl_hours: 24
+
+http:
+  host: "0.0.0.0"
+  port: 8800
+  read_timeout: 30
+  write_timeout: 120
+  pid_file: /tmp/auto-dba.pid
+  # 前后端分离：默认不托管 frontend/dist。页面只走 Vite（5174/5175）。
+  serve_static: false
+
+log:
+  level: debug
+
+db:
+  driver: postgres
+  dsn: "postgres://autosql_user:xV2vkHQk5jdY@10.100.112.14:5432/db_autosql?sslmode=disable"
+
+cdc:
+  enabled: false
+  debezium_url: ""
+  kafka_brokers: ""
+
+migration:
+  enabled: false
+  oss_endpoint: ""
+
+flashback:
+  workdir: /tmp/auto-dba-flashback
+  archive_dir: ""
+  max_wal_bytes: 1073741824
+  tencent_secret_id: ""
+  tencent_secret_key: ""
+  tencent_region: ""
+
+external:
+  dolphinscheduler_url: ""
+  starrocks_fe_url: ""
+
+# WebTTY / 实例主机 SSH（密钥登录，不用库账号密码）
+terminal:
+  enabled: true
+  ssh_user: sysadmin
+  # 私钥路径（勿提交仓库）；对应公钥见同目录 id_ed25519.pub
+  ssh_identity_file: config/terminal/id_ed25519
+  scripts_dir: ""
+  static_dir: ""
+  max_lifetime_sec: 1800
+
+services:
+  db_monitor:
+    mode: embed
+    url: ""
+    host: "0.0.0.0"
+    port: 8801

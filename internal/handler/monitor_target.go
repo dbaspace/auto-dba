@@ -15,7 +15,7 @@ type MonitorTargetHandler struct {
 }
 
 func (h *MonitorTargetHandler) List(c *gin.Context) {
-	list, err := h.Store.ListMonitorJobs(c.Query("keyword"))
+	list, err := h.Store.ListMonitorJobsInTenant(effectiveListTenantID(h.Store, c), c.Query("keyword"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -27,7 +27,7 @@ func (h *MonitorTargetHandler) List(c *gin.Context) {
 }
 
 func (h *MonitorTargetHandler) Get(c *gin.Context) {
-	it, err := h.Store.GetMonitorJob(c.Param("id"))
+	it, err := h.Store.GetMonitorJobInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -76,6 +76,7 @@ func (h *MonitorTargetHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
+	stampTenantID(c, func(tid string) { it.TenantID = tid })
 	if err := h.Store.CreateMonitorJob(&it); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
@@ -84,7 +85,7 @@ func (h *MonitorTargetHandler) Create(c *gin.Context) {
 }
 
 func (h *MonitorTargetHandler) Update(c *gin.Context) {
-	exist, err := h.Store.GetMonitorJob(c.Param("id"))
+	exist, err := h.Store.GetMonitorJobInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || exist == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "监控任务不存在"})
 		return
@@ -103,11 +104,15 @@ func (h *MonitorTargetHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
-	full, _ := h.Store.GetMonitorJob(it.ID)
+	full, _ := h.Store.GetMonitorJobInTenant(it.ID, effectiveListTenantID(h.Store, c))
 	c.JSON(http.StatusOK, gin.H{"data": full})
 }
 
 func (h *MonitorTargetHandler) Delete(c *gin.Context) {
+	if exist, err := h.Store.GetMonitorJobInTenant(c.Param("id"), effectiveListTenantID(h.Store, c)); err != nil || exist == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "监控任务不存在"})
+		return
+	}
 	if err := h.Store.DeleteMonitorJob(c.Param("id")); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return

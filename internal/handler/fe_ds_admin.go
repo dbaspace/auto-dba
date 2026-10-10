@@ -28,7 +28,7 @@ func (h *FeAdminHandler) List(c *gin.Context) {
 	if env == "" {
 		env = c.Query("env")
 	}
-	list, err := h.Store.ListFeAdmins(env, c.Query("keyword"))
+	list, err := h.Store.ListFeAdminsInTenant(effectiveListTenantID(h.Store, c), env, c.Query("keyword"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -40,7 +40,7 @@ func (h *FeAdminHandler) List(c *gin.Context) {
 }
 
 func (h *FeAdminHandler) Get(c *gin.Context) {
-	it, err := h.Store.GetFeAdmin(c.Param("id"))
+	it, err := h.Store.GetFeAdminInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -84,6 +84,7 @@ func (h *FeAdminHandler) Create(c *gin.Context) {
 	it.CreatedBy = actorName(c)
 	it.UpdatedBy = it.CreatedBy
 	it.Password = ""
+	stampTenantID(c, func(tid string) { it.TenantID = tid })
 	if err := h.Store.CreateFeAdmin(&it); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
@@ -92,7 +93,7 @@ func (h *FeAdminHandler) Create(c *gin.Context) {
 }
 
 func (h *FeAdminHandler) Update(c *gin.Context) {
-	exist, err := h.Store.GetFeAdmin(c.Param("id"))
+	exist, err := h.Store.GetFeAdminInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || exist == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "FE 凭据不存在"})
 		return
@@ -133,7 +134,12 @@ func (h *FeAdminHandler) Update(c *gin.Context) {
 }
 
 func (h *FeAdminHandler) Delete(c *gin.Context) {
-	if err := h.Store.DeleteFeAdmin(c.Param("id")); err != nil {
+	exist, err := h.Store.GetFeAdminInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
+	if err != nil || exist == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "配置不存在"})
+		return
+	}
+	if err := h.Store.DeleteFeAdmin(exist.ID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
@@ -145,7 +151,7 @@ func (h *DsAdminHandler) List(c *gin.Context) {
 	if env == "" {
 		env = c.Query("env")
 	}
-	list, err := h.Store.ListDsAdmins(env, c.Query("keyword"))
+	list, err := h.Store.ListDsAdminsInTenant(effectiveListTenantID(h.Store, c), env, c.Query("keyword"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -157,7 +163,7 @@ func (h *DsAdminHandler) List(c *gin.Context) {
 }
 
 func (h *DsAdminHandler) Get(c *gin.Context) {
-	it, err := h.Store.GetDsAdmin(c.Param("id"))
+	it, err := h.Store.GetDsAdminInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -198,6 +204,7 @@ func (h *DsAdminHandler) Create(c *gin.Context) {
 	it.CreatedBy = actorName(c)
 	it.UpdatedBy = it.CreatedBy
 	it.Password = ""
+	stampTenantID(c, func(tid string) { it.TenantID = tid })
 	if err := h.Store.CreateDsAdmin(&it); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
@@ -206,7 +213,7 @@ func (h *DsAdminHandler) Create(c *gin.Context) {
 }
 
 func (h *DsAdminHandler) Update(c *gin.Context) {
-	exist, err := h.Store.GetDsAdmin(c.Param("id"))
+	exist, err := h.Store.GetDsAdminInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || exist == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "海豚配置不存在"})
 		return
@@ -241,7 +248,12 @@ func (h *DsAdminHandler) Update(c *gin.Context) {
 }
 
 func (h *DsAdminHandler) Delete(c *gin.Context) {
-	if err := h.Store.DeleteDsAdmin(c.Param("id")); err != nil {
+	exist, err := h.Store.GetDsAdminInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
+	if err != nil || exist == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "配置不存在"})
+		return
+	}
+	if err := h.Store.DeleteDsAdmin(exist.ID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
@@ -258,7 +270,7 @@ func (h *DsAdminHandler) Credential(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "请指定 env"})
 		return
 	}
-	it, err := h.Store.GetDsAdminByEnv(env)
+	it, err := h.Store.GetDsAdminByEnvInTenant(env, effectiveListTenantID(h.Store, c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return

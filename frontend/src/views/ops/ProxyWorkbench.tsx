@@ -3,6 +3,9 @@ import {
   Alert, Button, Form, Input, InputNumber, Modal, Select, Space, Table, Tag, Switch, message, Collapse,
 } from 'antd'
 import api from '../../api/request'
+import Auth from '../../components/Auth'
+import { Perm } from '../../hooks/usePermission'
+import { useAppSelector } from '../../store'
 import ProxyArchitectureDiagram, {
   parseBackendsFromConf,
   parseBackendsJSON,
@@ -16,6 +19,8 @@ type Backend = { name?: string; host: string; port: number; weight?: number; bac
 
 type ProxyService = {
   id: string
+  tenant_id?: string
+  tenant_name?: string
   name: string
   kind: string
   agent_base_url?: string
@@ -77,6 +82,11 @@ const LB_ALGO = [
 ]
 
 export default function ProxyWorkbench({ kind }: { kind: ProxyKind }) {
+  const authUser = useAppSelector((s) => s.auth.user)
+  const impersonating = Boolean((authUser as { impersonating?: boolean })?.impersonating)
+  const currentTenant = (authUser as { current_tenant?: { id?: string; name?: string; code?: string } })?.current_tenant
+  const currentTenantId = currentTenant?.id || ''
+  const currentTenantLabel = currentTenant?.name || currentTenant?.code || '当前租户'
   const [list, setList] = useState<ProxyService[]>([])
   const [loading, setLoading] = useState(false)
   const [selected, setSelected] = useState<ProxyService | null>(null)
@@ -155,6 +165,22 @@ export default function ProxyWorkbench({ kind }: { kind: ProxyKind }) {
     setLvsDiag(null)
   }, [kind])
 
+  function assignServiceToCurrentTenant(row: ProxyService, e?: React.MouseEvent) {
+    e?.stopPropagation()
+    if (!row.id || !currentTenantId) return
+    const from = row.tenant_name || row.tenant_id || '其它租户'
+    Modal.confirm({
+      title: '划拨到当前租户',
+      content: `将代理「${row.name}」（当前归属：${from}）划拨到「${currentTenantLabel}」？该租户成员即可运维。`,
+      okText: '划拨',
+      onOk: async () => {
+        await api.post(`/proxy/services/${row.id}/assign-tenant`, { tenant_id: currentTenantId })
+        message.success('已划拨到 ' + currentTenantLabel)
+        await load()
+      },
+    })
+  }
+
   const openDetail = async (row: ProxyService) => {
     try {
       const { data } = await api.get(`/proxy/services/${row.id}`)
@@ -205,6 +231,17 @@ export default function ProxyWorkbench({ kind }: { kind: ProxyKind }) {
   const columns = useMemo(
     () => [
       { title: '名称', dataIndex: 'name' },
+      ...(impersonating
+        ? [{
+            title: '所属租户',
+            width: 140,
+            render: (_: unknown, r: ProxyService) => {
+              const same = r.tenant_id && currentTenantId && r.tenant_id === currentTenantId
+              const label = r.tenant_name || r.tenant_id || '—'
+              return same ? <Tag color="green">{label}</Tag> : <Tag color="orange">{label}</Tag>
+            },
+          }]
+        : []),
       { title: '配置路径', dataIndex: 'conf_path', ellipsis: true },
       { title: 'VIP', dataIndex: 'vip', width: 120, render: (v: string) => v || '-' },
       {
@@ -225,15 +262,24 @@ export default function ProxyWorkbench({ kind }: { kind: ProxyKind }) {
       { title: '最近下发', dataIndex: 'pushed_at', width: 180, render: (v: string) => v || '-' },
       {
         title: '操作',
-        width: 100,
+        width: impersonating ? 200 : 100,
         render: (_: any, r: ProxyService) => (
-          <Button type="link" size="small" onClick={() => openDetail(r)}>
-            管理
-          </Button>
+          <Space size={0}>
+            <Button type="link" size="small" onClick={() => openDetail(r)}>
+              管理
+            </Button>
+            {impersonating && r.tenant_id && r.tenant_id !== currentTenantId ? (
+              <Auth urn={Perm.tenants.impersonate}>
+                <Button type="link" size="small" onClick={(e) => assignServiceToCurrentTenant(r, e)}>
+                  划拨到当前租户
+                </Button>
+              </Auth>
+            ) : null}
+          </Space>
         ),
       },
     ],
-    [],
+    [impersonating, currentTenantId],
   )
 
   return (
@@ -251,6 +297,14 @@ export default function ProxyWorkbench({ kind }: { kind: ProxyKind }) {
               : '高可用：须主+备 2 节点（平台 Agent :8090），各装 haproxy+keepalived；同 VIP，主备漂移。VIP 必填且不可冲突。'
         }
       />
+      {impersonating ? (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message={`审计中：列表含全平台 ${KIND_LABEL[kind] || kind}。其它租户资源可划拨到「${currentTenantLabel}」，该租户成员即可运维。`}
+        />
+      ) : null}
       <Space style={{ marginBottom: 12 }} wrap>
         <Button
           type="primary"

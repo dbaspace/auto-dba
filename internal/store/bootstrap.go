@@ -11,8 +11,8 @@ import (
 
 // 启动引导版本：修改 migrate.go / seed.go 后请递增对应常量，否则已初始化库会跳过重跑。
 const (
-	SchemaVersion = "2026-09-27.commercial-deploy"
-	SeedVersion   = "2026-09-27.commercial-deploy"
+	SchemaVersion = "2026-10-10.tenancy-v3.alert-ops"
+	SeedVersion   = "2026-10-10.alert-ops-v3"
 )
 
 const (
@@ -65,6 +65,10 @@ func (d *DB) migrateFast() error {
 			return err
 		}
 		if cur == SchemaVersion {
+			// 轻量幂等：租户内唯一约束迁移不依赖升版本，避免 skip 路径漏跑。
+			if err := d.ensureTenantScopedUniques(); err != nil {
+				return err
+			}
 			log.Printf("migrate: skip (schema_version=%s) in %s", SchemaVersion, time.Since(t0).Round(time.Millisecond))
 			return nil
 		}
@@ -80,6 +84,7 @@ func (d *DB) migrateFast() error {
 }
 
 // seedFast 在 seed 已是当前版本时跳过菜单/RBAC 全量 ensure（远程 PG 上可达数十秒）。
+// 轻量幂等种子（如默认告警规则）在 skip 路径仍会执行，避免仅靠升版本才写入。
 func (d *DB) seedFast() error {
 	t0 := time.Now()
 	if err := d.ensureSchemaMetaTable(); err != nil {
@@ -91,11 +96,20 @@ func (d *DB) seedFast() error {
 			return err
 		}
 		if cur == SeedVersion {
+			if err := d.EnsureDefaultAlertRules(); err != nil {
+				return err
+			}
+			if err := d.SyncDefaultTenantMemberships(); err != nil {
+				return err
+			}
 			log.Printf("seed: skip (seed_version=%s) in %s", SeedVersion, time.Since(t0).Round(time.Millisecond))
 			return nil
 		}
 	}
 	if err := d.seed(); err != nil {
+		return err
+	}
+	if err := d.SyncDefaultTenantMemberships(); err != nil {
 		return err
 	}
 	if err := d.schemaMetaSet(metaSeedVersion, SeedVersion); err != nil {

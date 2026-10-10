@@ -15,6 +15,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"auto-dba/internal/middleware"
 	"auto-dba/internal/secret"
 	"auto-dba/internal/store"
 )
@@ -130,8 +131,8 @@ func dsFetchUserInfo(loginURL, sessionID string) map[string]any {
 	return parsed.Data
 }
 
-func (h *DsAdminHandler) loadPlainCredential(env string) (*store.DsAdmin, string, error) {
-	it, err := h.Store.GetDsAdminByEnv(env)
+func (h *DsAdminHandler) loadPlainCredential(env, tenantID string) (*store.DsAdmin, string, error) {
+	it, err := h.Store.GetDsAdminByEnvInTenant(env, tenantID)
 	if err != nil {
 		return nil, "", err
 	}
@@ -145,8 +146,8 @@ func (h *DsAdminHandler) loadPlainCredential(env string) (*store.DsAdmin, string
 	return it, plain, nil
 }
 
-func (h *DsAdminHandler) ensureDSSession(env string) (*dsCachedSession, *store.DsAdmin, error) {
-	it, plain, err := h.loadPlainCredential(env)
+func (h *DsAdminHandler) ensureDSSession(env, tenantID string) (*dsCachedSession, *store.DsAdmin, error) {
+	it, plain, err := h.loadPlainCredential(env, tenantID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -155,6 +156,7 @@ func (h *DsAdminHandler) ensureDSSession(env string) (*dsCachedSession, *store.D
 	if envKey == "" {
 		envKey = strings.TrimSpace(env)
 	}
+	envKey = strings.TrimSpace(tenantID) + "|" + envKey
 	if cached, ok := dsSessions.Load(envKey); ok {
 		s := cached.(*dsCachedSession)
 		if s.SessionID != "" && s.LoginURL == loginURL && time.Since(s.At) < dsSessionTTL {
@@ -181,7 +183,7 @@ func (h *DsAdminHandler) Warm(c *gin.Context) {
 		return
 	}
 	start := time.Now()
-	_, _, err := h.ensureDSSession(env)
+	_, _, err := h.ensureDSSession(env, middleware.TenantID(c))
 	elapsed := time.Since(start).Milliseconds()
 	if err != nil {
 		log.Printf("ds_warm env=%s err=%v elapsed_ms=%d", env, err, elapsed)
@@ -202,7 +204,7 @@ func (h *DsAdminHandler) ConsoleBootstrap(c *gin.Context) {
 		return
 	}
 	sessStart := time.Now()
-	sess, it, err := h.ensureDSSession(env)
+	sess, it, err := h.ensureDSSession(env, middleware.TenantID(c))
 	sessMs := time.Since(sessStart).Milliseconds()
 	if err != nil {
 		fallback := ""
@@ -1036,7 +1038,7 @@ func copyDSResponseHeaders(dst http.Header, src http.Header) {
 func (h *DsAdminHandler) Proxy(c *gin.Context) {
 	start := time.Now()
 	env := strings.TrimSpace(c.Param("env"))
-	sess, _, err := h.ensureDSSession(env)
+	sess, _, err := h.ensureDSSession(env, middleware.TenantID(c))
 	if err != nil {
 		c.Header("Content-Type", "text/html; charset=utf-8")
 		c.String(http.StatusBadGateway, `<!DOCTYPE html><html><body style="font-family:sans-serif;padding:24px;color:#c00">%s</body></html>`, html.EscapeString(err.Error()))

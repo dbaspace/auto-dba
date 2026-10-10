@@ -48,6 +48,7 @@ func main() {
 	mux.HandleFunc("/v1/sr/disk/init", withAuth(handleDiskInit))
 	mux.HandleFunc("/v1/sr/fs/ensure", withAuth(handleEnsureFS))
 	mux.HandleFunc("/v1/sr/file/put", withAuth(handleFilePut))
+	mux.HandleFunc("/v1/sr/file/get", withAuth(handleFileGet))
 	mux.HandleFunc("/v1/sr/artifact/install", withAuth(handleArtifactInstall))
 	mux.HandleFunc("/v1/sr/systemd/install", withAuth(handleSystemdInstall))
 	mux.HandleFunc("/v1/sr/systemd/ctrl", withAuth(handleSystemdCtrl))
@@ -475,6 +476,8 @@ func handleFilePut(w http.ResponseWriter, r *http.Request) {
 		Path    string `json:"path"`
 		Content string `json:"content"`
 		Mode    string `json:"mode"`
+		// Backup 为 true 时，覆盖前把旧文件备份为 <path>.bak.<时间戳> 并回传旧内容，供平台记录「下发前」版本。
+		Backup bool `json:"backup"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "message": err.Error()})
@@ -495,6 +498,26 @@ func handleFilePut(w http.ResponseWriter, r *http.Request) {
 			mode = os.FileMode(v)
 		}
 	}
+	resp := map[string]any{"ok": true}
+	if req.Backup {
+		prev, err := readExistingConf(req.Path)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "message": "读取旧文件失败: " + err.Error()})
+			return
+		}
+		if prev != nil {
+			bak, err := backupConfFile(req.Path, prev, mode, time.Now())
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "message": "备份旧文件失败: " + err.Error()})
+				return
+			}
+			resp["previous_exists"] = true
+			resp["previous_content"] = string(prev)
+			resp["previous_sha256"] = sha256Hex(prev)
+			resp["backup_path"] = bak
+			resp["message"] = "backup " + bak
+		}
+	}
 	if err := os.WriteFile(tmp, []byte(req.Content), mode); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "message": err.Error()})
 		return
@@ -503,7 +526,7 @@ func handleFilePut(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "message": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func handleArtifactInstall(w http.ResponseWriter, r *http.Request) {

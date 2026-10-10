@@ -30,10 +30,10 @@ func (h *ProxyHandler) Meta(c *gin.Context) {
 			{"code": "lvs", "label": "LVS (Keepalived+IPVS)", "default_conf": proxy.DefaultConfPath("lvs"), "default_unit": proxy.DefaultUnit("lvs"), "ha_nodes": "2", "ha_note": "Director 主备 2 节点；RS 走 backends"},
 		},
 		"ha": gin.H{
-			"min_nodes": 2,
+			"min_nodes":       2,
 			"nginx_max_nodes": proxy.MaxNginxNodes,
-			"roles":     []string{"master", "backup"},
-			"notes":     "三种代理自建/登记均须主+备（各绑平台 Agent :8090）；Nginx 可追加 backup 节点。VIP 仅 MASTER 持有，多节点主要为故障切换冗余。",
+			"roles":           []string{"master", "backup"},
+			"notes":           "三种代理自建/登记均须主+备（各绑平台 Agent :8090）；Nginx 可追加 backup 节点。VIP 仅 MASTER 持有，多节点主要为故障切换冗余。",
 		},
 		"lvs": gin.H{
 			"lb_algo": []string{"rr", "wrr", "lc", "wlc", "lblc", "lblcr", "dh", "sh", "mh", "sed", "nq", "fo", "ovf", "twos"},
@@ -45,22 +45,62 @@ func (h *ProxyHandler) Meta(c *gin.Context) {
 	}})
 }
 
+func (h *ProxyHandler) enrichProxyTenants(list []store.ProxyService) {
+	names := tenantNameMap(h.Store)
+	for i := range list {
+		applyTenantName(names, &list[i].TenantID, &list[i].TenantName)
+	}
+}
+
+func (h *ProxyHandler) enrichProxyOne(s *store.ProxyService) {
+	if s == nil {
+		return
+	}
+	names := tenantNameMap(h.Store)
+	applyTenantName(names, &s.TenantID, &s.TenantName)
+}
+
 func (h *ProxyHandler) List(c *gin.Context) {
-	list, err := h.Store.ListProxyServices(c.Query("kind"), c.Query("env_id"))
+	list, err := h.Store.ListProxyServicesInTenant(effectiveListTenantID(h.Store, c), c.Query("kind"), c.Query("env_id"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
+	if list == nil {
+		list = []store.ProxyService{}
+	}
+	h.enrichProxyTenants(list)
 	views := make([]gin.H, 0, len(list))
 	for i := range list {
 		h.Store.AttachProxyConfVersion(&list[i])
 		views = append(views, proxyServiceView(&list[i]))
 	}
-	c.JSON(http.StatusOK, gin.H{"data": views})
+	c.JSON(http.StatusOK, gin.H{"data": views, "audit_scope": auditScope(h.Store, c)})
+}
+
+// AssignTenant POST /proxy/services/:id/assign-tenant
+func (h *ProxyHandler) AssignTenant(c *gin.Context) {
+	to, ok := parseAssignTenantID(h.Store, c)
+	if !ok {
+		return
+	}
+	id := c.Param("id")
+	if err := h.Store.AssignProxyServiceTenant(id, to); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	_ = h.Store.AppendTenantAudit(to, middleware.UserID(c), "resource.assign", "proxy_service:"+id)
+	s, _ := h.Store.GetProxyService(id)
+	if s != nil {
+		s.PasswordEnc = ""
+		h.enrichProxyOne(s)
+		h.Store.AttachProxyConfVersion(s)
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "data": proxyServiceView(s)})
 }
 
 func (h *ProxyHandler) Get(c *gin.Context) {
-	s, err := h.Store.GetProxyService(c.Param("id"))
+	s, err := h.Store.GetProxyServiceInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -70,30 +110,31 @@ func (h *ProxyHandler) Get(c *gin.Context) {
 		return
 	}
 	s.PasswordEnc = ""
+	h.enrichProxyOne(s)
 	h.Store.AttachProxyConfVersion(s)
 	c.JSON(http.StatusOK, gin.H{"data": proxyServiceView(s)})
 }
 
 func (h *ProxyHandler) Create(c *gin.Context) {
 	var req struct {
-		Name         string            `json:"name"`
-		Kind         string            `json:"kind"`
-		EnvID        string            `json:"env_id"`
-		AgentID      string            `json:"agent_id"`
-		AgentBaseURL string            `json:"agent_base_url"`
-		AgentUser    string            `json:"agent_user"`
-		Password     string            `json:"password"`
-		ConfPath     string            `json:"conf_path"`
-		ConfContent  string            `json:"conf_content"`
-		SystemdUnit  string            `json:"systemd_unit"`
-		VIP          string            `json:"vip"`
-		ListenPort   int               `json:"listen_port"`
-		Backends     []proxy.Backend   `json:"backends"`
-		Mode         string            `json:"mode"`
-		LVS          *proxy.LVSOptions `json:"lvs"`
+		Name         string             `json:"name"`
+		Kind         string             `json:"kind"`
+		EnvID        string             `json:"env_id"`
+		AgentID      string             `json:"agent_id"`
+		AgentBaseURL string             `json:"agent_base_url"`
+		AgentUser    string             `json:"agent_user"`
+		Password     string             `json:"password"`
+		ConfPath     string             `json:"conf_path"`
+		ConfContent  string             `json:"conf_content"`
+		SystemdUnit  string             `json:"systemd_unit"`
+		VIP          string             `json:"vip"`
+		ListenPort   int                `json:"listen_port"`
+		Backends     []proxy.Backend    `json:"backends"`
+		Mode         string             `json:"mode"`
+		LVS          *proxy.LVSOptions  `json:"lvs"`
 		Nodes        []proxy.HANodeSpec `json:"nodes"`
-		Remark       string            `json:"remark"`
-		Generate     bool              `json:"generate"`
+		Remark       string             `json:"remark"`
+		Generate     bool               `json:"generate"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
@@ -122,10 +163,11 @@ func (h *ProxyHandler) Create(c *gin.Context) {
 	}
 	who := middleware.Username(c)
 	s := &store.ProxyService{
-		Name: req.Name, Kind: kind, EnvID: req.EnvID,
-		ConfPath: firstNonEmpty(req.ConfPath, proxy.DefaultConfPath(req.Kind)),
+		TenantID: middleware.TenantID(c),
+		Name:     req.Name, Kind: kind, EnvID: req.EnvID,
+		ConfPath:    firstNonEmpty(req.ConfPath, proxy.DefaultConfPath(req.Kind)),
 		SystemdUnit: firstNonEmpty(req.SystemdUnit, proxy.DefaultUnit(req.Kind)),
-		VIP: req.VIP, ListenPort: req.ListenPort, Remark: req.Remark,
+		VIP:         req.VIP, ListenPort: req.ListenPort, Remark: req.Remark,
 		Status: "draft", CreatedBy: who, UpdatedBy: who,
 	}
 	if s.ListenPort <= 0 {
@@ -183,23 +225,23 @@ func (h *ProxyHandler) Create(c *gin.Context) {
 }
 
 func (h *ProxyHandler) Update(c *gin.Context) {
-	exist, err := h.Store.GetProxyService(c.Param("id"))
+	exist, err := h.Store.GetProxyServiceInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || exist == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "服务不存在"})
 		return
 	}
 	var req struct {
-		Name         string          `json:"name"`
-		EnvID        string          `json:"env_id"`
-		AgentID      string          `json:"agent_id"`
-		AgentBaseURL string          `json:"agent_base_url"`
-		AgentUser    string          `json:"agent_user"`
-		Password     string          `json:"password"`
-		ConfPath     string          `json:"conf_path"`
-		ConfContent  string          `json:"conf_content"`
-		SystemdUnit  string          `json:"systemd_unit"`
-		VIP          string          `json:"vip"`
-		ListenPort   int             `json:"listen_port"`
+		Name         string             `json:"name"`
+		EnvID        string             `json:"env_id"`
+		AgentID      string             `json:"agent_id"`
+		AgentBaseURL string             `json:"agent_base_url"`
+		AgentUser    string             `json:"agent_user"`
+		Password     string             `json:"password"`
+		ConfPath     string             `json:"conf_path"`
+		ConfContent  string             `json:"conf_content"`
+		SystemdUnit  string             `json:"systemd_unit"`
+		VIP          string             `json:"vip"`
+		ListenPort   int                `json:"listen_port"`
 		Backends     []proxy.Backend    `json:"backends"`
 		Nodes        []proxy.HANodeSpec `json:"nodes"`
 		Remark       string             `json:"remark"`
@@ -313,7 +355,12 @@ func (h *ProxyHandler) Update(c *gin.Context) {
 }
 
 func (h *ProxyHandler) Delete(c *gin.Context) {
-	if err := h.Store.DeleteProxyService(c.Param("id")); err != nil {
+	exist, err := h.Store.GetProxyServiceInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
+	if err != nil || exist == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "服务不存在"})
+		return
+	}
+	if err := h.Store.DeleteProxyService(exist.ID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
@@ -349,7 +396,7 @@ func (h *ProxyHandler) Preview(c *gin.Context) {
 }
 
 func (h *ProxyHandler) Push(c *gin.Context) {
-	s, err := h.Store.GetProxyService(c.Param("id"))
+	s, err := h.Store.GetProxyServiceInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || s == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "服务不存在"})
 		return
@@ -384,7 +431,7 @@ func (h *ProxyHandler) Push(c *gin.Context) {
 }
 
 func (h *ProxyHandler) Validate(c *gin.Context) {
-	s, err := h.Store.GetProxyService(c.Param("id"))
+	s, err := h.Store.GetProxyServiceInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || s == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "服务不存在"})
 		return
@@ -405,7 +452,7 @@ func (h *ProxyHandler) Validate(c *gin.Context) {
 }
 
 func (h *ProxyHandler) ServiceStatus(c *gin.Context) {
-	s, err := h.Store.GetProxyService(c.Param("id"))
+	s, err := h.Store.GetProxyServiceInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || s == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "服务不存在"})
 		return
@@ -421,7 +468,7 @@ func (h *ProxyHandler) ServiceStatus(c *gin.Context) {
 }
 
 func (h *ProxyHandler) ServiceCtrl(c *gin.Context) {
-	s, err := h.Store.GetProxyService(c.Param("id"))
+	s, err := h.Store.GetProxyServiceInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || s == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "服务不存在"})
 		return
@@ -439,7 +486,7 @@ func (h *ProxyHandler) ServiceCtrl(c *gin.Context) {
 
 // LVSIpvs 只读查询 Agent 本机 IPVS 表。
 func (h *ProxyHandler) LVSIpvs(c *gin.Context) {
-	s, err := h.Store.GetProxyService(c.Param("id"))
+	s, err := h.Store.GetProxyServiceInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || s == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "服务不存在"})
 		return
@@ -465,7 +512,7 @@ func (h *ProxyHandler) LVSIpvs(c *gin.Context) {
 
 // LVSStatus Keepalived + VIP 汇总（三种代理均可：均部署 Keepalived）。
 func (h *ProxyHandler) LVSStatus(c *gin.Context) {
-	s, err := h.Store.GetProxyService(c.Param("id"))
+	s, err := h.Store.GetProxyServiceInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || s == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "服务不存在"})
 		return
@@ -490,7 +537,7 @@ func (h *ProxyHandler) LVSStatus(c *gin.Context) {
 }
 
 func (h *ProxyHandler) VersionList(c *gin.Context) {
-	s, err := h.Store.GetProxyService(c.Param("id"))
+	s, err := h.Store.GetProxyServiceInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || s == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "服务不存在"})
 		return
@@ -531,7 +578,7 @@ func (h *ProxyHandler) VersionList(c *gin.Context) {
 }
 
 func (h *ProxyHandler) VersionDetail(c *gin.Context) {
-	s, err := h.Store.GetProxyService(c.Param("id"))
+	s, err := h.Store.GetProxyServiceInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || s == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "服务不存在"})
 		return
@@ -549,7 +596,7 @@ func (h *ProxyHandler) VersionDetail(c *gin.Context) {
 }
 
 func (h *ProxyHandler) VersionRestore(c *gin.Context) {
-	s, err := h.Store.GetProxyService(c.Param("id"))
+	s, err := h.Store.GetProxyServiceInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || s == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "服务不存在"})
 		return
@@ -665,9 +712,9 @@ func (h *ProxyHandler) Deploy(c *gin.Context) {
 	}
 	s := &store.ProxyService{
 		Name: req.Name, Kind: kind, EnvID: req.EnvID,
-		ConfPath: firstNonEmpty(req.ConfPath, proxy.DefaultConfPath(kind)),
+		ConfPath:    firstNonEmpty(req.ConfPath, proxy.DefaultConfPath(kind)),
 		SystemdUnit: firstNonEmpty(req.SystemdUnit, proxy.DefaultUnit(kind)),
-		VIP: req.VIP, ListenPort: req.ListenPort, Remark: firstNonEmpty(req.Remark, "自建部署·主备"),
+		VIP:         req.VIP, ListenPort: req.ListenPort, Remark: firstNonEmpty(req.Remark, "自建部署·主备"),
 		Status: "draft", CreatedBy: who, UpdatedBy: who,
 	}
 	if s.ListenPort <= 0 {
@@ -738,11 +785,10 @@ func (h *ProxyHandler) Deploy(c *gin.Context) {
 	h.Store.AttachProxyConfVersion(s)
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{
 		"service": proxyServiceView(s), "jobs": jobViews,
-		"job_id": jobViews[0]["job_id"], // 兼容旧前端轮询字段
+		"job_id":  jobViews[0]["job_id"], // 兼容旧前端轮询字段
 		"message": fmt.Sprintf("已在 %d 个节点触发装包；完成后将自动下发主备 Keepalived 配置", len(jobs)),
 	}})
 }
-
 
 func (h *ProxyHandler) finishProxyDeploy(serviceID, jobID string, pushConf, enableStart bool, who string) {
 	authCtx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
@@ -836,7 +882,7 @@ func (h *ProxyHandler) finishProxyDeploy(serviceID, jobID string, pushConf, enab
 
 // DeployJob 查询 Agent 部署任务状态（自动在主备节点中定位 job）。
 func (h *ProxyHandler) DeployJob(c *gin.Context) {
-	s, err := h.Store.GetProxyService(c.Param("id"))
+	s, err := h.Store.GetProxyServiceInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || s == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "服务不存在"})
 		return

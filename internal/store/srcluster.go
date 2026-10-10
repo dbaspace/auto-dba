@@ -17,35 +17,39 @@ const (
 	SrChangeFailed    = "failed"
 	SrChangeCancelled = "cancelled"
 
-	SrStepPending   = "pending"
-	SrStepRunning   = "running"
-	SrStepSuccess   = "success"
-	SrStepFailed    = "failed"
-	SrStepSkipped   = "skipped"
+	SrStepPending = "pending"
+	SrStepRunning = "running"
+	SrStepSuccess = "success"
+	SrStepFailed  = "failed"
+	SrStepSkipped = "skipped"
 
-	SrChangeClusterInit   = "cluster_init"
-	SrChangeClusterReinit = "cluster_reinit"
-	SrChangeAddFE         = "add_fe"
-	SrChangeAddBE       = "add_be"
-	SrChangeRestart     = "restart_node"
-	SrChangeStartNode   = "start_node"
-	SrChangeStopNode    = "stop_node"
-	SrChangeRemoveFE    = "remove_fe"
-	SrChangeRemoveBE    = "remove_be"
-	SrChangeUpgrade     = "upgrade"
+	SrChangeClusterInit     = "cluster_init"
+	SrChangeClusterReinit   = "cluster_reinit"
+	SrChangeAddFE           = "add_fe"
+	SrChangeAddBE           = "add_be"
+	SrChangeRestart         = "restart_node"
+	SrChangeStartNode       = "start_node"
+	SrChangeStopNode        = "stop_node"
+	SrChangeRemoveFE        = "remove_fe"
+	SrChangeRemoveBE        = "remove_be"
+	SrChangeUpgrade         = "upgrade"
 	SrChangeUpgradeRollback = "upgrade_rollback"
-	SrChangeDecommissionBE = "decommission_be"
-	SrChangeConfigApply = "config_apply"
+	SrChangeDecommissionBE  = "decommission_be"
+	SrChangeRecommissionBE  = "recommission_be"
+	SrChangeConfigApply     = "config_apply"
+	SrChangeConfigRollback  = "config_rollback"
 
-	SrClusterDraft    = "draft"
-	SrClusterIniting  = "initializing"
-	SrClusterReady    = "ready"
-	SrClusterFailed   = "failed"
+	SrClusterDraft   = "draft"
+	SrClusterIniting = "initializing"
+	SrClusterReady   = "ready"
+	SrClusterFailed  = "failed"
 
 	SrNodePending = "pending"
 	SrNodeReady   = "ready"
 	SrNodeStopped = "stopped"
 	SrNodeFailed  = "failed"
+	// SrNodeDecommissioning 已执行 DECOMMISSION、FE 尚在迁移 tablet；迁完后由 FE 移除，平台随后删除登记
+	SrNodeDecommissioning = "decommissioning"
 
 	SrDeployPending = "pending"
 	SrDeployRunning = "running"
@@ -88,6 +92,8 @@ type SrAgentDeploy struct {
 // SrCluster 集群登记。
 type SrCluster struct {
 	ID              string `json:"id"`
+	TenantID        string `json:"tenant_id,omitempty"`
+	TenantName      string `json:"tenant_name,omitempty"`
 	Name            string `json:"name"`
 	Environment     string `json:"environment"`
 	Version         string `json:"version"`
@@ -343,6 +349,22 @@ func (d *DB) ensureSrClusterTables() error {
 			updated_at TEXT NOT NULL DEFAULT ''
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_sr_agent_deploys_host ON tbl_sr_agent_deploys(host_instance_id, created_at DESC)`,
+		`CREATE TABLE IF NOT EXISTS tbl_sr_conf_revisions (
+			id TEXT PRIMARY KEY,
+			cluster_id TEXT NOT NULL DEFAULT '',
+			node_id TEXT NOT NULL,
+			role TEXT NOT NULL DEFAULT '',
+			kind TEXT NOT NULL DEFAULT '',
+			content TEXT NOT NULL DEFAULT '',
+			content_hash TEXT NOT NULL DEFAULT '',
+			source TEXT NOT NULL DEFAULT '',
+			change_id TEXT NOT NULL DEFAULT '',
+			note TEXT NOT NULL DEFAULT '',
+			created_by TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT ''
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_sr_conf_rev_node ON tbl_sr_conf_revisions(node_id, created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_sr_conf_rev_change ON tbl_sr_conf_revisions(change_id)`,
 	}
 	for _, s := range stmts {
 		if _, err := d.Exec(s); err != nil {
@@ -411,7 +433,13 @@ func (d *DB) CreateSrAgent(a *SrAgent) error {
 		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
 		a.ID, a.Name, a.BaseURL, a.Username, a.PasswordEnc, a.HostInstID, a.Remark,
 		a.CreatedBy, a.UpdatedBy, a.CreatedAt, a.UpdatedAt)
-	return err
+	if err != nil {
+		return err
+	}
+	if tid := d.inheritTenantFromInstance(a.HostInstID); tid != "" {
+		return d.AssignTenantID("tbl_sr_agents", a.ID, tid)
+	}
+	return nil
 }
 
 func (d *DB) UpdateSrAgent(a *SrAgent) error {
@@ -495,7 +523,13 @@ func (d *DB) CreateSrAgentDeploy(it *SrAgentDeploy) error {
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
 		it.ID, it.HostInstanceID, it.AgentID, it.Status, it.ListenPort, it.RemoteDir, it.BaseURL, it.LogText,
 		it.CreatedBy, it.CreatedAt, it.UpdatedAt, it.FinishedAt)
-	return err
+	if err != nil {
+		return err
+	}
+	if tid := d.inheritTenantFromInstance(it.HostInstanceID); tid != "" {
+		return d.AssignTenantID("tbl_sr_agent_deploys", it.ID, tid)
+	}
+	return nil
 }
 
 func (d *DB) UpdateSrAgentDeploy(it *SrAgentDeploy) error {
@@ -519,6 +553,21 @@ func (d *DB) GetSrAgentDeploy(id string) (*SrAgentDeploy, error) {
 		return nil, err
 	}
 	return it, nil
+}
+
+// AgentDeployStaleAfter 超过该时长仍为 pending/running 的 Agent 下发视为后端重启遗留，不再阻塞新下发。
+const AgentDeployStaleAfter = 15 * time.Minute
+
+// AgentDeployActive Agent 下发记录是否仍在进行（时间无法解析时按进行中处理）。
+func AgentDeployActive(status, createdAt string, now time.Time) bool {
+	if status != SrDeployPending && status != SrDeployRunning {
+		return false
+	}
+	t, err := time.Parse(time.RFC3339, strings.TrimSpace(createdAt))
+	if err != nil {
+		return true
+	}
+	return now.Sub(t) < AgentDeployStaleAfter
 }
 
 func (d *DB) ListSrAgentDeploys(hostInstanceID string, limit int) ([]SrAgentDeploy, error) {
@@ -594,7 +643,10 @@ func (d *DB) CreateSrCluster(c *SrCluster) error {
 		c.FeHTTPPort, c.FeEditPort, c.FeQueryPort, c.BeHeartbeatPort,
 		c.FeHost, c.FeUser, c.FePasswordEnc, c.Status, c.Remark,
 		c.CreatedBy, c.UpdatedBy, c.CreatedAt, c.UpdatedAt)
-	return err
+	if err != nil {
+		return err
+	}
+	return d.AssignTenantID("tbl_sr_clusters", c.ID, c.TenantID)
 }
 
 func (d *DB) UpdateSrCluster(c *SrCluster) error {
@@ -632,13 +684,21 @@ func (d *DB) DeleteSrCluster(id string) error {
 	if _, err := tx.Exec(d.rewrite(`DELETE FROM tbl_sr_clusters WHERE id=?`), id); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	// 版本表可能尚未建好，放在事务外且忽略错误，避免阻塞删集群
+	_ = d.DeleteSrConfRevisionsByCluster(id)
+	return nil
 }
+
+const srClusterSelectCols = `id, COALESCE(tenant_id,''), name, environment, version, release_id, software_base, data_root, fe_http_port, fe_edit_port, fe_query_port, be_heartbeat_port,
+		fe_host, fe_user, fe_password_enc, status, remark, created_by, updated_by, created_at, updated_at`
 
 func scanSrCluster(sc interface{ Scan(dest ...any) error }) (*SrCluster, error) {
 	var c SrCluster
 	var enc string
-	if err := sc.Scan(&c.ID, &c.Name, &c.Environment, &c.Version, &c.ReleaseID, &c.SoftwareBase, &c.DataRoot,
+	if err := sc.Scan(&c.ID, &c.TenantID, &c.Name, &c.Environment, &c.Version, &c.ReleaseID, &c.SoftwareBase, &c.DataRoot,
 		&c.FeHTTPPort, &c.FeEditPort, &c.FeQueryPort, &c.BeHeartbeatPort,
 		&c.FeHost, &c.FeUser, &enc, &c.Status, &c.Remark,
 		&c.CreatedBy, &c.UpdatedBy, &c.CreatedAt, &c.UpdatedAt); err != nil {
@@ -650,9 +710,7 @@ func scanSrCluster(sc interface{ Scan(dest ...any) error }) (*SrCluster, error) 
 }
 
 func (d *DB) GetSrCluster(id string) (*SrCluster, error) {
-	row := d.QueryRow(`SELECT id,name,environment,version,release_id,software_base,data_root,fe_http_port,fe_edit_port,fe_query_port,be_heartbeat_port,
-		fe_host,fe_user,fe_password_enc,status,remark,created_by,updated_by,created_at,updated_at
-		FROM tbl_sr_clusters WHERE id=?`, id)
+	row := d.QueryRow(`SELECT `+srClusterSelectCols+` FROM tbl_sr_clusters WHERE id=?`, id)
 	c, err := scanSrCluster(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -661,15 +719,22 @@ func (d *DB) GetSrCluster(id string) (*SrCluster, error) {
 }
 
 func (d *DB) ListSrClusters(env string) ([]SrCluster, error) {
-	q := `SELECT id,name,environment,version,release_id,software_base,data_root,fe_http_port,fe_edit_port,fe_query_port,be_heartbeat_port,
-		fe_host,fe_user,fe_password_enc,status,remark,created_by,updated_by,created_at,updated_at FROM tbl_sr_clusters`
-	var rows *sql.Rows
-	var err error
-	if strings.TrimSpace(env) != "" {
-		rows, err = d.Query(q+` WHERE environment=? ORDER BY created_at DESC`, env)
-	} else {
-		rows, err = d.Query(q + ` ORDER BY created_at DESC`)
+	return d.ListSrClustersInTenant("", env)
+}
+
+func (d *DB) ListSrClustersInTenant(tenantID, env string) ([]SrCluster, error) {
+	q := `SELECT ` + srClusterSelectCols + ` FROM tbl_sr_clusters WHERE 1=1`
+	args := []any{}
+	if tid := strings.TrimSpace(tenantID); tid != "" {
+		q += ` AND COALESCE(tenant_id,'')=?`
+		args = append(args, tid)
 	}
+	if strings.TrimSpace(env) != "" {
+		q += ` AND environment=?`
+		args = append(args, env)
+	}
+	q += ` ORDER BY created_at DESC`
+	rows, err := d.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -706,7 +771,10 @@ func (d *DB) CreateSrNode(n *SrNode) error {
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		n.ID, n.ClusterID, n.Component, n.FeRole, n.Host, n.HTTPPort, n.EditPort, n.HeartbeatPort,
 		n.SoftwarePath, n.DataRoot, n.SystemdUnit, n.HostInstanceID, n.AgentID, prim, n.Status, n.Remark, n.CreatedAt, n.UpdatedAt)
-	return err
+	if err != nil {
+		return err
+	}
+	return d.inheritTenantFromParent("tbl_sr_nodes", n.ID, "tbl_sr_clusters", n.ClusterID)
 }
 
 func (d *DB) UpdateSrNode(n *SrNode) error {
@@ -724,6 +792,7 @@ func (d *DB) UpdateSrNode(n *SrNode) error {
 
 func (d *DB) DeleteSrNode(id string) error {
 	_, _ = d.Exec(`DELETE FROM tbl_sr_node_configs WHERE node_id=?`, id)
+	_ = d.DeleteSrConfRevisionsByNode(id)
 	_, err := d.Exec(`DELETE FROM tbl_sr_nodes WHERE id=?`, id)
 	return err
 }
@@ -856,7 +925,10 @@ func (d *DB) CreateSrChange(ch *SrChange) error {
 	_, err := d.Exec(`INSERT INTO tbl_sr_changes (id,cluster_id,type,status,payload_json,log_text,created_by,created_at,updated_at)
 		VALUES (?,?,?,?,?,?,?,?,?)`,
 		ch.ID, ch.ClusterID, ch.Type, ch.Status, ch.PayloadJSON, ch.LogText, ch.CreatedBy, ch.CreatedAt, ch.UpdatedAt)
-	return err
+	if err != nil {
+		return err
+	}
+	return d.inheritTenantFromParent("tbl_sr_changes", ch.ID, "tbl_sr_clusters", ch.ClusterID)
 }
 
 func (d *DB) UpdateSrChangeStatus(id, status, logAppend string) error {

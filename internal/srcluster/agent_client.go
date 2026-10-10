@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -82,7 +83,29 @@ type FilePutReq struct {
 	Mode     string `json:"mode,omitempty"`
 	ChangeID string `json:"change_id,omitempty"`
 	StepID   string `json:"step_id,omitempty"`
+	// Backup 覆盖前在远端备份旧文件并回传旧内容；旧版 Agent 忽略该字段。
+	Backup bool `json:"backup,omitempty"`
 }
+
+type FilePutResp struct {
+	JobResp
+	PreviousExists  bool   `json:"previous_exists,omitempty"`
+	PreviousContent string `json:"previous_content,omitempty"`
+	PreviousSHA256  string `json:"previous_sha256,omitempty"`
+	BackupPath      string `json:"backup_path,omitempty"`
+}
+
+type FileGetResp struct {
+	OK      bool   `json:"ok"`
+	Exists  bool   `json:"exists"`
+	Content string `json:"content"`
+	SHA256  string `json:"sha256,omitempty"`
+	MTime   string `json:"mtime,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
+// ErrAgentTooOld Agent 未提供该接口（404），需升级 node-agent。
+var ErrAgentTooOld = errors.New("Agent 版本过低，不支持读取远端配置，请重新部署 node-agent")
 
 type EnsureFSReq struct {
 	Paths        []string `json:"paths"`
@@ -218,9 +241,22 @@ func (c *AgentClient) EnsureFS(ctx context.Context, auth AgentAuth, req EnsureFS
 	return &out, nil
 }
 
-func (c *AgentClient) FilePut(ctx context.Context, auth AgentAuth, req FilePutReq) (*JobResp, error) {
-	var out JobResp
+func (c *AgentClient) FilePut(ctx context.Context, auth AgentAuth, req FilePutReq) (*FilePutResp, error) {
+	var out FilePutResp
 	if _, err := c.doJSON(ctx, http.MethodPost, auth, "/v1/sr/file/put", req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// FileGet 只读远端 */conf/fe.conf | */conf/be.conf；旧 Agent 返回 ErrAgentTooOld。
+func (c *AgentClient) FileGet(ctx context.Context, auth AgentAuth, path string) (*FileGetResp, error) {
+	var out FileGetResp
+	code, err := c.doJSON(ctx, http.MethodPost, auth, "/v1/sr/file/get", map[string]string{"path": path}, &out)
+	if code == http.StatusNotFound {
+		return nil, ErrAgentTooOld
+	}
+	if err != nil {
 		return nil, err
 	}
 	return &out, nil

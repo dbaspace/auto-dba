@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -22,18 +23,30 @@ var (
 )
 
 func (h *DatabaseHandler) resolveVisibleDB(c *gin.Context, id string) (*store.Database, *store.Instance, string, error) {
-	rec, err := h.Store.GetDatabase(id)
+	var rec *store.Database
+	var err error
+	if platformAdminAuditing(h.Store, c) {
+		rec, err = h.Store.GetDatabase(id)
+	} else {
+		rec, err = h.Store.GetDatabaseVisible(id, middleware.TenantID(c), middleware.UserID(c))
+	}
 	if err != nil {
 		return nil, nil, "", err
 	}
 	if rec == nil {
 		return nil, nil, "", errQueryNotFound
 	}
-	viewer := h.Store.ViewerOf(middleware.Username(c), middleware.Role(c))
-	if !rec.VisibleTo(viewer) {
-		return nil, nil, "", errQueryForbidden
+	granted := false
+	if !platformAdminAuditing(h.Store, c) {
+		granted, _ = h.Store.HasResourceGrant(middleware.TenantID(c), middleware.UserID(c), "database", rec.ID)
 	}
-	inst, err := h.Store.GetInstance(rec.InstanceID)
+	if !granted {
+		viewer := h.Store.ViewerOfInTenant(middleware.Username(c), middleware.Role(c), rec.TenantID)
+		if !rec.VisibleTo(viewer) {
+			return nil, nil, "", errQueryForbidden
+		}
+	}
+	inst, err := resolveParentInstance(h.Store, c, rec)
 	if err != nil {
 		return nil, nil, "", err
 	}
@@ -42,7 +55,14 @@ func (h *DatabaseHandler) resolveVisibleDB(c *gin.Context, id string) (*store.Da
 	}
 	password, err := secret.Decrypt(h.Secret, inst.Password)
 	if err != nil {
-		return nil, nil, "", errors.New("实例密码解密失败")
+		name := strings.TrimSpace(inst.Name)
+		if name == "" {
+			name = inst.ID
+		}
+		return nil, nil, "", fmt.Errorf(
+			"实例「%s」密码解密失败（密钥可能已变更）。指定库租户不会改实例密码，请到资源配置→实例中重新填写密码后保存",
+			name,
+		)
 	}
 	return rec, inst, password, nil
 }

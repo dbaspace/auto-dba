@@ -39,7 +39,7 @@ func (h *SrClusterHandler) Meta(c *gin.Context) {
 			store.SrChangeClusterInit, store.SrChangeClusterReinit, store.SrChangeAddFE, store.SrChangeAddBE,
 			store.SrChangeRestart, store.SrChangeStartNode, store.SrChangeStopNode,
 			store.SrChangeRemoveFE, store.SrChangeRemoveBE,
-			store.SrChangeDecommissionBE, store.SrChangeUpgrade, store.SrChangeConfigApply,
+			store.SrChangeDecommissionBE, store.SrChangeUpgrade, store.SrChangeConfigApply, store.SrChangeConfigRollback,
 		},
 		"defaults": gin.H{
 			"software_base":     "/home/dorisdb_base",
@@ -62,8 +62,20 @@ func (h *SrClusterHandler) Meta(c *gin.Context) {
 
 // --- Agents ---
 
+// hostInstanceAllowed 主机实例非空时须属于当前租户（或已授权），否则写 404 并返回 false。
+func (h *SrClusterHandler) hostInstanceAllowed(c *gin.Context, instanceID string) bool {
+	if strings.TrimSpace(instanceID) == "" {
+		return true
+	}
+	if it, err := resolveInstanceInTenant(h.Store, c, instanceID); err != nil || it == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "主机实例不存在"})
+		return false
+	}
+	return true
+}
+
 func (h *SrClusterHandler) ListAgents(c *gin.Context) {
-	list, err := h.Store.ListSrAgents()
+	list, err := h.Store.ListSrAgentsInTenant(effectiveListTenantID(h.Store, c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -88,6 +100,9 @@ func (h *SrClusterHandler) CreateAgent(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "base_url 必填"})
 		return
 	}
+	if !h.hostInstanceAllowed(c, req.HostInstanceID) {
+		return
+	}
 	enc, err := secret.Encrypt(h.Secret, req.Password)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
@@ -102,6 +117,9 @@ func (h *SrClusterHandler) CreateAgent(c *gin.Context) {
 	if err := h.Store.CreateSrAgent(a); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
+	}
+	if tid := middleware.TenantID(c); tid != "" {
+		_ = h.Store.AssignTenantID("tbl_sr_agents", a.ID, tid)
 	}
 	rebound, _ := h.Store.RebindSrNodesAgent(a.HostInstID, agentAddrs(h.Store, a.HostInstID, a.BaseURL), a.ID)
 	a.PasswordSet = enc != ""
@@ -120,6 +138,9 @@ func (h *SrClusterHandler) DeployAgent(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
+	if !h.hostInstanceAllowed(c, req.HostInstanceID) {
+		return
+	}
 	id, err := h.eng().StartDeploy(srcluster.DeployOpts{
 		HostInstanceID: req.HostInstanceID,
 		ListenPort:     req.ListenPort,
@@ -136,7 +157,7 @@ func (h *SrClusterHandler) DeployAgent(c *gin.Context) {
 
 func (h *SrClusterHandler) ListAgentDeploys(c *gin.Context) {
 	limit, _ := strconv.Atoi(c.Query("limit"))
-	list, err := h.Store.ListSrAgentDeploys(c.Query("host_instance_id"), limit)
+	list, err := h.Store.ListSrAgentDeploysInTenant(effectiveListTenantID(h.Store, c), c.Query("host_instance_id"), limit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -205,7 +226,7 @@ func (h *SrClusterHandler) StopAgent(c *gin.Context) {
 }
 
 func (h *SrClusterHandler) ListAgentStatus(c *gin.Context) {
-	list, err := h.Store.ListSrAgents()
+	list, err := h.Store.ListSrAgentsInTenant(effectiveListTenantID(h.Store, c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -222,33 +243,100 @@ func (h *SrClusterHandler) ListAgentStatus(c *gin.Context) {
 
 // --- Clusters ---
 
+func (h *SrClusterHandler) enrichSrClusterTenants(list []store.SrCluster) {
+	names := tenantNameMap(h.Store)
+	for i := range list {
+		applyTenantName(names, &list[i].TenantID, &list[i].TenantName)
+	}
+}
+
 func (h *SrClusterHandler) ListClusters(c *gin.Context) {
-	list, err := h.Store.ListSrClusters(c.Query("environment"))
+	list, err := h.Store.ListSrClustersInTenant(effectiveListTenantID(h.Store, c), c.Query("environment"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": list})
+	if list == nil {
+		list = []store.SrCluster{}
+	}
+	h.enrichSrClusterTenants(list)
+	c.JSON(http.StatusOK, gin.H{"data": list, "audit_scope": auditScope(h.Store, c)})
+}
+
+// AssignTenant POST /sr-cluster/clusters/:id/assign-tenant
+func (h *SrClusterHandler) AssignTenant(c *gin.Context) {
+	to, ok := parseAssignTenantID(h.Store, c)
+	if !ok {
+		return
+	}
+	id := c.Param("id")
+	if err := h.Store.AssignSrClusterTenant(id, to); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	_ = h.Store.AppendTenantAudit(to, middleware.UserID(c), "resource.assign", "sr_cluster:"+id)
+	cl, _ := h.Store.GetSrCluster(id)
+	if cl != nil {
+		h.enrichSrClusterTenants([]store.SrCluster{*cl})
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "data": cl})
 }
 
 func (h *SrClusterHandler) GetCluster(c *gin.Context) {
-	cl, err := h.Store.GetSrCluster(c.Param("id"))
+	cl, err := resolveSrClusterInTenant(h.Store, c, c.Param("id"))
 	if err != nil || cl == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "集群不存在"})
 		return
 	}
+	h.enrichSrClusterTenants([]store.SrCluster{*cl})
 	nodes, _ := h.Store.ListSrNodes(cl.ID)
-	c.JSON(http.StatusOK, gin.H{"data": gin.H{"cluster": cl, "nodes": nodes}})
+	eng := h.eng()
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{
+		"cluster":     cl,
+		"nodes":       nodes,
+		"instance":    eng.LinkedInstance(cl, nodes),
+		"monitor_job": eng.ClusterMonitor(cl, nodes),
+	}})
+}
+
+// SyncRegistry 手动同步集群到配置中心：登记/关联资源实例，并同步监控目标注册。
+func (h *SrClusterHandler) SyncRegistry(c *gin.Context) {
+	cl, err := h.Store.GetSrClusterInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
+	if err != nil || cl == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "集群不存在"})
+		return
+	}
+	res := h.eng().SyncRegistry(cl, nil, middleware.Username(c), true)
+	c.JSON(http.StatusOK, gin.H{"data": res})
+}
+
+// GetClusterLive 节点实时角色/存活/版本（SHOW PROC）；FE 不可达时返回空 nodes 与原因，不报错。
+func (h *SrClusterHandler) GetClusterLive(c *gin.Context) {
+	cl, err := h.Store.GetSrClusterInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
+	if err != nil || cl == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "集群不存在"})
+		return
+	}
+	live, removed, err := h.eng().ClusterLive(c.Request.Context(), cl)
+	removedOut := make([]gin.H, 0, len(removed))
+	for _, n := range removed {
+		removedOut = append(removedOut, gin.H{"id": n.ID, "host": n.Host, "component": n.Component})
+	}
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"data": gin.H{"nodes": gin.H{}, "removed_nodes": removedOut}, "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"nodes": live, "removed_nodes": removedOut}})
 }
 
 func (h *SrClusterHandler) CreateCluster(c *gin.Context) {
 	var req struct {
 		store.SrCluster
-		FePassword         string         `json:"fe_password"`
-		Nodes              []store.SrNode `json:"nodes"`
-		InitNow            bool           `json:"init_now"`
-		RegisterExisting   bool           `json:"register_existing"`
-		SourceMonitorTask  string         `json:"source_monitor_task"`
+		FePassword        string         `json:"fe_password"`
+		Nodes             []store.SrNode `json:"nodes"`
+		InitNow           bool           `json:"init_now"`
+		RegisterExisting  bool           `json:"register_existing"`
+		SourceMonitorTask string         `json:"source_monitor_task"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
@@ -349,6 +437,21 @@ func (h *SrClusterHandler) CreateCluster(c *gin.Context) {
 		}
 		cl.FePasswordEnc = enc
 	}
+	var warnings []string
+	if req.RegisterExisting {
+		diffs, err := h.eng().ProbeAndAlignFERoles(c.Request.Context(), &cl, req.Nodes)
+		if err != nil {
+			port := cl.FeQueryPort
+			if port <= 0 {
+				port = 9030
+			}
+			c.JSON(http.StatusBadRequest, gin.H{"message": fmt.Sprintf(
+				"无法连接 FE %s:%d（%v）。请填写正确的 FE 密码，或先在「资源配置 → 实例管理 → StarRocks」登记该集群并填写密码",
+				cl.FeHost, port, err)})
+			return
+		}
+		warnings = append(warnings, diffs...)
+	}
 	if req.RegisterExisting {
 		cl.Status = store.SrClusterReady
 		note := "登记已有集群"
@@ -361,6 +464,7 @@ func (h *SrClusterHandler) CreateCluster(c *gin.Context) {
 			cl.Remark = cl.Remark + "；" + note
 		}
 	}
+	stampTenantID(c, func(tid string) { cl.TenantID = tid })
 	if err := h.Store.CreateSrCluster(&cl); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -405,6 +509,15 @@ func (h *SrClusterHandler) CreateCluster(c *gin.Context) {
 	}
 	cl.FePasswordSet = cl.FePasswordEnc != ""
 	out := gin.H{"cluster": cl, "nodes": req.Nodes}
+	if req.RegisterExisting {
+		res := h.eng().SyncRegistry(&cl, nil, who, true)
+		out["registry"] = res
+		warnings = append(warnings, res.Warnings...)
+		if len(warnings) > 0 {
+			c.JSON(http.StatusOK, gin.H{"data": out, "warning": strings.Join(warnings, "；")})
+			return
+		}
+	}
 	if req.InitNow && !req.RegisterExisting {
 		changeID, err := h.eng().StartClusterInit(cl.ID, who)
 		if err != nil {
@@ -417,7 +530,7 @@ func (h *SrClusterHandler) CreateCluster(c *gin.Context) {
 }
 
 func (h *SrClusterHandler) UpdateCluster(c *gin.Context) {
-	exist, err := h.Store.GetSrCluster(c.Param("id"))
+	exist, err := h.Store.GetSrClusterInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || exist == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "集群不存在"})
 		return
@@ -491,7 +604,12 @@ func (h *SrClusterHandler) UpdateCluster(c *gin.Context) {
 }
 
 func (h *SrClusterHandler) DeleteCluster(c *gin.Context) {
-	if err := h.Store.DeleteSrCluster(c.Param("id")); err != nil {
+	exist, err := h.Store.GetSrClusterInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
+	if err != nil || exist == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "集群不存在"})
+		return
+	}
+	if err := h.Store.DeleteSrCluster(exist.ID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
@@ -501,6 +619,10 @@ func (h *SrClusterHandler) DeleteCluster(c *gin.Context) {
 // --- Nodes ---
 
 func (h *SrClusterHandler) ListNodes(c *gin.Context) {
+	if cl, err := resolveSrClusterInTenant(h.Store, c, c.Param("id")); err != nil || cl == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "集群不存在"})
+		return
+	}
 	list, err := h.Store.ListSrNodes(c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
@@ -511,7 +633,7 @@ func (h *SrClusterHandler) ListNodes(c *gin.Context) {
 
 func (h *SrClusterHandler) CreateNode(c *gin.Context) {
 	clusterID := c.Param("id")
-	cl, err := h.Store.GetSrCluster(clusterID)
+	cl, err := h.Store.GetSrClusterInTenant(clusterID, effectiveListTenantID(h.Store, c))
 	if err != nil || cl == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "集群不存在"})
 		return
@@ -601,6 +723,10 @@ func (h *SrClusterHandler) CreateNode(c *gin.Context) {
 }
 
 func (h *SrClusterHandler) DeleteNode(c *gin.Context) {
+	if n, err := h.Store.GetSrNode(c.Param("nodeId")); err != nil || n == nil || n.ClusterID != c.Param("id") {
+		c.JSON(http.StatusNotFound, gin.H{"message": "节点不存在"})
+		return
+	}
 	if err := h.Store.DeleteSrNode(c.Param("nodeId")); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -612,7 +738,7 @@ func (h *SrClusterHandler) DeleteNode(c *gin.Context) {
 
 func (h *SrClusterHandler) ListChanges(c *gin.Context) {
 	limit, _ := strconv.Atoi(c.Query("limit"))
-	list, err := h.Store.ListSrChanges(c.Query("cluster_id"), limit)
+	list, err := h.Store.ListSrChangesInTenant(effectiveListTenantID(h.Store, c), c.Query("cluster_id"), limit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -724,7 +850,7 @@ func (h *SrClusterHandler) PrecheckAddNode(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
-	cl, err := h.Store.GetSrCluster(c.Param("id"))
+	cl, err := h.Store.GetSrClusterInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || cl == nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "集群不存在"})
 		return
@@ -764,7 +890,7 @@ func (h *SrClusterHandler) GetConfigs(c *gin.Context) {
 }
 
 func (h *SrClusterHandler) PreviewConfigs(c *gin.Context) {
-	cl, err := h.Store.GetSrCluster(c.Param("id"))
+	cl, err := h.Store.GetSrClusterInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || cl == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "集群不存在"})
 		return
@@ -783,7 +909,7 @@ func (h *SrClusterHandler) PreviewConfigs(c *gin.Context) {
 }
 
 func (h *SrClusterHandler) PutNodeConfig(c *gin.Context) {
-	cl, err := h.Store.GetSrCluster(c.Param("id"))
+	cl, err := h.Store.GetSrClusterInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || cl == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "集群不存在"})
 		return
@@ -805,13 +931,14 @@ func (h *SrClusterHandler) PutNodeConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
+	who := middleware.Username(c)
 	if strings.TrimSpace(body) == "" {
 		_ = h.Store.DeleteSrNodeConfig(n.ID)
 		c.JSON(http.StatusOK, gin.H{"ok": true, "cleared": true})
 		return
 	}
 	if err := h.Store.UpsertSrNodeConfig(&store.SrNodeConfig{
-		NodeID: n.ID, Content: body, UpdatedBy: middleware.Username(c),
+		NodeID: n.ID, Content: body, UpdatedBy: who,
 	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -829,7 +956,7 @@ func (h *SrClusterHandler) PutNodeConfig(c *gin.Context) {
 }
 
 func (h *SrClusterHandler) PutConfigs(c *gin.Context) {
-	cl, err := h.Store.GetSrCluster(c.Param("id"))
+	cl, err := h.Store.GetSrClusterInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || cl == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "集群不存在"})
 		return
@@ -879,6 +1006,278 @@ func (h *SrClusterHandler) StartConfigApply(c *gin.Context) {
 	_ = c.ShouldBindJSON(&req)
 	id, err := h.eng().StartConfigApply(c.Param("id"), middleware.Username(c), srcluster.ConfigApplyOpts{
 		Roles: req.Roles, NodeIDs: req.NodeIDs, Restart: req.Restart,
+	})
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"change_id": id}})
+}
+
+// clusterNode 取路径 :id / :nodeId 对应的集群与节点；失败时已写响应。
+func (h *SrClusterHandler) clusterNode(c *gin.Context) (*store.SrCluster, *store.SrNode, bool) {
+	cl, err := h.Store.GetSrClusterInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
+	if err != nil || cl == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "集群不存在"})
+		return nil, nil, false
+	}
+	n, err := h.Store.GetSrNode(c.Param("nodeId"))
+	if err != nil || n == nil || n.ClusterID != cl.ID {
+		c.JSON(http.StatusNotFound, gin.H{"message": "节点不存在"})
+		return nil, nil, false
+	}
+	return cl, n, true
+}
+
+// GetRemoteConf 读取节点远端当前 fe.conf / be.conf（只读）。
+func (h *SrClusterHandler) GetRemoteConf(c *gin.Context) {
+	cl, n, ok := h.clusterNode(c)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
+	defer cancel()
+	path, resp, err := h.eng().ReadRemoteConf(ctx, cl, n)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{
+		"node_id": n.ID, "remote_path": path, "exists": resp.Exists,
+		"content": resp.Content, "sha256": resp.SHA256, "mtime": resp.MTime,
+	}})
+}
+
+// ConfDiff 节点配置对比：base（远端 / 最近下发 / 指定版本）→ target（编辑区正文或已保存草稿渲染结果）。
+func (h *SrClusterHandler) ConfDiff(c *gin.Context) {
+	cl, n, ok := h.clusterNode(c)
+	if !ok {
+		return
+	}
+	var req struct {
+		Base    string  `json:"base"` // remote | applied
+		Content *string `json:"content"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	var target string
+	if req.Content != nil {
+		full, err := srcluster.RenderEditableConf(cl, n, *req.Content)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+			return
+		}
+		target = full
+	} else {
+		_, full, _, err := srcluster.MaterializeConf(h.Store, cl, n)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+			return
+		}
+		target = full
+	}
+
+	var baseLabel, baseContent string
+	var drift gin.H
+	switch strings.ToLower(strings.TrimSpace(req.Base)) {
+	case "", "remote":
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
+		defer cancel()
+		_, resp, err := h.eng().ReadRemoteConf(ctx, cl, n)
+		if err != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"message": "读取远端配置失败: " + err.Error()})
+			return
+		}
+		baseContent = resp.Content
+		baseLabel = "远端当前文件"
+		if !resp.Exists {
+			baseLabel = "远端当前文件（不存在）"
+		}
+		if applied, err := h.Store.LatestSrConfRevision(n.ID, store.SrConfRevApplied); err == nil && applied != nil {
+			keys := srcluster.ConfKeyDiff(applied.Content, resp.Content)
+			drift = gin.H{
+				"detected": len(keys) > 0, "keys": keys,
+				"applied_at": applied.CreatedAt, "change_id": applied.ChangeID, "revision_id": applied.ID,
+			}
+		}
+	case "applied":
+		rev, err := h.Store.LatestSrConfRevision(n.ID, store.SrConfRevApplied)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+			return
+		}
+		if rev == nil {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "该节点尚无平台下发记录"})
+			return
+		}
+		baseContent = rev.Content
+		baseLabel = "最近一次下发（" + rev.CreatedAt + "）"
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"message": "base 须为 remote 或 applied"})
+		return
+	}
+	lines := srcluster.ConfLineDiff(baseContent, target)
+	added, deleted := srcluster.ConfLineStats(lines)
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{
+		"base_label": baseLabel, "base_content": baseContent, "target_content": target,
+		"keys": srcluster.ConfKeyDiff(baseContent, target), "lines": lines,
+		"added": added, "deleted": deleted, "drift": drift,
+	}})
+}
+
+// ConfPatch 同角色批量下发：源节点用编辑区全文，其他勾选节点只应用公共参数改动。dry_run 只返回计划。
+func (h *SrClusterHandler) ConfPatch(c *gin.Context) {
+	var req struct {
+		SourceNodeID string   `json:"source_node_id"`
+		Content      string   `json:"content"`
+		NodeIDs      []string `json:"node_ids"`
+		Restart      bool     `json:"restart"`
+		DryRun       bool     `json:"dry_run"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+	defer cancel()
+	if req.DryRun {
+		plan, err := h.eng().PlanConfPatch(ctx, c.Param("id"), req.SourceNodeID, req.Content, req.NodeIDs)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"data": plan})
+		return
+	}
+	id, err := h.eng().ApplyConfPatch(ctx, c.Param("id"), middleware.Username(c), req.SourceNodeID, req.Content, req.NodeIDs, req.Restart)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"change_id": id}})
+}
+
+// ConfHistory 节点下发记录：每次下发（config_apply / config_rollback 等）合并为一行「修改前 → 修改后」。
+func (h *SrClusterHandler) ConfHistory(c *gin.Context) {
+	_, n, ok := h.clusterNode(c)
+	if !ok {
+		return
+	}
+	revs, err := h.Store.ListSrConfApplyRevisions(n.ID, store.SrConfRevKeepPerNode)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "读取下发记录失败（请确认已执行 tbl_sr_conf_revisions 建表 SQL）: " + err.Error()})
+		return
+	}
+	type entry struct {
+		key           string
+		before, after *store.SrConfRevision
+	}
+	var order []*entry
+	byKey := map[string]*entry{}
+	for i := range revs {
+		r := &revs[i]
+		k := r.ChangeID
+		if k == "" {
+			k = "rev:" + r.ID
+		}
+		en := byKey[k]
+		if en == nil {
+			en = &entry{key: k}
+			byKey[k] = en
+			order = append(order, en)
+		}
+		if r.Kind == store.SrConfRevBeforeApply {
+			en.before = r
+		} else {
+			en.after = r
+		}
+	}
+	changeTypes := map[string]string{}
+	out := make([]gin.H, 0, len(order))
+	for _, en := range order {
+		if en.after == nil {
+			continue
+		}
+		item := gin.H{
+			"change_id": en.after.ChangeID, "created_at": en.after.CreatedAt, "created_by": en.after.CreatedBy,
+			"after_revision_id": en.after.ID, "before_revision_id": "", "keys": []srcluster.ConfKeyChange{},
+			"added": 0, "deleted": 0, "change_type": "",
+		}
+		if cid := en.after.ChangeID; cid != "" {
+			t, ok := changeTypes[cid]
+			if !ok {
+				if ch, err := h.Store.GetSrChange(cid); err == nil && ch != nil {
+					t = ch.Type
+				}
+				changeTypes[cid] = t
+			}
+			item["change_type"] = t
+		}
+		if en.before != nil {
+			item["before_revision_id"] = en.before.ID
+			item["keys"] = srcluster.ConfKeyDiff(en.before.Content, en.after.Content)
+			item["added"], item["deleted"] = srcluster.ConfLineStats(srcluster.ConfLineDiff(en.before.Content, en.after.Content))
+		}
+		out = append(out, item)
+	}
+	c.JSON(http.StatusOK, gin.H{"data": out})
+}
+
+// ConfRevisionDiff GET /clusters/:id/conf-revision-diff?from=&to= 两个版本之间的差异。
+func (h *SrClusterHandler) ConfRevisionDiff(c *gin.Context) {
+	load := func(id string) (*store.SrConfRevision, bool) {
+		rev, err := h.Store.GetSrConfRevision(strings.TrimSpace(id))
+		if err != nil || rev == nil || rev.ClusterID != c.Param("id") {
+			c.JSON(http.StatusNotFound, gin.H{"message": "配置版本不存在"})
+			return nil, false
+		}
+		return rev, true
+	}
+	from, ok := load(c.Query("from"))
+	if !ok {
+		return
+	}
+	to, ok := load(c.Query("to"))
+	if !ok {
+		return
+	}
+	lines := srcluster.ConfLineDiff(from.Content, to.Content)
+	added, deleted := srcluster.ConfLineStats(lines)
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{
+		"base_label": "修改前（" + from.CreatedAt + "）", "base_content": from.Content, "target_content": to.Content,
+		"keys": srcluster.ConfKeyDiff(from.Content, to.Content), "lines": lines,
+		"added": added, "deleted": deleted,
+	}})
+}
+
+func (h *SrClusterHandler) GetConfRevision(c *gin.Context) {
+	rev, err := h.Store.GetSrConfRevision(c.Param("rid"))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	if rev == nil || rev.ClusterID != c.Param("id") {
+		c.JSON(http.StatusNotFound, gin.H{"message": "配置版本不存在"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": rev})
+}
+
+func (h *SrClusterHandler) StartConfigRollback(c *gin.Context) {
+	var req struct {
+		NodeID     string `json:"node_id"`
+		RevisionID string `json:"revision_id"`
+		ChangeID   string `json:"change_id"`
+		Restart    bool   `json:"restart"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	id, err := h.eng().StartConfigRollback(c.Param("id"), middleware.Username(c), srcluster.ConfigRollbackOpts{
+		NodeID: req.NodeID, RevisionID: req.RevisionID, ChangeID: req.ChangeID, Restart: req.Restart,
 	})
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})

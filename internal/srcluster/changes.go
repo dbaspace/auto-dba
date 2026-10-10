@@ -36,6 +36,7 @@ func (e *Engine) StartUpgrade(clusterID, targetReleaseID, operator string) (stri
 	if err != nil {
 		return "", err
 	}
+	nodes = activeNodes(nodes)
 	if len(nodes) == 0 {
 		return "", fmt.Errorf("无节点")
 	}
@@ -307,6 +308,9 @@ func (e *Engine) StartRestartNode(clusterID, nodeID, operator string) (string, e
 	if err != nil || n == nil || n.ClusterID != clusterID {
 		return "", fmt.Errorf("节点不存在")
 	}
+	if n.Status == store.SrNodeDecommissioning {
+		return "", errNodeDecommissioning
+	}
 	ch := &store.SrChange{ClusterID: clusterID, Type: store.SrChangeRestart, Status: store.SrChangePending, CreatedBy: operator}
 	if err := e.Store.CreateSrChange(ch); err != nil {
 		return "", err
@@ -335,6 +339,9 @@ func (e *Engine) startNodePower(clusterID, nodeID, operator, action string) (str
 	n, err := e.Store.GetSrNode(nodeID)
 	if err != nil || n == nil || n.ClusterID != clusterID {
 		return "", fmt.Errorf("节点不存在")
+	}
+	if n.Status == store.SrNodeDecommissioning {
+		return "", errNodeDecommissioning
 	}
 	if strings.TrimSpace(n.AgentID) == "" {
 		return "", fmt.Errorf("节点未绑定 agent_id")
@@ -375,6 +382,9 @@ func (e *Engine) StartRemoveNode(clusterID, nodeID, operator string, forceDropBE
 		if forceDropBE {
 			typ = store.SrChangeRemoveBE
 		} else {
+			if n.Status == store.SrNodeDecommissioning {
+				return "", fmt.Errorf("该 BE 已在下线中（DECOMMISSION 迁移 tablet），无需重复执行；如需中止请走工单「恢复节点」")
+			}
 			typ = store.SrChangeDecommissionBE
 		}
 	} else {
@@ -399,17 +409,12 @@ func (e *Engine) StartRemoveNode(clusterID, nodeID, operator string, forceDropBE
 		add("drop_follower_"+n.ID, "DROP FOLLOWER")
 		add("stop_node_"+n.ID, "停止 FE")
 		add("verify_frontends", "SHOW PROC frontends")
-	} else if forceDropBE {
-		add("drop_backend_"+n.ID, "DROP BACKEND")
-		add("stop_node_"+n.ID, "停止 BE")
-		add("verify_backends", "SHOW PROC backends")
 	} else {
-		add("decommission_be_"+n.ID, "DECOMMISSION BACKEND")
-		add("stop_node_"+n.ID, "停止 BE（下线完成后）")
-		add("verify_backends", "SHOW PROC backends")
+		for _, s := range beRemoveSteps(n.ID, forceDropBE) {
+			add(s[0], s[1])
+		}
 	}
 	add("finalize", "完成")
-	_ = cl
 	go e.runChange(ch.ID)
 	return ch.ID, nil
 }
@@ -434,6 +439,7 @@ func (e *Engine) StartConfigApply(clusterID, operator string, opts ConfigApplyOp
 	if err != nil {
 		return "", err
 	}
+	nodes = activeNodes(nodes)
 	if len(nodes) == 0 {
 		return "", fmt.Errorf("无节点")
 	}
@@ -494,6 +500,17 @@ func (e *Engine) StartConfigApply(clusterID, operator string, opts ConfigApplyOp
 		id = strings.TrimSpace(id)
 		if id != "" {
 			nodeFilter[id] = true
+		}
+	}
+	if len(nodeFilter) > 0 {
+		pickedRoles := map[string]bool{}
+		for _, n := range nodes {
+			if nodeFilter[n.ID] {
+				pickedRoles[strings.ToLower(n.Component)] = true
+			}
+		}
+		if len(pickedRoles) > 1 {
+			return "", fmt.Errorf("只能同时下发同一角色的节点，请分别下发 FE 与 BE")
 		}
 	}
 

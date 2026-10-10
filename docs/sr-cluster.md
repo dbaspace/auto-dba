@@ -14,6 +14,7 @@
 | 重新初始化 | `cluster_reinit` |
 | 升级 | `upgrade`（建单前须 precheck 通过） |
 | 下线节点 | `remove_node` |
+| 恢复节点（撤销 BE 在线缩容） | `restore_node`（建单时校验该 BE 仍处于下线状态，见 §9.2） |
 
 启停 / 重启 / 配置下发仍可直连变更 API。审批人：`assigned_to` 或全局 `sync_default_approver`，并受 `issue_global_approver_whitelist` 约束；两者都为空时建单返回 400「请选择审批人」。
 
@@ -155,7 +156,8 @@ flowchart TB
 | POST | `/v1/sr/precheck` | 分角色预检。`role=fe\|be`；返回 `{ok, items[]}` |
 | POST | `/v1/sr/disk/init` | BE：`device`、`mount_point=/data`、`fstype=xfs`、`persist_fstab`；校验非系统盘；`auto=true` 时忽略 `device`，按数据目录三条规则自动处理 |
 | POST | `/v1/sr/fs/ensure` | `mkdir -p` 路径列表 |
-| POST | `/v1/sr/file/put` | 下发 conf/unit（先写 `.new` 再 rename） |
+| POST | `/v1/sr/file/put` | 下发 conf/unit（先写 `.new` 再 rename）。`backup=true` 时覆盖前把旧文件复制为 `<path>.bak.<yyyyMMddHHmmss.SSS>`（每个文件保留最近 10 份），并回传 `previous_exists`、`previous_content`、`previous_sha256`、`backup_path` |
+| POST | `/v1/sr/file/get` | 只读：`path` 必须是绝对路径且以 `/conf/fe.conf` 或 `/conf/be.conf` 结尾，文件不超过 1MB；返回 `{exists, content, sha256, mtime}`。旧版 Agent 无此接口（404），平台提示「Agent 版本过低」 |
 | POST | `/v1/sr/artifact/install` | 签名 URL 下载 + sha256 + 解压到 `target_dir`（异步 job） |
 | POST | `/v1/sr/systemd/install` | 写入 unit + `daemon-reload` |
 | POST | `/v1/sr/systemd/ctrl` | `action=start\|stop\|restart\|enable\|status\|reset-failed\|cat`，`unit=fe-9030` 等 |
@@ -315,12 +317,33 @@ agents_health
 | FE 子角色 `fe_role` | `leader`（只读观测）/ `follower` / `observer` | 新增时选 follower（或后续 observer）；**不可指定部署为 leader**，由选举产生 |
 | BE | 无子角色 | `ADD/DECOMMISSION/DROP BACKEND` |
 
+**节点表的实时角色**：集群详情按角色分两张表，与 `SHOW PROC '/frontends'`、`'/backends'` 对应，各表只放该角色有意义的列：
+- **Frontend（FE）**：角色 / Host / ReplayedJournalId / LastHeartbeat / StartTime / 状态 / 操作（中间三列取自 `/frontends` 同名列，原样展示）
+- **Backend（BE）**：Host / 数据目录 / CPU核数 / 存储 / Tablet数 / 状态 / 操作（分页，默认每页 20，可选 50 / 100）
+
+Host、状态、操作为两表共用；Host 悬停显示软件路径，首 FE 在 Host 旁以「首FE」标签标出。版本已在集群信息中展示，节点表不再重复。FE「角色」列取自实时 `Role`（LEADER 金色、FOLLOWER 蓝色、OBSERVER 灰色）；实时角色与登记的 `fe_role` 不一致时，鼠标悬停提示登记值。「状态」列在登记状态之外，`Alive=false` 额外显示「离线」；BE `SystemDecommissioned=true` 时显示橙色「下线中」并附剩余 tablet，操作列只保留「恢复」。FE 不可达或节点未出现在结果中时，回退显示登记的 `fe_role`（置灰，悬停可看原因）。数据来自 `GET /api/v1/sr-cluster/clusters/:id/live`，打开集群时自动加载，可点「刷新」手动刷新。该接口不回写 `fe_role`；唯一的写操作是删除已缩容完成的 BE 登记（§9.2）。「首FE」指初始化时第一个启动的 FE（`is_primary_fe`），不代表当前 Leader。
+
+**BE 资源列**：同一接口从 `SHOW PROC '/backends'` 读取 BE 的「CPU核数」（`CpuCores`）、「存储」和「Tablet数」（`TabletNum`），字符串原样展示。存储按数据目录所在磁盘统计，显示为 `总量（已用 使用率）`，如 `99.951 GB（已用 37.02%）`：总量取 `TotalCapacity`，使用率取 `UsedPct`（含非 StarRocks 文件；≥85% 橙色、≥95% 红色）；悬停显示 StarRocks 数据占用 `DataUsedCapacity` 与可用 `AvailCapacity`。`DataTotalCapacity` 只是数据占用加可用，不代表磁盘大小，不展示。FE 行、未出现在 `/backends` 中的 BE、FE 不可达或旧版本缺列时显示 `—`。资源值不落库，每次刷新重新读取。
+
+**查询开销**：节点表不轮询，只在打开集群、点「刷新」时请求一次。每次请求只解析一次 FE 凭据、建一个 FE 连接，`/frontends` 与 `/backends` 各查一次；缩容收尾（§9.2）复用同一份 `/backends` 结果，不再单独查询。`SHOW PROC '/backends'` 在 FE 内存中完成，开销随 BE 数线性增长，几百个 BE 仍为毫秒级。
+
+**FE 账号密码来源**：集群初装时 root 无密码，后期上密码后由「资源配置 → 实例管理 → StarRocks」中的实例提供。平台连接 FE（SHOW PROC、ADD/DROP、升级校验等）时：
+- 关联实例设置了密码：用实例的账号密码。
+- 否则：用集群自身保存的 `fe_user` / FE 密码（初装为空）。
+
+关联规则（不改表结构）：
+1. 实例标签含 `sr-cluster=<集群ID>`。
+2. 没有该标签时，按实例 host 匹配：多个地址逗号分隔，域名逐个 DNS 解析；解析出的 IP 等于任一 FE 节点或 `fe_host`，且端口等于 `fe_query_port`。多个实例命中时优先已设密码的。
+
+集群详情的「资源实例」一项显示关联结果（标签关联或按主机匹配）。连不上 FE 时，节点表上方提示错误原因和实例管理入口。
+
 ### 操作对照
 
 | 操作 | FE | BE |
 |------|----|----|
 | 新增 | 奇数约束；`ADD FOLLOWER` + `start_fe.sh --helper` | 盘初始化 → systemctl → `ADD BACKEND` |
-| 删除 | `DROP FOLLOWER "host:9010"`；删后仍奇数 | 默认 `DECOMMISSION`；危险 `DROP BACKEND` |
+| 删除 | `DROP FOLLOWER "host:9010"`；删后仍奇数 | 默认 `DECOMMISSION`（不停服，可恢复）；危险 `DROP BACKEND`（不可恢复），见 §9.2 |
+| 恢复 | — | 下线中可 `CANCEL DECOMMISSION BACKEND "host:heartbeat_port"`（工单 `restore_node`） |
 | 重启 | Agent `systemd/ctrl restart`（unit=`fe-{http_port}`） | 同左（`be-{heartbeat_port}`） |
 | 状态 | `SHOW PROC '/frontends'` | `SHOW PROC '/backends'` |
 
@@ -562,10 +585,28 @@ flowchart TB
 
 | 模式 | SQL | 说明 |
 |------|-----|------|
-| **推荐** | `ALTER SYSTEM DECOMMISSION BACKEND "host:port";` | 慢下线，迁移 tablet，尽量不影响集群；完成后停进程再清理 |
-| **危险** | `ALTER SYSTEM DROP BACKEND "host:port";` | 立即摘除，影响服务；须二次确认 + 独立权限 |
+| **推荐（在线缩容）** | `ALTER SYSTEM DECOMMISSION BACKEND "host:heartbeat_port";` | FE 迁移 tablet，迁完后自动把该 BE 移出集群；迁移期间可恢复 |
+| **危险** | `ALTER SYSTEM DROP BACKEND "host:heartbeat_port";` | 立即摘除，不可恢复；工单里勾选「强制 DROP」 |
 
-下线进度用 `SHOW PROC '/backends'` 观察。
+两种模式都**只执行 SQL，不停止 BE 进程**，也不要求其余 BE 全部存活。主机上的 BE 进程、数据目录由运维自行回收。
+
+**变更步骤**：
+- `decommission_be`：`decommission_be_<id>`（DECOMMISSION）→ `verify_decommission_<id>`（`SHOW PROC '/backends'` 中该 BE `SystemDecommissioned=true`，或已迁完不在结果中）→ `finalize`。节点状态变为「下线中」（`decommissioning`）。
+- `remove_be`：`drop_backend_<id>`（DROP）→ `verify_dropped_<id>`（1 分钟内确认已不在 `SHOW PROC '/backends'`）→ `finalize`。
+
+**恢复**（仅 DECOMMISSION 且尚未迁完）：节点表中 BE 实时 `SystemDecommissioned=true` 时显示「恢复」，提交工单 `restore_node`。建单与执行前都会查 `SHOW PROC '/backends'`：
+- 该 BE 已不在结果中：拒绝，「在线缩容已完成，节点已移出集群，无法恢复」。
+- 在结果中但 `SystemDecommissioned=false`：拒绝，「该 BE 未处于下线状态」。
+
+`recommission_be` 步骤：（BE 进程未运行时先 `start_node_<id>`）→ `cancel_decommission_<id>`（`CANCEL DECOMMISSION BACKEND "host:heartbeat_port"`）→ `verify_recommission_<id>`（3 分钟内 `SystemDecommissioned=false` 且 `Alive=true`）→ `finalize`。成功后节点状态恢复为「运行中」，并重新同步监控目标。
+
+**自动删除登记**：BE 最近一次生命周期变更（扩容 / 下线 / DROP / 恢复）是成功的 DECOMMISSION 或 DROP，且已不在 `SHOW PROC '/backends'` 时，平台删除该节点登记，节点表不再展示，并在对应变更日志追加「缩容完成：BE host 已不在 SHOW PROC '/backends'，已移除节点登记」。触发点：
+- 缩容变更收尾时（DROP 通常当场删除；DECOMMISSION 若已迁完也当场删除）；
+- 打开集群 / 点「刷新」调用 `GET /sr-cluster/clusters/:id/live` 时，返回的 `removed_nodes` 列出本次删除的节点，页面提示并刷新节点表。
+
+集群有进行中的变更、或 `SHOW PROC '/backends'` 查询失败 / 无行时不删除。
+
+**下线中的 BE**：不可启停 / 重启 / 重复 DECOMMISSION（可强制 DROP）；不参与升级（含预检、版本校验）和配置下发；`verify_backends` 对其不做存活与版本校验。
 
 ---
 
@@ -589,7 +630,7 @@ flowchart TB
 |----|------|
 | 文件 | 仅 `fe.conf` / `be.conf` |
 | 远端路径 | `{software_path}/conf/{fe\|be}.conf` |
-| 日维 | 变更类型 `config_apply`：`put_conf_*` →（可选）`restart_node_*` → `finalize` |
+| 日维 | 变更类型 `config_apply`：`put_conf_*` →（可选）`restart_node_*` → `finalize`；回退为 `config_rollback`，步骤相同（见 10.4） |
 | 通道 | Node Agent `POST /v1/sr/file/put` |
 | 锁定 | 草稿**禁止**写 `meta_dir` / `storage_root_path`；下发时追加 `meta_dir={software_path}/meta`、`storage_root_path={data_root}/be/storage` |
 | 节点视图 | 集群「配置」：按节点展示**已解析**参数（非 `{{模板}}`）；可编辑保存节点草稿；勾选节点下发 |
@@ -607,7 +648,16 @@ flowchart TB
 | PUT | `/api/v1/sr-cluster/clusters/:id/configs` | body `{ fe?, be? }` 存集群草稿 |
 | GET | `/api/v1/sr-cluster/clusters/:id/configs/preview` | 各节点已解析 conf + vars |
 | PUT | `/api/v1/sr-cluster/clusters/:id/nodes/:nodeId/config` | 保存节点草稿 `{ content }` |
-| POST | `/api/v1/sr-cluster/clusters/:id/config-apply` | body `{ roles?, node_ids?, restart? }` → `change_id` |
+| POST | `/api/v1/sr-cluster/clusters/:id/config-apply` | body `{ roles?, node_ids?, restart? }` → `change_id`；`node_ids` 跨 FE/BE 时拒绝 |
+| POST | `/api/v1/sr-cluster/clusters/:id/conf-patch` | 同角色批量下发（页面「下发到勾选节点」）。body `{ source_node_id, content, node_ids, restart?, dry_run }`；`dry_run=true` 返回计划 `{ role, base_label, changes, local_keys, nodes[{node_id, host, role, source, content}] }`，否则写各节点草稿并发起 `config_apply` → `change_id` |
+| GET | `/api/v1/sr-cluster/clusters/:id/nodes/:nodeId/conf-remote` | 经 Agent `file/get` 读取节点远端当前 conf |
+| POST | `/api/v1/sr-cluster/clusters/:id/nodes/:nodeId/conf-diff` | body `{ base: remote\|applied, content? }`；`content` 为下发后的可编辑区（缺省用已保存草稿），渲染并追加锁定路径后作为右侧。返回 `{ base_label, base_content, target_content, keys, lines, added, deleted, drift }` |
+| GET | `/api/v1/sr-cluster/clusters/:id/nodes/:nodeId/conf-history` | 节点下发记录：按 `change_id` 合并 `before_apply` + `applied`，每次下发一行 `{ change_id, change_type, created_at, created_by, before_revision_id, after_revision_id, keys, added, deleted }` |
+| GET | `/api/v1/sr-cluster/clusters/:id/conf-revision-diff` | `?from=&to=` 两个版本的差异（查看某次下发的修改前 → 修改后） |
+| GET | `/api/v1/sr-cluster/clusters/:id/conf-revisions/:rid` | 单个版本（含正文） |
+| POST | `/api/v1/sr-cluster/clusters/:id/conf-rollback` | body `{ node_id, revision_id, restart? }`（单节点回退到某版本，页面用于「回退到修改前」）或 `{ change_id, restart? }`（整单回退某次下发）→ `change_id`，变更类型 `config_rollback` |
+| GET | `/api/v1/sr-cluster/clusters/:id/live` | 节点实时角色/存活/版本/下线状态（SHOW PROC）；顺带删除已缩容完成的 BE 登记，返回 `removed_nodes` |
+| POST | `/api/v1/sr-cluster/clusters/:id/sync-registry` | 同步到配置中心：登记/关联资源实例 + 同步监控目标注册，返回 `{ instance, monitor_job, warnings }` |
 
 ```mermaid
 flowchart LR
@@ -619,7 +669,38 @@ flowchart LR
   Apply[config_apply] --> Render
 ```
 
-log4j / 读回现网 / diff UI / 一致性巡检为后续项。
+### 10.4 修改前后对比与回退下发
+
+**版本记录**（表 `tbl_sr_conf_revisions`，每节点保留最近 100 个）：
+
+| 类型 `kind` | 何时写入 | 内容 |
+|------|------|------|
+| `before_apply` | 每次 `ApplyConfToNode` 下发成功后 | Agent 覆盖前回传的远端原文件；首次下发或旧版 Agent 没有 |
+| `applied` | 同上 | 实际写入远端的完整文件（含锁定路径） |
+
+版本表缺失（建表 SQL 未执行）时只打日志，不阻断保存和下发。保存节点草稿不再记版本（旧版本写入的 `kind='draft'` 记录不再展示，可手工清理）。
+
+**差异算法**：参数级差异 `ConfKeyDiff`（忽略注释、空行、顺序）+ 逐行差异 `ConfLineDiff`（LCS，行尾空白与 CRLF 不计）。
+
+**手工改动检测**：仅在下发确认框中，比较「最近一次 `applied` 版本」与远端当前文件的参数差异，不同即判定远端被手工修改（`drift.detected`）并标红。
+
+**同角色下发**（`conf-patch`）：
+
+- 一次只能下发同一角色：页面只允许勾选与当前编辑节点同角色的节点，后端 `PlanConfPatch` 与 `StartConfigApply` 均拒绝混合 FE/BE。
+- 本次改动 = `ConfKeyDiff(修改前, 编辑区)`，修改前取当前节点「远端文件 > 最近一次 applied > 已保存配置」（均去掉锁定行）。
+- 当前节点下发编辑区全文；其他勾选节点在各自已保存配置上 `ConfKeyPatch` 公共改动（新增 / 修改替换最后一次出现，否则追加；删除去掉该键所有非注释行）。`frontend_address`、`priority_networks` 属节点专属，不同步。
+- 流程：`dry_run=true` 取计划 → 确认框逐节点「远端当前 → 下发后」（`conf-diff base=remote content=计划内容`）→ `dry_run=false` 以勾选节点重新计算并写草稿、发起 `config_apply`。
+
+**回退**：`StartConfigRollback` 先校验目标版本可渲染，再把节点草稿改为 `StripLockedDataDirKeys(版本内容)`，然后复用 `put_conf_*` →（可选）`restart_node_*` → `finalize` 步骤下发；整单回退用该变更各节点的 `before_apply` 版本，没有记录的节点跳过，全部没有则拒绝。数据目录项仍按平台锁定值下发。
+
+**页面**（集群「配置」弹窗）：右侧分「编辑 / 下发记录」两个页签。
+
+- 编辑：节点信息 + 编辑区，不读远端。
+- 下发记录：该节点每次下发一行（时间、类型 配置下发 / 配置回退、操作人、改动参数摘要）。「查看修改」展示修改前 → 修改后（参数表 + 逐行差异）；「回退到修改前」确认框展示「远端当前 → 回退后」差异并可勾选重启，无修改前记录（首次下发 / 旧版 Agent）时禁用。
+- 「下发到勾选节点…」：先预演，确认框顶部显示本次改动与不同步的节点专属参数，逐节点展示差异；与远端一致的节点默认不勾选，远端被手工改过的节点标红。
+- 变更详情里 `config_apply` / `config_rollback` 提供「回退本次下发」。
+
+log4j / 一致性巡检为后续项。
 
 ---
 
@@ -633,6 +714,8 @@ log4j / 读回现网 / diff UI / 一致性巡检为后续项。
 - 每个节点只替换 `bin`、`lib`，旧目录备份到 `{software_path}/bak.<backup_suffix>/`（同一升级单共用 `backup_suffix`，存于变更 payload）。重试时若该备份已存在，当前目录另存为 `bak.<suffix>.retry-<时间>/`，**不会覆盖升级前的旧版本备份**。
 
 ### 11.0 升级日志、重试与回滚
+
+**变更页分类**：工作台「变更」页按类型分四个子 Tab，标签带条数：初始化日志（`cluster_init`、`cluster_reinit`）、运行日志（`start_node` / `stop_node` / `restart_node`）、升级日志（`upgrade`、`upgrade_rollback`）、扩缩容日志（`add_fe` / `add_be` / `remove_fe` / `remove_be` / `decommission_be` / `recommission_be`，以及配置下发 `config_apply`、配置回退 `config_rollback`）。切换子 Tab 自动打开该类中失败或执行中的变更（没有则取最新一条）；从其他入口打开某条变更（提交后跳转、工单「查看变更日志」、列表点击）时子 Tab 跟随其分类。集群卡片上原「初始化日志 / 运行日志」按钮已移除。
 
 **步骤日志**：`upgrade_node_*` 按阶段逐行追加并实时落库（停服 → 下载替换 `[replaced]` → 启动 → 已启动），变更页 2 秒轮询可看到进度。启动失败时引擎先 `reset-failed` 再启动，失败后调 Agent `/v1/sr/diag` 采集 `systemctl status`、`journalctl`、`systemctl cat <unit>`（核对 Type / PIDFile / Environment）与 `fe.out`/`be.out` 末尾附在步骤日志中；旧 Agent（无 diag）退回 `systemctl status`。步骤失败时错误**追加**到已有日志末尾（`失败: …`），不再覆盖前面的阶段日志。
 
@@ -738,6 +821,49 @@ update-alternatives --set javac /home/jdk-21.0.4/bin/javac
 2. **从监控目标导入**（推荐）：`GET /monitor-targets/preview?kind=starrocks-fe|starrocks-be`（与 FE 管理同源），按监控任务 / domain 预填 host、环境，以及标签 **`version` / `sr_version` / `starrocks_version`**。登记可不绑定制品 Release（仅写 version）；若设置中已有同号 Release 则自动关联。Agent 仍须手选。无监控目标时可去「配置中心 · 监控目标注册」先录入。
 
 登记后维护：添加节点 / 加入 / 重启 / 下线 / 升级；`ready` 集群不再显示「集群初始化」。
+
+**登记时的 FE 校验**：
+- 保存前先连接 FE，执行 `SHOW PROC '/frontends'`（只读）。表单填了 FE 密码就用表单的；留空则用资源配置中按主机匹配到的 StarRocks 实例的账号密码。
+- 连不上时拒绝保存，并提示填写密码或先到实例管理登记。
+- 连上后按实际角色写入各 FE 的 `fe_role`：OBSERVER 记为 observer，LEADER 和 FOLLOWER 记为 follower（与平台初始化一致，leader 由选举产生）。登记的 FE 与现场不一致时以 warning 提示。
+- 保存成功后自动「同步到配置中心」（见下节）。
+
+#### 同步到配置中心（资源实例 + 监控目标注册）
+
+**触发时机**：
+- `cluster_init`、`cluster_reinit` 成功：登记或关联资源实例，并同步监控目标。
+- `add_fe`、`add_be`、`recommission_be` 成功：同步监控目标。
+- `remove_fe`、`remove_be`、`decommission_be` 成功：移除该节点的监控目标；BE 已移出 `SHOW PROC '/backends'` 时同时删除节点登记（§9.2）。
+- 登记已有集群成功后：同步一次。
+- 集群详情的「同步到配置中心」按钮：手动同步，用于存量集群。
+
+同步结果追加在变更状态消息里；同步失败只提示，不影响变更结果。
+
+**资源实例**（资源配置 → 实例管理 → StarRocks）：
+- 已有匹配实例（规则见 §4）：只补 `sr-cluster=<集群ID>` 标签，不改密码等字段。
+- 没有：新建一条实例：
+  - 名称为集群名；host 为全部 FE，`fe_host` 在前、逗号分隔；端口 `fe_query_port`；账号 `fe_user`；密码为集群当前密码，初装为空，后期在实例管理维护。
+  - 环境按集群 `environment` 匹配（id / code / name），区域取包含该环境的第一个区域。
+  - 标签 `sr-cluster=<id>`、`idc=<环境编码>`。
+
+**监控目标注册**，沿用现有 StarRocks 任务的约定：
+- 任务名为集群名；采集点为环境编码；任务标签 `idc`、`version`，以及 `domain`（取关联实例的域名，是 IP 时不填）。
+- FE 组：`host:8030`（节点 `http_port`，其次 `fe_http_port`），标签 `app=fe-StarRocks`。
+- BE 组：`host:8040`（节点 `http_port`，默认 8040），标签 `app=be-StarRocks`。
+- 模板、scheme、`/metrics`、`1m`、`10s` 用默认值。
+
+定位已有任务，按以下顺序：
+1. 描述含 `sr-cluster=<id>`。
+2. 任务名等于集群名。
+3. 名称含 starrocks，且目标主机属于本集群。
+
+合并规则（只补不改）：
+- 只把 `ready` 节点补进对应组：目标组的端口一致时按端口识别 FE/BE，否则看 `app` 标签。缺少的组新建，组标签缺 `app` 时补上。
+- 任务标签只补缺失的 key；`version` 以平台为准（登记导入会读取它），组上已有的 `version` 标签同步更新。
+- 采集点、间隔等人工设置不动。
+- 下线节点只移除其目标，不删任务。
+
+推导不出的值（如 `domain`、`idc`、采集点）在集群详情「监控任务」中显示「待补充」，需到监控目标注册页手动补充。
 
 ### 12.3 新建向导校验（与 §4 角色模型一致）
 

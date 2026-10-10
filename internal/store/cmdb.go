@@ -15,6 +15,7 @@ import (
 
 type CmdbRelation struct {
 	ID        string `json:"id"`
+	TenantID  string `json:"tenant_id,omitempty"`
 	SrcType   string `json:"src_type"`
 	SrcID     string `json:"src_id"`
 	RelType   string `json:"rel_type"`
@@ -36,6 +37,7 @@ type CmdbTagDef struct {
 	CITypes     []string `json:"ci_types"` // 适用类型；空=全部
 	Scope       string   `json:"scope"`    // general | monitor
 	SortOrder   int      `json:"sort_order"`
+	TenantID    string   `json:"tenant_id,omitempty"`
 	CreatedAt   string   `json:"created_at"`
 	UpdatedAt   string   `json:"updated_at"`
 }
@@ -190,6 +192,10 @@ func (d *DB) AppendCmdbAudit(actor, action, ciType, ciID, source string, before,
 }
 
 func (d *DB) ListCmdbAuditLogs(ciType, ciID, actor, q string, limit, offset int) ([]CmdbAuditLog, error) {
+	return d.ListCmdbAuditLogsInTenant("", ciType, ciID, actor, q, limit, offset)
+}
+
+func (d *DB) ListCmdbAuditLogsInTenant(tenantID, ciType, ciID, actor, q string, limit, offset int) ([]CmdbAuditLog, error) {
 	if limit <= 0 {
 		limit = 50
 	}
@@ -201,6 +207,10 @@ func (d *DB) ListCmdbAuditLogs(ciType, ciID, actor, q string, limit, offset int)
 	}
 	where := []string{"1=1"}
 	args := []any{}
+	if tid := strings.TrimSpace(tenantID); tid != "" {
+		where = append(where, "COALESCE(tenant_id,'')=?")
+		args = append(args, tid)
+	}
 	if t := strings.TrimSpace(ciType); t != "" {
 		where = append(where, "ci_type=?")
 		args = append(args, t)
@@ -247,8 +257,16 @@ func (d *DB) ListCmdbAuditLogs(ciType, ciID, actor, q string, limit, offset int)
 }
 
 func (d *DB) ListCmdbRelations(srcType, srcID, dstType, dstID string) ([]CmdbRelation, error) {
+	return d.ListCmdbRelationsInTenant("", srcType, srcID, dstType, dstID)
+}
+
+func (d *DB) ListCmdbRelationsInTenant(tenantID, srcType, srcID, dstType, dstID string) ([]CmdbRelation, error) {
 	where := []string{"1=1"}
 	args := []any{}
+	if tid := strings.TrimSpace(tenantID); tid != "" {
+		where = append(where, "COALESCE(tenant_id,'')=?")
+		args = append(args, tid)
+	}
 	if t := strings.TrimSpace(srcType); t != "" {
 		where = append(where, "src_type=?")
 		args = append(args, t)
@@ -302,7 +320,13 @@ func (d *DB) CreateCmdbRelation(r *CmdbRelation) error {
 		 VALUES(?,?,?,?,?,?,?,?,?,?)`,
 		r.ID, r.SrcType, r.SrcID, r.RelType, r.DstType, r.DstID, r.Source, r.Remark, r.CreatedAt, r.UpdatedAt,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	if tid := strings.TrimSpace(r.TenantID); tid != "" {
+		return d.AssignTenantID("tbl_cmdb_relations", r.ID, tid)
+	}
+	return nil
 }
 
 func (d *DB) DeleteCmdbRelation(id string) error {
@@ -310,13 +334,29 @@ func (d *DB) DeleteCmdbRelation(id string) error {
 	return err
 }
 
+func (d *DB) DeleteCmdbRelationInTenant(id, tenantID string) error {
+	ok, err := d.rowVisibleInTenant("tbl_cmdb_relations", id, tenantID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return sql.ErrNoRows
+	}
+	return d.DeleteCmdbRelation(id)
+}
+
 func (d *DB) ListCmdbTagDefs(scope string) ([]CmdbTagDef, error) {
-	q := `SELECT id, key, name, values_json, description, required, ci_types_json, scope, sort_order, created_at, updated_at FROM tbl_cmdb_tag_defs`
+	return d.ListCmdbTagDefsInTenant("", scope)
+}
+
+func (d *DB) ListCmdbTagDefsInTenant(tenantID, scope string) ([]CmdbTagDef, error) {
+	q := `SELECT id, key, name, values_json, description, required, ci_types_json, scope, sort_order, created_at, updated_at FROM tbl_cmdb_tag_defs WHERE 1=1`
 	args := []any{}
 	if s := strings.TrimSpace(scope); s != "" {
-		q += ` WHERE scope=?`
+		q += ` AND scope=?`
 		args = append(args, s)
 	}
+	q, args = appendTenantFilter(q, args, tenantID)
 	q += ` ORDER BY sort_order ASC, key ASC`
 	rows, err := d.Query(q, args...)
 	if err != nil {
@@ -377,10 +417,11 @@ func (d *DB) UpsertCmdbTagDef(r *CmdbTagDef) error {
 	if r.Required {
 		req = 1
 	}
+	tcl, targs := tenantClause(r.TenantID)
 	if r.ID != "" {
 		res, err := d.Exec(
-			`UPDATE tbl_cmdb_tag_defs SET key=?, name=?, values_json=?, description=?, required=?, ci_types_json=?, scope=?, sort_order=?, updated_at=? WHERE id=?`,
-			r.Key, r.Name, encodeJSON(r.Values), r.Description, req, encodeJSON(r.CITypes), r.Scope, r.SortOrder, now, r.ID,
+			`UPDATE tbl_cmdb_tag_defs SET key=?, name=?, values_json=?, description=?, required=?, ci_types_json=?, scope=?, sort_order=?, updated_at=? WHERE id=?`+tcl,
+			append([]any{r.Key, r.Name, encodeJSON(r.Values), r.Description, req, encodeJSON(r.CITypes), r.Scope, r.SortOrder, now, r.ID}, targs...)...,
 		)
 		if err != nil {
 			return err
@@ -393,8 +434,8 @@ func (d *DB) UpsertCmdbTagDef(r *CmdbTagDef) error {
 	}
 	// 按 key 更新
 	res, err := d.Exec(
-		`UPDATE tbl_cmdb_tag_defs SET name=?, values_json=?, description=?, required=?, ci_types_json=?, scope=?, sort_order=?, updated_at=? WHERE key=?`,
-		r.Name, encodeJSON(r.Values), r.Description, req, encodeJSON(r.CITypes), r.Scope, r.SortOrder, now, r.Key,
+		`UPDATE tbl_cmdb_tag_defs SET name=?, values_json=?, description=?, required=?, ci_types_json=?, scope=?, sort_order=?, updated_at=? WHERE key=?`+tcl,
+		append([]any{r.Name, encodeJSON(r.Values), r.Description, req, encodeJSON(r.CITypes), r.Scope, r.SortOrder, now, r.Key}, targs...)...,
 	)
 	if err == nil {
 		if n, _ := res.RowsAffected(); n > 0 {
@@ -406,10 +447,16 @@ func (d *DB) UpsertCmdbTagDef(r *CmdbTagDef) error {
 		r.ID = uuid.NewString()
 	}
 	r.CreatedAt, r.UpdatedAt = now, now
+	// tenant_id 必须在 INSERT 时写入：列默认是 default 租户，后置 Assign 会撞 (tenant_id,key) 唯一约束。
+	tid := strings.TrimSpace(r.TenantID)
+	if tid == "" {
+		tid = DefaultTenantID
+		r.TenantID = tid
+	}
 	_, err = d.Exec(
-		`INSERT INTO tbl_cmdb_tag_defs(id, key, name, values_json, description, required, ci_types_json, scope, sort_order, created_at, updated_at)
-		 VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
-		r.ID, r.Key, r.Name, encodeJSON(r.Values), r.Description, req, encodeJSON(r.CITypes), r.Scope, r.SortOrder, r.CreatedAt, r.UpdatedAt,
+		`INSERT INTO tbl_cmdb_tag_defs(id, key, name, values_json, description, required, ci_types_json, scope, sort_order, created_at, updated_at, tenant_id)
+		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+		r.ID, r.Key, r.Name, encodeJSON(r.Values), r.Description, req, encodeJSON(r.CITypes), r.Scope, r.SortOrder, r.CreatedAt, r.UpdatedAt, tid,
 	)
 	return err
 }
@@ -617,7 +664,12 @@ func (d *DB) ListCmdbSyncRuns(jobID string, limit int) ([]CmdbSyncRun, error) {
 
 // EnsureDefaultCmdbTagDefs 从监控标签字典种子同步一批通用标签定义。
 func (d *DB) EnsureDefaultCmdbTagDefs() error {
-	exist, err := d.ListCmdbTagDefs("")
+	return d.EnsureDefaultCmdbTagDefsForTenant("")
+}
+
+// EnsureDefaultCmdbTagDefsForTenant 租户无任何标签定义时写入内置默认集。
+func (d *DB) EnsureDefaultCmdbTagDefsForTenant(tenantID string) error {
+	exist, err := d.ListCmdbTagDefsInTenant(tenantID, "")
 	if err != nil {
 		return err
 	}
@@ -632,6 +684,7 @@ func (d *DB) EnsureDefaultCmdbTagDefs() error {
 		{ID: uuid.NewString(), Key: "env", Name: "环境标签", Values: []string{}, Scope: "monitor", SortOrder: 4, CreatedAt: now, UpdatedAt: now},
 	}
 	for i := range defs {
+		defs[i].TenantID = tenantID
 		if err := d.UpsertCmdbTagDef(&defs[i]); err != nil {
 			return fmt.Errorf("seed tag %s: %w", defs[i].Key, err)
 		}

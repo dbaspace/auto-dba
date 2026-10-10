@@ -17,56 +17,59 @@ import (
 )
 
 type Deps struct {
-	Cfg       *config.Config
-	Auth      *handler.AuthHandler
-	Inst      *handler.InstanceHandler
-	DB        *handler.DatabaseHandler
-	Region    *handler.RegionHandler
-	Env       *handler.EnvironmentHandler
-	Connector *handler.ConnectorHandler
-	Args      *handler.GlobalArgHandler
-	Ticket    *handler.TicketHandler
-	CreateDB  *handler.CreateDBHandler
-	Account   *handler.AccountHandler
-	Review    *handler.ReviewRuleHandler
-	CDC       *handler.CDCHandler
-	Slot      *handler.SlotHandler
-	Migration *handler.MigrationHandler
-	Flashback *handler.FlashbackHandler
-	Archive   *handler.ArchiveHandler
-	Kafka     *handler.KafkaHandler
-	Redis     *handler.RedisHandler // Redis 工单；为 nil 时不注册路由
-	Insight   *handler.InsightHandler
-	Session   *handler.SessionHandler
-	PgSpace   *handler.PgSpaceHandler
-	RedisRDB  *handler.RedisRDBHandler
-	AWR       *handler.AWRHandler
+	Cfg                *config.Config
+	Auth               *handler.AuthHandler
+	Inst               *handler.InstanceHandler
+	DB                 *handler.DatabaseHandler
+	Region             *handler.RegionHandler
+	Env                *handler.EnvironmentHandler
+	Connector          *handler.ConnectorHandler
+	Args               *handler.GlobalArgHandler
+	Ticket             *handler.TicketHandler
+	CreateDB           *handler.CreateDBHandler
+	Account            *handler.AccountHandler
+	Review             *handler.ReviewRuleHandler
+	CDC                *handler.CDCHandler
+	Slot               *handler.SlotHandler
+	Migration          *handler.MigrationHandler
+	Flashback          *handler.FlashbackHandler
+	Archive            *handler.ArchiveHandler
+	Kafka              *handler.KafkaHandler
+	Redis              *handler.RedisHandler // Redis 工单；为 nil 时不注册路由
+	Insight            *handler.InsightHandler
+	Session            *handler.SessionHandler
+	PgSpace            *handler.PgSpaceHandler
+	RedisRDB           *handler.RedisRDBHandler
+	AWR                *handler.AWRHandler
 	SqlInsightAnalysis *handler.SqlInsightAnalysisHandler
 	DbMonitor          *handler.DbMonitorHandler
 	DbMonitorProxy     gin.HandlerFunc // mode=remote 时反向代理到独立 db-monitor 服务
 	Multilang          *handler.MultilangHandler
-	External       *handler.ExternalHandler
-	MonitorTarget  *handler.MonitorTargetHandler
-	MonitorTag     *handler.MonitorLabelTagHandler
-	FeAdmin        *handler.FeAdminHandler
-	DsAdmin        *handler.DsAdminHandler
-	OSSSettings    *handler.OSSSettingsHandler
-	OSSUpload      *handler.OSSUploadHandler
-	StarRocksWeb   *handler.StarRocksWebHandler
-	HA             *handler.HAHandler
-	Proxy          *handler.ProxyHandler
-	Backup         *handler.BackupHandler
-	SrCluster      *handler.SrClusterHandler
-	DbDeploy       *handler.DbDeployHandler
-	Cmdb           *handler.CmdbHandler
-	DCL            *handler.DCLHandler
-	RBAC           *handler.RBACHandler
-	Ldap           *handler.LdapHandler
-	Sso            *handler.SsoHandler
-	SMTP           *handler.SMTPHandler
-	Notify         *handler.NotifyHandler
-	Terminal       *terminal.Handler
-	Static         string
+	External           *handler.ExternalHandler
+	MonitorTarget      *handler.MonitorTargetHandler
+	MonitorTag         *handler.MonitorLabelTagHandler
+	FeAdmin            *handler.FeAdminHandler
+	DsAdmin            *handler.DsAdminHandler
+	OSSSettings        *handler.OSSSettingsHandler
+	OSSUpload          *handler.OSSUploadHandler
+	StarRocksWeb       *handler.StarRocksWebHandler
+	HA                 *handler.HAHandler
+	Proxy              *handler.ProxyHandler
+	Backup             *handler.BackupHandler
+	SrCluster          *handler.SrClusterHandler
+	DbDeploy           *handler.DbDeployHandler
+	Cmdb               *handler.CmdbHandler
+	Todo               *handler.TodoHandler
+	Alert              *handler.AlertHandler
+	DCL                *handler.DCLHandler
+	RBAC               *handler.RBACHandler
+	Tenant             *handler.TenantHandler
+	Ldap               *handler.LdapHandler
+	Sso                *handler.SsoHandler
+	SMTP               *handler.SMTPHandler
+	Notify             *handler.NotifyHandler
+	Terminal           *terminal.Handler
+	Static             string
 }
 
 func Init(e *gin.Engine, d Deps) {
@@ -75,7 +78,7 @@ func Init(e *gin.Engine, d Deps) {
 			return strings.HasPrefix(origin, "http://localhost:") || strings.HasPrefix(origin, "http://127.0.0.1:")
 		},
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization", "X-Tenant-Id"},
 		AllowCredentials: true,
 	}))
 
@@ -93,7 +96,7 @@ func Init(e *gin.Engine, d Deps) {
 	api.POST("/auth/sso/exchange", d.Auth.SSOExchange)
 	api.GET("/auth/sso/ticket", d.Auth.SSOTicket)
 
-	auth := middleware.Auth(d.Cfg.App.JWTSecret, d.Auth.Store,
+	auth := middleware.Auth(&d.Cfg.App.JWTSecret, d.Auth.Store,
 		"/healthz", "/readyz",
 		"/api/v1/auth/login", "/api/v1/auth/captcha", "/api/v1/info",
 		"/api/v1/auth/sso/",
@@ -102,15 +105,57 @@ func Init(e *gin.Engine, d Deps) {
 	secured := e.Group("/api/v1")
 	secured.Use(auth)
 	secured.Use(middleware.IdleSession(d.Auth.Store))
+	secured.Use(middleware.TenantGuard(d.Auth.Store,
+		"/api/v1/auth/me",
+		"/api/v1/auth/logout",
+		"/api/v1/auth/password",
+		"/api/v1/auth/profile",
+		"/api/v1/auth/select-tenant",
+		"/api/v1/tenants",
+	))
+
+	gdb := d.Auth.Store
+	gSrCl := handler.TenantResourceGuard(gdb, handler.GuardSrCluster)
+	gSrCh := handler.TenantResourceGuard(gdb, handler.GuardSrChange)
+	gSrAg := handler.TenantResourceGuard(gdb, handler.GuardSrAgent)
+	gSrAgD := handler.TenantResourceGuard(gdb, handler.GuardSrAgentDeploy)
+	gDdCl := handler.TenantResourceGuard(gdb, handler.GuardDbDeployCluster)
+	gDdCh := handler.TenantResourceGuard(gdb, handler.GuardDbDeployChange)
+	gDdAg := handler.TenantResourceGuard(gdb, handler.GuardDbDeployAgent)
+	gHaCl := handler.TenantResourceGuard(gdb, handler.GuardHACluster)
+	gHaCt := handler.TenantResourceGuard(gdb, handler.GuardHAController)
+	gFb := handler.TenantResourceGuard(gdb, handler.GuardFlashback)
+	gArc := handler.TenantResourceGuard(gdb, handler.GuardArchive)
+	gPx := handler.TenantResourceGuard(gdb, handler.GuardProxyService)
 
 	requireURN := func(urn string) gin.HandlerFunc {
 		return middleware.RequireURN(d.RBAC.Store, urn)
 	}
 
 	secured.GET("/auth/me", d.Auth.Me)
+	secured.POST("/auth/select-tenant", d.Auth.SelectTenant)
 	secured.POST("/auth/logout", d.Auth.Logout)
 	secured.PUT("/auth/password", d.Auth.ChangePassword)
 	secured.PUT("/auth/profile", d.Auth.UpdateProfile)
+
+	if d.Tenant != nil {
+		secured.GET("/tenants/mine", d.Tenant.Mine)
+		secured.POST("/tenants/switch", d.Tenant.Switch)
+		secured.GET("/tenants/plan-options", d.Tenant.PlanOptions)
+		secured.GET("/tenant-acl-options", d.Tenant.ACLOptions)
+		secured.GET("/tenants", requireURN(store.URNSidebarTenants), d.Tenant.List)
+		secured.POST("/tenants", requireURN(store.URNTenantsCreate), d.Tenant.Create)
+		secured.PUT("/tenants/:id", requireURN(store.URNTenantsEdit), d.Tenant.Update)
+		secured.GET("/tenants/:id/members", requireURN(store.URNTenantsMembers), d.Tenant.ListMembers)
+		secured.PUT("/tenants/:id/members", requireURN(store.URNTenantsMembers), d.Tenant.UpsertMember)
+		secured.DELETE("/tenants/:id/members/:userId", requireURN(store.URNTenantsMembers), d.Tenant.RemoveMember)
+		secured.GET("/tenants/:id/grants", requireURN(store.URNTenantsGrants), d.Tenant.ListGrants)
+		secured.GET("/tenants/:id/grant-resources", requireURN(store.URNTenantsGrants), d.Tenant.ListGrantResources)
+		secured.POST("/tenants/:id/grants", requireURN(store.URNTenantsGrants), d.Tenant.CreateGrant)
+		secured.DELETE("/tenants/:id/grants/:grantId", requireURN(store.URNTenantsGrants), d.Tenant.DeleteGrant)
+		secured.GET("/tenants/:id/audit-logs", requireURN(store.URNSidebarTenants), d.Tenant.AuditLogs)
+		secured.POST("/tenants/:id/impersonate", requireURN(store.URNTenantsImpersonate), d.Tenant.Impersonate)
+	}
 	secured.GET("/login-logs", d.Auth.ListLoginLogs)
 	secured.GET("/query-audits", d.Auth.ListQueryAudits)
 
@@ -134,6 +179,7 @@ func Init(e *gin.Engine, d Deps) {
 
 	secured.GET("/menus/mine", d.RBAC.MineMenus)
 	secured.GET("/menus/tree", d.RBAC.MenuTree)
+	secured.GET("/menus/page-actions", d.RBAC.PageActions)
 	secured.POST("/menus", requireURN(store.URNMenusCreate), d.RBAC.CreateMenu)
 	secured.POST("/menus/:id/move", requireURN(store.URNMenusEdit), d.RBAC.MoveMenu)
 	secured.PUT("/menus/:id", requireURN(store.URNMenusEdit), d.RBAC.UpdateMenu)
@@ -162,6 +208,7 @@ func Init(e *gin.Engine, d Deps) {
 	secured.POST("/instances/test-connection", d.Inst.TestConnection)
 	secured.GET("/instances/:id", d.Inst.Get)
 	secured.PUT("/instances/:id", requireURN(store.URNInstancesEdit), d.Inst.Update)
+	secured.POST("/instances/:id/assign-tenant", requireURN(store.URNTenantsImpersonate), d.Inst.AssignTenant)
 	secured.DELETE("/instances/:id", requireURN(store.URNInstancesDelete), d.Inst.Delete)
 	if d.Terminal != nil {
 		secured.POST("/instances/:id/open-terminal", d.Terminal.OpenInstance)
@@ -185,8 +232,10 @@ func Init(e *gin.Engine, d Deps) {
 	secured.GET("/databases", d.DB.List)
 	secured.POST("/databases", requireURN(store.URNDatabasesCreate), d.DB.Create)
 	secured.POST("/databases/batch", requireURN(store.URNDatabasesCreate), d.DB.CreateBatch)
+	secured.POST("/databases/assign-tenant", requireURN(store.URNTenantsImpersonate), d.DB.AssignTenantBatch)
 	secured.GET("/databases/:id/tables", d.DB.ListTables)
 	secured.PUT("/databases/:id", requireURN(store.URNDatabasesEdit), d.DB.Update)
+	secured.POST("/databases/:id/assign-tenant", requireURN(store.URNTenantsImpersonate), d.DB.AssignTenant)
 	secured.DELETE("/databases/:id", requireURN(store.URNDatabasesDelete), d.DB.Delete)
 	secured.POST("/query", d.DB.Query)
 
@@ -207,6 +256,75 @@ func Init(e *gin.Engine, d Deps) {
 		secured.POST("/monitor-tags", requireURN(store.URNMonitorTagsCreate), d.MonitorTag.Create)
 		secured.PUT("/monitor-tags/:id", requireURN(store.URNMonitorTagsEdit), d.MonitorTag.Update)
 		secured.DELETE("/monitor-tags/:id", requireURN(store.URNMonitorTagsDelete), d.MonitorTag.Delete)
+	}
+
+	if d.Todo != nil {
+		td := secured.Group("/todos")
+		td.GET("", d.Todo.List)
+		td.GET("/users", d.Todo.Users)
+		td.POST("/images", d.Todo.UploadImage)
+		td.GET("/images/:iid", d.Todo.Image)
+		td.GET("/:id", d.Todo.Get)
+		td.POST("", requireURN(store.URNTodoCreate), d.Todo.Create)
+		td.PUT("/:id", requireURN(store.URNTodoEdit), d.Todo.Update)
+		td.POST("/:id/subtasks", requireURN(store.URNTodoFollow), d.Todo.AddSubtask)
+		td.PUT("/:id/subtasks/:sid", requireURN(store.URNTodoFollow), d.Todo.UpdateSubtask)
+		td.POST("/:id/subtasks/:sid/progress", requireURN(store.URNTodoFollow), d.Todo.SubtaskProgress)
+		td.DELETE("/:id/subtasks/:sid", requireURN(store.URNTodoEdit), d.Todo.DeleteSubtask)
+		td.POST("/:id/handover", requireURN(store.URNTodoFollow), d.Todo.Handover)
+		td.POST("/:id/close", requireURN(store.URNTodoFollow), d.Todo.Close)
+		td.POST("/:id/reopen", requireURN(store.URNTodoFollow), d.Todo.Reopen)
+		td.DELETE("/:id", requireURN(store.URNTodoDelete), d.Todo.Delete)
+	}
+
+	if d.Alert != nil {
+		al := secured.Group("/alerts")
+		al.GET("", d.Alert.List)
+		al.GET("/stats", d.Alert.Stats)
+		al.POST("/postmortem", d.Alert.Postmortem)
+		al.GET("/:id", d.Alert.Get)
+		al.GET("/:id/events", d.Alert.Events)
+		al.POST("/:id/claim", requireURN(store.URNAlertClaim), d.Alert.Claim)
+		al.POST("/:id/handover", requireURN(store.URNAlertClaim), d.Alert.Handover)
+		al.POST("/:id/processing", requireURN(store.URNAlertClaim), d.Alert.Processing)
+		al.POST("/:id/resolve", requireURN(store.URNAlertResolve), d.Alert.Resolve)
+		al.POST("/:id/false-positive", requireURN(store.URNAlertResolve), d.Alert.FalsePositive)
+		al.POST("/:id/silence", requireURN(store.URNAlertSilence), d.Alert.QuickSilence)
+		al.POST("/:id/todo", requireURN(store.URNTodoCreate), d.Alert.CreateTodo)
+
+		as := secured.Group("/alert-silences")
+		as.GET("", d.Alert.ListSilences)
+		as.POST("", requireURN(store.URNAlertSilence), d.Alert.CreateSilence)
+		as.POST("/:id/cancel", requireURN(store.URNAlertSilence), d.Alert.CancelSilence)
+
+		ar := secured.Group("/alert-rules")
+		ar.GET("", d.Alert.ListRules)
+		ar.GET("/templates", d.Alert.ListExprTemplates)
+		ar.POST("/test", requireURN(store.URNAlertRuleEdit), d.Alert.TestRule)
+		ar.POST("/compile-preview", requireURN(store.URNAlertRuleEdit), d.Alert.CompilePreview)
+		ar.GET("/:id", d.Alert.GetRule)
+		ar.POST("", requireURN(store.URNAlertRuleEdit), d.Alert.CreateRule)
+		ar.PUT("/:id", requireURN(store.URNAlertRuleEdit), d.Alert.UpdateRule)
+		ar.DELETE("/:id", requireURN(store.URNAlertRuleDelete), d.Alert.DeleteRule)
+		ar.POST("/:id/test", requireURN(store.URNAlertRuleEdit), d.Alert.TestRule)
+
+		ai := secured.Group("/alert-inhibitions")
+		ai.GET("", d.Alert.ListInhibitions)
+		ai.POST("", requireURN(store.URNAlertRuleEdit), d.Alert.CreateInhibition)
+		ai.PUT("/:id", requireURN(store.URNAlertRuleEdit), d.Alert.UpdateInhibition)
+		ai.DELETE("/:id", requireURN(store.URNAlertRuleDelete), d.Alert.DeleteInhibition)
+
+		art := secured.Group("/alert-routes")
+		art.GET("", d.Alert.ListRoutes)
+		art.POST("", requireURN(store.URNAlertRuleEdit), d.Alert.CreateRoute)
+		art.PUT("/:id", requireURN(store.URNAlertRuleEdit), d.Alert.UpdateRoute)
+		art.DELETE("/:id", requireURN(store.URNAlertRuleDelete), d.Alert.DeleteRoute)
+
+		ao := secured.Group("/alert-oncall")
+		ao.GET("", d.Alert.ListOncall)
+		ao.POST("", requireURN(store.URNAlertRuleEdit), d.Alert.CreateOncall)
+		ao.PUT("/:id", requireURN(store.URNAlertRuleEdit), d.Alert.UpdateOncall)
+		ao.DELETE("/:id", requireURN(store.URNAlertRuleDelete), d.Alert.DeleteOncall)
 	}
 
 	if d.Cmdb != nil {
@@ -397,16 +515,16 @@ func Init(e *gin.Engine, d Deps) {
 	fb.GET("/tasks", d.Flashback.List)
 	fb.POST("/tasks", d.Flashback.Create)
 	fb.POST("/tasks/precheck", d.Flashback.Precheck)
-	fb.GET("/tasks/:id", d.Flashback.Get)
-	fb.GET("/tasks/:id/sql", d.Flashback.SQLs)
-	fb.GET("/tasks/:id/logs", d.Flashback.Logs)
-	fb.POST("/tasks/:id/submit-dml-ticket", d.Flashback.SubmitDML)
+	fb.GET("/tasks/:id", gFb, d.Flashback.Get)
+	fb.GET("/tasks/:id/sql", gFb, d.Flashback.SQLs)
+	fb.GET("/tasks/:id/logs", gFb, d.Flashback.Logs)
+	fb.POST("/tasks/:id/submit-dml-ticket", gFb, d.Flashback.SubmitDML)
 
 	arc := secured.Group("/archive")
 	arc.GET("/tasks", d.Archive.List)
 	arc.POST("/tasks", d.Archive.Create)
-	arc.GET("/tasks/:id", d.Archive.Get)
-	arc.PATCH("/tasks/:id", d.Archive.Update)
+	arc.GET("/tasks/:id", gArc, d.Archive.Get)
+	arc.PATCH("/tasks/:id", gArc, d.Archive.Update)
 	arc.GET("/stats", d.Archive.Stats)
 	arc.GET("/meta", d.Archive.Meta)
 	arc.GET("/runs", d.Archive.ListRuns)
@@ -414,10 +532,10 @@ func Init(e *gin.Engine, d Deps) {
 	arc.GET("/settings", d.Archive.GetSettings)
 	arc.PATCH("/settings", d.Archive.PutSettings)
 	arc.POST("/settings/:kind/test", d.Archive.TestSettings)
-	arc.POST("/tasks/:id/run", d.Archive.Run)
-	arc.POST("/tasks/:id/pause", d.Archive.Pause)
-	arc.GET("/tasks/:id/runs", d.Archive.ListRuns)
-	arc.POST("/tasks/:id/runs/:runId/stop", d.Archive.StopRun)
+	arc.POST("/tasks/:id/run", gArc, d.Archive.Run)
+	arc.POST("/tasks/:id/pause", gArc, d.Archive.Pause)
+	arc.GET("/tasks/:id/runs", gArc, d.Archive.ListRuns)
+	arc.POST("/tasks/:id/runs/:runId/stop", gArc, d.Archive.StopRun)
 
 	secured.GET("/kafka/orders", d.Kafka.List)
 	secured.POST("/kafka/orders", d.Kafka.Create)
@@ -438,26 +556,26 @@ func Init(e *gin.Engine, d Deps) {
 		hg.POST("/candidates/import-dbdeploy", d.HA.ImportDbDeployMembers)
 		hg.GET("/clusters", d.HA.ListClusters)
 		hg.POST("/clusters", d.HA.CreateCluster)
-		hg.GET("/clusters/:id", d.HA.GetCluster)
-		hg.PUT("/clusters/:id", d.HA.UpdateCluster)
-		hg.DELETE("/clusters/:id", d.HA.DeleteCluster)
-		hg.GET("/clusters/:id/topology", d.HA.Topology)
-		hg.GET("/clusters/:id/mha/conf", d.HA.GetMHAConf)
-		hg.POST("/clusters/:id/mha/conf/preview", d.HA.PreviewMHAConf)
-		hg.PUT("/clusters/:id/mha/conf", d.HA.SaveMHAConf)
-		hg.POST("/clusters/:id/mha/conf/push", d.HA.PushMHAConf)
-		hg.GET("/clusters/:id/mha/manager/status", d.HA.GetMHAManagerStatus)
-		hg.POST("/clusters/:id/mha/manager/:action", d.HA.MHAManagerCtrl)
-		hg.POST("/clusters/:id/mha/packages/install", d.HA.InstallMHAPackages)
-		hg.GET("/clusters/:id/mha/packages/runs", d.HA.ListMHAInstallRuns)
-		hg.GET("/clusters/:id/pgaf/state", d.HA.GetPGAFState)
-		hg.GET("/clusters/:id/pgaf/service/status", d.HA.GetPGAFServiceStatus)
-		hg.POST("/clusters/:id/pgaf/service/:action", d.HA.PGAFServiceCtrl)
-		hg.POST("/clusters/:id/pgaf/packages/install", d.HA.InstallPGAFPackages)
-		hg.GET("/clusters/:id/pgaf/packages/runs", d.HA.ListPGAFInstallRuns)
-		hg.GET("/clusters/:id/patroni/cluster", d.HA.GetPatroniCluster)
-		hg.POST("/clusters/:id/patroni/packages/install", d.HA.InstallPatroniPackages)
-		hg.GET("/clusters/:id/patroni/packages/runs", d.HA.ListPatroniInstallRuns)
+		hg.GET("/clusters/:id", gHaCl, d.HA.GetCluster)
+		hg.PUT("/clusters/:id", gHaCl, d.HA.UpdateCluster)
+		hg.DELETE("/clusters/:id", gHaCl, d.HA.DeleteCluster)
+		hg.GET("/clusters/:id/topology", gHaCl, d.HA.Topology)
+		hg.GET("/clusters/:id/mha/conf", gHaCl, d.HA.GetMHAConf)
+		hg.POST("/clusters/:id/mha/conf/preview", gHaCl, d.HA.PreviewMHAConf)
+		hg.PUT("/clusters/:id/mha/conf", gHaCl, d.HA.SaveMHAConf)
+		hg.POST("/clusters/:id/mha/conf/push", gHaCl, d.HA.PushMHAConf)
+		hg.GET("/clusters/:id/mha/manager/status", gHaCl, d.HA.GetMHAManagerStatus)
+		hg.POST("/clusters/:id/mha/manager/:action", gHaCl, d.HA.MHAManagerCtrl)
+		hg.POST("/clusters/:id/mha/packages/install", gHaCl, d.HA.InstallMHAPackages)
+		hg.GET("/clusters/:id/mha/packages/runs", gHaCl, d.HA.ListMHAInstallRuns)
+		hg.GET("/clusters/:id/pgaf/state", gHaCl, d.HA.GetPGAFState)
+		hg.GET("/clusters/:id/pgaf/service/status", gHaCl, d.HA.GetPGAFServiceStatus)
+		hg.POST("/clusters/:id/pgaf/service/:action", gHaCl, d.HA.PGAFServiceCtrl)
+		hg.POST("/clusters/:id/pgaf/packages/install", gHaCl, d.HA.InstallPGAFPackages)
+		hg.GET("/clusters/:id/pgaf/packages/runs", gHaCl, d.HA.ListPGAFInstallRuns)
+		hg.GET("/clusters/:id/patroni/cluster", gHaCl, d.HA.GetPatroniCluster)
+		hg.POST("/clusters/:id/patroni/packages/install", gHaCl, d.HA.InstallPatroniPackages)
+		hg.GET("/clusters/:id/patroni/packages/runs", gHaCl, d.HA.ListPatroniInstallRuns)
 		hg.GET("/mha/releases", d.HA.ListMHAReleases)
 		hg.POST("/mha/releases", d.HA.CreateMHARelease)
 		hg.PATCH("/mha/releases/:id", d.HA.UpdateMHARelease)
@@ -487,8 +605,8 @@ func Init(e *gin.Engine, d Deps) {
 		hg.GET("/tasks", d.HA.ListTasks)
 		hg.GET("/controllers", d.HA.ListControllers)
 		hg.POST("/controllers", d.HA.CreateController)
-		hg.DELETE("/controllers/:id", d.HA.DeleteController)
-		hg.POST("/controllers/:id/env-check", d.HA.EnvCheckController)
+		hg.DELETE("/controllers/:id", gHaCt, d.HA.DeleteController)
+		hg.POST("/controllers/:id/env-check", gHaCt, d.HA.EnvCheckController)
 	}
 
 	if d.Proxy != nil {
@@ -497,6 +615,7 @@ func Init(e *gin.Engine, d Deps) {
 		pg.GET("/services", d.Proxy.List)
 		pg.POST("/services/deploy", d.Proxy.Deploy) // 静态路径须先于 /services/:id
 		pg.POST("/services", d.Proxy.Create)
+		pg.POST("/services/:id/assign-tenant", requireURN(store.URNTenantsImpersonate), gPx, d.Proxy.AssignTenant)
 		pg.GET("/services/:id", d.Proxy.Get)
 		pg.PUT("/services/:id", d.Proxy.Update)
 		pg.DELETE("/services/:id", d.Proxy.Delete)
@@ -567,12 +686,12 @@ func Init(e *gin.Engine, d Deps) {
 		sg.POST("/agents", d.SrCluster.CreateAgent)
 		sg.POST("/agents/deploy", d.SrCluster.DeployAgent)
 		sg.GET("/agents/deploys", d.SrCluster.ListAgentDeploys)
-		sg.GET("/agents/deploys/:id", d.SrCluster.GetAgentDeploy)
+		sg.GET("/agents/deploys/:id", gSrAgD, d.SrCluster.GetAgentDeploy)
 		sg.GET("/agents/status", d.SrCluster.ListAgentStatus)
-		sg.DELETE("/agents/:id", d.SrCluster.DeleteAgent)
-		sg.POST("/agents/:id/probe", d.SrCluster.ProbeAgent)
-		sg.POST("/agents/:id/start", d.SrCluster.StartAgent)
-		sg.POST("/agents/:id/stop", d.SrCluster.StopAgent)
+		sg.DELETE("/agents/:id", gSrAg, d.SrCluster.DeleteAgent)
+		sg.POST("/agents/:id/probe", gSrAg, d.SrCluster.ProbeAgent)
+		sg.POST("/agents/:id/start", gSrAg, d.SrCluster.StartAgent)
+		sg.POST("/agents/:id/stop", gSrAg, d.SrCluster.StopAgent)
 		sg.GET("/oss", d.SrCluster.GetOSS)
 		sg.PUT("/oss", d.SrCluster.PutOSS)
 		sg.POST("/oss/test", d.SrCluster.TestOSS)
@@ -590,33 +709,43 @@ func Init(e *gin.Engine, d Deps) {
 		sg.POST("/conf-templates/reset", d.SrCluster.ResetConfTemplates)
 		sg.GET("/clusters", d.SrCluster.ListClusters)
 		sg.POST("/clusters", d.SrCluster.CreateCluster)
+		sg.POST("/clusters/:id/assign-tenant", requireURN(store.URNTenantsImpersonate), gSrCl, d.SrCluster.AssignTenant)
 		sg.POST("/tickets", d.SrCluster.CreateTicket)
-		sg.GET("/clusters/:id", d.SrCluster.GetCluster)
-		sg.PATCH("/clusters/:id", d.SrCluster.UpdateCluster)
-		sg.DELETE("/clusters/:id", d.SrCluster.DeleteCluster)
-		sg.GET("/clusters/:id/nodes", d.SrCluster.ListNodes)
-		sg.POST("/clusters/:id/nodes", d.SrCluster.CreateNode)
-		sg.POST("/clusters/:id/nodes/precheck", d.SrCluster.PrecheckAddNode)
-		sg.DELETE("/clusters/:id/nodes/:nodeId", d.SrCluster.DeleteNode)
-		sg.POST("/clusters/:id/init", d.SrCluster.StartInit)
-		sg.POST("/clusters/:id/reinit", d.SrCluster.StartReinit)
-		sg.POST("/clusters/:id/upgrade", d.SrCluster.StartUpgrade)
-		sg.POST("/clusters/:id/upgrade/precheck", d.SrCluster.PrecheckUpgrade)
-		sg.GET("/clusters/:id/configs", d.SrCluster.GetConfigs)
-		sg.PUT("/clusters/:id/configs", d.SrCluster.PutConfigs)
-		sg.GET("/clusters/:id/configs/preview", d.SrCluster.PreviewConfigs)
-		sg.PUT("/clusters/:id/nodes/:nodeId/config", d.SrCluster.PutNodeConfig)
-		sg.POST("/clusters/:id/config-apply", d.SrCluster.StartConfigApply)
-		sg.POST("/clusters/:id/nodes/:nodeId/add", d.SrCluster.StartAddNode)
-		sg.POST("/clusters/:id/nodes/:nodeId/restart", d.SrCluster.StartRestartNode)
-		sg.POST("/clusters/:id/nodes/:nodeId/start", d.SrCluster.StartNodeStart)
-		sg.POST("/clusters/:id/nodes/:nodeId/stop", d.SrCluster.StartNodeStop)
-		sg.POST("/clusters/:id/nodes/:nodeId/remove", d.SrCluster.StartRemoveNode)
+		sg.GET("/clusters/:id", gSrCl, d.SrCluster.GetCluster)
+		sg.GET("/clusters/:id/live", gSrCl, d.SrCluster.GetClusterLive)
+		sg.POST("/clusters/:id/sync-registry", gSrCl, d.SrCluster.SyncRegistry)
+		sg.PATCH("/clusters/:id", gSrCl, d.SrCluster.UpdateCluster)
+		sg.DELETE("/clusters/:id", gSrCl, d.SrCluster.DeleteCluster)
+		sg.GET("/clusters/:id/nodes", gSrCl, d.SrCluster.ListNodes)
+		sg.POST("/clusters/:id/nodes", gSrCl, d.SrCluster.CreateNode)
+		sg.POST("/clusters/:id/nodes/precheck", gSrCl, d.SrCluster.PrecheckAddNode)
+		sg.DELETE("/clusters/:id/nodes/:nodeId", gSrCl, d.SrCluster.DeleteNode)
+		sg.POST("/clusters/:id/init", gSrCl, d.SrCluster.StartInit)
+		sg.POST("/clusters/:id/reinit", gSrCl, d.SrCluster.StartReinit)
+		sg.POST("/clusters/:id/upgrade", gSrCl, d.SrCluster.StartUpgrade)
+		sg.POST("/clusters/:id/upgrade/precheck", gSrCl, d.SrCluster.PrecheckUpgrade)
+		sg.GET("/clusters/:id/configs", gSrCl, d.SrCluster.GetConfigs)
+		sg.PUT("/clusters/:id/configs", gSrCl, d.SrCluster.PutConfigs)
+		sg.GET("/clusters/:id/configs/preview", gSrCl, d.SrCluster.PreviewConfigs)
+		sg.PUT("/clusters/:id/nodes/:nodeId/config", gSrCl, d.SrCluster.PutNodeConfig)
+		sg.POST("/clusters/:id/config-apply", gSrCl, d.SrCluster.StartConfigApply)
+		sg.GET("/clusters/:id/nodes/:nodeId/conf-remote", gSrCl, d.SrCluster.GetRemoteConf)
+		sg.POST("/clusters/:id/nodes/:nodeId/conf-diff", gSrCl, d.SrCluster.ConfDiff)
+		sg.GET("/clusters/:id/nodes/:nodeId/conf-history", gSrCl, d.SrCluster.ConfHistory)
+		sg.GET("/clusters/:id/conf-revisions/:rid", gSrCl, d.SrCluster.GetConfRevision)
+		sg.GET("/clusters/:id/conf-revision-diff", gSrCl, d.SrCluster.ConfRevisionDiff)
+		sg.POST("/clusters/:id/conf-patch", gSrCl, d.SrCluster.ConfPatch)
+		sg.POST("/clusters/:id/conf-rollback", gSrCl, d.SrCluster.StartConfigRollback)
+		sg.POST("/clusters/:id/nodes/:nodeId/add", gSrCl, d.SrCluster.StartAddNode)
+		sg.POST("/clusters/:id/nodes/:nodeId/restart", gSrCl, d.SrCluster.StartRestartNode)
+		sg.POST("/clusters/:id/nodes/:nodeId/start", gSrCl, d.SrCluster.StartNodeStart)
+		sg.POST("/clusters/:id/nodes/:nodeId/stop", gSrCl, d.SrCluster.StartNodeStop)
+		sg.POST("/clusters/:id/nodes/:nodeId/remove", gSrCl, d.SrCluster.StartRemoveNode)
 		sg.GET("/changes", d.SrCluster.ListChanges)
-		sg.GET("/changes/:id", d.SrCluster.GetChange)
-		sg.POST("/changes/:id/cancel", d.SrCluster.CancelChange)
-		sg.POST("/changes/:id/retry", d.SrCluster.RetryChange)
-		sg.POST("/changes/:id/rollback-node", d.SrCluster.RollbackUpgradeNode)
+		sg.GET("/changes/:id", gSrCh, d.SrCluster.GetChange)
+		sg.POST("/changes/:id/cancel", gSrCh, d.SrCluster.CancelChange)
+		sg.POST("/changes/:id/retry", gSrCh, d.SrCluster.RetryChange)
+		sg.POST("/changes/:id/rollback-node", gSrCh, d.SrCluster.RollbackUpgradeNode)
 	}
 	if d.DbDeploy != nil {
 		dg := secured.Group("/db-deploy")
@@ -627,31 +756,42 @@ func Init(e *gin.Engine, d Deps) {
 		dg.PUT("/releases/:id", d.DbDeploy.UpsertRelease)
 		dg.DELETE("/releases/:id", d.DbDeploy.DeleteRelease)
 		dg.POST("/releases/:id/presign", d.DbDeploy.PresignRelease)
+		dg.POST("/releases/:id/upload", d.DbDeploy.UploadRelease)
+		dg.POST("/releases/:id/sync-from-oss", d.DbDeploy.SyncReleaseFromOSS)
+		dg.POST("/instance-probe", d.DbDeploy.ProbeInstance)
+		dg.GET("/conf-templates", d.DbDeploy.ListConfTemplates)
+		dg.PUT("/conf-templates", d.DbDeploy.PutConfTemplate)
+		dg.POST("/conf-templates/reset", d.DbDeploy.ResetConfTemplate)
+		dg.GET("/clusters/:id/conf", gDdCl, d.DbDeploy.GetClusterConf)
+		dg.PUT("/clusters/:id/conf", gDdCl, d.DbDeploy.PutClusterConf)
+		dg.GET("/clusters/:id/conf/preview", gDdCl, d.DbDeploy.PreviewClusterConf)
+		dg.POST("/clusters/:id/conf/preview", gDdCl, d.DbDeploy.PreviewClusterConf)
 		dg.GET("/clusters", d.DbDeploy.ListClusters)
 		dg.POST("/clusters", d.DbDeploy.UpsertCluster)
+		dg.POST("/clusters/:id/assign-tenant", requireURN(store.URNTenantsImpersonate), gDdCl, d.DbDeploy.AssignTenant)
 		dg.POST("/tickets", d.DbDeploy.CreateTicket)
-		dg.GET("/clusters/:id", d.DbDeploy.GetCluster)
-		dg.PUT("/clusters/:id", d.DbDeploy.UpsertCluster)
-		dg.DELETE("/clusters/:id", d.DbDeploy.DeleteCluster)
-		dg.POST("/clusters/:id/deploy", d.DbDeploy.StartDeploy)
-		dg.POST("/clusters/:id/ha-init", d.DbDeploy.StartHaInit)
-		dg.POST("/clusters/:id/ha/preflight", d.DbDeploy.HAPreflight)
-		dg.GET("/clusters/:id/nodes", d.DbDeploy.ListNodes)
-		dg.POST("/clusters/:id/nodes", d.DbDeploy.UpsertNode)
-		dg.POST("/clusters/:id/nodes/precheck", d.DbDeploy.PrecheckAddNode)
-		dg.DELETE("/clusters/:id/nodes/:nodeId", d.DbDeploy.DeleteNode)
-		dg.POST("/clusters/:id/nodes/:nodeId/start", d.DbDeploy.StartNode)
-		dg.POST("/clusters/:id/nodes/:nodeId/stop", d.DbDeploy.StopNode)
-		dg.POST("/clusters/:id/nodes/:nodeId/restart", d.DbDeploy.RestartNode)
-		dg.POST("/clusters/:id/nodes/:nodeId/add", d.DbDeploy.AddNode)
-		dg.POST("/clusters/:id/nodes/:nodeId/remove", d.DbDeploy.RemoveNode)
+		dg.GET("/clusters/:id", gDdCl, d.DbDeploy.GetCluster)
+		dg.PUT("/clusters/:id", gDdCl, d.DbDeploy.UpsertCluster)
+		dg.DELETE("/clusters/:id", gDdCl, d.DbDeploy.DeleteCluster)
+		dg.POST("/clusters/:id/deploy", gDdCl, d.DbDeploy.StartDeploy)
+		dg.POST("/clusters/:id/ha-init", gDdCl, d.DbDeploy.StartHaInit)
+		dg.POST("/clusters/:id/ha/preflight", gDdCl, d.DbDeploy.HAPreflight)
+		dg.GET("/clusters/:id/nodes", gDdCl, d.DbDeploy.ListNodes)
+		dg.POST("/clusters/:id/nodes", gDdCl, d.DbDeploy.UpsertNode)
+		dg.POST("/clusters/:id/nodes/precheck", gDdCl, d.DbDeploy.PrecheckAddNode)
+		dg.DELETE("/clusters/:id/nodes/:nodeId", gDdCl, d.DbDeploy.DeleteNode)
+		dg.POST("/clusters/:id/nodes/:nodeId/start", gDdCl, d.DbDeploy.StartNode)
+		dg.POST("/clusters/:id/nodes/:nodeId/stop", gDdCl, d.DbDeploy.StopNode)
+		dg.POST("/clusters/:id/nodes/:nodeId/restart", gDdCl, d.DbDeploy.RestartNode)
+		dg.POST("/clusters/:id/nodes/:nodeId/add", gDdCl, d.DbDeploy.AddNode)
+		dg.POST("/clusters/:id/nodes/:nodeId/remove", gDdCl, d.DbDeploy.RemoveNode)
 		dg.GET("/changes", d.DbDeploy.ListChanges)
-		dg.GET("/changes/:id", d.DbDeploy.GetChange)
-		dg.POST("/changes/:id/retry", d.DbDeploy.RetryChange)
-		dg.POST("/changes/:id/cancel", d.DbDeploy.CancelChange)
+		dg.GET("/changes/:id", gDdCh, d.DbDeploy.GetChange)
+		dg.POST("/changes/:id/retry", gDdCh, d.DbDeploy.RetryChange)
+		dg.POST("/changes/:id/cancel", gDdCh, d.DbDeploy.CancelChange)
 		dg.GET("/agents", d.DbDeploy.ListAgents)
 		dg.POST("/agents", d.DbDeploy.UpsertAgent)
-		dg.DELETE("/agents/:id", d.DbDeploy.DeleteAgent)
+		dg.DELETE("/agents/:id", gDdAg, d.DbDeploy.DeleteAgent)
 		dg.POST("/agents/deploy", d.DbDeploy.DeployAgent)
 		dg.GET("/agents/deploys", d.DbDeploy.ListAgentDeploys)
 		dg.GET("/agents/deploys/:id", d.DbDeploy.GetAgentDeploy)

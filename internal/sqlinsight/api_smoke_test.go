@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"auto-dba/internal/middleware"
+	"auto-dba/internal/store"
 )
 
 // 对临时自测端口上的 SQL 洞察相关路由做鉴权后冒烟（需 AUTO_DBA_SMOKE_BASE）。
@@ -22,7 +23,7 @@ func TestSQLInsightAPISmoke(t *testing.T) {
 	if secret == "" {
 		secret = "change-me-in-production"
 	}
-	tok, err := middleware.SignToken(secret, "selftest", "admin", "admin", time.Hour)
+	tok, err := middleware.SignToken(secret, "selftest", "admin", "admin", store.DefaultTenantID, "default", time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}

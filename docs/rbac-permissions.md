@@ -187,3 +187,60 @@ API：
 
 - 后端：`POST /pg-activity-snapshots/collect`、`/awr-reports/generate*`、`/pg-space/collect*`、`/sql-insight/analysis/runs` 已绑对应 URN
 - 设置保存走全局参数，按钮需 `um.action.args.edit`
+
+## 空目录与未接入页面（侧栏）
+
+- 侧栏菜单（`/auth/me` 的 `menus`）只去掉操作节点；没有子菜单的目录也保留，悬停弹层提示「暂无页面」。
+- 菜单登记了页面 path、但前端没有对应组件时，打开显示占位页：页面标题、该页面下登记的操作按钮（无权限置灰）、「暂无数据」。占位页数据来自 `GET /api/v1/menus/page-actions?path=`。
+
+## 待办跟进（增量）
+
+- 页面：`/ops/todo`，URN `um.sidebar.ops-todo`；种子目录「待办跟进」（`sort_order=65`，告警管理之前），子页「待办看板」。
+- 表：`tbl_todos`、`tbl_todo_logs`、`tbl_todo_subtasks`（`internal/store/todo.go`）、`tbl_todo_images`（`internal/store/todo_image.go`）。
+- 操作权限（挂页面下）：
+
+| 操作 | Title | URN |
+|------|-------|-----|
+| 新建待办 | 新建待办 | `um.action.todo.create` |
+| 编辑待办 | 编辑待办 | `um.action.todo.edit` |
+| 跟进待办（新增 / 编辑子任务、更新子任务进展、转交、闭环、重新打开） | 跟进待办 | `um.action.todo.follow` |
+| 删除待办 | 删除待办 | `um.action.todo.delete` |
+
+- 跟进类操作除 `um.action.todo.follow` 外，还要求是负责人、跟进人或发起人；拥有 `um.action.todo.edit` 者可跟进任意事项。
+- 页签：我的待办（我负责、未闭环）、待我跟进（我是跟进人、未闭环）、我发起的（含已闭环）、团队待办（全部未闭环）、已闭环、超期预警（已超期或 48 小时内到期）。
+- 状态落库为 `pending` 待处理 / `following` 跟进中 / `handover` 待交接 / `closed` 已闭环；「已超期」按计划完成时间实时计算，不落库。
+- 子任务：一个事项可拆成多个子任务（名称、描述即具体动作、负责人、计划完成时间、状态 `pending` 待处理 / `doing` 进行中 / `done` 已完成、进展说明）。
+  - 「更新进展」针对某个子任务，进展追加到跟进记录（`tbl_todo_logs.subtask_id` 关联子任务），不覆盖历史。
+  - 事项的「最新进展」「下一步动作」由子任务自动汇总：最新进展取最近一次有进展的子任务，下一步动作为未完成子任务按顺序编号；不再手工填写。
+  - 子任务首次有进展时，待处理 / 待交接的事项自动转为跟进中；存在未完成子任务时不能闭环；已闭环事项须重新打开后才能操作子任务。
+  - 事项名称只能通过「编辑」（`um.action.todo.edit`）修改，子任务操作不改名称。
+  - 接口：`POST /todos/:id/subtasks`、`PUT /todos/:id/subtasks/:sid`、`POST /todos/:id/subtasks/:sid/progress`（`um.action.todo.follow`，且需与事项相关或有编辑权限）；`DELETE /todos/:id/subtasks/:sid`（`um.action.todo.edit`）。
+- 图片：事项（新建 / 编辑）、子任务（新增 / 编辑）、子任务进展、闭环四处可附图，存 PostgreSQL（BYTEA）。
+  - 先上传后绑定：`POST /todos/images`（multipart `file`，需新建 / 跟进 / 编辑任一权限）返回图片 ID；保存时在请求体 `image_ids` 中带上，后端校验「本人上传且未绑定」后认领。编辑时 `image_ids` 表示该处最终图片列表，移除的会删除。
+  - 进展、闭环的截图挂在对应跟进记录上（`scope=log`），删除子任务时只删子任务自身图片，历史记录里的截图保留。
+  - `GET /todos/images/:iid` 查看图片（登录即可；未绑定图片仅上传者可见），响应带 `nosniff` 与 `Content-Security-Policy: default-src 'none'`。
+  - 限制：按文件内容识别，仅 PNG / JPG / GIF / WebP（不收 SVG），单张 5MB，每处 9 张；上传后 24 小时未绑定的图片在下次上传时自动清理。
+
+## 告警管理（增量）
+
+- 目录：`m-alert`「告警管理」；详见 [alerts.md](alerts.md)。
+- 页面与侧栏 URN：
+
+| 页面 | Path | URN |
+|------|------|-----|
+| 活跃告警 | `/ops/alerts` | `um.sidebar.ops-alerts` |
+| 历史告警 | `/ops/alerts/history` | `um.sidebar.ops-alerts-history` |
+| 规则管理 | `/ops/alerts/rules` | `um.sidebar.ops-alerts-rules` |
+| 静默管理 | `/ops/alerts/silences` | `um.sidebar.ops-alerts-silences` |
+
+- 操作权限：
+
+| 操作 | Title | URN | 挂载 |
+|------|-------|-----|------|
+| 认领 / 转派 / 处理中 | 认领告警 | `um.action.alert.claim` | 活跃告警 |
+| 恢复 / 误报关闭 | 关闭告警 | `um.action.alert.resolve` | 活跃告警 |
+| 新建 / 取消静默 | 静默告警 | `um.action.alert.silence` | 活跃告警 |
+| 新建 / 编辑 / 启停规则 | 编辑规则 | `um.action.alert.rule.edit` | 规则管理 |
+| 删除规则 | 删除规则 | `um.action.alert.rule.delete` | 规则管理 |
+
+- 「转待办」复用 `um.action.todo.create`，`source=alert`、`source_ref=告警 ID`。

@@ -1,8 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Button, Checkbox, Input, Modal, Pagination, Radio, Select, Space, Tabs, Tag, message } from 'antd'
+import { Alert, Button, Checkbox, Input, Modal, Pagination, Radio, Select, Space, Tabs, Tag, message } from 'antd'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import api from '../../api/request'
+import Auth from '../../components/Auth'
+import { Perm } from '../../hooks/usePermission'
 import DbTypeIcon from '../../components/DbTypeIcon'
+import { useAppSelector } from '../../store'
 import './Databases.css'
 
 interface TypeOption {
@@ -33,9 +36,12 @@ interface LiveDb {
 
 interface DatabaseRow {
   id?: string
+  tenant_id?: string
+  tenant_name?: string
   db_name?: string
   db_names?: string[]
   instance_id?: string
+  instance_name?: string
   domains?: string[]
   tags?: string[]
   visibility?: string
@@ -74,6 +80,10 @@ function defaultApprovers(inst?: InstanceRow): string[] {
 }
 
 export default function Databases() {
+  const user = useAppSelector((s) => s.auth.user)
+  const impersonating = Boolean((user as { impersonating?: boolean })?.impersonating)
+  const currentTenant = (user as { current_tenant?: { id?: string; name?: string; code?: string } })?.current_tenant
+  const currentTenantId = String(currentTenant?.id || '')
   const [typeOptions, setTypeOptions] = useState<TypeOption[]>([])
   const [activeType, setActiveType] = useState('')
   const [instances, setInstances] = useState<InstanceRow[]>([])
@@ -91,6 +101,11 @@ export default function Databases() {
   const [saving, setSaving] = useState(false)
   const [page, setPage] = useState(1)
   const pageSize = 10
+  const [tenants, setTenants] = useState<{ id: string; name?: string; code?: string }[]>([])
+  const [assignRows, setAssignRows] = useState<DatabaseRow[]>([])
+  const [assignTid, setAssignTid] = useState('')
+  const [assigning, setAssigning] = useState(false)
+  const [selectedKeys, setSelectedKeys] = useState<React.Key[]>([])
 
   const knownTypes = useMemo(() => new Set(typeOptions.map((t) => t.value)), [typeOptions])
 
@@ -173,25 +188,27 @@ export default function Databases() {
     return cur
   }
 
-  function instanceName(id?: string) {
-    return instances.find((i) => i.id === id)?.name || id || ''
+  function instanceName(id?: string, fallback?: string) {
+    return fallback || instances.find((i) => i.id === id)?.name || id || ''
   }
 
   function roleNames(ids?: string[]) {
     return (ids || []).map((id) => roles.find((r) => r.id === id)?.name || id).join(',')
   }
 
+  async function loadAclOptions(tenantId?: string) {
+    const tid = tenantId || currentTenantId
+    const { data } = await api.get('/tenant-acl-options', { params: tid ? { tenant_id: tid } : {} })
+    const payload = data.data || {}
+    const names = (payload.users || []).map((u: any) => u.username || u.name).filter(Boolean)
+    setUserOptions([...new Set(names as string[])])
+    setRoles(payload.roles || [])
+  }
+
   async function loadMeta() {
-    const [instRes, apprRes, roleRes, argRes] = await Promise.all([
-      api.get('/instances'),
-      api.get('/create-db/approvers'),
-      api.get('/role-options'),
-      api.get('/global-args'),
-    ])
+    const [instRes, argRes] = await Promise.all([api.get('/instances'), api.get('/global-args')])
     setInstances(instRes.data.data || [])
-    const names = (apprRes.data.data || []).map((a: any) => a.name || a).filter(Boolean)
-    setUserOptions([...new Set(['admin', ...names])])
-    setRoles(roleRes.data.data || [])
+    await loadAclOptions(currentTenantId)
     const raw = (argRes.data.data || []).find((a: any) => a.key === 'ticket_instance_types')?.value || ''
     setTypeOptions(parseInstanceTypes(raw))
   }
@@ -234,6 +251,7 @@ export default function Databases() {
       domains: [],
       approvers: f.id ? f.approvers : defaultApprovers(inst),
     }))
+    void loadAclOptions(inst?.tenant_id || currentTenantId)
     loadLiveDbs(id)
   }
 
@@ -251,6 +269,8 @@ export default function Databases() {
       })
       setLiveDbs([])
       setLiveHint('')
+      const inst = instances.find((i) => i.id === row.instance_id)
+      void loadAclOptions(row.tenant_id || inst?.tenant_id || currentTenantId)
     } else {
       setForm({
         instance_id: '',
@@ -258,6 +278,7 @@ export default function Databases() {
         approvers: defaultApprovers(),
         ...emptyMeta(),
       })
+      void loadAclOptions(currentTenantId)
       loadLiveDbs()
     }
     setVisible(true)
@@ -322,6 +343,55 @@ export default function Databases() {
     }
   }
 
+  function openAssign(rows: DatabaseRow[]) {
+    const list = rows.filter((r) => r.id)
+    if (!list.length) {
+      message.warning('请先勾选库')
+      return
+    }
+    setAssignTid(currentTenantId)
+    setAssignRows(list)
+  }
+
+  async function confirmAssign() {
+    if (!assignRows.length || !assignTid) {
+      message.warning('请选择目标租户')
+      return
+    }
+    const ids = assignRows.map((r) => r.id!).filter(Boolean)
+    setAssigning(true)
+    try {
+      const { data } = await api.post('/databases/assign-tenant', { tenant_id: assignTid, ids })
+      const label =
+        tenants.find((t) => t.id === assignTid)?.name || tenants.find((t) => t.id === assignTid)?.code || assignTid
+      const okCount = Number(data.ok_count || 0)
+      const failCount = Number(data.fail_count || 0)
+      const failed: { id?: string; db_name?: string; message?: string }[] = data.failed || []
+      if (failCount === 0) {
+        message.success(`已划拨 ${okCount} 个库到 ${label}`)
+      } else {
+        Modal.warning({
+          title: `划拨完成：成功 ${okCount}，失败 ${failCount}`,
+          content: (
+            <ul style={{ margin: 0, paddingLeft: 18, maxHeight: 240, overflow: 'auto' }}>
+              {failed.map((f) => (
+                <li key={f.id || f.db_name}>
+                  {f.db_name || f.id}：{f.message || '失败'}
+                </li>
+              ))}
+            </ul>
+          ),
+        })
+      }
+      setAssignRows([])
+      setSelectedKeys([])
+      await load()
+      await loadMeta()
+    } finally {
+      setAssigning(false)
+    }
+  }
+
   function remove(row: DatabaseRow) {
     Modal.confirm({
       title: '提示',
@@ -338,6 +408,14 @@ export default function Databases() {
     ;(async () => {
       await loadMeta()
       await load()
+      if (impersonating) {
+        try {
+          const { data } = await api.get('/tenants')
+          setTenants((data.data || []).filter((t: { status?: string }) => t.status !== 'disabled'))
+        } catch {
+          setTenants([])
+        }
+      }
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -369,8 +447,29 @@ export default function Databases() {
           <Button type="primary" onClick={() => open()}>
             登记库
           </Button>
+          {impersonating ? (
+            <Auth urn={Perm.tenants.impersonate}>
+              <Button
+                disabled={!selectedKeys.length}
+                onClick={() => {
+                  const set = new Set(selectedKeys.map(String))
+                  openAssign(filteredRows.filter((r) => r.id && set.has(r.id)))
+                }}
+              >
+                批量指定租户{selectedKeys.length ? `（${selectedKeys.length}）` : ''}
+              </Button>
+            </Auth>
+          ) : null}
         </div>
       </div>
+      {impersonating ? (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message={`审计中：可指定库的归属租户（单一归属）。实例地址可留在原租户；跨租户共用请用授权（只读），不要多租户共编同一行。`}
+        />
+      ) : null}
       <Tabs
         className="inst-tabs"
         activeKey={activeType}
@@ -378,6 +477,7 @@ export default function Databases() {
           setActiveType(k)
           setDbNameQ('')
           setPage(1)
+          setSelectedKeys([])
         }}
         items={tabs.map((t) => ({
           key: t.value,
@@ -399,8 +499,30 @@ export default function Databases() {
           pagination={false}
           scroll={{ y: 'calc(100% - 47px)' }}
           style={{ height: '100%' }}
+          rowSelection={
+            impersonating
+              ? {
+                  selectedRowKeys: selectedKeys,
+                  onChange: (keys) => setSelectedKeys(keys),
+                  getCheckboxProps: (row: DatabaseRow) => ({ disabled: !row.id }),
+                }
+              : undefined
+          }
           columns={[
             { title: '库名', dataIndex: 'db_name', width: 140 },
+            ...(impersonating
+              ? [
+                  {
+                    title: '所属租户',
+                    width: 120,
+                    render: (_: unknown, row: DatabaseRow) => {
+                      const same = row.tenant_id && currentTenantId && row.tenant_id === currentTenantId
+                      const label = row.tenant_name || row.tenant_id || '—'
+                      return same ? <Tag color="green">{label}</Tag> : <Tag color="orange">{label}</Tag>
+                    },
+                  },
+                ]
+              : []),
             {
               title: '绑定域名',
               width: 180,
@@ -435,7 +557,7 @@ export default function Databases() {
               width: 140,
               render: (_, row) => (row.visibility === 'private' ? roleNames(row.role_ids) || '—' : '—'),
             },
-            { title: '实例', width: 120, render: (_, row) => instanceName(row.instance_id) },
+            { title: '实例', width: 120, render: (_, row) => instanceName(row.instance_id, row.instance_name) },
             {
               title: '审批人',
               width: 120,
@@ -443,10 +565,17 @@ export default function Databases() {
             },
             {
               title: '操作',
-              width: 160,
+              width: impersonating ? 280 : 160,
               fixed: 'right',
               render: (_, row) => (
                 <Space size={0}>
+                  {impersonating ? (
+                    <Auth urn={Perm.tenants.impersonate}>
+                      <Button type="link" onClick={() => openAssign([row])}>
+                        指定租户
+                      </Button>
+                    </Auth>
+                  ) : null}
                   <Button type="link" onClick={() => open(row)}>
                     编辑
                   </Button>
@@ -470,6 +599,46 @@ export default function Databases() {
         />
       </div>
 
+      <Modal
+        open={assignRows.length > 0}
+        title={assignRows.length > 1 ? `批量指定库归属租户（${assignRows.length}）` : '指定库归属租户'}
+        okText="划拨"
+        confirmLoading={assigning}
+        onCancel={() => !assigning && setAssignRows([])}
+        onOk={confirmAssign}
+      >
+        <p style={{ marginBottom: 12 }}>
+          {assignRows.length === 1 ? (
+            <>
+              将库「{assignRows[0].db_name}」（实例{' '}
+              {instanceName(assignRows[0].instance_id, assignRows[0].instance_name)}
+              ）划到指定租户。实例地址不迁；该库账号随库走。其它租户要用请走授权（只读）。
+            </>
+          ) : (
+            <>
+              将以下 {assignRows.length} 个库划到同一目标租户。实例地址不迁；各库账号随库走。其它租户要用请走授权（只读）。
+              <ul style={{ margin: '8px 0 0', paddingLeft: 18, maxHeight: 160, overflow: 'auto' }}>
+                {assignRows.map((r) => (
+                  <li key={r.id}>
+                    {r.db_name}（{instanceName(r.instance_id, r.instance_name)}）
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </p>
+        <Select
+          style={{ width: '100%' }}
+          showSearch
+          optionFilterProp="label"
+          value={assignTid || undefined}
+          onChange={(v) => setAssignTid(v)}
+          options={tenants.map((t) => ({
+            value: t.id,
+            label: `${t.name || t.code || t.id}${t.id === currentTenantId ? '（当前审计）' : ''}`,
+          }))}
+        />
+      </Modal>
       <Modal
         open={visible}
         title="登记库"
@@ -586,7 +755,9 @@ export default function Databases() {
                 <Radio.Button value="global">全局</Radio.Button>
                 <Radio.Button value="private">私有</Radio.Button>
               </Radio.Group>
-              <div className="type-hint">全局：所有人可见。私有：仅可访问用户，以及绑定角色下的用户可见</div>
+              <div className="type-hint">
+                全局：本租户内可见。私有：仅可访问用户，以及绑定角色下的本租户成员可见
+              </div>
             </div>
           </div>
           {visibility === 'private' && (
@@ -594,11 +765,11 @@ export default function Databases() {
               <div className="fi">
                 <label>可访问用户</label>
                 <Select
-                  mode="tags"
+                  mode="multiple"
                   value={form.access_users || []}
                   showSearch
                   maxTagCount="responsive"
-                  placeholder="选择或输入用户名"
+                  placeholder="选择本库所属租户成员"
                   style={{ width: '100%' }}
                   optionFilterProp="label"
                   options={userOptions.map((u) => ({ value: u, label: u }))}
@@ -612,7 +783,7 @@ export default function Databases() {
                   value={form.role_ids || []}
                   showSearch
                   maxTagCount="responsive"
-                  placeholder="绑定后，该角色下用户可见"
+                  placeholder="绑定后，本租户内该角色成员可见"
                   style={{ width: '100%' }}
                   optionFilterProp="label"
                   options={roles.map((r) => ({ value: r.id as string, label: r.name || r.code }))}
@@ -624,11 +795,11 @@ export default function Databases() {
           <div className="fi">
             <label>审批人</label>
             <Select
-              mode="tags"
+              mode="multiple"
               value={form.approvers || []}
               showSearch
               maxTagCount="responsive"
-              placeholder="可多选，也可输入后回车"
+              placeholder="仅限本库所属租户成员"
               style={{ width: '100%' }}
               optionFilterProp="label"
               options={userOptions.map((u) => ({ value: u, label: u }))}

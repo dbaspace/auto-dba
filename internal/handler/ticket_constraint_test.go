@@ -30,22 +30,22 @@ func TestCanActOnTargetConstraints(t *testing.T) {
 	}
 	id := insts[0].ID
 
-	ok, deny, msg, err := h.canActOnTarget(id, "appdb", "admin")
+	ok, deny, msg, err := h.canActOnTarget("", id, "appdb", "admin")
 	if err != nil || !ok {
 		t.Fatalf("admin should pass registered db: deny=%v msg=%s err=%v", deny, msg, err)
 	}
 
-	ok, deny, msg, err = h.canActOnTarget(id, "missing_db", "admin")
+	ok, deny, msg, err = h.canActOnTarget("", id, "missing_db", "admin")
 	if err != nil || ok || deny != targetActDenyDBNotRegistered {
 		t.Fatalf("missing db: ok=%v deny=%v msg=%s err=%v", ok, deny, msg, err)
 	}
 
-	ok, deny, msg, err = h.canActOnTarget(id, "appdb", "someone_else")
+	ok, deny, msg, err = h.canActOnTarget("", id, "appdb", "someone_else")
 	if err != nil || ok || deny != targetActDenyNotApprover {
 		t.Fatalf("non approver: ok=%v deny=%v msg=%s err=%v", ok, deny, msg, err)
 	}
 
-	ok, deny, msg, err = h.canActOnTarget("not-exist", "", "admin")
+	ok, deny, msg, err = h.canActOnTarget("", "not-exist", "", "admin")
 	if err != nil || ok || deny != targetActDenyInstanceMissing {
 		t.Fatalf("missing instance: ok=%v deny=%v msg=%s err=%v", ok, deny, msg, err)
 	}

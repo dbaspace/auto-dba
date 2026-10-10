@@ -749,12 +749,17 @@ function NotifyPanel() {
         await_exec_stuck_hours: Number(d.await_exec_stuck_hours) > 0 ? Number(d.await_exec_stuck_hours) : 2,
         webhook_enabled: !!d.webhook_enabled,
         webhook_url: d.webhook_url || '',
+        webhook_on_alert: d.webhook_on_alert !== false,
         wecom_enabled: !!d.wecom_enabled,
         wecom_corp_id: d.wecom_corp_id || '',
         wecom_agent_id: d.wecom_agent_id || '',
         wecom_secret: '',
+        wecom_on_alert: !!d.wecom_on_alert,
+        wecom_to_user: d.wecom_to_user || '@all',
         phone_enabled: !!d.phone_enabled,
         phone_api_url: d.phone_api_url || '',
+        phone_on_alert: !!d.phone_on_alert,
+        email_on_alert: !!d.email_on_alert,
       })
     } catch (e: any) {
       message.error(e?.response?.data?.message || e?.message || '加载失败')
@@ -781,12 +786,17 @@ function NotifyPanel() {
         await_exec_stuck_hours: Number(f.await_exec_stuck_hours) > 0 ? Number(f.await_exec_stuck_hours) : 2,
         webhook_enabled: !!f.webhook_enabled,
         webhook_url: (f.webhook_url || '').trim(),
+        webhook_on_alert: !!f.webhook_on_alert,
         wecom_enabled: !!f.wecom_enabled,
         wecom_corp_id: (f.wecom_corp_id || '').trim(),
         wecom_agent_id: (f.wecom_agent_id || '').trim(),
         wecom_secret: (f.wecom_secret || '').trim(),
+        wecom_on_alert: !!f.wecom_on_alert,
+        wecom_to_user: (f.wecom_to_user || '@all').trim(),
         phone_enabled: !!f.phone_enabled,
         phone_api_url: (f.phone_api_url || '').trim(),
+        phone_on_alert: !!f.phone_on_alert,
+        email_on_alert: !!f.email_on_alert,
       })
       message.success('已保存')
       form.setFieldValue('wecom_secret', '')
@@ -862,15 +872,22 @@ function NotifyPanel() {
         </Form.Item>
         <Divider />
         <p className="field-hint" style={{ marginBottom: 12 }}>
-          以下渠道本期仅保存配置，发送能力后续开放。
+          告警外发：Webhook / 企微 / 电话 / 邮件。也可在「通知路由」按标签覆盖渠道。
         </p>
         <Form.Item label="启用 Webhook" name="webhook_enabled" valuePropName="checked">
           <Switch />
         </Form.Item>
-        <Form.Item label="Webhook URL" name="webhook_url">
+        <Form.Item label="Webhook 用于告警" name="webhook_on_alert" valuePropName="checked">
+          <Switch />
+        </Form.Item>
+        <Form.Item label="Webhook URL" name="webhook_url"
+          extra={<span className="field-hint">通用 JSON；若为企微群机器人 URL 则自动改发 markdown</span>}>
           <Input placeholder="https://example.com/hooks/..." />
         </Form.Item>
-        <Form.Item label="启用企业微信" name="wecom_enabled" valuePropName="checked">
+        <Form.Item label="启用企业微信应用" name="wecom_enabled" valuePropName="checked">
+          <Switch />
+        </Form.Item>
+        <Form.Item label="企微用于告警" name="wecom_on_alert" valuePropName="checked">
           <Switch />
         </Form.Item>
         <Form.Item label="企业微信 CorpID" name="wecom_corp_id">
@@ -882,11 +899,22 @@ function NotifyPanel() {
         <Form.Item label="企业微信 Secret" name="wecom_secret">
           <Input.Password placeholder="留空表示不修改" />
         </Form.Item>
+        <Form.Item label="企微接收人" name="wecom_to_user" extra={<span className="field-hint">默认 @all；值班排班可覆盖</span>}>
+          <Input placeholder="@all" />
+        </Form.Item>
         <Form.Item label="启用电话通知" name="phone_enabled" valuePropName="checked">
           <Switch />
         </Form.Item>
-        <Form.Item label="电话通知 API" name="phone_api_url">
+        <Form.Item label="电话用于告警" name="phone_on_alert" valuePropName="checked">
+          <Switch />
+        </Form.Item>
+        <Form.Item label="电话通知 API" name="phone_api_url"
+          extra={<span className="field-hint">POST JSON：severity/title/text 等字段</span>}>
           <Input placeholder="https://..." />
+        </Form.Item>
+        <Form.Item label="告警邮件通知" name="email_on_alert" valuePropName="checked"
+          extra={<span className="field-hint">发给值班人 / labels.owner（需 SMTP）</span>}>
+          <Switch />
         </Form.Item>
         <Button type="primary" loading={saving} onClick={onSave}>
           保存

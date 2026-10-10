@@ -474,6 +474,9 @@ func (e *Engine) runChange(changeID string) {
 	for i := range nodes {
 		nodeByID[nodes[i].ID] = &nodes[i]
 	}
+	if ch.Type == store.SrChangeUpgrade || ch.Type == store.SrChangeUpgradeRollback {
+		nodes = activeNodes(nodes)
+	}
 
 	for _, step := range ch.Steps {
 		if step.Status == store.SrStepSuccess || step.Status == store.SrStepSkipped {
@@ -508,9 +511,13 @@ func (e *Engine) runChange(changeID string) {
 		step.EndedAt = time.Now().Format(time.RFC3339)
 		_ = e.Store.UpdateSrChangeStep(&step)
 	}
-	_ = e.Store.UpdateSrChangeStatus(changeID, store.SrChangeSuccess, "全部步骤完成")
 	cl.Status = store.SrClusterReady
 	_ = e.Store.UpdateSrCluster(cl)
+	msg := "全部步骤完成"
+	if extra := e.syncRegistryAfterChange(ch, cl); extra != "" {
+		msg += "；" + extra
+	}
+	_ = e.Store.UpdateSrChangeStatus(changeID, store.SrChangeSuccess, msg)
 }
 
 func (e *Engine) execStep(ctx context.Context, cl *store.SrCluster, nodeByID map[string]*store.SrNode, nodes []store.SrNode, step *store.SrChangeStep) error {
@@ -609,6 +616,30 @@ func (e *Engine) execStep(ctx context.Context, cl *store.SrCluster, nodeByID map
 			return fmt.Errorf("节点缺失")
 		}
 		return e.stepDropBackend(ctx, cl, n, step)
+	case strings.HasPrefix(key, "verify_decommission_"):
+		n := nodeByID[step.NodeID]
+		if n == nil {
+			return fmt.Errorf("节点缺失")
+		}
+		return e.stepVerifyDecommission(ctx, cl, n, step)
+	case strings.HasPrefix(key, "verify_dropped_"):
+		n := nodeByID[step.NodeID]
+		if n == nil {
+			return fmt.Errorf("节点缺失")
+		}
+		return e.stepVerifyDropped(ctx, cl, n, step)
+	case strings.HasPrefix(key, "cancel_decommission_"):
+		n := nodeByID[step.NodeID]
+		if n == nil {
+			return fmt.Errorf("节点缺失")
+		}
+		return e.stepCancelDecommission(ctx, cl, n, step)
+	case strings.HasPrefix(key, "verify_recommission_"):
+		n := nodeByID[step.NodeID]
+		if n == nil {
+			return fmt.Errorf("节点缺失")
+		}
+		return e.stepVerifyRecommission(ctx, cl, n, step)
 	case strings.HasPrefix(key, "stop_node_"):
 		n := nodeByID[step.NodeID]
 		if n == nil {
@@ -864,20 +895,28 @@ func (e *Engine) stepWaitFEReady(ctx context.Context, cl *store.SrCluster, step 
 }
 
 func (e *Engine) feDSN(cl *store.SrCluster) (string, error) {
+	if strings.TrimSpace(cl.FeHost) == "" {
+		return "", fmt.Errorf("fe_host 为空")
+	}
+	var nodes []store.SrNode
+	if e.Store != nil && cl.ID != "" {
+		nodes, _ = e.Store.ListSrNodes(cl.ID)
+	}
+	return e.feDSNWithNodes(cl, nodes)
+}
+
+// feDSNWithNodes 同 feDSN，节点列表由调用方提供（避免重复读库）。
+func (e *Engine) feDSNWithNodes(cl *store.SrCluster, nodes []store.SrNode) (string, error) {
 	host := strings.TrimSpace(cl.FeHost)
 	if host == "" {
 		return "", fmt.Errorf("fe_host 为空")
 	}
-	user := cl.FeUser
-	if user == "" {
-		user = "root"
-	}
-	pass, err := secret.Decrypt(e.Secret, cl.FePasswordEnc)
+	// 初装允许空密码；后期上密码后由资源配置中的 StarRocks 实例提供
+	user, pass, err := e.feCredentials(cl, nodes, false)
 	if err != nil {
 		return "", err
 	}
-	// 初装允许空密码
-	return fmt.Sprintf("%s:%s@tcp(%s:%d)/", user, pass, host, cl.FeQueryPort), nil
+	return buildFEDSN(user, pass, host, cl.FeQueryPort), nil
 }
 
 func (e *Engine) pingFE(ctx context.Context, cl *store.SrCluster) error {
@@ -1200,6 +1239,7 @@ func (e *Engine) queryProcAlive(ctx context.Context, cl *store.SrCluster, path, 
 	errIdx := col("errmsg")
 	joinIdx := col("join")
 	verIdx := col("version")
+	decomIdx := col("systemdecommissioned")
 	checkVer := strings.TrimSpace(wantVersion) != "" && verIdx >= 0
 
 	count := 0
@@ -1250,13 +1290,18 @@ func (e *Engine) queryProcAlive(ctx context.Context, cl *store.SrCluster, path, 
 		if errmsg != "" {
 			line += " ErrMsg=" + errmsg
 		}
-		if checkVer && !versionMatches(ver, wantVersion) {
+		decommissioned := procTruthy(cell(decomIdx))
+		if decommissioned {
+			line += " Decommissioned"
+		}
+		// 下线中的 BE 不参与升级，版本不符不算失败
+		if checkVer && !decommissioned && !versionMatches(ver, wantVersion) {
 			if ver == "" {
 				ver = "（未上报）"
 			}
 			verBad = append(verBad, fmt.Sprintf("%s 版本 %s", label, ver))
 		}
-		if okAlive && !procTruthy(alive) {
+		if okAlive && !procTruthy(alive) && !decommissioned {
 			notAlive++
 			bad = append(bad, line)
 		} else {

@@ -257,6 +257,16 @@ func (d *DB) ClearLoginFailures(id string) error {
 }
 
 func (d *DB) DeleteUser(id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil
+	}
+	if _, err := d.Exec(`DELETE FROM tbl_tenant_members WHERE user_id=?`, id); err != nil {
+		return err
+	}
+	if _, err := d.Exec(`DELETE FROM tbl_tenant_grants WHERE to_user_id=?`, id); err != nil {
+		return err
+	}
 	if _, err := d.Exec(`DELETE FROM tbl_user_roles WHERE user_id=?`, id); err != nil {
 		return err
 	}

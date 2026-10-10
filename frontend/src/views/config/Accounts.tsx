@@ -17,6 +17,7 @@ import api from '../../api/request'
 import Auth from '../../components/Auth'
 import { Perm } from '../../hooks/usePermission'
 import DbTypeIcon from '../../components/DbTypeIcon'
+import { useAppSelector } from '../../store'
 import './Accounts.css'
 
 const permissionOps = [
@@ -71,6 +72,9 @@ function permText(list: any[]) {
 }
 
 export default function Accounts() {
+  const user = useAppSelector((s) => s.auth.user)
+  const impersonating = Boolean((user as { impersonating?: boolean })?.impersonating)
+  const currentTenantId = (user as { current_tenant?: { id?: string } })?.current_tenant?.id || ''
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [rows, setRows] = useState<any[]>([])
@@ -279,6 +283,11 @@ export default function Accounts() {
   return (
     <div className="ops-page">
       <p className="hint">新增数据库工单审批通过后会自动写入此处；密码以 AES-256-GCM 加密存储，查看时再解密。</p>
+      {impersonating ? (
+        <p className="hint" style={{ color: 'var(--ant-color-text-secondary, #666)' }}>
+          审计中：列表含全平台账号（含所属租户）。划拨请在实例页操作，账号随实例租户归属。
+        </p>
+      ) : null}
       <Tabs
         activeKey={activeType}
         onChange={setActiveType}
@@ -350,6 +359,19 @@ export default function Accounts() {
               width: 120,
               render: (_, row) => <Tag color="processing">{typeLabel(row.db_type)}</Tag>,
             },
+            ...(impersonating
+              ? [
+                  {
+                    title: '所属租户',
+                    width: 120,
+                    render: (_: unknown, row: any) => {
+                      const same = row.tenant_id && currentTenantId && row.tenant_id === currentTenantId
+                      const label = row.tenant_name || row.tenant_id || '—'
+                      return same ? <Tag color="green">{label}</Tag> : <Tag color="orange">{label}</Tag>
+                    },
+                  },
+                ]
+              : []),
             {
               title: '用户名',
               render: (_, row) => (

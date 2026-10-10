@@ -46,15 +46,46 @@
 
 **接入层代理**：Hub 含 HAProxy / Nginx / LVS。**自建部署**经平台 Agent 装发行版包（均含 **keepalived**；须**主备至少 2 节点**；Nginx 可扩至多节点）并下发 conf；VIP 必填且做占用校验。亦可仅登记已有。详见 [proxy.md](proxy.md)。
 
-**与 StarRocks 对照的后续项**：整集群 reinit、版本升级门禁、分层 conf 模板下发；Redis 部署内自动接入 HA。
+**与 StarRocks 对照的后续项**：整集群 reinit、版本升级门禁、已运行实例的参数在线下发（含回滚 / 修订记录）；Redis 部署内自动接入 HA。
 
 ## 制品
 
-运维将包提前放入配置中心该环境 OSS；`DbRelease` 登记 `object_key` + `sha256`。控制面签发短时 GET，Agent 下载校验解压。对象键建议：
+运维在 **版本目录** Tab 登记版本，包放在配置中心该环境 OSS（设置 Tab 绑定 OSS 与 prefix，未填 prefix 时默认 `db-artifacts/{engine}/`）。对象键约定：
 
 ```text
-{prefix}db-artifacts/{engine}/{version}/{arch}/{filename}
+{prefix}{version}/{arch}/{filename}
 ```
+
+- **版本号按引擎校验**：MySQL `主.次.修订`（5.7 / 8.0 / 8.4 LTS / 9.x Innovation，通道 LTS / Innovation / GA）；PostgreSQL `主版本[.小版本]`，**13 及以上**（内置模板使用 `wal_keep_size`）。列表展示大版本（MySQL `8.0`，PG `16`）。
+- **登记时 object_key 可留空**：按约定自动生成；只填文件名也会补全目录。
+- **取包三种方式**：
+  - 页面 **上传**：边传边算 sha256，写入 OSS 并回填。
+  - **从 OSS 同步**：列出版本目录，取同名或最大的包。sha256 依次取同目录 `.sha256` 旁注、`SHA256SUMS` / `sha256sums.txt`、对象元数据；都没有时，≤32MB 当场计算，更大的包后台计算，状态显示「计算中」。
+  - **行内填写 sha256**。
+- **就绪状态**：object_key 指向具体文件且 sha256 为 64 位十六进制即为「就绪」。**部署 / 扩容只允许已启用且就绪的版本**（签发下载地址时校验），新建集群的版本下拉也只列就绪版本。
+- **安装解包**：MySQL / PG 官方 tarball 带一层顶级目录，控制面在 `artifact/install` 传 `strip_components: 1`。DB Agent 仅在包内恰好只有一个顶级目录时才剥离，否则原样解压。旧版 Agent 忽略该字段，需重新下发 DB Agent 才生效。
+
+## 参数模板（MySQL / PostgreSQL）
+
+部署 / 扩容写配置（`put_conf_*` 步骤）时，MySQL 写 `{software_base}/my.cnf`，PG 写 `{data_root}/postgresql.conf`。生成步骤：
+
+1. **选模板**（按集群版本的大版本）：
+   - 平台模板按以下顺序查找：精确大版本 → 内置对应大版本（MySQL 8.1–8.3 → 8.0，8.4 / 9.x → 8.4）→ `*` 通用。
+   - 都没有时用内置模板：MySQL 5.7 / 8.0 / 8.4，PG 通用（13+）。
+2. **渲染变量**：Go `text/template`，未知变量直接报错。可用 `{{.BaseDir}} {{.DataDir}} {{.LogDir}} {{.Port}} {{.Host}} {{.ServerID}} {{.Role}} {{.Topology}} {{.Version}} {{.Major}}`。
+3. **叠加集群覆盖**：每行 `key = value`，同名参数替换模板值，否则追加。MySQL 只作用于 `[mysqld]`，`-` 与 `_` 等价；不支持段头、模板变量。
+4. **追加平台托管项**：模板和覆盖里都不允许填写，平台按拓扑与角色生成：
+   - **MySQL**：`basedir / datadir / port / socket / server_id`；只读从库加 `read_only / super_read_only`。主从拓扑会加载半同步插件 `plugin-load-add`，参数名随版本切换：8.4+ 用 `rpl_semi_sync_source_* / replica_*`，更早版本用 `master_* / slave_*`。
+   - **PG**：`port / data_directory`；主从拓扑主库加 `synchronous_standby_names`，从库加 `primary_conninfo / hot_standby`。
+
+入口：
+
+- **设置 Tab →「参数模板」**：按大版本分页签，可编辑并保存为平台模板、恢复内置、复制成新大版本模板。保存时校验托管键，并用示例变量试渲染。
+- **集群详情 →「参数」**：左侧编辑集群覆盖，右侧预览各节点最终配置及模板来源（未保存的覆盖也可预览）。
+
+范围：只对**后续部署 / 扩容**生效；已运行实例的在线下发后续提供。
+
+接口：`GET|PUT /db-deploy/conf-templates`、`POST /db-deploy/conf-templates/reset`、`GET|PUT /db-deploy/clusters/:id/conf`、`GET|POST /db-deploy/clusters/:id/conf/preview`。表：`tbl_db_deploy_conf_templates`（`engine, major` 唯一）、`tbl_db_deploy_cluster_confs`（`cluster_id` 主键）。
 
 ## Agent
 
@@ -85,7 +116,7 @@
 7. **扩容**：ready 集群对新节点点「加入」走 `add_node`（装包+启停；replica 含复制验收）  
 8. **下线**：`remove_node` 停服并移除平台登记（保留主机数据目录；禁止下线唯一主）
 
-节点运维：`start` / `stop` / `restart` / `add` / `remove` 走独立变更类型；`ha_init` 计入「部署日志」。工作台「部署日志 / 运行日志」按变更类型过滤。
+节点运维：`start` / `stop` / `restart` / `add` / `remove` 走独立变更类型。「变更」页按类型分四个子 Tab：初始化日志（`cluster_deploy`、`ha_init`）、运行日志（`start_node` / `stop_node` / `restart_node`）、升级日志（暂无此类变更）、扩缩容日志（`add_node` / `remove_node`），标签带条数；打开任一变更时子 Tab 自动切到其分类。集群卡片上不再有日志按钮。
 
 ### 高危操作须工单审批
 
@@ -126,7 +157,7 @@ Hub 选引擎 → 工作台含：集群列表（**新建集群** / **登记已�
 |------|------|
 | 新建集群 | 状态 `draft`，再点「开始部署」（仅 **可部署** 引擎） |
 | 登记已有集群 | `register_existing`，直接 `ready`，不跑装机 |
-| 部署日志 / 运行日志 | 变更 Tab 按类型过滤 |
+| 初始化 / 运行 / 升级 / 扩缩容日志 | 变更 Tab 内分类子 Tab |
 
 ## 引擎能力矩阵
 

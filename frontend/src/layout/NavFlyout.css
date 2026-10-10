@@ -204,6 +204,12 @@
   white-space: nowrap;
 }
 
+.nav-flyout-empty {
+  padding: 8px 4px;
+  font-size: 12px;
+  color: var(--app-text-secondary, #9ca3af);
+}
+
 .nav-flyout-link:hover {
   background: var(--app-sider-active-bg, #f5f7fa);
   color: var(--app-text, #111827);
@@ -309,6 +315,22 @@
   color: var(--app-sider-text, #374151);
   font-size: 14px;
   border-radius: 0;
+}
+
+.app-sider-top-ico {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  flex: none;
+  font-size: 16px;
+  line-height: 1;
+}
+
+/* 选中时只改文字色，保留各菜单图标自身配色 */
+.app-sider-top-item.active .app-sider-label,
+.app-sider-top-item.flyout-open .app-sider-label {
+  color: var(--app-sider-active-color, #1677ff);
 }
 
 .app-sider-top-item:hover {

@@ -36,7 +36,6 @@ func (h *HAHandler) controllerAuth(ctrl *store.HAController) (ha.ControllerAuth,
 	}, nil
 }
 
-
 // ListCandidateSources 成员候选：已登记实例 + 集群部署 ready 的 MySQL 主从节点。
 func (h *HAHandler) ListCandidateSources(c *gin.Context) {
 	engine := strings.ToLower(strings.TrimSpace(c.Query("engine")))
@@ -48,7 +47,7 @@ func (h *HAHandler) ListCandidateSources(c *gin.Context) {
 		dbType = "postgres"
 	}
 
-	insts, err := h.Store.ListInstances(dbType, c.Query("q"))
+	insts, err := h.Store.ListInstancesInTenant(effectiveListTenantID(h.Store, c), dbType, c.Query("q"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -69,7 +68,7 @@ func (h *HAHandler) ListCandidateSources(c *gin.Context) {
 
 	var deployNodes []gin.H
 	if engine == "mysql" {
-		clusters, err := h.Store.ListDbDeployClusters("mysql")
+		clusters, err := h.Store.ListDbDeployClustersInTenant(effectiveListTenantID(h.Store, c), "mysql")
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 			return
@@ -131,7 +130,7 @@ func (h *HAHandler) ImportDbDeployMembers(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "dbdeploy_cluster_id 必填"})
 		return
 	}
-	cl, err := h.Store.GetDbDeployCluster(req.DbDeployClusterID)
+	cl, err := h.Store.GetDbDeployClusterInTenant(req.DbDeployClusterID, effectiveListTenantID(h.Store, c))
 	if err != nil || cl == nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "部署集群不存在"})
 		return
@@ -170,7 +169,7 @@ func (h *HAHandler) ImportDbDeployMembers(c *gin.Context) {
 			port = 3306
 		}
 		name := fmt.Sprintf("%s-%s", cl.Name, n.Host)
-		inst, err := h.Store.EnsureInstanceFromHost("mysql", name, n.Host, port, "")
+		inst, err := h.Store.EnsureInstanceFromHostInTenant(cl.TenantID, "mysql", name, n.Host, port, "")
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"message": "登记实例失败: " + err.Error()})
 			return
@@ -193,16 +192,16 @@ func (h *HAHandler) ImportDbDeployMembers(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{
-		"cluster_name": cl.Name,
+		"cluster_name":  cl.Name,
 		"controller_id": cl.ControllerID,
-		"members":      members,
-		"dbdeploy_id":  cl.ID,
+		"members":       members,
+		"dbdeploy_id":   cl.ID,
 	}})
 }
 
 // GetMHAConf 读取已保存 conf，若无则按成员生成预览。
 func (h *HAHandler) GetMHAConf(c *gin.Context) {
-	cluster, err := h.Store.GetHACluster(c.Param("id"))
+	cluster, err := h.Store.GetHAClusterInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || cluster == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "集群不存在"})
 		return
@@ -245,7 +244,7 @@ func (h *HAHandler) GetMHAConf(c *gin.Context) {
 
 // PreviewMHAConf 按选项重新生成模板。
 func (h *HAHandler) PreviewMHAConf(c *gin.Context) {
-	cluster, err := h.Store.GetHACluster(c.Param("id"))
+	cluster, err := h.Store.GetHAClusterInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || cluster == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "集群不存在"})
 		return
@@ -278,7 +277,7 @@ func (h *HAHandler) PreviewMHAConf(c *gin.Context) {
 
 // SaveMHAConf 保存平台侧草稿。
 func (h *HAHandler) SaveMHAConf(c *gin.Context) {
-	cluster, err := h.Store.GetHACluster(c.Param("id"))
+	cluster, err := h.Store.GetHAClusterInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || cluster == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "集群不存在"})
 		return
@@ -330,7 +329,7 @@ func (h *HAHandler) SaveMHAConf(c *gin.Context) {
 
 // PushMHAConf 下发到 Manager Agent，可选跑 check_repl。
 func (h *HAHandler) PushMHAConf(c *gin.Context) {
-	cluster, err := h.Store.GetHACluster(c.Param("id"))
+	cluster, err := h.Store.GetHAClusterInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || cluster == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "集群不存在"})
 		return

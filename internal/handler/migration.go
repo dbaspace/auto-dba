@@ -62,7 +62,7 @@ type migCreateReq struct {
 }
 
 func (h *MigrationHandler) List(c *gin.Context) {
-	list, err := h.Store.ListMigrations()
+	list, err := h.Store.ListMigrationsInTenant(effectiveListTenantID(h.Store, c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -74,7 +74,7 @@ func (h *MigrationHandler) List(c *gin.Context) {
 }
 
 func (h *MigrationHandler) Get(c *gin.Context) {
-	t, err := h.Store.GetMigration(c.Param("id"))
+	t, err := h.Store.GetMigrationInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || t == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "任务不存在"})
 		return
@@ -83,7 +83,19 @@ func (h *MigrationHandler) Get(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": t})
 }
 
-func (h *MigrationHandler) fillEndpoints(t *store.MigrationTask) error {
+// fillEndpoints 创建路径：源/目标实例须属于当前租户（或已授权）。
+func (h *MigrationHandler) fillEndpoints(c *gin.Context, t *store.MigrationTask) error {
+	if src, err := resolveInstanceInTenant(h.Store, c, t.SourceID); err != nil || src == nil {
+		return errOr("源实例不存在")
+	}
+	if tgt, err := resolveInstanceInTenant(h.Store, c, t.TargetID); err != nil || tgt == nil {
+		return errOr("目标实例不存在")
+	}
+	return h.fillEndpointsRaw(t)
+}
+
+// fillEndpointsRaw 仅补全主机端口（调用方已校验任务归属）。
+func (h *MigrationHandler) fillEndpointsRaw(t *store.MigrationTask) error {
 	src, err := h.Store.GetInstance(t.SourceID)
 	if err != nil || src == nil {
 		return errOr("源实例不存在")
@@ -173,32 +185,33 @@ func (h *MigrationHandler) Create(c *gin.Context) {
 	} else {
 		t.ScheduledAt = ""
 	}
-	if err := h.fillEndpoints(t); err != nil {
+	if err := h.fillEndpoints(c, t); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
-	def, _ := h.Store.GetGlobalArg("migration_approver_user_ids")
-	if def == "" {
-		def, _ = h.Store.GetGlobalArg("sync_default_approver")
+	preferred := strings.TrimSpace(req.AssignedApprover)
+	if preferred == "" {
+		preferred = strings.TrimSpace(req.Reviewer)
 	}
-	reviewer := strings.TrimSpace(req.AssignedApprover)
-	if reviewer == "" {
-		reviewer = strings.TrimSpace(req.Reviewer)
+	if preferred == "" {
+		preferred = strings.TrimSpace(req.Approver)
 	}
-	if reviewer == "" {
-		reviewer = strings.TrimSpace(req.Approver)
+	if preferred == "" {
+		preferred = strings.TrimSpace(req.AssignedTo)
 	}
-	if reviewer == "" {
-		reviewer = strings.TrimSpace(req.AssignedTo)
-	}
-	if reviewer == "" {
-		reviewer = strings.TrimSpace(def)
-		if i := strings.IndexAny(reviewer, ",，"); i >= 0 {
-			reviewer = strings.TrimSpace(reviewer[:i])
+	if preferred == "" {
+		def, _ := h.Store.GetGlobalArg("migration_approver_user_ids")
+		if def == "" {
+			def, _ = h.Store.GetGlobalArg("sync_default_approver")
+		}
+		preferred = strings.TrimSpace(def)
+		if i := strings.IndexAny(preferred, ",，"); i >= 0 {
+			preferred = strings.TrimSpace(preferred[:i])
 		}
 	}
-	if reviewer == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "审核人必填，或在全局参数配置 migration_approver_user_ids / sync_default_approver"})
+	reviewer, aerr := resolveTenantAssignee(h.Store, middleware.TenantID(c), preferred)
+	if aerr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": aerr.Error()})
 		return
 	}
 	th := &TicketHandler{Store: h.Store}
@@ -271,7 +284,7 @@ func (h *MigrationHandler) Create(c *gin.Context) {
 		t.ErrorMessage = "预检未通过"
 		_ = h.Store.UpdateMigration(t)
 		_ = h.Store.AddMigrationLog(t.ID, "ERROR", "创建后预检未通过")
-		saved, _ := h.Store.GetMigration(t.ID)
+		saved, _ := h.Store.GetMigrationInTenant(t.ID, effectiveListTenantID(h.Store, c))
 		c.JSON(http.StatusOK, gin.H{"data": saved, "ok": false, "items": items, "message": "预检未通过"})
 		return
 	}
@@ -286,6 +299,9 @@ func (h *MigrationHandler) Create(c *gin.Context) {
 		Submitter:   middleware.Username(c),
 		AssignedTo:  reviewer,
 	}
+	stampTenantID(c, func(tid string) {
+		if issue != nil { issue.TenantID = tid }
+	})
 	if err := h.Store.CreateIssue(issue); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -294,12 +310,12 @@ func (h *MigrationHandler) Create(c *gin.Context) {
 	t.IssueID = issue.ID
 	_ = h.Store.UpdateMigration(t)
 	_ = h.Store.AddMigrationLog(t.ID, "INFO", "已提交审批，通过后自动执行")
-	saved, _ := h.Store.GetMigration(t.ID)
+	saved, _ := h.Store.GetMigrationInTenant(t.ID, effectiveListTenantID(h.Store, c))
 	c.JSON(http.StatusOK, gin.H{"data": saved, "ok": true, "items": items})
 }
 
 func (h *MigrationHandler) loadTask(c *gin.Context) *store.MigrationTask {
-	t, err := h.Store.GetMigration(c.Param("id"))
+	t, err := h.Store.GetMigrationInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || t == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "任务不存在"})
 		return nil
@@ -316,7 +332,7 @@ func (h *MigrationHandler) Precheck(c *gin.Context) {
 		SchemaStrategy: req.SchemaStrategy, MigrationMode: req.MigrationMode,
 	}
 	if id := c.Param("id"); id != "" && id != "precheck" {
-		if exist, _ := h.Store.GetMigration(id); exist != nil {
+		if exist, _ := h.Store.GetMigrationInTenant(id, effectiveListTenantID(h.Store, c)); exist != nil {
 			t = exist
 		}
 	}
@@ -325,7 +341,7 @@ func (h *MigrationHandler) Precheck(c *gin.Context) {
 		return
 	}
 	if t.DBType == "" {
-		if inst, _ := h.Store.GetInstance(t.SourceID); inst != nil {
+		if inst, _ := resolveInstanceInTenant(h.Store, c, t.SourceID); inst != nil {
 			t.DBType = inst.DBType
 		}
 	}
@@ -657,7 +673,7 @@ func (h *MigrationHandler) Progress(c *gin.Context) {
 }
 
 func (h *MigrationHandler) Connect(c *gin.Context) {
-	inst, err := h.Store.GetInstance(c.Param("id"))
+	inst, err := resolveInstanceInTenant(h.Store, c, c.Param("id"))
 	if err != nil || inst == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "实例不存在"})
 		return
@@ -674,7 +690,7 @@ func (h *MigrationHandler) Connect(c *gin.Context) {
 }
 
 func (h *MigrationHandler) Databases(c *gin.Context) {
-	inst, err := h.Store.GetInstance(c.Param("id"))
+	inst, err := resolveInstanceInTenant(h.Store, c, c.Param("id"))
 	if err != nil || inst == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "实例不存在"})
 		return
@@ -695,7 +711,7 @@ func (h *MigrationHandler) Databases(c *gin.Context) {
 }
 
 func (h *MigrationHandler) Tables(c *gin.Context) {
-	inst, err := h.Store.GetInstance(c.Param("id"))
+	inst, err := resolveInstanceInTenant(h.Store, c, c.Param("id"))
 	if err != nil || inst == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "实例不存在"})
 		return
@@ -730,7 +746,7 @@ func (h *MigrationHandler) Tables(c *gin.Context) {
 }
 
 func (h *MigrationHandler) BatchTables(c *gin.Context) {
-	inst, err := h.Store.GetInstance(c.Param("id"))
+	inst, err := resolveInstanceInTenant(h.Store, c, c.Param("id"))
 	if err != nil || inst == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "实例不存在"})
 		return
@@ -899,8 +915,8 @@ func (h *MigrationHandler) GetSettings(c *gin.Context) {
 	oss := s.OSS
 	ossConfigured := s.OSS.Configured
 	if env != "" {
-		ossConfigured = h.Store.ResolveMigrationOSSConfigured(env)
-		if row, err := h.Store.GetOSSSettingByEnv(env); err == nil && row != nil {
+		ossConfigured = h.Store.ResolveMigrationOSSConfiguredInTenant(effectiveListTenantID(h.Store, c), env)
+		if row, err := h.Store.GetOSSSettingByEnvInTenant(env, effectiveListTenantID(h.Store, c)); err == nil && row != nil {
 			oss = store.MigrationOSSSettings{
 				Endpoint:      row.Endpoint,
 				Bucket:        row.Bucket,

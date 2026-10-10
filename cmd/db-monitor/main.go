@@ -35,7 +35,7 @@ func main() {
 			_ = os.WriteFile(p, []byte(strconv.Itoa(os.Getpid())+"\n"), 0644)
 			defer func() { _ = os.Remove(p) }()
 		}
-		server.RunDbMonitor(cfg)
+		server.RunDbMonitor(cfg, *configPath)
 	case "status":
 		fmt.Println("check GET http://<host>:<db_monitor.port>/healthz")
 	default:

@@ -135,7 +135,7 @@ func EnsureMembersFromDeploy(st *store.DB, cl *store.DbDeployCluster, nodes []st
 			port = defaultPort
 		}
 		name := fmt.Sprintf("%s-%s", cl.Name, n.Host)
-		inst, err := st.EnsureInstanceFromHost(eng, name, n.Host, port, cl.Environment)
+		inst, err := st.EnsureInstanceFromHostInTenant(cl.TenantID, eng, name, n.Host, port, cl.Environment)
 		if err != nil {
 			return nil, fmt.Errorf("登记实例失败 %s:%d: %w", n.Host, port, err)
 		}

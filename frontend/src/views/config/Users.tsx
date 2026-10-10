@@ -1,9 +1,21 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { Button, Form, Input, Modal, Popconfirm, Select, Space, Tag, message } from 'antd'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import api from '../../api/request'
 import Auth from '../../components/Auth'
 import { Perm } from '../../hooks/usePermission'
+import { useAppSelector } from '../../store'
+
+function renderRoleTags(ids: string[], names: Record<string, string>, fallback?: string) {
+  if (!ids.length) return fallback || '-'
+  return (
+    <Space size={[4, 4]} wrap>
+      {ids.map((id) => (
+        <Tag key={id}>{names[id] || id}</Tag>
+      ))}
+    </Space>
+  )
+}
 
 function currentUserId(): string {
   try {
@@ -47,8 +59,13 @@ function deleteConfirmCopy(row: any): { title: string; description: string } {
 }
 
 export default function Users() {
+  const authUser = useAppSelector((s) => s.auth.user)
+  const currentTenantId =
+    (authUser as { current_tenant?: { id?: string } })?.current_tenant?.id || ''
   const [rows, setRows] = useState<any[]>([])
   const [roles, setRoles] = useState<any[]>([])
+  /** 当前租户成员 role_ids：user_id → role_ids */
+  const [tenantRoleMap, setTenantRoleMap] = useState<Record<string, string[]>>({})
   const [visible, setVisible] = useState(false)
   const [pwdOpen, setPwdOpen] = useState(false)
   const [pwdTarget, setPwdTarget] = useState<any>(null)
@@ -70,15 +87,31 @@ export default function Users() {
     const [u, r] = await Promise.all([api.get('/users'), api.get('/roles')])
     setRows(u.data.data || [])
     setRoles(r.data.data || [])
+    if (currentTenantId) {
+      try {
+        const { data } = await api.get(`/tenants/${currentTenantId}/members`, { silent: true })
+        const map: Record<string, string[]> = {}
+        for (const m of data?.data || []) {
+          const uid = String(m.user_id || '').trim()
+          if (!uid) continue
+          map[uid] = Array.isArray(m.role_ids) ? m.role_ids.filter(Boolean) : []
+        }
+        setTenantRoleMap(map)
+      } catch {
+        setTenantRoleMap({})
+      }
+    } else {
+      setTenantRoleMap({})
+    }
   }
 
-  function roleNameMap() {
+  const names = useMemo(() => {
     const m: Record<string, string> = {}
     for (const r of roles) {
       m[r.id] = r.name || r.code || r.id
     }
     return m
-  }
+  }, [roles])
 
   function open(row?: any) {
     const ids =
@@ -182,9 +215,7 @@ export default function Users() {
 
   useEffect(() => {
     load()
-  }, [])
-
-  const names = roleNameMap()
+  }, [currentTenantId])
 
   return (
     <div className="ops-page">
@@ -213,8 +244,8 @@ export default function Users() {
               render: (v: string) => v || '-',
             },
             {
-              title: '角色',
-              width: 220,
+              title: '平台角色',
+              width: 280,
               render: (_, row) => {
                 const ids =
                   Array.isArray(row.role_ids) && row.role_ids.length > 0
@@ -222,18 +253,22 @@ export default function Users() {
                     : row.role_id
                       ? [row.role_id]
                       : []
-                if (!ids.length) {
-                  return row.role || '-'
-                }
-                return (
-                  <Space size={[4, 4]} wrap>
-                    {ids.map((id: string) => (
-                      <Tag key={id}>{names[id] || row.role || id}</Tag>
-                    ))}
-                  </Space>
-                )
+                return renderRoleTags(ids, names, row.role || '-')
               },
             },
+            ...(currentTenantId
+              ? [
+                  {
+                    title: '租户角色',
+                    width: 280,
+                    render: (_: unknown, row: any) => {
+                      const ids = tenantRoleMap[row.id] || []
+                      if (!ids.length) return <span style={{ color: '#999' }}>非本租户成员</span>
+                      return renderRoleTags(ids, names)
+                    },
+                  },
+                ]
+              : []),
             {
               title: '来源',
               width: 100,
@@ -383,7 +418,10 @@ export default function Users() {
               placeholder="user@example.com"
             />
           </Form.Item>
-          <Form.Item label="角色" extra="可多选；权限为各角色并集。列表首位为主角色（展示/JWT）。">
+          <Form.Item
+            label="平台角色"
+            extra="可多选，列表全部展示；权限为并集。首位为主角色（JWT/兼容）。业务侧栏看「租户角色」（租户成员里配置）。"
+          >
             <Select
               mode="multiple"
               style={{ width: '100%' }}

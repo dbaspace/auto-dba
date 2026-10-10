@@ -23,6 +23,11 @@ type ClusterItem struct {
 
 // ListClusters 从监控目标注册聚合集群；环境必须能映射到「环境管理」中的 code，否则丢弃（不合规）。
 func (s *Service) ListClusters(engine string) ([]ClusterItem, error) {
+	return s.ListClustersInTenant("", engine)
+}
+
+// ListClustersInTenant 按租户聚合监控目标中的 StarRocks 集群。
+func (s *Service) ListClustersInTenant(tenantID, engine string) ([]ClusterItem, error) {
 	engine = NormalizeEngine(engine)
 	if engine != "starrocks" {
 		return []ClusterItem{}, nil
@@ -36,7 +41,7 @@ func (s *Service) ListClusters(engine string) ([]ClusterItem, error) {
 	}
 	envByCode, envByName := buildEnvLookups(envs)
 
-	jobs, err := s.Store.ListMonitorJobs("")
+	jobs, err := s.Store.ListMonitorJobsInTenant(tenantID, "")
 	if err != nil {
 		return nil, err
 	}

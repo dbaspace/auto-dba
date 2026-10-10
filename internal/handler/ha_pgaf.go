@@ -13,7 +13,7 @@ import (
 
 // GetPGAFState 查询 pg_auto_failover formation 状态。
 func (h *HAHandler) GetPGAFState(c *gin.Context) {
-	cluster, err := h.Store.GetHACluster(c.Param("id"))
+	cluster, err := h.Store.GetHAClusterInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || cluster == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "集群不存在"})
 		return

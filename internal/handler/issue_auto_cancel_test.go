@@ -46,9 +46,12 @@ func TestCloseStalePendingIssuesCancelsOnlyExpired(t *testing.T) {
 	h := &TicketHandler{Store: db}
 	now := time.Date(2026, 9, 10, 17, 18, 0, 0, time.UTC)
 
-	stale := &store.Issue{IssueType: store.IssueTypeDDL, Description: "stale-auto-cancel-test", SQLContent: "SELECT 1", Submitter: "tester", AssignedTo: "admin", Status: store.StatusPending}
-	edge := &store.Issue{IssueType: store.IssueTypeDDL, Description: "edge-auto-cancel-test", SQLContent: "SELECT 1", Submitter: "tester", AssignedTo: "admin", Status: store.StatusPending}
-	fresh := &store.Issue{IssueType: store.IssueTypeDDL, Description: "fresh-auto-cancel-test", SQLContent: "SELECT 1", Submitter: "tester", AssignedTo: "admin", Status: store.StatusPending}
+	stale := &store.Issue{
+		TenantID: store.DefaultTenantID,IssueType: store.IssueTypeDDL, Description: "stale-auto-cancel-test", SQLContent: "SELECT 1", Submitter: "tester", AssignedTo: "admin", Status: store.StatusPending}
+	edge := &store.Issue{
+		TenantID: store.DefaultTenantID,IssueType: store.IssueTypeDDL, Description: "edge-auto-cancel-test", SQLContent: "SELECT 1", Submitter: "tester", AssignedTo: "admin", Status: store.StatusPending}
+	fresh := &store.Issue{
+		TenantID: store.DefaultTenantID,IssueType: store.IssueTypeDDL, Description: "fresh-auto-cancel-test", SQLContent: "SELECT 1", Submitter: "tester", AssignedTo: "admin", Status: store.StatusPending}
 	for _, it := range []*store.Issue{stale, edge, fresh} {
 		if err := db.CreateIssue(it); err != nil {
 			t.Fatal(err)

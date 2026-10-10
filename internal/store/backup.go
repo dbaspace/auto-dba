@@ -51,6 +51,7 @@ func ValidBackupMethod(m string) bool {
 // BackupStorage 存储后端。
 type BackupStorage struct {
 	ID           string `json:"id"`
+	TenantID     string `json:"tenant_id,omitempty"`
 	Name         string `json:"name"`
 	Kind         string `json:"kind"` // local | s3
 	Endpoint     string `json:"endpoint,omitempty"`
@@ -69,22 +70,23 @@ type BackupStorage struct {
 
 // BackupAgent 平台 Agent（备份 / RDB / HA 环境检查）。
 type BackupAgent struct {
-	ID             string `json:"id"`
-	Name           string `json:"name"`
-	BaseURL        string `json:"base_url"`
-	Username       string `json:"username,omitempty"`
-	PasswordEnc    string `json:"-"`
-	PasswordSet    bool   `json:"password_set"`
-	Engines        string `json:"engines,omitempty"` // 兼容旧字段
-	EnabledGroups  string `json:"enabled_groups,omitempty"` // backup,rdb,ha
-	Capabilities   string `json:"capabilities,omitempty"`   // JSON CapabilitiesReport
-	Tags           string `json:"tags,omitempty"`
-	Remark         string `json:"remark,omitempty"`
-	HostInstance   string `json:"host_instance_id,omitempty"`
-	CreatedBy      string `json:"created_by,omitempty"`
-	UpdatedBy      string `json:"updated_by,omitempty"`
-	CreatedAt      string `json:"created_at"`
-	UpdatedAt      string `json:"updated_at"`
+	ID            string `json:"id"`
+	TenantID      string `json:"tenant_id,omitempty"`
+	Name          string `json:"name"`
+	BaseURL       string `json:"base_url"`
+	Username      string `json:"username,omitempty"`
+	PasswordEnc   string `json:"-"`
+	PasswordSet   bool   `json:"password_set"`
+	Engines       string `json:"engines,omitempty"`        // 兼容旧字段
+	EnabledGroups string `json:"enabled_groups,omitempty"` // backup,rdb,ha
+	Capabilities  string `json:"capabilities,omitempty"`   // JSON CapabilitiesReport
+	Tags          string `json:"tags,omitempty"`
+	Remark        string `json:"remark,omitempty"`
+	HostInstance  string `json:"host_instance_id,omitempty"`
+	CreatedBy     string `json:"created_by,omitempty"`
+	UpdatedBy     string `json:"updated_by,omitempty"`
+	CreatedAt     string `json:"created_at"`
+	UpdatedAt     string `json:"updated_at"`
 }
 
 // BackupAgentDeploy 一次 Agent 下发任务。
@@ -113,6 +115,7 @@ const (
 // BackupPolicy 备份策略。
 type BackupPolicy struct {
 	ID            string   `json:"id"`
+	TenantID      string   `json:"tenant_id,omitempty"`
 	Name          string   `json:"name"`
 	InstanceID    string   `json:"instance_id"`
 	InstanceName  string   `json:"instance_name,omitempty"`
@@ -136,6 +139,7 @@ type BackupPolicy struct {
 // BackupRun 一次备份执行。
 type BackupRun struct {
 	ID           string `json:"id"`
+	TenantID     string `json:"tenant_id,omitempty"`
 	PolicyID     string `json:"policy_id"`
 	PolicyName   string `json:"policy_name,omitempty"`
 	InstanceID   string `json:"instance_id"`
@@ -315,8 +319,16 @@ func scanBackupPolicy(p *BackupPolicy) error {
 // --- Storage ---
 
 func (d *DB) ListBackupStorages() ([]BackupStorage, error) {
-	rows, err := d.Query(`SELECT id, name, kind, endpoint, bucket, prefix, access_key, secret_key_enc, local_path, remark,
-		created_by, updated_by, created_at, updated_at FROM tbl_backup_storages ORDER BY updated_at DESC`)
+	return d.ListBackupStoragesInTenant("")
+}
+
+func (d *DB) ListBackupStoragesInTenant(tenantID string) ([]BackupStorage, error) {
+	q := `SELECT id, name, kind, endpoint, bucket, prefix, access_key, secret_key_enc, local_path, remark,
+		created_by, updated_by, created_at, updated_at FROM tbl_backup_storages WHERE 1=1`
+	args := []any{}
+	q, args = appendTenantFilter(q, args, tenantID)
+	q += ` ORDER BY updated_at DESC`
+	rows, err := d.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -355,6 +367,11 @@ func (d *DB) GetBackupStorage(id string) (*BackupStorage, error) {
 	return s, nil
 }
 
+func (d *DB) GetBackupStorageInTenant(id, tenantID string) (*BackupStorage, error) {
+	s, err := d.GetBackupStorage(id)
+	return ownedInTenant(d, s, err, "tbl_backup_storages", id, tenantID)
+}
+
 func (d *DB) CreateBackupStorage(s *BackupStorage) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	if s.ID == "" {
@@ -368,7 +385,10 @@ func (d *DB) CreateBackupStorage(s *BackupStorage) error {
 		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		s.ID, s.Name, s.Kind, s.Endpoint, s.Bucket, s.Prefix, s.AccessKey, s.SecretKeyEnc, s.LocalPath, s.Remark,
 		s.CreatedBy, s.UpdatedBy, s.CreatedAt, s.UpdatedAt)
-	return err
+	if err != nil {
+		return err
+	}
+	return d.AssignTenantID("tbl_backup_storages", s.ID, s.TenantID)
 }
 
 func (d *DB) UpdateBackupStorage(s *BackupStorage) error {
@@ -393,8 +413,16 @@ func (d *DB) DeleteBackupStorage(id string) error {
 // --- Agent ---
 
 func (d *DB) ListBackupAgents() ([]BackupAgent, error) {
-	rows, err := d.Query(`SELECT id, name, base_url, username, password_enc, engines, COALESCE(enabled_groups,''), COALESCE(capabilities,''), tags, remark, created_by, updated_by, created_at, updated_at
-		FROM tbl_backup_agents ORDER BY updated_at DESC`)
+	return d.ListBackupAgentsInTenant("")
+}
+
+func (d *DB) ListBackupAgentsInTenant(tenantID string) ([]BackupAgent, error) {
+	q := `SELECT id, name, base_url, username, password_enc, engines, COALESCE(enabled_groups,''), COALESCE(capabilities,''), tags, remark, created_by, updated_by, created_at, updated_at
+		FROM tbl_backup_agents WHERE 1=1`
+	args := []any{}
+	q, args = appendTenantFilter(q, args, tenantID)
+	q += ` ORDER BY updated_at DESC`
+	rows, err := d.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -415,6 +443,11 @@ func (d *DB) ListBackupAgents() ([]BackupAgent, error) {
 		out = []BackupAgent{}
 	}
 	return out, rows.Err()
+}
+
+func (d *DB) GetBackupAgentInTenant(id, tenantID string) (*BackupAgent, error) {
+	a, err := d.GetBackupAgent(id)
+	return ownedInTenant(d, a, err, "tbl_backup_agents", id, tenantID)
 }
 
 func (d *DB) GetBackupAgent(id string) (*BackupAgent, error) {
@@ -444,7 +477,10 @@ func (d *DB) CreateBackupAgent(a *BackupAgent) error {
 		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		a.ID, a.Name, a.BaseURL, a.Username, a.PasswordEnc, a.Engines, a.EnabledGroups, a.Capabilities, a.Tags, a.Remark,
 		a.CreatedBy, a.UpdatedBy, a.CreatedAt, a.UpdatedAt)
-	return err
+	if err != nil {
+		return err
+	}
+	return d.AssignTenantID("tbl_backup_agents", a.ID, a.TenantID)
 }
 
 func (d *DB) UpdateBackupAgent(a *BackupAgent) error {
@@ -469,10 +505,18 @@ func (d *DB) DeleteBackupAgent(id string) error {
 // --- Policy ---
 
 func (d *DB) ListBackupPolicies(instanceID string) ([]BackupPolicy, error) {
+	return d.ListBackupPoliciesInTenant("", instanceID)
+}
+
+func (d *DB) ListBackupPoliciesInTenant(tenantID, instanceID string) ([]BackupPolicy, error) {
 	q := `SELECT p.id, p.name, p.instance_id, COALESCE(i.name,''), p.engine, p.method, p.databases_json, p.schedule_expr,
 		p.retention_days, p.parallel, p.compress, p.storage_id, p.agent_id, p.enabled, p.created_by, p.updated_by, p.created_at, p.updated_at
 		FROM tbl_backup_policies p LEFT JOIN tbl_instances i ON i.id=p.instance_id WHERE 1=1`
 	var args []any
+	if tid := strings.TrimSpace(tenantID); tid != "" {
+		q += ` AND COALESCE(p.tenant_id,'')=?`
+		args = append(args, tid)
+	}
 	if id := strings.TrimSpace(instanceID); id != "" {
 		q += ` AND p.instance_id=?`
 		args = append(args, id)
@@ -500,6 +544,11 @@ func (d *DB) ListBackupPolicies(instanceID string) ([]BackupPolicy, error) {
 		out = []BackupPolicy{}
 	}
 	return out, rows.Err()
+}
+
+func (d *DB) GetBackupPolicyInTenant(id, tenantID string) (*BackupPolicy, error) {
+	p, err := d.GetBackupPolicy(id)
+	return ownedInTenant(d, p, err, "tbl_backup_policies", id, tenantID)
 }
 
 func (d *DB) GetBackupPolicy(id string) (*BackupPolicy, error) {
@@ -550,7 +599,13 @@ func (d *DB) CreateBackupPolicy(p *BackupPolicy) error {
 		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		p.ID, p.Name, p.InstanceID, p.Engine, p.Method, p.DatabasesJSON, p.ScheduleExpr, p.RetentionDays, p.Parallel, compress,
 		p.StorageID, p.AgentID, enabled, p.CreatedBy, p.UpdatedBy, p.CreatedAt, p.UpdatedAt)
-	return err
+	if err != nil {
+		return err
+	}
+	if p.TenantID == "" {
+		p.TenantID = d.inheritTenantFromInstance(p.InstanceID)
+	}
+	return d.AssignTenantID("tbl_backup_policies", p.ID, p.TenantID)
 }
 
 func (d *DB) UpdateBackupPolicy(p *BackupPolicy) error {
@@ -628,11 +683,20 @@ func (d *DB) CreateBackupRun(r *BackupRun) error {
 		r.Status = BackupRunPending
 	}
 	r.CreatedAt = now
+	if r.TenantID == "" {
+		r.TenantID = d.inheritTenantFromInstance(r.InstanceID)
+	}
 	_, err := d.Exec(`INSERT INTO tbl_backup_runs(id, policy_id, instance_id, engine, method, status, trigger_src, parent_run_id, set_label, object_key, local_path, size_bytes, checksum, log_summary, error_message, extra_json, started_at, finished_at, created_by, created_at)
 		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		r.ID, r.PolicyID, r.InstanceID, r.Engine, r.Method, r.Status, r.Trigger, r.ParentRunID, r.SetLabel, r.ObjectKey, r.LocalPath, r.SizeBytes, r.Checksum,
 		r.LogSummary, r.ErrorMessage, r.ExtraJSON, r.StartedAt, r.FinishedAt, r.CreatedBy, r.CreatedAt)
-	return err
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(r.TenantID) != "" {
+		return d.AssignTenantID("tbl_backup_runs", r.ID, r.TenantID)
+	}
+	return nil
 }
 
 func (d *DB) UpdateBackupRun(r *BackupRun) error {
@@ -661,6 +725,10 @@ func (d *DB) GetBackupRun(id string) (*BackupRun, error) {
 }
 
 func (d *DB) ListBackupRuns(policyID, instanceID, status string, limit int) ([]BackupRun, error) {
+	return d.ListBackupRunsInTenant("", policyID, instanceID, status, limit)
+}
+
+func (d *DB) ListBackupRunsInTenant(tenantID, policyID, instanceID, status string, limit int) ([]BackupRun, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
@@ -669,6 +737,10 @@ func (d *DB) ListBackupRuns(policyID, instanceID, status string, limit int) ([]B
 		r.size_bytes, r.checksum, r.log_summary, r.error_message, COALESCE(r.extra_json,''), r.started_at, r.finished_at, r.created_by, r.created_at
 		FROM tbl_backup_runs r LEFT JOIN tbl_backup_policies p ON p.id=r.policy_id WHERE 1=1`
 	var args []any
+	if tid := strings.TrimSpace(tenantID); tid != "" {
+		q += ` AND COALESCE(r.tenant_id,'')=?`
+		args = append(args, tid)
+	}
 	if id := strings.TrimSpace(policyID); id != "" {
 		q += ` AND r.policy_id=?`
 		args = append(args, id)
@@ -851,7 +923,14 @@ func (d *DB) CreateBackupAgentDeploy(it *BackupAgentDeploy) error {
 		VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
 		it.ID, it.HostInstanceID, it.AgentID, it.Status, it.ListenPort, it.RemoteDir, it.BaseURL, it.LogText,
 		it.CreatedBy, it.CreatedAt, it.UpdatedAt, it.FinishedAt)
-	return err
+	if err != nil {
+		return err
+	}
+	tid := d.inheritTenantFromInstance(it.HostInstanceID)
+	if tid != "" {
+		return d.AssignTenantID("tbl_backup_agent_deploys", it.ID, tid)
+	}
+	return nil
 }
 
 func (d *DB) UpdateBackupAgentDeploy(it *BackupAgentDeploy) error {
@@ -878,12 +957,17 @@ func (d *DB) GetBackupAgentDeploy(id string) (*BackupAgentDeploy, error) {
 }
 
 func (d *DB) ListBackupAgentDeploys(hostInstanceID string, limit int) ([]BackupAgentDeploy, error) {
+	return d.ListBackupAgentDeploysInTenant("", hostInstanceID, limit)
+}
+
+func (d *DB) ListBackupAgentDeploysInTenant(tenantID, hostInstanceID string, limit int) ([]BackupAgentDeploy, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
 	q := `SELECT id, host_instance_id, agent_id, status, listen_port, remote_dir, base_url, log_text, created_by, created_at, updated_at, finished_at
 		FROM tbl_backup_agent_deploys WHERE 1=1`
 	var args []any
+	q, args = appendTenantFilter(q, args, tenantID)
 	if id := strings.TrimSpace(hostInstanceID); id != "" {
 		q += ` AND host_instance_id=?`
 		args = append(args, id)
@@ -942,4 +1026,3 @@ func (d *DB) LatestSuccessDeployForAgent(agentID, hostInstanceID string) (*Backu
 	}
 	return nil, nil
 }
-

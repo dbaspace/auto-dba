@@ -73,8 +73,80 @@ func redactInstanceCopy(it store.Instance) store.Instance {
 	return it
 }
 
+func (h *InstanceHandler) tenantNameMap() map[string]string {
+	out := map[string]string{}
+	list, err := h.Store.ListTenants()
+	if err != nil {
+		return out
+	}
+	for _, t := range list {
+		out[t.ID] = t.Name
+		if t.Name == "" {
+			out[t.ID] = t.Code
+		}
+	}
+	return out
+}
+
+func (h *InstanceHandler) enrichInstanceTenants(list []store.Instance) {
+	names := h.tenantNameMap()
+	for i := range list {
+		if n := names[list[i].TenantID]; n != "" {
+			list[i].TenantName = n
+		}
+	}
+}
+
+func (h *InstanceHandler) loadInstance(c *gin.Context, id string) (*store.Instance, error) {
+	return resolveInstanceInTenant(h.Store, c, id)
+}
+
+func (h *InstanceHandler) mergeHostedInstances(list []store.Instance, tid, dbType, q string) ([]store.Instance, error) {
+	ids, err := h.Store.ListInstanceIDsForTenantDatabases(tid)
+	if err != nil {
+		return list, err
+	}
+	seen := map[string]struct{}{}
+	for i := range list {
+		seen[list[i].ID] = struct{}{}
+	}
+	dbType = strings.TrimSpace(dbType)
+	q = strings.ToLower(strings.TrimSpace(q))
+	for _, id := range ids {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		it, err := h.Store.GetInstance(id)
+		if err != nil || it == nil {
+			continue
+		}
+		if dbType != "" && !strings.EqualFold(it.DBType, dbType) {
+			continue
+		}
+		if q != "" {
+			blob := strings.ToLower(it.Name + " " + it.DomainName + " " + it.Host)
+			if !strings.Contains(blob, q) {
+				continue
+			}
+		}
+		seen[id] = struct{}{}
+		list = append(list, *it)
+	}
+	return list, nil
+}
+
 func (h *InstanceHandler) List(c *gin.Context) {
-	list, err := h.Store.ListInstances(c.Query("db_type"), c.Query("q"))
+	tid := middleware.TenantID(c)
+	var list []store.Instance
+	var err error
+	if platformAdminAuditing(h.Store, c) {
+		list, err = h.Store.ListInstances(c.Query("db_type"), c.Query("q"))
+	} else {
+		list, err = h.Store.ListInstancesInTenant(tid, c.Query("db_type"), c.Query("q"))
+		if err == nil {
+			list, err = h.mergeHostedInstances(list, tid, c.Query("db_type"), c.Query("q"))
+		}
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -82,16 +154,16 @@ func (h *InstanceHandler) List(c *gin.Context) {
 	if list == nil {
 		list = []store.Instance{}
 	}
-	viewer := h.Store.ViewerOf(middleware.Username(c), middleware.Role(c))
-	list = store.FilterVisibleInstances(list, viewer)
+	list = store.FilterVisibleInstancesByTenant(list, viewerForRequest(h.Store, c))
+	h.enrichInstanceTenants(list)
 	for i := range list {
 		redactInstance(&list[i])
 	}
-	c.JSON(http.StatusOK, gin.H{"data": list})
+	c.JSON(http.StatusOK, gin.H{"data": list, "audit_scope": platformAdminAuditing(h.Store, c)})
 }
 
 func (h *InstanceHandler) Get(c *gin.Context) {
-	it, err := h.Store.GetInstance(c.Param("id"))
+	it, err := resolveInstanceInTenant(h.Store, c, c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -100,7 +172,7 @@ func (h *InstanceHandler) Get(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"message": "实例不存在"})
 		return
 	}
-	viewer := h.Store.ViewerOf(middleware.Username(c), middleware.Role(c))
+	viewer := h.Store.ViewerOfInTenant(middleware.Username(c), middleware.Role(c), it.TenantID)
 	if !it.VisibleTo(viewer) {
 		c.JSON(http.StatusForbidden, gin.H{"message": "无权访问该实例"})
 		return
@@ -145,14 +217,14 @@ func (h *InstanceHandler) TestConnection(c *gin.Context) {
 		return
 	}
 	if strings.TrimSpace(password) == "" && strings.TrimSpace(req.ID) != "" {
-		stored, err := h.Store.GetInstance(strings.TrimSpace(req.ID))
+		stored, err := h.loadInstance(c, strings.TrimSpace(req.ID))
 		if err != nil || stored == nil {
 			c.JSON(http.StatusOK, gin.H{"ok": false, "message": "实例不存在，无法使用已存密码"})
 			return
 		}
 		plain, err := secret.Decrypt(h.Secret, stored.Password)
 		if err != nil {
-			c.JSON(http.StatusOK, gin.H{"ok": false, "message": "解密已存密码失败"})
+			c.JSON(http.StatusOK, gin.H{"ok": false, "message": "解密已存密码失败：密钥可能已变更，请重新填写密码"})
 			return
 		}
 		password = plain
@@ -259,6 +331,11 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
+	it.TenantID = middleware.TenantID(c)
+	if err := validateResourceACL(h.Store, it.TenantID, it.Visibility, it.AccessUsers, it.RoleIDs, it.Approvers); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
 	if err := h.Store.CreateInstance(&it); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "创建失败（可能是 host+port 已存在）: " + err.Error()})
 		return
@@ -269,7 +346,7 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 }
 
 func (h *InstanceHandler) Update(c *gin.Context) {
-	exist, err := h.Store.GetInstance(c.Param("id"))
+	exist, err := h.loadInstance(c, c.Param("id"))
 	if err != nil || exist == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "实例不存在"})
 		return
@@ -280,6 +357,7 @@ func (h *InstanceHandler) Update(c *gin.Context) {
 		return
 	}
 	it.ID = exist.ID
+	it.TenantID = exist.TenantID
 	it.Host = strings.TrimSpace(it.Host)
 	if it.Host == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "连接主机必填"})
@@ -309,6 +387,10 @@ func (h *InstanceHandler) Update(c *gin.Context) {
 	}
 	if msg := validateHostACL(&it); msg != "" {
 		c.JSON(http.StatusBadRequest, gin.H{"message": msg})
+		return
+	}
+	if err := validateResourceACL(h.Store, it.TenantID, it.Visibility, it.AccessUsers, it.RoleIDs, it.Approvers); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
 	if err := normalizeInstanceCloud(&it); err != nil {
@@ -348,8 +430,12 @@ func validateHostACL(it *store.Instance) string {
 
 func (h *InstanceHandler) Delete(c *gin.Context) {
 	id := c.Param("id")
-	exist, _ := h.Store.GetInstance(id)
-	if exist != nil && strings.EqualFold(strings.TrimSpace(exist.DBType), "host") {
+	exist, _ := h.loadInstance(c, id)
+	if exist == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "实例不存在"})
+		return
+	}
+	if strings.EqualFold(strings.TrimSpace(exist.DBType), "host") {
 		refs, err := collectHostRefs(h.Store, exist)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"message": "检查主机引用失败: " + err.Error()})
@@ -363,8 +449,14 @@ func (h *InstanceHandler) Delete(c *gin.Context) {
 			return
 		}
 	}
-	if err := h.Store.DeleteInstance(id); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+	var delErr error
+	if platformAdminAuditing(h.Store, c) {
+		delErr = h.Store.DeleteInstance(id)
+	} else {
+		delErr = h.Store.DeleteInstanceInTenant(id, middleware.TenantID(c))
+	}
+	if delErr != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": delErr.Error()})
 		return
 	}
 	var before any
@@ -375,8 +467,40 @@ func (h *InstanceHandler) Delete(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
+// AssignTenant POST /instances/:id/assign-tenant — 平台审计会话下将实例划拨到目标租户。
+func (h *InstanceHandler) AssignTenant(c *gin.Context) {
+	if !platformAdminAuditing(h.Store, c) {
+		c.JSON(http.StatusForbidden, gin.H{"message": "仅平台管理员在租户审计会话中可划拨资源"})
+		return
+	}
+	var req struct {
+		TenantID string `json:"tenant_id"`
+	}
+	_ = c.ShouldBindJSON(&req)
+	to := strings.TrimSpace(req.TenantID)
+	if to == "" {
+		to = middleware.TenantID(c)
+	}
+	if to == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "目标租户必填"})
+		return
+	}
+	id := c.Param("id")
+	if err := h.Store.AssignInstanceTenant(id, to); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	_ = h.Store.AppendTenantAudit(to, middleware.UserID(c), "resource.assign", "instance:"+id)
+	it, _ := h.Store.GetInstance(id)
+	if it != nil {
+		h.enrichInstanceTenants([]store.Instance{*it})
+		redactInstance(it)
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "data": it})
+}
+
 func (h *InstanceHandler) kafkaInstance(c *gin.Context) (*store.Instance, bool) {
-	inst, err := h.Store.GetInstance(c.Param("id"))
+	inst, err := h.loadInstance(c, c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return nil, false
@@ -575,7 +699,7 @@ func (h *InstanceHandler) QueryKafkaTopicMessages(c *gin.Context) {
 }
 
 func (h *InstanceHandler) redisInstance(c *gin.Context) (*store.Instance, string, bool) {
-	inst, err := h.Store.GetInstance(c.Param("id"))
+	inst, err := h.loadInstance(c, c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return nil, "", false
@@ -655,7 +779,7 @@ type liveDBItem struct {
 }
 
 func (h *DatabaseHandler) ListLive(c *gin.Context) {
-	inst, err := h.Store.GetInstance(c.Param("id"))
+	inst, err := resolveInstanceInTenant(h.Store, c, c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -664,7 +788,12 @@ func (h *DatabaseHandler) ListLive(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"message": "实例不存在"})
 		return
 	}
-	registered, err := h.Store.ListDatabases(inst.ID, "")
+	var registered []store.Database
+	if platformAdminAuditing(h.Store, c) {
+		registered, err = h.Store.ListDatabases(inst.ID, "")
+	} else {
+		registered, err = h.Store.ListDatabasesInTenant(effectiveListTenantID(h.Store, c), inst.ID, "")
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -705,15 +834,155 @@ func mergeLive(live []dbprobe.Item, registered []store.Database) []liveDBItem {
 	return out
 }
 
+func (h *DatabaseHandler) enrichDatabaseTenants(list []store.Database) {
+	names := map[string]string{}
+	if ts, err := h.Store.ListTenants(); err == nil {
+		for _, t := range ts {
+			names[t.ID] = t.Name
+			if t.Name == "" {
+				names[t.ID] = t.Code
+			}
+		}
+	}
+	instCache := map[string]*store.Instance{}
+	for i := range list {
+		iid := list[i].InstanceID
+		inst := instCache[iid]
+		if inst == nil && iid != "" {
+			inst, _ = h.Store.GetInstance(iid)
+			if inst != nil {
+				instCache[iid] = inst
+			}
+		}
+		if list[i].TenantID == "" && inst != nil {
+			list[i].TenantID = inst.TenantID
+		}
+		if inst != nil {
+			list[i].InstanceName = inst.Name
+		}
+		if n := names[list[i].TenantID]; n != "" {
+			list[i].TenantName = n
+		}
+	}
+}
+
 func (h *DatabaseHandler) List(c *gin.Context) {
-	list, err := h.Store.ListDatabases(c.Query("instance_id"), c.Query("q"))
+	tid := middleware.TenantID(c)
+	var list []store.Database
+	var err error
+	if platformAdminAuditing(h.Store, c) {
+		list, err = h.Store.ListDatabases(c.Query("instance_id"), c.Query("q"))
+	} else {
+		list, err = h.Store.ListDatabasesInTenant(tid, c.Query("instance_id"), c.Query("q"))
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
-	viewer := h.Store.ViewerOf(middleware.Username(c), middleware.Role(c))
-	list = store.FilterVisibleDatabases(list, viewer)
-	c.JSON(http.StatusOK, gin.H{"data": list})
+	list = store.FilterVisibleDatabasesByTenant(list, viewerForRequest(h.Store, c))
+	if !platformAdminAuditing(h.Store, c) {
+		extra, gerr := h.Store.ListGrantedDatabases(tid, middleware.UserID(c), c.Query("instance_id"), c.Query("q"))
+		if gerr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": gerr.Error()})
+			return
+		}
+		seen := map[string]struct{}{}
+		for i := range list {
+			seen[list[i].ID] = struct{}{}
+		}
+		for _, it := range extra {
+			if _, ok := seen[it.ID]; ok {
+				continue
+			}
+			list = append(list, it)
+		}
+	}
+	h.enrichDatabaseTenants(list)
+	c.JSON(http.StatusOK, gin.H{"data": list, "audit_scope": platformAdminAuditing(h.Store, c)})
+}
+
+// AssignTenant POST /databases/:id/assign-tenant — 只改库归属，实例地址可留在原租户。
+func (h *DatabaseHandler) AssignTenant(c *gin.Context) {
+	to, ok := parseAssignTenantID(h.Store, c)
+	if !ok {
+		return
+	}
+	id := c.Param("id")
+	if err := h.Store.AssignDatabaseTenant(id, to); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	_ = h.Store.AppendTenantAudit(to, middleware.UserID(c), "resource.assign", "database:"+id)
+	it, _ := h.Store.GetDatabase(id)
+	if it != nil {
+		list := []store.Database{*it}
+		h.enrichDatabaseTenants(list)
+		it = &list[0]
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "data": it})
+}
+
+// AssignTenantBatch POST /databases/assign-tenant — 批量指定库归属租户。
+func (h *DatabaseHandler) AssignTenantBatch(c *gin.Context) {
+	if !platformAdminAuditing(h.Store, c) {
+		c.JSON(http.StatusForbidden, gin.H{"message": "仅平台管理员在租户审计会话中可划拨资源"})
+		return
+	}
+	var req struct {
+		TenantID string   `json:"tenant_id"`
+		IDs      []string `json:"ids"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "参数无效"})
+		return
+	}
+	to := strings.TrimSpace(req.TenantID)
+	if to == "" {
+		to = middleware.TenantID(c)
+	}
+	if to == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "目标租户必填"})
+		return
+	}
+	seen := map[string]bool{}
+	ids := make([]string, 0, len(req.IDs))
+	for _, id := range req.IDs {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "ids 必填"})
+		return
+	}
+	type failItem struct {
+		ID      string `json:"id"`
+		DBName  string `json:"db_name,omitempty"`
+		Message string `json:"message"`
+	}
+	okCount := 0
+	failed := make([]failItem, 0)
+	actor := middleware.UserID(c)
+	for _, id := range ids {
+		dbName := ""
+		if it, _ := h.Store.GetDatabase(id); it != nil {
+			dbName = it.DBName
+		}
+		if err := h.Store.AssignDatabaseTenant(id, to); err != nil {
+			failed = append(failed, failItem{ID: id, DBName: dbName, Message: err.Error()})
+			continue
+		}
+		okCount++
+		_ = h.Store.AppendTenantAudit(to, actor, "resource.assign", "database:"+id)
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"ok_count":   okCount,
+		"fail_count": len(failed),
+		"failed":     failed,
+	})
 }
 
 func (h *DatabaseHandler) Create(c *gin.Context) {
@@ -726,7 +995,7 @@ func (h *DatabaseHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "instance_id 与 db_name 必填"})
 		return
 	}
-	inst, err := h.Store.GetInstance(it.InstanceID)
+	inst, err := resolveInstanceInTenant(h.Store, c, it.InstanceID)
 	if err != nil || inst == nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "实例未登记，请先在配置中创建实例"})
 		return
@@ -737,6 +1006,14 @@ func (h *DatabaseHandler) Create(c *gin.Context) {
 		return
 	}
 	it.Domains = bound
+	it.TenantID = middleware.TenantID(c)
+	if it.TenantID == "" {
+		it.TenantID = inst.TenantID
+	}
+	if err := validateResourceACL(h.Store, it.TenantID, it.Visibility, it.AccessUsers, it.RoleIDs, it.Approvers); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
 	if err := h.Store.CreateDatabase(&it); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "创建失败（库名可能已存在）: " + err.Error()})
 		return
@@ -764,7 +1041,7 @@ func (h *DatabaseHandler) CreateBatch(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "instance_id 与 db_names 必填"})
 		return
 	}
-	inst, err := h.Store.GetInstance(req.InstanceID)
+	inst, err := resolveInstanceInTenant(h.Store, c, req.InstanceID)
 	if err != nil || inst == nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "实例未登记，请先在配置中创建实例"})
 		return
@@ -774,7 +1051,16 @@ func (h *DatabaseHandler) CreateBatch(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
+	tid := middleware.TenantID(c)
+	if tid == "" {
+		tid = inst.TenantID
+	}
+	if err := validateResourceACL(h.Store, tid, req.Visibility, req.AccessUsers, req.RoleIDs, req.Approvers); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
 	created, skipped, err := h.Store.CreateDatabases(&store.Database{
+		TenantID:    tid,
 		InstanceID:  req.InstanceID,
 		Approvers:   req.Approvers,
 		Visibility:  req.Visibility,
@@ -795,7 +1081,13 @@ func (h *DatabaseHandler) CreateBatch(c *gin.Context) {
 }
 
 func (h *DatabaseHandler) Update(c *gin.Context) {
-	exist, err := h.Store.GetDatabase(c.Param("id"))
+	var exist *store.Database
+	var err error
+	if platformAdminAuditing(h.Store, c) {
+		exist, err = h.Store.GetDatabase(c.Param("id"))
+	} else {
+		exist, err = h.Store.GetDatabaseInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
+	}
 	if err != nil || exist == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "库未登记"})
 		return
@@ -810,7 +1102,7 @@ func (h *DatabaseHandler) Update(c *gin.Context) {
 	if it.DBName == "" {
 		it.DBName = exist.DBName
 	}
-	inst, err := h.Store.GetInstance(exist.InstanceID)
+	inst, err := resolveParentInstance(h.Store, c, exist)
 	if err != nil || inst == nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "实例未登记，请先在配置中创建实例"})
 		return
@@ -821,6 +1113,17 @@ func (h *DatabaseHandler) Update(c *gin.Context) {
 		return
 	}
 	it.Domains = bound
+	aclTid := exist.TenantID
+	if aclTid == "" {
+		aclTid = inst.TenantID
+	}
+	if aclTid == "" {
+		aclTid = middleware.TenantID(c)
+	}
+	if err := validateResourceACL(h.Store, aclTid, it.Visibility, it.AccessUsers, it.RoleIDs, it.Approvers); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
 	if err := h.Store.UpdateDatabase(&it); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
@@ -831,12 +1134,16 @@ func (h *DatabaseHandler) Update(c *gin.Context) {
 
 func (h *DatabaseHandler) Delete(c *gin.Context) {
 	id := c.Param("id")
-	exist, _ := h.Store.GetDatabase(id)
-	if err := h.Store.DeleteDatabase(id); err != nil {
+	exist, err := h.Store.GetDatabaseInTenant(id, effectiveListTenantID(h.Store, c))
+	if err != nil || exist == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "数据库不存在"})
+		return
+	}
+	if err := h.Store.DeleteDatabase(exist.ID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
-	_ = h.Store.AppendCmdbAudit(c.GetString(middleware.CtxUsername), "delete", "database", id, "api", exist, nil)
+	_ = h.Store.AppendCmdbAudit(c.GetString(middleware.CtxUsername), "delete", "database", exist.ID, "api", exist, nil)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 

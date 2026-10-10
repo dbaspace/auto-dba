@@ -23,6 +23,15 @@ func (h *PgSpaceHandler) Instances(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
+	if set := tenantInstanceIDSet(h.Svc.Store, c); set != nil {
+		kept := list[:0]
+		for _, it := range list {
+			if set[it.InstanceID] {
+				kept = append(kept, it)
+			}
+		}
+		list = kept
+	}
 	if list == nil {
 		list = []*pgspace.InstanceItem{}
 	}

@@ -15,9 +15,9 @@ import (
 )
 
 type DbDeployHandler struct {
-	Store  *store.DB
-	Secret string
-	Engine *dbdeploy.Engine
+	Store   *store.DB
+	Secret  string
+	Engine  *dbdeploy.Engine
 	Service *dbdeploy.Service
 }
 
@@ -69,30 +69,96 @@ func (h *DbDeployHandler) ListReleases(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": list})
+	for i := range list {
+		dbdeploy.DecorateRelease(&list[i])
+	}
+	c.JSON(http.StatusOK, gin.H{"data": list, "channels": dbdeploy.ReleaseChannels(c.Query("engine"))})
 }
 
+// UpsertRelease POST 登记 / PUT 修改（只覆盖请求体中出现的字段）。
 func (h *DbDeployHandler) UpsertRelease(c *gin.Context) {
 	var r store.DbDeployRelease
+	prevVersion := ""
+	if id := c.Param("id"); id != "" {
+		cur, err := h.Store.GetDbDeployRelease(id)
+		if err != nil || cur == nil {
+			c.JSON(http.StatusNotFound, gin.H{"message": "版本不存在"})
+			return
+		}
+		r = *cur
+		prevVersion = cur.Version
+	}
 	if err := c.ShouldBindJSON(&r); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
 	if id := c.Param("id"); id != "" {
 		r.ID = id
+	} else {
+		r.ID = ""
+		r.Enabled = true
 	}
 	r.UpdatedBy = actorOfDb(c)
 	if r.CreatedBy == "" {
 		r.CreatedBy = r.UpdatedBy
 	}
-	if !r.Enabled && c.Request.Method == http.MethodPost {
-		r.Enabled = true
-	}
-	if err := h.Store.UpsertDbDeployRelease(&r); err != nil {
+	if err := h.svc().PrepareRelease(&r, prevVersion == "" || strings.TrimSpace(r.Version) != prevVersion); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
+	if err := h.Store.UpsertDbDeployRelease(&r); err != nil {
+		msg := err.Error()
+		if strings.Contains(strings.ToLower(msg), "unique") || strings.Contains(strings.ToLower(msg), "duplicate") {
+			msg = "该引擎下同版本同架构已登记"
+		}
+		c.JSON(http.StatusBadRequest, gin.H{"message": msg})
+		return
+	}
+	dbdeploy.DecorateRelease(&r)
 	c.JSON(http.StatusOK, gin.H{"data": r})
+}
+
+// UploadRelease POST /releases/:id/upload（multipart: file）上传安装包到 OSS，自动计算 sha256。
+func (h *DbDeployHandler) UploadRelease(c *gin.Context) {
+	rel, err := h.Store.GetDbDeployRelease(c.Param("id"))
+	if err != nil || rel == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "版本不存在"})
+		return
+	}
+	fh, err := c.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "file 必填"})
+		return
+	}
+	f, err := fh.Open()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	defer f.Close()
+	out, err := h.svc().UploadRelease(c.Request.Context(), rel, fh.Filename, f, actorOfDb(c))
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": out})
+}
+
+// SyncReleaseFromOSS POST /releases/:id/sync-from-oss 扫描 OSS 目录登记安装包。
+func (h *DbDeployHandler) SyncReleaseFromOSS(c *gin.Context) {
+	rel, err := h.Store.GetDbDeployRelease(c.Param("id"))
+	if err != nil || rel == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "版本不存在"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Minute)
+	defer cancel()
+	res, err := h.svc().SyncReleaseFromOSS(ctx, rel, actorOfDb(c))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": res})
 }
 
 func (h *DbDeployHandler) DeleteRelease(c *gin.Context) {
@@ -117,17 +183,47 @@ func (h *DbDeployHandler) PresignRelease(c *gin.Context) {
 	}})
 }
 
+func (h *DbDeployHandler) enrichDbDeployTenants(list []store.DbDeployCluster) {
+	names := tenantNameMap(h.Store)
+	for i := range list {
+		applyTenantName(names, &list[i].TenantID, &list[i].TenantName)
+	}
+}
+
 func (h *DbDeployHandler) ListClusters(c *gin.Context) {
-	list, err := h.Store.ListDbDeployClusters(c.Query("engine"))
+	list, err := h.Store.ListDbDeployClustersInTenant(effectiveListTenantID(h.Store, c), c.Query("engine"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": list})
+	if list == nil {
+		list = []store.DbDeployCluster{}
+	}
+	h.enrichDbDeployTenants(list)
+	c.JSON(http.StatusOK, gin.H{"data": list, "audit_scope": auditScope(h.Store, c)})
+}
+
+// AssignTenant POST /db-deploy/clusters/:id/assign-tenant
+func (h *DbDeployHandler) AssignTenant(c *gin.Context) {
+	to, ok := parseAssignTenantID(h.Store, c)
+	if !ok {
+		return
+	}
+	id := c.Param("id")
+	if err := h.Store.AssignDbDeployClusterTenant(id, to); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	_ = h.Store.AppendTenantAudit(to, middleware.UserID(c), "resource.assign", "db_deploy_cluster:"+id)
+	cl, _ := h.Store.GetDbDeployCluster(id)
+	if cl != nil {
+		h.enrichDbDeployTenants([]store.DbDeployCluster{*cl})
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "data": cl})
 }
 
 func (h *DbDeployHandler) GetCluster(c *gin.Context) {
-	cl, err := h.Store.GetDbDeployCluster(c.Param("id"))
+	cl, err := h.Store.GetDbDeployClusterInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -136,6 +232,7 @@ func (h *DbDeployHandler) GetCluster(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"message": "集群不存在"})
 		return
 	}
+	h.enrichDbDeployTenants([]store.DbDeployCluster{*cl})
 	nodes, _ := h.Store.ListDbDeployNodes(cl.ID)
 	c.JSON(http.StatusOK, gin.H{"data": cl, "nodes": nodes})
 }
@@ -143,7 +240,8 @@ func (h *DbDeployHandler) GetCluster(c *gin.Context) {
 func (h *DbDeployHandler) UpsertCluster(c *gin.Context) {
 	var req struct {
 		store.DbDeployCluster
-		RegisterExisting bool `json:"register_existing"`
+		RegisterExisting bool                 `json:"register_existing"`
+		Nodes            []store.DbDeployNode `json:"nodes"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
@@ -153,6 +251,7 @@ func (h *DbDeployHandler) UpsertCluster(c *gin.Context) {
 	if id := c.Param("id"); id != "" {
 		cl.ID = id
 	}
+	isNew := strings.TrimSpace(cl.ID) == ""
 	cl.UpdatedBy = actorOfDb(c)
 	if cl.CreatedBy == "" {
 		cl.CreatedBy = cl.UpdatedBy
@@ -205,9 +304,45 @@ func (h *DbDeployHandler) UpsertCluster(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
+	regNodes := req.RegisterExisting && isNew && cl.DeployKind != store.DbDeployKindCloud && len(req.Nodes) > 0
+	if regNodes {
+		if err := validateRegisterNodes(cl.Topology, req.Nodes); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+			return
+		}
+	}
+	stampTenantID(c, func(tid string) { cl.TenantID = tid })
 	if err := h.Store.UpsertDbDeployCluster(&cl); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
+	}
+	if regNodes {
+		agents, _ := h.Store.ListDbDeployAgents()
+		var failed []string
+		for _, rn := range req.Nodes {
+			n := store.DbDeployNode{
+				ClusterID: cl.ID,
+				Role:      rn.Role,
+				Host:      strings.TrimSpace(rn.Host),
+				Port:      rn.Port,
+				AgentID:   strings.TrimSpace(rn.AgentID),
+				Status:    store.DbNodeReady,
+				Remark:    "登记已有集群",
+			}
+			if n.Role == "single" {
+				n.Role = "primary"
+			}
+			if n.AgentID == "" {
+				n.AgentID = agentIDForHost(agents, n.Host)
+			}
+			if err := h.Store.UpsertDbDeployNode(&n); err != nil {
+				failed = append(failed, n.Host+": "+err.Error())
+			}
+		}
+		if len(failed) > 0 {
+			c.JSON(http.StatusOK, gin.H{"data": cl, "warning": "部分节点登记失败：" + strings.Join(failed, "；")})
+			return
+		}
 	}
 	// 云：确保有唯一 endpoint 节点
 	if cl.DeployKind == store.DbDeployKindCloud {
@@ -239,7 +374,12 @@ func (h *DbDeployHandler) UpsertCluster(c *gin.Context) {
 }
 
 func (h *DbDeployHandler) DeleteCluster(c *gin.Context) {
-	if err := h.Store.DeleteDbDeployCluster(c.Param("id")); err != nil {
+	exist, err := h.Store.GetDbDeployClusterInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
+	if err != nil || exist == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "集群不存在"})
+		return
+	}
+	if err := h.Store.DeleteDbDeployCluster(exist.ID); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
@@ -247,6 +387,10 @@ func (h *DbDeployHandler) DeleteCluster(c *gin.Context) {
 }
 
 func (h *DbDeployHandler) ListNodes(c *gin.Context) {
+	if cl, err := h.Store.GetDbDeployClusterInTenant(c.Param("id"), effectiveListTenantID(h.Store, c)); err != nil || cl == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "集群不存在"})
+		return
+	}
 	list, err := h.Store.ListDbDeployNodes(c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
@@ -262,6 +406,12 @@ func (h *DbDeployHandler) UpsertNode(c *gin.Context) {
 		return
 	}
 	n.ClusterID = c.Param("id")
+	if strings.TrimSpace(n.ID) != "" {
+		if old, _ := h.Store.GetDbDeployNode(n.ID); old != nil && old.ClusterID != n.ClusterID {
+			c.JSON(http.StatusNotFound, gin.H{"message": "节点不存在"})
+			return
+		}
+	}
 	if err := h.Store.UpsertDbDeployNode(&n); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
@@ -270,6 +420,10 @@ func (h *DbDeployHandler) UpsertNode(c *gin.Context) {
 }
 
 func (h *DbDeployHandler) DeleteNode(c *gin.Context) {
+	if n, err := h.Store.GetDbDeployNode(c.Param("nodeId")); err != nil || n == nil || n.ClusterID != c.Param("id") {
+		c.JSON(http.StatusNotFound, gin.H{"message": "节点不存在"})
+		return
+	}
 	if err := h.Store.DeleteDbDeployNode(c.Param("nodeId")); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
@@ -278,7 +432,7 @@ func (h *DbDeployHandler) DeleteNode(c *gin.Context) {
 }
 
 func (h *DbDeployHandler) ListAgents(c *gin.Context) {
-	list, err := h.Store.ListDbDeployAgents()
+	list, err := h.Store.ListDbDeployAgentsInTenant(effectiveListTenantID(h.Store, c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -300,6 +454,15 @@ func (h *DbDeployHandler) UpsertAgent(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
+	if strings.TrimSpace(req.ID) != "" {
+		if old, err := h.Store.GetDbDeployAgentInTenant(req.ID, effectiveListTenantID(h.Store, c)); err != nil || old == nil {
+			c.JSON(http.StatusNotFound, gin.H{"message": "Agent 不存在"})
+			return
+		}
+	}
+	if !dbHostInstanceAllowed(h.Store, c, req.HostInstanceID) {
+		return
+	}
 	a := &store.DbDeployAgent{
 		ID: req.ID, Name: req.Name, BaseURL: req.BaseURL, Username: req.Username,
 		HostInstID: req.HostInstanceID, Remark: req.Remark,
@@ -313,9 +476,13 @@ func (h *DbDeployHandler) UpsertAgent(c *gin.Context) {
 		}
 		a.PasswordEnc = enc
 	}
+	isNew := strings.TrimSpace(req.ID) == ""
 	if err := h.Store.UpsertDbDeployAgent(a); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
+	}
+	if tid := middleware.TenantID(c); isNew && tid != "" {
+		_ = h.Store.AssignTenantID("tbl_db_deploy_agents", a.ID, tid)
 	}
 	rebound, _ := h.Store.RebindDbDeployNodesAgent(a.HostInstID, agentAddrs(h.Store, a.HostInstID, a.BaseURL), a.ID)
 	a.PasswordEnc = ""
@@ -348,6 +515,9 @@ func (h *DbDeployHandler) DeployAgent(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
+	if !dbHostInstanceAllowed(h.Store, c, req.HostInstanceID) {
+		return
+	}
 	id, err := h.eng().StartAgentDeploy(dbdeploy.DeployOpts{
 		HostInstanceID: req.HostInstanceID,
 		ListenPort:     req.ListenPort,
@@ -363,7 +533,7 @@ func (h *DbDeployHandler) DeployAgent(c *gin.Context) {
 }
 
 func (h *DbDeployHandler) ListAgentDeploys(c *gin.Context) {
-	list, err := h.Store.ListDbDeployAgentDeploys(c.Query("host_instance_id"), 50)
+	list, err := h.Store.ListDbDeployAgentDeploysInTenant(effectiveListTenantID(h.Store, c), c.Query("host_instance_id"), 50)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -372,7 +542,7 @@ func (h *DbDeployHandler) ListAgentDeploys(c *gin.Context) {
 }
 
 func (h *DbDeployHandler) GetAgentDeploy(c *gin.Context) {
-	it, err := h.Store.GetDbDeployAgentDeploy(c.Param("id"))
+	it, err := h.Store.GetDbDeployAgentDeployInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || it == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "下发记录不存在"})
 		return
@@ -418,9 +588,9 @@ func (h *DbDeployHandler) StartDeploy(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
-	cl, _ := h.Store.GetDbDeployCluster(c.Param("id"))
+	cl, _ := h.Store.GetDbDeployClusterInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	c.JSON(http.StatusOK, gin.H{
-		"data": gin.H{"cluster": cl, "change_id": changeID},
+		"data":    gin.H{"cluster": cl, "change_id": changeID},
 		"message": "已提交部署变更",
 	})
 }
@@ -432,7 +602,7 @@ func (h *DbDeployHandler) StartHaInit(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
-	cl, _ := h.Store.GetDbDeployCluster(c.Param("id"))
+	cl, _ := h.Store.GetDbDeployClusterInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	c.JSON(http.StatusOK, gin.H{
 		"data":    gin.H{"cluster": cl, "change_id": changeID},
 		"message": "已提交 HA 接入变更",
@@ -441,18 +611,18 @@ func (h *DbDeployHandler) StartHaInit(c *gin.Context) {
 
 // HAPreflight 创建/部署前 HA 门禁预检。
 func (h *DbDeployHandler) HAPreflight(c *gin.Context) {
-	cl, err := h.Store.GetDbDeployCluster(c.Param("id"))
+	cl, err := h.Store.GetDbDeployClusterInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || cl == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "集群不存在"})
 		return
 	}
 	nodes, _ := h.Store.ListDbDeployNodes(cl.ID)
 	out := gin.H{
-		"ha_enabled": cl.HaEnabled,
-		"ha_mode":    cl.HaMode,
+		"ha_enabled":    cl.HaEnabled,
+		"ha_mode":       cl.HaMode,
 		"controller_id": cl.ControllerID,
-		"topology":   cl.Topology,
-		"status":     cl.Status,
+		"topology":      cl.Topology,
+		"status":        cl.Status,
 	}
 	if err := dbdeploy.ValidateDeployHA(h.Store, cl, nodes); err != nil {
 		out["ok"] = false
@@ -483,7 +653,7 @@ func (h *DbDeployHandler) HAPreflight(c *gin.Context) {
 
 func (h *DbDeployHandler) ListChanges(c *gin.Context) {
 	limit := 50
-	list, err := h.Store.ListDbDeployChanges(c.Query("cluster_id"), limit)
+	list, err := h.Store.ListDbDeployChangesInTenant(effectiveListTenantID(h.Store, c), c.Query("cluster_id"), limit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -492,7 +662,7 @@ func (h *DbDeployHandler) ListChanges(c *gin.Context) {
 }
 
 func (h *DbDeployHandler) GetChange(c *gin.Context) {
-	ch, err := h.Store.GetDbDeployChange(c.Param("id"))
+	ch, err := h.Store.GetDbDeployChangeInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -505,6 +675,10 @@ func (h *DbDeployHandler) GetChange(c *gin.Context) {
 }
 
 func (h *DbDeployHandler) RetryChange(c *gin.Context) {
+	if ch, err := h.Store.GetDbDeployChangeInTenant(c.Param("id"), effectiveListTenantID(h.Store, c)); err != nil || ch == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "变更不存在"})
+		return
+	}
 	if err := h.eng().RetryChange(c.Param("id"), actorOfDb(c)); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
@@ -513,6 +687,10 @@ func (h *DbDeployHandler) RetryChange(c *gin.Context) {
 }
 
 func (h *DbDeployHandler) CancelChange(c *gin.Context) {
+	if ch, err := h.Store.GetDbDeployChangeInTenant(c.Param("id"), effectiveListTenantID(h.Store, c)); err != nil || ch == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "变更不存在"})
+		return
+	}
 	if err := h.eng().CancelChange(c.Param("id"), actorOfDb(c)); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
@@ -563,4 +741,16 @@ func (h *DbDeployHandler) RemoveNode(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{"change_id": id}})
+}
+
+// dbHostInstanceAllowed 主机实例非空时须属于当前租户（或已授权）。
+func dbHostInstanceAllowed(db *store.DB, c *gin.Context, instanceID string) bool {
+	if strings.TrimSpace(instanceID) == "" {
+		return true
+	}
+	if it, err := resolveInstanceInTenant(db, c, instanceID); err != nil || it == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "主机实例不存在"})
+		return false
+	}
+	return true
 }

@@ -58,6 +58,7 @@ type Graph struct {
 // ListOpts 目录筛选。
 type ListOpts struct {
 	Type     string
+	TenantID string
 	EnvID    string
 	RegionID string
 	Q        string
@@ -166,7 +167,11 @@ func filterCIs(list []CI, opts ListOpts) []CI {
 }
 
 func (s *Service) GetCI(ciType, id string) (*CI, error) {
-	list, err := s.ListCIs(ListOpts{Type: ciType, Limit: 5000})
+	return s.GetCIInTenant(ciType, id, "")
+}
+
+func (s *Service) GetCIInTenant(ciType, id, tenantID string) (*CI, error) {
+	list, err := s.ListCIs(ListOpts{Type: ciType, TenantID: tenantID, Limit: 5000})
 	if err != nil {
 		return nil, err
 	}
@@ -190,7 +195,7 @@ func (s *Service) GetCI(ciType, id string) (*CI, error) {
 }
 
 func (s *Service) listInstances(opts ListOpts) ([]CI, error) {
-	list, err := s.Store.ListInstances("", opts.Q)
+	list, err := s.Store.ListInstancesInTenant(opts.TenantID, "", opts.Q)
 	if err != nil {
 		return nil, err
 	}
@@ -211,7 +216,7 @@ func (s *Service) listInstances(opts ListOpts) ([]CI, error) {
 }
 
 func (s *Service) listDatabases(opts ListOpts) ([]CI, error) {
-	list, err := s.Store.ListDatabases("", opts.Q)
+	list, err := s.Store.ListDatabasesInTenant(opts.TenantID, "", opts.Q)
 	if err != nil {
 		return nil, err
 	}
@@ -262,7 +267,7 @@ func (s *Service) listEnvironments(_ ListOpts) ([]CI, error) {
 }
 
 func (s *Service) listConnectors(opts ListOpts) ([]CI, error) {
-	list, err := s.Store.ListConnectors("")
+	list, err := s.Store.ListConnectorsInTenant(opts.TenantID, "")
 	if err != nil {
 		return nil, err
 	}
@@ -279,7 +284,7 @@ func (s *Service) listConnectors(opts ListOpts) ([]CI, error) {
 }
 
 func (s *Service) listMonitorJobs(opts ListOpts) ([]CI, error) {
-	list, err := s.Store.ListMonitorJobs(opts.Q)
+	list, err := s.Store.ListMonitorJobsInTenant(opts.TenantID, opts.Q)
 	if err != nil {
 		return nil, err
 	}
@@ -294,8 +299,8 @@ func (s *Service) listMonitorJobs(opts ListOpts) ([]CI, error) {
 	return out, nil
 }
 
-func (s *Service) listMonitorGroups(_ ListOpts) ([]CI, error) {
-	jobs, err := s.Store.ListMonitorJobs("")
+func (s *Service) listMonitorGroups(opts ListOpts) ([]CI, error) {
+	jobs, err := s.Store.ListMonitorJobsInTenant(opts.TenantID, "")
 	if err != nil {
 		return nil, err
 	}
@@ -325,7 +330,7 @@ func (s *Service) listMonitorGroups(_ ListOpts) ([]CI, error) {
 }
 
 func (s *Service) listHAClusters(opts ListOpts) ([]CI, error) {
-	list, err := s.Store.ListHAClusters("", opts.EnvID, opts.Q)
+	list, err := s.Store.ListHAClustersInTenant(opts.TenantID, "", opts.EnvID, opts.Q)
 	if err != nil {
 		return nil, err
 	}
@@ -342,7 +347,7 @@ func (s *Service) listHAClusters(opts ListOpts) ([]CI, error) {
 }
 
 func (s *Service) listBackupPolicies(opts ListOpts) ([]CI, error) {
-	list, err := s.Store.ListBackupPolicies("")
+	list, err := s.Store.ListBackupPoliciesInTenant(opts.TenantID, "")
 	if err != nil {
 		return nil, err
 	}
@@ -363,7 +368,7 @@ func (s *Service) listBackupPolicies(opts ListOpts) ([]CI, error) {
 }
 
 func (s *Service) listHosts(opts ListOpts) ([]CI, error) {
-	list, err := s.Store.ListInstances("", opts.Q)
+	list, err := s.Store.ListInstancesInTenant(opts.TenantID, "", opts.Q)
 	if err != nil {
 		return nil, err
 	}

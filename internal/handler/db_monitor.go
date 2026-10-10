@@ -32,7 +32,7 @@ func (h *DbMonitorHandler) Instances(c *gin.Context) {
 	if dbType == "" {
 		dbType = "postgres"
 	}
-	list, err := h.Svc.ListInstances(dbType)
+	list, err := h.Svc.ListInstancesInTenant(effectiveListTenantID(h.Svc.Store, c), dbType)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -48,7 +48,7 @@ func (h *DbMonitorHandler) Clusters(c *gin.Context) {
 	if engine == "" {
 		engine = "starrocks"
 	}
-	list, err := h.Svc.ListClusters(engine)
+	list, err := h.Svc.ListClustersInTenant(effectiveListTenantID(h.Svc.Store, c), engine)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return

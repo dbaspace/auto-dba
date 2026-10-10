@@ -1,0 +1,21 @@
+# Nacos 引导示例（可复制进 config/config.yaml 顶部，或对照填写）
+# 真实 password 勿提交仓库；可用环境变量 NACOS_PASSWORD
+# 完整说明：docs/nacos-config.md
+
+nacos:
+  enabled: true
+  # 单机一个地址；集群逗号分隔，客户端同一套代码
+  server_addr: "10.100.113.151:8848"
+  # server_addr: "10.0.0.1:8848,10.0.0.2:8848,10.0.0.3:8848"
+  #
+  # namespace = 平台部署用的 Nacos「命名空间 ID」（控制台第二列），不是「环境管理」里的 code：
+  #   public（默认）→ "" 或 public
+  #   autosql       → e4dec2e2-4711-432f-9110-cc9b67d66b81
+  # 勿填 beijing / test 等业务环境编码；说明见 docs/nacos-config.md「业务环境 vs Nacos Namespace」
+  namespace: "e4dec2e2-4711-432f-9110-cc9b67d66b81"
+  group: DEFAULT_GROUP
+  data_id: auto-dba.yaml
+  username: nacos
+  password: ""
+  # watch: true                      # 默认开启 ListenConfig 热更；显式 false 关闭
+  # restart_on_listen_change: false  # true：http.port/host 变更时进程自重启

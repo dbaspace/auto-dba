@@ -18,6 +18,13 @@ function isBenignCdcMiss(url: string | undefined, status: number | undefined): b
 client.interceptors.request.use((cfg) => {
   const token = localStorage.getItem('token')
   if (token) cfg.headers.Authorization = `Bearer ${token}`
+  try {
+    const u = JSON.parse(localStorage.getItem('user') || '{}')
+    const tid = u?.current_tenant?.id || u?.tenant_id
+    if (tid) cfg.headers['X-Tenant-Id'] = tid
+  } catch {
+    /* ignore */
+  }
   return cfg
 })
 

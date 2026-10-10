@@ -225,6 +225,21 @@ func (d *DB) seedRBAC(now string) error {
 	if err := d.ensureSqlInsightActionMenus(now); err != nil {
 		return err
 	}
+	if err := d.ensureAlertMenus(now); err != nil {
+		return err
+	}
+	if err := d.ensureTodoMenus(now); err != nil {
+		return err
+	}
+	if err := d.ensureTopLevelMenuSort(now); err != nil {
+		return err
+	}
+	if err := d.ensureTenantMenus(now); err != nil {
+		return err
+	}
+	if err := d.EnsureDefaultAlertRules(); err != nil {
+		return err
+	}
 	if err := d.ensureDbConfigMenuTree(now); err != nil {
 		return err
 	}
@@ -529,7 +544,7 @@ func (d *DB) seedMenus(now string) error {
 		{"m-query", "m-data-query", "数据库", "/ops/query", "um.sidebar.ops-query", "查看数据库", "search", 1},
 		{"m-query-kafka", "m-data-query", "Kafka", "/ops/kafka-query", "um.sidebar.ops-query-kafka", "查看 Kafka", "share", 2},
 		{"m-query-redis", "m-data-query", "Redis", "/ops/redis-query", "um.sidebar.ops-query-redis", "查看 Redis", "coin", 3},
-		{"m-tickets", "", "工单", "", "um.sidebar.tickets", "查看工单", "tickets", 10},
+		{"m-tickets", "", "工单申请", "", "um.sidebar.tickets", "查看工单申请", "tickets", 10},
 		{"m-tickets-list", "m-tickets", "工单列表", "/ops/tickets", "um.sidebar.ops-tickets", "查看工单列表", "list", 11},
 		{"m-tickets-ddl", "m-tickets", "DDL 工单", "/ops/ddl", "um.sidebar.ops-ddl", "查看 DDL 工单", "edit", 12},
 		{"m-tickets-dml", "m-tickets", "DML 工单", "/ops/dml", "um.sidebar.ops-dml", "查看 DML 工单", "document", 13},
@@ -1241,7 +1256,7 @@ func (d *DB) ensureHAMenu(now string) error {
 
 func (d *DB) ensureCmdbMenuTree(now string) error {
 	items := []seedMenu{
-		{"m-cmdb", "", "CMDB", "", "um.sidebar.cmdb", "查看 CMDB", "coin", 8},
+		{"m-cmdb", "", "CMDB", "", "um.sidebar.cmdb", "查看 CMDB", "coin", 6},
 		{"m-cmdb-assets", "m-cmdb", "资产目录", "/cmdb/assets", "um.sidebar.cmdb-assets", "查看资产目录", "list", 1},
 		{"m-cmdb-topo", "m-cmdb", "关系拓扑", "/cmdb/topology", "um.sidebar.cmdb-topology", "查看关系拓扑", "share", 2},
 		{"m-cmdb-tags", "m-cmdb", "标签管理", "/cmdb/tags", "um.sidebar.cmdb-tags", "查看 CMDB 标签", "tag", 3},
@@ -1519,6 +1534,204 @@ func (d *DB) backfillMenuMeta() error {
 		if changed {
 			if err := d.UpdateMenu(&m); err != nil {
 				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (d *DB) ensureTenantMenus(now string) error {
+	parent := "m-rbac"
+	items := []seedMenu{
+		{"m-cfg-tenants", parent, "租户管理", "/config/tenants", URNSidebarTenants, "查看租户管理", "cluster", 55},
+		{"m-act-tenants-create", "m-cfg-tenants", "新建租户", "", URNTenantsCreate, "创建租户", "plus", 90},
+		{"m-act-tenants-edit", "m-cfg-tenants", "编辑租户", "", URNTenantsEdit, "编辑租户资料与状态", "edit", 91},
+		{"m-act-tenants-disable", "m-cfg-tenants", "停用租户", "", URNTenantsDisable, "停用租户", "stop", 92},
+		{"m-act-tenants-members", "m-cfg-tenants", "管理成员", "", URNTenantsMembers, "增删改租户成员与角色", "team", 93},
+		{"m-act-tenants-grants", "m-cfg-tenants", "资源授权", "", URNTenantsGrants, "跨租户资源授权", "share", 94},
+		{"m-act-tenants-impersonate", "m-cfg-tenants", "进入租户审计", "", URNTenantsImpersonate, "平台管理员进入租户上下文（审计）", "eye", 95},
+	}
+	admin, _ := d.GetRoleByCode("admin")
+	for _, it := range items {
+		m := &Menu{
+			ID: it.ID, ParentID: it.Parent, Title: it.Title, Path: it.Path,
+			URN: it.URN, PermissionDesc: it.Perm, Icon: it.Icon, SortOrder: it.Sort, Enabled: true,
+			CreatedAt: now, UpdatedAt: now,
+		}
+		if err := d.EnsureMenu(m); err != nil {
+			return err
+		}
+		if admin != nil {
+			if _, err := d.Exec(
+				`INSERT INTO tbl_role_menus(role_id, menu_id) VALUES(?,?) ON CONFLICT DO NOTHING`,
+				admin.ID, it.ID,
+			); err != nil {
+				return err
+			}
+		}
+	}
+	log.Printf("seed: tenant menus ensured")
+	return nil
+}
+
+func (d *DB) ensureAlertMenus(now string) error {
+	items := []seedMenu{
+		{"m-alert", "", "告警管理", "", "um.sidebar.alerts", "查看告警管理", "bell", 70},
+		{"m-alert-active", "m-alert", "活跃告警", "/ops/alerts", "um.sidebar.ops-alerts", "查看活跃告警", "bell", 1},
+		{"m-alert-history", "m-alert", "历史告警", "/ops/alerts/history", "um.sidebar.ops-alerts-history", "查看历史告警", "clock", 2},
+		{"m-alert-rules", "m-alert", "规则管理", "/ops/alerts/rules", "um.sidebar.ops-alerts-rules", "查看告警规则", "setting", 3},
+		{"m-alert-silences", "m-alert", "静默管理", "/ops/alerts/silences", "um.sidebar.ops-alerts-silences", "查看静默规则", "mute", 4},
+		{"m-alert-routes", "m-alert", "通知路由", "/ops/alerts/routes", "um.sidebar.ops-alerts-routes", "查看通知路由", "share", 5},
+		{"m-alert-inhibitions", "m-alert", "抑制规则", "/ops/alerts/inhibitions", "um.sidebar.ops-alerts-inhibitions", "查看抑制规则", "stop", 6},
+		{"m-alert-oncall", "m-alert", "值班排班", "/ops/alerts/oncall", "um.sidebar.ops-alerts-oncall", "查看值班排班", "team", 7},
+		{"m-act-alert-claim", "m-alert-active", "认领告警", "", URNAlertClaim, "认领 / 转派 / 处理中", "user", 90},
+		{"m-act-alert-resolve", "m-alert-active", "关闭告警", "", URNAlertResolve, "恢复 / 误报关闭", "check", 91},
+		{"m-act-alert-silence", "m-alert-active", "静默告警", "", URNAlertSilence, "新建 / 取消静默", "pause", 92},
+		{"m-act-alert-rule-edit", "m-alert-rules", "编辑规则", "", URNAlertRuleEdit, "新建 / 编辑 / 启停规则", "edit", 90},
+		{"m-act-alert-rule-del", "m-alert-rules", "删除规则", "", URNAlertRuleDelete, "删除告警规则", "delete", 91},
+	}
+	// 若已有「告警管理」目录（含手工空目录），子页面挂到其下，避免出现两个同名目录。
+	parentID := "m-alert"
+	if list, err := d.ListMenus(); err == nil {
+		for _, m := range list {
+			if m.Title == "告警管理" && strings.TrimSpace(m.Path) == "" && !IsActionMenu(m) {
+				parentID = m.ID
+				break
+			}
+		}
+	}
+	for i := range items {
+		if items[i].ID == "m-alert" {
+			items[i].ID = parentID
+		}
+		if items[i].Parent == "m-alert" {
+			items[i].Parent = parentID
+		}
+	}
+	for _, it := range items {
+		m := &Menu{
+			ID: it.ID, ParentID: it.Parent, Title: it.Title, Path: it.Path,
+			URN: it.URN, PermissionDesc: it.Perm, Icon: it.Icon, SortOrder: it.Sort, Enabled: true,
+			CreatedAt: now, UpdatedAt: now,
+		}
+		if err := d.EnsureMenu(m); err != nil {
+			return err
+		}
+		if it.Parent == "" {
+			if err := d.GrantMenuToAllRoles(it.ID); err != nil {
+				return err
+			}
+		} else if err := d.GrantMenuFollowingParent(it.ID, it.Parent); err != nil {
+			return err
+		}
+	}
+	log.Printf("seed: alert menus ensured under %s", parentID)
+	return nil
+}
+
+func (d *DB) ensureTodoMenus(now string) error {
+	parentID := "m-todo"
+	if list, err := d.ListMenus(); err == nil {
+		for _, m := range list {
+			if m.Title == "待办跟进" && strings.TrimSpace(m.Path) == "" && !IsActionMenu(m) {
+				parentID = m.ID
+				break
+			}
+		}
+	}
+	parent := &Menu{
+		ID: parentID, ParentID: "", Title: "待办跟进", Path: "",
+		URN: "um.sidebar.todo", PermissionDesc: "查看待办跟进", Icon: "todo-list",
+		SortOrder: 65, Enabled: true, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := d.EnsureMenu(parent); err != nil {
+		return err
+	}
+	if err := d.GrantMenuToAllRoles(parent.ID); err != nil {
+		return err
+	}
+	page := &Menu{
+		ID: "m-todo-board", ParentID: parentID, Title: "待办看板", Path: "/ops/todo",
+		URN: "um.sidebar.ops-todo", PermissionDesc: "查看待办看板", Icon: "todo-list",
+		SortOrder: 1, Enabled: true, CreatedAt: now, UpdatedAt: now,
+	}
+	// 若已有挂在该目录下的 /ops/todo 页面，沿用其 id，避免重复
+	if list, err := d.ListMenus(); err == nil {
+		for _, m := range list {
+			if strings.TrimSpace(m.Path) == "/ops/todo" {
+				page.ID = m.ID
+				page.ParentID = parentID
+				break
+			}
+		}
+	}
+	if err := d.EnsureMenu(page); err != nil {
+		return err
+	}
+	if err := d.GrantMenuFollowingParent(page.ID, parentID); err != nil {
+		return err
+	}
+	log.Printf("seed: todo menus ensured under %s", parentID)
+	return nil
+}
+
+// ensureTopLevelMenuSort 回写一级目录 sort_order，与侧栏正常顺序一致。
+func (d *DB) ensureTopLevelMenuSort(now string) error {
+	tops := []struct {
+		id    string
+		title string
+		urn   string
+		icon  string
+		sort  int
+	}{
+		{"m-dashboard", "仪表盘", "um.sidebar.ops-dashboard", "dashboard", 1},
+		{"m-cfg", "配置中心", "um.sidebar.config", "setting", 2},
+		{"m-db-config", "资源配置", "um.sidebar.db-config", "coin", 3},
+		{"m-data-query", "数据查询", "um.sidebar.data-query", "search", 5},
+		{"m-cmdb", "CMDB", "um.sidebar.cmdb", "coin", 6},
+		{"m-tickets", "工单申请", "um.sidebar.tickets", "tickets", 10},
+		{"m-sync", "同步与迁移", "um.sidebar.sync", "refresh", 20},
+		{"m-safe", "数据安全", "um.sidebar.safe", "lock", 30},
+		{"m-diag", "诊断", "um.sidebar.diag", "monitor", 40},
+		{"m-plat", "平台运维", "um.sidebar.platform", "grid", 50},
+		{"m-rbac", "用户权限", "um.sidebar.rbac", "lock", 55},
+		{"m-alert", "告警管理", "um.sidebar.alerts", "bell", 70},
+	}
+	for _, it := range tops {
+		exist, err := d.GetMenu(it.id)
+		if err != nil {
+			return err
+		}
+		if exist == nil {
+			continue
+		}
+		m := *exist
+		m.ParentID = ""
+		m.Title = it.title
+		if it.urn != "" {
+			m.URN = it.urn
+		}
+		if it.icon != "" {
+			m.Icon = it.icon
+		}
+		m.SortOrder = it.sort
+		m.Enabled = true
+		m.UpdatedAt = now
+		if err := d.UpdateMenu(&m); err != nil {
+			return err
+		}
+	}
+	// 待办目录可能是手工 id，按标题回写序号
+	if list, err := d.ListMenus(); err == nil {
+		for i := range list {
+			m := list[i]
+			if m.Title == "待办跟进" && strings.TrimSpace(m.Path) == "" && strings.TrimSpace(m.ParentID) == "" {
+				m.SortOrder = 65
+				m.UpdatedAt = now
+				if err := d.UpdateMenu(&m); err != nil {
+					return err
+				}
+				break
 			}
 		}
 	}

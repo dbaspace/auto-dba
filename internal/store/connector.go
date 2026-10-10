@@ -32,8 +32,13 @@ func scanConnector(scanner interface {
 }
 
 func (d *DB) ListConnectors(env string) ([]Connector, error) {
+	return d.ListConnectorsInTenant("", env)
+}
+
+func (d *DB) ListConnectorsInTenant(tenantID, env string) ([]Connector, error) {
 	q := `SELECT ` + connectorCols + ` FROM tbl_connectors WHERE 1=1`
 	var args []any
+	q, args = appendTenantFilter(q, args, tenantID)
 	if strings.TrimSpace(env) != "" {
 		q += ` AND env=?`
 		args = append(args, strings.TrimSpace(env))
@@ -63,6 +68,11 @@ func (d *DB) GetConnector(id string) (*Connector, error) {
 	return it, err
 }
 
+func (d *DB) GetConnectorInTenant(id, tenantID string) (*Connector, error) {
+	it, err := d.GetConnector(id)
+	return ownedInTenant(d, it, err, "tbl_connectors", id, tenantID)
+}
+
 func (d *DB) CreateConnector(it *Connector) error {
 	if it.ID == "" {
 		it.ID = uuid.NewString()
@@ -75,7 +85,10 @@ func (d *DB) CreateConnector(it *Connector) error {
 		`INSERT INTO tbl_connectors(`+connectorCols+`) VALUES(?,?,?,?,?,?,?,?)`,
 		it.ID, it.DBZHost, it.Env, it.KafkaHost, it.MessageSchemaMode, it.Remark, it.CreatedAt, it.UpdatedAt,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	return d.AssignTenantID("tbl_connectors", it.ID, it.TenantID)
 }
 
 func (d *DB) UpdateConnector(it *Connector) error {

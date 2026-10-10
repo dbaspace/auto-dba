@@ -1,7 +1,10 @@
 package handler
 
 import (
+	"database/sql"
+	"errors"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -41,7 +44,7 @@ func (h *CmdbHandler) ListCIs(c *gin.Context) {
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "100"))
 	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
 	list, err := h.svc().ListCIs(cmdb.ListOpts{
-		Type: c.Query("type"), EnvID: c.Query("env_id"), RegionID: c.Query("region_id"),
+		Type: c.Query("type"), TenantID: middleware.TenantID(c), EnvID: c.Query("env_id"), RegionID: c.Query("region_id"),
 		Q: c.Query("q"), Tag: c.Query("tag"), Limit: limit, Offset: offset,
 	})
 	if err != nil {
@@ -52,7 +55,7 @@ func (h *CmdbHandler) ListCIs(c *gin.Context) {
 }
 
 func (h *CmdbHandler) GetCI(c *gin.Context) {
-	ci, err := h.svc().GetCI(c.Param("type"), c.Param("id"))
+	ci, err := h.svc().GetCIInTenant(c.Param("type"), c.Param("id"), middleware.TenantID(c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -67,7 +70,7 @@ func (h *CmdbHandler) GetCI(c *gin.Context) {
 
 func (h *CmdbHandler) Graph(c *gin.Context) {
 	depth, _ := strconv.Atoi(c.DefaultQuery("depth", "1"))
-	g, err := h.svc().BuildGraph(c.Param("type"), c.Param("id"), depth)
+	g, err := h.svc().BuildGraphInTenant(c.Param("type"), c.Param("id"), middleware.TenantID(c), depth)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
@@ -76,7 +79,7 @@ func (h *CmdbHandler) Graph(c *gin.Context) {
 }
 
 func (h *CmdbHandler) ListRelations(c *gin.Context) {
-	list, err := h.Store.ListCmdbRelations(c.Query("src_type"), c.Query("src_id"), c.Query("dst_type"), c.Query("dst_id"))
+	list, err := h.Store.ListCmdbRelationsInTenant(effectiveListTenantID(h.Store, c), c.Query("src_type"), c.Query("src_id"), c.Query("dst_type"), c.Query("dst_id"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -91,6 +94,7 @@ func (h *CmdbHandler) CreateRelation(c *gin.Context) {
 		return
 	}
 	r.Source = "manual"
+	stampTenantID(c, func(tid string) { r.TenantID = tid })
 	if err := h.Store.CreateCmdbRelation(&r); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
@@ -101,7 +105,11 @@ func (h *CmdbHandler) CreateRelation(c *gin.Context) {
 
 func (h *CmdbHandler) DeleteRelation(c *gin.Context) {
 	id := c.Param("id")
-	if err := h.Store.DeleteCmdbRelation(id); err != nil {
+	if err := h.Store.DeleteCmdbRelationInTenant(id, middleware.TenantID(c)); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusNotFound, gin.H{"message": "关系不存在"})
+			return
+		}
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
@@ -110,7 +118,13 @@ func (h *CmdbHandler) DeleteRelation(c *gin.Context) {
 }
 
 func (h *CmdbHandler) ListTagDefs(c *gin.Context) {
-	list, err := h.Store.ListCmdbTagDefs(c.Query("scope"))
+	// 种子写当前审计租户；列表在审计会话下看全平台。
+	if seedTID := middleware.TenantID(c); seedTID != "" {
+		if err := h.Store.EnsureDefaultCmdbTagDefsForTenant(seedTID); err != nil {
+			log.Printf("cmdb: seed tag defs tenant=%s: %v", seedTID, err)
+		}
+	}
+	list, err := h.Store.ListCmdbTagDefsInTenant(effectiveListTenantID(h.Store, c), c.Query("scope"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -127,6 +141,13 @@ func (h *CmdbHandler) UpsertTagDef(c *gin.Context) {
 	if id := c.Param("id"); id != "" {
 		r.ID = id
 	}
+	if r.ID != "" {
+		if old, err := h.Store.GetCmdbTagDefInTenant(r.ID, effectiveListTenantID(h.Store, c)); err != nil || old == nil {
+			c.JSON(http.StatusNotFound, gin.H{"message": "标签定义不存在"})
+			return
+		}
+	}
+	r.TenantID = middleware.TenantID(c)
 	if err := h.Store.UpsertCmdbTagDef(&r); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
@@ -135,6 +156,10 @@ func (h *CmdbHandler) UpsertTagDef(c *gin.Context) {
 }
 
 func (h *CmdbHandler) DeleteTagDef(c *gin.Context) {
+	if old, err := h.Store.GetCmdbTagDefInTenant(c.Param("id"), effectiveListTenantID(h.Store, c)); err != nil || old == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "标签定义不存在"})
+		return
+	}
 	if err := h.Store.DeleteCmdbTagDef(c.Param("id")); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
@@ -150,7 +175,20 @@ func (h *CmdbHandler) SyncMonitorTags(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
+// ciInTenant 校验 :type/:id 指向的 CI 属于当前租户，否则写 404。
+func (h *CmdbHandler) ciInTenant(c *gin.Context) bool {
+	ci, err := h.svc().GetCIInTenant(c.Param("type"), c.Param("id"), middleware.TenantID(c))
+	if err != nil || ci == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "配置项不存在"})
+		return false
+	}
+	return true
+}
+
 func (h *CmdbHandler) GetCITags(c *gin.Context) {
+	if !h.ciInTenant(c) {
+		return
+	}
 	tags, kv, err := h.svc().EffectiveTags(c.Param("type"), c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
@@ -167,6 +205,9 @@ func (h *CmdbHandler) SetCITags(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
+	if !h.ciInTenant(c) {
+		return
+	}
 	if err := h.svc().SetTags(c.Param("type"), c.Param("id"), body.Tags, actorOf(c)); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
@@ -177,7 +218,7 @@ func (h *CmdbHandler) SetCITags(c *gin.Context) {
 func (h *CmdbHandler) ListAudit(c *gin.Context) {
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
 	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
-	list, err := h.Store.ListCmdbAuditLogs(c.Query("ci_type"), c.Query("ci_id"), c.Query("actor"), c.Query("q"), limit, offset)
+	list, err := h.Store.ListCmdbAuditLogsInTenant(effectiveListTenantID(h.Store, c), c.Query("ci_type"), c.Query("ci_id"), c.Query("actor"), c.Query("q"), limit, offset)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -206,6 +247,10 @@ func (h *CmdbHandler) RegisterDatabases(c *gin.Context) {
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	if it, err := resolveInstanceInTenant(h.Store, c, body.InstanceID); err != nil || it == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "实例不存在"})
 		return
 	}
 	created, skipped, err := h.svc().RegisterDatabases(body.InstanceID, body.DBNames, actorOf(c))

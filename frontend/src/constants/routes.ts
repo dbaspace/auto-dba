@@ -58,14 +58,21 @@ export const PAGE_ROUTES = [
   { path: '/ops/multilang', title: '多语模版' },
   { path: '/ops/dolphin', title: '海豚管理' },
   { path: '/ops/sr', title: 'SR控制台' },
-  { path: '/ops/cluster-deploy/:engine', title: '引擎工作台' },
   { path: '/ops/cluster-deploy', title: '集群部署' },
-  { path: '/ops/cluster-deploy/haproxy', title: 'HAProxy 代理' },
-  { path: '/ops/cluster-deploy/nginx', title: 'Nginx 代理' },
-  { path: '/ops/cluster-deploy/lvs', title: 'LVS 代理' },
-  { path: '/ops/sr-cluster', title: '集群部署' },
+  { path: '/ops/cluster-deploy/haproxy', title: 'HAProxy 部署' },
+  { path: '/ops/cluster-deploy/nginx', title: 'Nginx 部署' },
+  { path: '/ops/cluster-deploy/lvs', title: 'LVS 部署' },
+  { path: '/ops/sr-cluster', title: 'StarRocks 部署' },
   { path: '/ops/terminal', title: '主机终端' },
   { path: '/ops/ha', title: '高可用服务维护' },
+  { path: '/ops/todo', title: '待办跟进' },
+  { path: '/ops/alerts', title: '活跃告警' },
+  { path: '/ops/alerts/history', title: '历史告警' },
+  { path: '/ops/alerts/rules', title: '规则管理' },
+  { path: '/ops/alerts/silences', title: '静默管理' },
+  { path: '/ops/alerts/routes', title: '通知路由' },
+  { path: '/ops/alerts/inhibitions', title: '抑制规则' },
+  { path: '/ops/alerts/oncall', title: '值班排班' },
   { path: '/cmdb/assets', title: '资产目录' },
   { path: '/cmdb/topology', title: '关系拓扑' },
   { path: '/cmdb/tags', title: 'CMDB 标签' },
@@ -91,9 +98,28 @@ export const PAGE_ROUTES = [
   { path: '/config/menus', title: '菜单管理' },
   { path: '/config/roles', title: '角色授权' },
   { path: '/config/users', title: '用户管理' },
+  { path: '/config/tenants', title: '租户管理' },
   { path: '/config/login-logs', title: '登录日志' },
   { path: '/config/ldap', title: '认证配置' },
 ]
+
+export const CLUSTER_DEPLOY_ENGINE_LABELS: Record<string, string> = {
+  haproxy: 'HAProxy', nginx: 'Nginx', lvs: 'LVS',
+  starrocks: 'StarRocks', clickhouse: 'ClickHouse',
+  mysql: 'MySQL', postgres: 'PostgreSQL', oceanbase: 'OceanBase', oracle: 'Oracle', sqlserver: 'SQL Server',
+  tidb: 'TiDB', cockroachdb: 'CockroachDB',
+  redis: 'Redis', mongodb: 'MongoDB', cassandra: 'Cassandra', elasticsearch: 'Elasticsearch',
+  kafka: 'Kafka',
+}
+
+/** 集群部署引擎工作台 /ops/cluster-deploy/<engine> 的 Tab 名，如「StarRocks 部署」；非引擎页返回空串 */
+export function clusterDeployEngineTitle(path: string): string {
+  const m = /^\/ops\/cluster-deploy\/([^/]+)\/?$/.exec(path || '')
+  if (!m) return ''
+  const id = m[1].toLowerCase()
+  const label = CLUSTER_DEPLOY_ENGINE_LABELS[id] || id.charAt(0).toUpperCase() + id.slice(1)
+  return `${label} 部署`
+}
 
 export function collectPaths(nodes: MenuNode[] | undefined, out: string[] = []): string[] {
   for (const n of nodes || []) {

@@ -84,7 +84,7 @@ func (h *CDCHandler) Precheck(c *gin.Context) {
 	}
 	add(cdcPrecheckItem{Code: "request", Name: "请求", Level: "required", Status: "passed", Message: "任务类型 " + taskType})
 
-	src, _ := h.Store.GetInstance(srcID)
+	src, _ := resolveInstanceInTenant(h.Store, c, srcID)
 	if src == nil {
 		add(cdcPrecheckItem{Code: "source_instance", Name: "源端实例", Level: "required", Status: "failed", Message: "源端实例未登记"})
 	} else {
@@ -180,7 +180,7 @@ func (h *CDCHandler) Precheck(c *gin.Context) {
 		add(cdcPrecheckItem{Code: "target_instance", Name: "目标端实例", Level: "required", Status: "failed", Message: "自动建表开启时必须选择目标端 StarRocks 实例"})
 	} else if dstID == "" {
 		add(cdcPrecheckItem{Code: "target_instance", Name: "目标端实例", Level: "info", Status: "passed", Message: "未填写（手动 DDL）"})
-	} else if dst, _ := h.Store.GetInstance(dstID); dst == nil {
+	} else if dst, _ := resolveInstanceInTenant(h.Store, c, dstID); dst == nil {
 		add(cdcPrecheckItem{Code: "target_instance", Name: "目标端实例", Level: "required", Status: "failed", Message: "目标端实例未登记"})
 	} else {
 		add(cdcPrecheckItem{Code: "target_instance", Name: "目标端实例", Level: "required", Status: "passed", Message: dst.Name})
@@ -196,7 +196,7 @@ func (h *CDCHandler) Precheck(c *gin.Context) {
 	connHost, dbzHost, schemaMode := "", "", ""
 	if connID == "" {
 		add(cdcPrecheckItem{Code: "connector", Name: "Debezium 集群", Level: "required", Status: "failed", Message: "未选择 Debezium 集群"})
-	} else if conn, _ := h.Store.GetConnector(connID); conn == nil {
+	} else if conn, _ := h.Store.GetConnectorInTenant(connID, effectiveListTenantID(h.Store, c)); conn == nil {
 		add(cdcPrecheckItem{Code: "connector", Name: "Debezium 集群", Level: "required", Status: "failed", Message: "连接器未登记"})
 	} else {
 		connHost, dbzHost, schemaMode = conn.KafkaHost, conn.DBZHost, conn.MessageSchemaMode
@@ -304,7 +304,7 @@ func (h *CDCHandler) Precheck(c *gin.Context) {
 		}
 		if parentID == "" {
 			add(cdcPrecheckItem{Code: "parent_task", Name: "父任务", Level: "required", Status: "failed", Message: "add_table 须指定 parent_id"})
-		} else if parent, _ := h.Store.GetCDC(parentID); parent == nil {
+		} else if parent, _ := h.Store.GetCDCInTenant(parentID, effectiveListTenantID(h.Store, c)); parent == nil {
 			add(cdcPrecheckItem{Code: "parent_task", Name: "父任务", Level: "required", Status: "failed", Message: "父任务不存在"})
 		} else {
 			pe := cdc.ParseTaskExtra(parent.Description)
@@ -326,7 +326,7 @@ func (h *CDCHandler) Precheck(c *gin.Context) {
 	}
 
 	if naming.ConnectorName != "" || naming.SlotName != "" {
-		if list, lerr := h.Store.ListCDC("", "init"); lerr == nil {
+		if list, lerr := h.Store.ListCDCInTenant(effectiveListTenantID(h.Store, c), "", "init"); lerr == nil {
 			var hits []string
 			for i := range list {
 				it := &list[i]

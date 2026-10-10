@@ -76,7 +76,7 @@ func (h *DbDeployHandler) PrecheckAddNode(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
-	cl, err := h.Store.GetDbDeployCluster(c.Param("id"))
+	cl, err := h.Store.GetDbDeployClusterInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || cl == nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "集群不存在"})
 		return
@@ -121,7 +121,7 @@ func (h *DbDeployHandler) CreateTicket(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "cluster_id 必填"})
 		return
 	}
-	cl, err := h.Store.GetDbDeployCluster(clusterID)
+	cl, err := h.Store.GetDbDeployClusterInTenant(clusterID, effectiveListTenantID(h.Store, c))
 	if err != nil || cl == nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "集群不存在"})
 		return
@@ -177,9 +177,10 @@ func (h *DbDeployHandler) CreateTicket(c *gin.Context) {
 		// cluster_id already set
 	}
 
-	assigned := strings.TrimSpace(req.AssignedTo)
-	if assigned == "" {
-		assigned, _ = h.Store.GetGlobalArg("sync_default_approver")
+	assigned, err := resolveTenantAssignee(h.Store, middleware.TenantID(c), req.AssignedTo)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
 	}
 	desc := strings.TrimSpace(req.Description)
 	if desc == "" {
@@ -197,6 +198,9 @@ func (h *DbDeployHandler) CreateTicket(c *gin.Context) {
 		Submitter:   middleware.Username(c),
 		AssignedTo:  assigned,
 	}
+	stampTenantID(c, func(tid string) {
+		if issue != nil { issue.TenantID = tid }
+	})
 	if err := h.Store.CreateIssue(issue); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return

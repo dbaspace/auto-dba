@@ -72,16 +72,24 @@ func (d *DB) UpsertHAMHAConf(it *HAMHAConf) error {
 }
 
 func (d *DB) FindInstanceByHostPort(dbType, host string, port int) (*Instance, error) {
+	return d.FindInstanceByHostPortInTenant("", dbType, host, port)
+}
+
+// FindInstanceByHostPortInTenant 按租户 + host:port + 引擎查找；tenantID 空则不限租户（仅兼容旧调用）。
+func (d *DB) FindInstanceByHostPortInTenant(tenantID, dbType, host string, port int) (*Instance, error) {
 	host = strings.TrimSpace(host)
 	if host == "" || port <= 0 {
 		return nil, nil
 	}
-	row := d.QueryRow(
-		`SELECT `+instanceCols+` FROM tbl_instances
-		 WHERE LOWER(TRIM(host))=LOWER(TRIM(?)) AND port=? AND LOWER(TRIM(db_type))=LOWER(TRIM(?))
-		 LIMIT 1`,
-		host, port, dbType,
-	)
+	q := `SELECT ` + instanceCols + ` FROM tbl_instances
+		 WHERE LOWER(TRIM(host))=LOWER(TRIM(?)) AND port=? AND LOWER(TRIM(db_type))=LOWER(TRIM(?))`
+	args := []any{host, port, dbType}
+	if tid := strings.TrimSpace(tenantID); tid != "" {
+		q += ` AND COALESCE(tenant_id,'')=?`
+		args = append(args, tid)
+	}
+	q += ` LIMIT 1`
+	row := d.QueryRow(q, args...)
 	it, err := scanInstance(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -89,12 +97,21 @@ func (d *DB) FindInstanceByHostPort(dbType, host string, port int) (*Instance, e
 	return it, err
 }
 
-// EnsureInstanceFromHost 若不存在则创建引擎实例登记（用于 db-deploy 节点接入 HA）。
+// EnsureInstanceFromHost 若不存在则创建引擎实例登记（默认租户）。
 func (d *DB) EnsureInstanceFromHost(dbType, name, host string, port int, envID string) (*Instance, error) {
+	return d.EnsureInstanceFromHostInTenant("", dbType, name, host, port, envID)
+}
+
+// EnsureInstanceFromHostInTenant 在指定租户内复用或登记实例；tenantID 空则落默认租户，且只匹配该租户。
+func (d *DB) EnsureInstanceFromHostInTenant(tenantID, dbType, name, host string, port int, envID string) (*Instance, error) {
 	if port <= 0 {
 		port = 3306
 	}
-	exist, err := d.FindInstanceByHostPort(dbType, host, port)
+	tid := strings.TrimSpace(tenantID)
+	if tid == "" {
+		tid = DefaultTenantID
+	}
+	exist, err := d.FindInstanceByHostPortInTenant(tid, dbType, host, port)
 	if err != nil {
 		return nil, err
 	}
@@ -106,6 +123,7 @@ func (d *DB) EnsureInstanceFromHost(dbType, name, host string, port int, envID s
 	}
 	it := &Instance{
 		ID:          uuid.NewString(),
+		TenantID:    tid,
 		Name:        name,
 		Host:        host,
 		Port:        port,

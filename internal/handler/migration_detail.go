@@ -16,7 +16,7 @@ func (h *MigrationHandler) decorateTask(t *store.MigrationTask) {
 		return
 	}
 	if h.Store != nil && (strings.TrimSpace(t.SourceHost) == "" || t.SourcePort == 0) {
-		_ = h.fillEndpoints(t)
+		_ = h.fillEndpointsRaw(t)
 	}
 	t.TaskName = t.Name
 	t.AssignedApproverLogin = t.AssignedApprover

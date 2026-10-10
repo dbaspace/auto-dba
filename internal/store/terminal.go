@@ -17,6 +17,7 @@ const (
 
 type TerminalSession struct {
 	ID          string
+	TenantID    string
 	ActionName  string
 	ExecContent string
 	Status      string
@@ -61,7 +62,16 @@ func (d *DB) CreateTerminalSession(s *TerminalSession) error {
 		 VALUES(?,?,?,?,?,?,?,?,?,?)`,
 		s.ID, s.ActionName, s.ExecContent, s.Status, s.CreatedBy, s.InstanceID, s.Host, s.ExpiresAt, s.CreatedAt, s.UpdatedAt,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	if s.TenantID == "" {
+		s.TenantID = d.inheritTenantFromInstance(s.InstanceID)
+	}
+	if s.TenantID != "" {
+		return d.AssignTenantID("tbl_terminal_sessions", s.ID, s.TenantID)
+	}
+	return nil
 }
 
 func (d *DB) GetTerminalSession(id string) (*TerminalSession, error) {

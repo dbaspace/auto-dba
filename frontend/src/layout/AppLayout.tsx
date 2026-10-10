@@ -3,7 +3,7 @@ import { Layout, Tooltip } from 'antd'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { CloseOutlined, MenuFoldOutlined, MenuUnfoldOutlined } from '@ant-design/icons'
 import api from '../api/request'
-import { resolveMenuIcon } from '../components/MenuIcon'
+import { menuIconTone, resolveMenuIcon } from '../components/MenuIcon'
 import { BrandWordmark } from '../components/BrandMark'
 import { useAppDispatch, useAppSelector } from '../store'
 import { setUser, MenuNode } from '../store/authSlice'
@@ -20,6 +20,7 @@ import {
 } from '../store/tabsSlice'
 import { collectPaths, pathAllowed } from '../constants/routes'
 import UserAccountMenu from './UserAccountMenu'
+import TenantSwitcher from '../components/TenantSwitcher'
 import UserWatermark from '../components/UserWatermark'
 import useIdleLogout from '../hooks/useIdleLogout'
 import NavFlyout from './NavFlyout'
@@ -229,14 +230,19 @@ export default function AppLayout() {
     closeFlyout()
   }
 
+  /** 有子菜单或是空目录（无 path）时走弹层；空目录弹层里提示暂无页面 */
+  function opensFlyout(n: MenuNode) {
+    return !!n.children?.length || !n.path
+  }
+
   function onTopEnter(n: MenuNode) {
-    if (n.children?.length) {
+    if (opensFlyout(n)) {
       scheduleFlyoutOpen(n.id || n.title)
     }
   }
 
   function onTopClick(n: MenuNode) {
-    if (n.children?.length) {
+    if (opensFlyout(n)) {
       cancelFlyoutOpen()
       cancelFlyoutClose()
       setFlyoutId((cur) => ((n.id || n.title) === cur ? cur : n.id || n.title))
@@ -356,6 +362,7 @@ export default function AppLayout() {
               (activeTop.id || activeTop.title) === id &&
               (!flyoutId || flyoutId === id)
             const flyoutOpen = flyoutId === id
+            const icoTone = menuIconTone(n.icon)
             const btn = (
               <button
                 type="button"
@@ -363,7 +370,9 @@ export default function AppLayout() {
                 onMouseEnter={() => onTopEnter(n)}
                 onClick={() => onTopClick(n)}
               >
-                <span style={{ display: 'inline-flex', width: 18 }}>{resolveMenuIcon(n.icon)}</span>
+                <span className="app-sider-top-ico" style={{ color: icoTone.color }}>
+                  {resolveMenuIcon(n.icon, icoTone.color)}
+                </span>
                 <span className="app-sider-label">{title}</span>
               </button>
             )
@@ -425,6 +434,7 @@ export default function AppLayout() {
           }}
         >
           <div style={{ flex: 1 }} />
+          <TenantSwitcher />
           <UserAccountMenu user={user} />
         </Header>
 

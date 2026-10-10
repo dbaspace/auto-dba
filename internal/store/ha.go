@@ -152,9 +152,14 @@ func decodeStandbyControllerIDs(raw string) []string {
 }
 
 func (d *DB) ListHAClusters(engine, envID, keyword string) ([]HACluster, error) {
+	return d.ListHAClustersInTenant("", engine, envID, keyword)
+}
+
+func (d *DB) ListHAClustersInTenant(tenantID, engine, envID, keyword string) ([]HACluster, error) {
 	q := `SELECT id, name, engine, env_id, mode, controller_id, COALESCE(standby_controller_ids,'[]'), maint_status, vip, remark, created_by, updated_by, created_at, updated_at
 		FROM tbl_ha_clusters WHERE 1=1`
 	var args []any
+	q, args = appendTenantFilter(q, args, tenantID)
 	if e := strings.TrimSpace(engine); e != "" {
 		q += ` AND engine=?`
 		args = append(args, strings.ToLower(e))
@@ -230,7 +235,10 @@ func (d *DB) CreateHACluster(c *HACluster) error {
 	_, err := d.Exec(`INSERT INTO tbl_ha_clusters(id, name, engine, env_id, mode, controller_id, standby_controller_ids, maint_status, vip, remark, created_by, updated_by, created_at, updated_at)
 		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		c.ID, c.Name, c.Engine, c.EnvID, c.Mode, c.ControllerID, standbyJSON, c.MaintStatus, c.VIP, c.Remark, c.CreatedBy, c.UpdatedBy, c.CreatedAt, c.UpdatedAt)
-	return err
+	if err != nil {
+		return err
+	}
+	return d.AssignTenantID("tbl_ha_clusters", c.ID, c.TenantID)
 }
 
 func (d *DB) UpdateHACluster(c *HACluster) error {
@@ -334,7 +342,10 @@ func (d *DB) CreateHATask(t *HATask) error {
 	_, err := d.Exec(`INSERT INTO tbl_ha_tasks(id, cluster_id, issue_id, action, status, target_instance_id, precheck_json, steps_json, result_json, operator, created_at, updated_at)
 		VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
 		t.ID, t.ClusterID, t.IssueID, t.Action, t.Status, t.TargetInstanceID, t.PrecheckJSON, t.StepsJSON, t.ResultJSON, t.Operator, t.CreatedAt, t.UpdatedAt)
-	return err
+	if err != nil {
+		return err
+	}
+	return d.inheritTenantFromParent("tbl_ha_tasks", t.ID, "tbl_ha_clusters", t.ClusterID)
 }
 
 func (d *DB) GetHATask(id string) (*HATask, error) {

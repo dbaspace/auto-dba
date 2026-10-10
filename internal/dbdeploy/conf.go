@@ -468,6 +468,9 @@ func needDirs(cl *store.DbDeployCluster, n *store.DbDeployNode) []string {
 	return []string{soft, data, filepath.ToSlash(filepath.Join(soft, "bin")), filepath.ToSlash(filepath.Join(data, "log"))}
 }
 
+// PickPrimary 与部署流程一致的主节点选择。
+func PickPrimary(nodes []store.DbDeployNode) *store.DbDeployNode { return pickPrimary(nodes) }
+
 func pickPrimary(nodes []store.DbDeployNode) *store.DbDeployNode {
 	for i := range nodes {
 		if nodes[i].Role == "primary" || nodes[i].Role == "single" {

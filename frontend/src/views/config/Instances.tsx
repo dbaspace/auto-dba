@@ -19,6 +19,8 @@ type TypeOption = InstanceTypeOption
 
 interface InstanceRow {
   id?: string
+  tenant_id?: string
+  tenant_name?: string
   name?: string
   db_type?: string
   region_id?: string
@@ -103,6 +105,11 @@ export default function Instances() {
   const navigate = useNavigate()
   const dispatch = useAppDispatch()
   const activeTabKey = useAppSelector((s) => s.tabs.activeKey)
+  const user = useAppSelector((s) => s.auth.user)
+  const impersonating = Boolean((user as { impersonating?: boolean })?.impersonating)
+  const currentTenant = (user as { current_tenant?: { id?: string; name?: string; code?: string } })?.current_tenant
+  const currentTenantId = String(currentTenant?.id || '')
+  const currentTenantLabel = currentTenant?.name || currentTenant?.code || '当前租户'
   const [typeOptions, setTypeOptions] = useState<TypeOption[]>([])
   const [regions, setRegions] = useState<MetaRow[]>([])
   const [regionEnvs, setRegionEnvs] = useState<MetaRow[]>([])
@@ -211,18 +218,20 @@ export default function Instances() {
     return opts
   }
 
+  async function loadAclOptions(tenantId?: string) {
+    const tid = tenantId || currentTenantId
+    const { data } = await api.get('/tenant-acl-options', { params: tid ? { tenant_id: tid } : {} })
+    const payload = data.data || {}
+    const names = (payload.users || []).map((u: any) => u.username || u.name).filter(Boolean)
+    setUserOptions([...new Set(names as string[])])
+    setRoles(payload.roles || [])
+  }
+
   async function loadMeta() {
-    const [r, e, apprRes, roleRes] = await Promise.all([
-      api.get('/regions'),
-      api.get('/environments'),
-      api.get('/create-db/approvers'),
-      api.get('/role-options'),
-    ])
+    const [r, e] = await Promise.all([api.get('/regions'), api.get('/environments')])
     setRegions(r.data.data || [])
     setAllEnvs(e.data.data || [])
-    const names = (apprRes.data.data || []).map((a: any) => a.name || a).filter(Boolean)
-    setUserOptions([...new Set(['admin', ...names])])
-    setRoles(roleRes.data.data || [])
+    await loadAclOptions(currentTenantId)
   }
 
   function regionName(id?: string) {
@@ -248,6 +257,7 @@ export default function Instances() {
   function open(row?: InstanceRow) {
     const tabType = activeType !== OTHER ? activeType : ''
     const creatingHost = isHostType(tabType)
+    const selfName = String((user as { username?: string })?.username || '').trim()
     const next: InstanceRow = row
       ? {
           ...row,
@@ -269,9 +279,9 @@ export default function Instances() {
           password: '',
           username: creatingHost ? 'sysadmin' : '',
           visibility: creatingHost ? 'private' : 'global',
-          access_users: creatingHost ? ['admin'] : [],
+          access_users: creatingHost && selfName ? [selfName] : [],
           role_ids: [],
-          approvers: ['admin'],
+          approvers: selfName ? [selfName] : [],
           cloud_vendor: '',
           cloud_instance_id: '',
           cloud_region: '',
@@ -283,6 +293,7 @@ export default function Instances() {
     setForm(next)
     setApproverText((next.approvers || []).join(','))
     setVisible(true)
+    void loadAclOptions(row?.tenant_id || currentTenantId)
     loadRegionEnvs(next.region_id)
   }
 
@@ -397,6 +408,21 @@ export default function Instances() {
     }
   }
 
+  function assignToCurrentTenant(row: InstanceRow) {
+    if (!row.id || !currentTenantId) return
+    const from = row.tenant_name || row.tenant_id || '其它租户'
+    Modal.confirm({
+      title: '划拨到当前租户',
+      content: `将实例「${row.name || row.id}」（当前归属：${from}）划拨到「${currentTenantLabel}」？下属已登记库与账号一并迁移。`,
+      okText: '划拨',
+      onOk: async () => {
+        await api.post(`/instances/${row.id}/assign-tenant`, { tenant_id: currentTenantId })
+        message.success('已划拨到 ' + currentTenantLabel)
+        await load()
+      },
+    })
+  }
+
   function remove(row: InstanceRow) {
     const host = isHostType(row.db_type)
     Modal.confirm({
@@ -462,6 +488,11 @@ export default function Instances() {
           </Auth>
         </div>
       </div>
+      {impersonating ? (
+        <div className="type-hint" style={{ margin: '0 0 8px', color: 'var(--ant-color-text-secondary, #666)' }}>
+          审计中：列表含全平台实例。其它租户资源可「划拨到当前租户（{currentTenantLabel}）」后供该租户成员使用。
+        </div>
+      ) : null}
       <div className="ops-table">
         <ResponsiveTable
           rowKey={(r) => r.id || r.name || ''}
@@ -470,8 +501,30 @@ export default function Instances() {
           pagination={false}
           scroll={{ y: '100%' }}
           style={{ height: '100%' }}
+          locale={{
+            emptyText: impersonating
+              ? '暂无实例。可在其它类型 Tab 查看，或先在默认租户建好后于本页划拨。'
+              : '暂无数据',
+          }}
           columns={[
             { title: '名称', dataIndex: 'name' },
+            ...(impersonating
+              ? [
+                  {
+                    title: '所属租户',
+                    width: 120,
+                    render: (_: unknown, row: InstanceRow) => {
+                      const same = row.tenant_id && currentTenantId && row.tenant_id === currentTenantId
+                      const label = row.tenant_name || row.tenant_id || '—'
+                      return same ? (
+                        <Tag color="green">{label}</Tag>
+                      ) : (
+                        <Tag color="orange">{label}</Tag>
+                      )
+                    },
+                  },
+                ]
+              : []),
             { title: '区域', width: 120, render: (_, row) => regionName(row.region_id) },
             { title: '环境', width: 120, render: (_, row) => envName(row.env_id) },
             { title: '连接主机', width: 160, render: (_, row) => `${row.host}:${row.port}` },
@@ -518,10 +571,17 @@ export default function Instances() {
             { title: '审批人', dataIndex: 'approvers', width: 120, render: (_, row) => (row.approvers || []).join(',') || '—' },
             {
               title: '操作',
-              width: 220,
+              width: impersonating ? 300 : 220,
               fixed: 'right' as const,
               render: (_, row) => (
                 <>
+                  {impersonating && row.tenant_id && row.tenant_id !== currentTenantId ? (
+                    <Auth urn={Perm.tenants.impersonate}>
+                      <Button type="link" onClick={() => assignToCurrentTenant(row)}>
+                        划拨到当前租户
+                      </Button>
+                    </Auth>
+                  ) : null}
                   {isHostType(row.db_type) && (
                     <Button
                       type="link"
@@ -701,7 +761,7 @@ export default function Instances() {
                     <Radio.Button value="global">全局</Radio.Button>
                     <Radio.Button value="private">私有</Radio.Button>
                   </Radio.Group>
-                  <div className="type-hint">私有：仅授权用户/角色可在「主机终端」看到并操作；特权角色除外</div>
+                  <div className="type-hint">私有：仅本租户授权成员/角色可在「主机终端」看到并操作；平台特权角色除外</div>
                 </div>
               </div>
               {visibility !== 'global' && (
@@ -709,11 +769,11 @@ export default function Instances() {
                   <div className="fi">
                     <label>可访问用户</label>
                     <Select
-                      mode="tags"
+                      mode="multiple"
                       value={form.access_users || []}
                       showSearch
                       maxTagCount="responsive"
-                      placeholder="选择或输入用户名"
+                      placeholder="选择所属租户成员"
                       style={{ width: '100%' }}
                       optionFilterProp="label"
                       options={userOptions.map((u) => ({ value: u, label: u }))}
@@ -727,7 +787,7 @@ export default function Instances() {
                       value={form.role_ids || []}
                       showSearch
                       maxTagCount="responsive"
-                      placeholder="绑定后，该角色下用户可见"
+                      placeholder="绑定后，本租户内该角色成员可见"
                       style={{ width: '100%' }}
                       optionFilterProp="label"
                       options={roles.map((r) => ({ value: r.id as string, label: r.name || r.code }))}
@@ -798,7 +858,20 @@ export default function Instances() {
           )}
           <div className="fi">
             <label>审批人</label>
-            <Input value={approverText} placeholder="逗号分隔，如 admin" onChange={(e) => setApproverText(e.target.value)} />
+            <Select
+              mode="multiple"
+              value={approverText
+                .split(',')
+                .map((s) => s.trim())
+                .filter(Boolean)}
+              showSearch
+              maxTagCount="responsive"
+              placeholder="仅限所属租户成员"
+              style={{ width: '100%' }}
+              optionFilterProp="label"
+              options={userOptions.map((u) => ({ value: u, label: u }))}
+              onChange={(v) => setApproverText((v || []).join(','))}
+            />
           </div>
           <div className="fi">
             <label>说明</label>

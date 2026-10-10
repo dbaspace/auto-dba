@@ -85,7 +85,7 @@ func (h *Handler) Open(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "args.host 必填"})
 		return
 	}
-	inst := h.findAuthorizedHost(middleware.Username(c), middleware.Role(c), host)
+	inst := h.findAuthorizedHost(middleware.TenantID(c), middleware.Username(c), middleware.Role(c), host)
 	if inst == nil {
 		c.JSON(http.StatusForbidden, gin.H{"code": 403, "message": "host 未登记为已授权主机实例"})
 		return
@@ -98,7 +98,7 @@ func (h *Handler) Open(c *gin.Context) {
 	if sshPort <= 0 {
 		sshPort = 22
 	}
-	token, _, err := h.createSession(middleware.Username(c), inst.ID, host, sshUser, sshPort, req.Envs)
+	token, _, err := h.createSession(middleware.Username(c), middleware.TenantID(c), inst.ID, host, sshUser, sshPort, req.Envs)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": err.Error()})
 		return
@@ -112,7 +112,7 @@ func (h *Handler) OpenInstance(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "终端功能未启用"})
 		return
 	}
-	inst, err := h.Store.GetInstance(c.Param("id"))
+	inst, err := h.Store.GetInstanceInTenant(c.Param("id"), middleware.TenantID(c))
 	if err != nil || inst == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "实例不存在"})
 		return
@@ -121,7 +121,7 @@ func (h *Handler) OpenInstance(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "仅支持主机类型实例"})
 		return
 	}
-	viewer := h.Store.ViewerOf(middleware.Username(c), middleware.Role(c))
+	viewer := h.Store.ViewerOfInTenant(middleware.Username(c), middleware.Role(c), inst.TenantID)
 	if !inst.VisibleTo(viewer) {
 		c.JSON(http.StatusForbidden, gin.H{"message": "未授权访问该主机终端"})
 		return
@@ -156,7 +156,7 @@ func (h *Handler) OpenInstance(c *gin.Context) {
 	if sshPort <= 0 {
 		sshPort = 22
 	}
-	token, sessID, err := h.createSession(middleware.Username(c), inst.ID, host, sshUser, sshPort, map[string]string{
+	token, sessID, err := h.createSession(middleware.Username(c), middleware.TenantID(c), inst.ID, host, sshUser, sshPort, map[string]string{
 		"SERVICENAME": strings.TrimSpace(inst.Name),
 		"USERNAME":    middleware.Username(c),
 	})
@@ -180,7 +180,7 @@ func (h *Handler) OpenInstance(c *gin.Context) {
 	})
 }
 
-func (h *Handler) createSession(user, instanceID, host, sshUser string, sshPort int, envs map[string]string) (token, sessID string, err error) {
+func (h *Handler) createSession(user, tenantID, instanceID, host, sshUser string, sshPort int, envs map[string]string) (token, sessID string, err error) {
 	tc := h.Cfg.Terminal
 	script := filepath.Join(tc.ScriptsDir, "node-terminal.sh")
 	if _, err := os.Stat(script); err != nil {
@@ -207,6 +207,7 @@ func (h *Handler) createSession(user, instanceID, host, sshUser string, sshPort 
 	raw, _ := json.Marshal(ec)
 	expires := time.Now().UTC().Add(time.Duration(tc.MaxLifetimeSec) * time.Second).Format(time.RFC3339)
 	s := &store.TerminalSession{
+		TenantID:    tenantID,
 		ActionName:  ActionNodeTerminal,
 		ExecContent: string(raw),
 		Status:      store.TermStatusCreated,
@@ -225,17 +226,17 @@ func (h *Handler) createSession(user, instanceID, host, sshUser string, sshPort 
 	return tok, s.ID, nil
 }
 
-func (h *Handler) findAuthorizedHost(username, role, host string) *store.Instance {
+func (h *Handler) findAuthorizedHost(tenantID, username, role, host string) *store.Instance {
 	host = strings.TrimSpace(host)
 	if host == "" || h.Store == nil {
 		return nil
 	}
-	list, err := h.Store.ListInstances("host", "")
+	list, err := h.Store.ListInstancesInTenant(tenantID, "host", "")
 	if err != nil {
 		return nil
 	}
-	viewer := h.Store.ViewerOf(username, role)
 	match := func(it store.Instance) bool {
+		viewer := h.Store.ViewerOfInTenant(username, role, it.TenantID)
 		if !store.IsHostInstanceType(it.DBType) || !it.VisibleTo(viewer) {
 			return false
 		}
@@ -260,8 +261,8 @@ func (h *Handler) findAuthorizedHost(username, role, host string) *store.Instanc
 	return nil
 }
 
-func (h *Handler) hostRegistered(host string) bool {
-	return h.findAuthorizedHost("", "admin", host) != nil
+func (h *Handler) hostRegistered(tenantID, host string) bool {
+	return h.findAuthorizedHost(tenantID, "", "admin", host) != nil
 }
 
 func (h *Handler) signSessionToken(sessionID string, ttl time.Duration) (string, error) {

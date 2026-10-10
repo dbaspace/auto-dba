@@ -18,7 +18,7 @@ import (
 )
 
 func (h *HAHandler) patroniClusterAuth(c *gin.Context) (*store.HACluster, ha.ControllerAuth, error) {
-	cluster, err := h.Store.GetHACluster(c.Param("id"))
+	cluster, err := h.Store.GetHAClusterInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || cluster == nil {
 		return nil, ha.ControllerAuth{}, fmt.Errorf("集群不存在")
 	}
@@ -278,7 +278,7 @@ func (h *HAHandler) InstallPatroniPackages(c *gin.Context) {
 		if !m.Enabled {
 			continue
 		}
-		inst, _ := h.Store.GetInstance(m.InstanceID)
+		inst, _ := resolveInstanceInTenant(h.Store, c, m.InstanceID)
 		if inst == nil {
 			continue
 		}

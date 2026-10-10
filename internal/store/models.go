@@ -72,6 +72,8 @@ type Environment struct {
 
 type Instance struct {
 	ID              string   `json:"id"`
+	TenantID        string   `json:"tenant_id,omitempty"`
+	TenantName      string   `json:"tenant_name,omitempty"`
 	Name            string   `json:"name"`
 	DomainName      string   `json:"domain_name"`
 	Domains         []string `json:"domains"`
@@ -98,17 +100,20 @@ type Instance struct {
 }
 
 type Database struct {
-	ID          string   `json:"id"`
-	InstanceID  string   `json:"instance_id"`
-	DBName      string   `json:"db_name"`
-	Domains     []string `json:"domains"`
-	Approvers   []string `json:"approvers"`
-	Visibility  string   `json:"visibility"`
-	AccessUsers []string `json:"access_users"`
-	RoleIDs     []string `json:"role_ids"`
-	Tags        []string `json:"tags"`
-	CreatedAt   string   `json:"created_at"`
-	UpdatedAt   string   `json:"updated_at"`
+	ID           string   `json:"id"`
+	TenantID     string   `json:"tenant_id,omitempty"`
+	TenantName   string   `json:"tenant_name,omitempty"`
+	InstanceID   string   `json:"instance_id"`
+	InstanceName string   `json:"instance_name,omitempty"`
+	DBName       string   `json:"db_name"`
+	Domains      []string `json:"domains"`
+	Approvers    []string `json:"approvers"`
+	Visibility   string   `json:"visibility"`
+	AccessUsers  []string `json:"access_users"`
+	RoleIDs      []string `json:"role_ids"`
+	Tags         []string `json:"tags"`
+	CreatedAt    string   `json:"created_at"`
+	UpdatedAt    string   `json:"updated_at"`
 }
 
 type GlobalArg struct {
@@ -120,6 +125,7 @@ type GlobalArg struct {
 
 type Connector struct {
 	ID                string `json:"id"`
+	TenantID          string `json:"tenant_id,omitempty"`
 	DBZHost           string `json:"dbz_host"`
 	Env               string `json:"env"`
 	KafkaHost         string `json:"kafka_host"`
@@ -130,20 +136,21 @@ type Connector struct {
 }
 
 type Issue struct {
-	ID            string `json:"id"`
-	TicketNo      string `json:"ticket_no"`
-	IssueType     string `json:"issue_type"`
-	Type          string `json:"type"`
-	InstanceID    string `json:"instance_id"`
-	DatabaseID    string `json:"database_id,omitempty"`
-	DBName        string `json:"db_name"`
-	SQLContent    string `json:"sql_content"`
-	Description   string `json:"description"`
-	Status        string `json:"status"`
-	Submitter     string `json:"submitter_name"`
-	AssignedTo    string `json:"assigned_to"`
-	RejectReason  string `json:"reject_reason,omitempty"`
-	NeedRollback  string `json:"need_rollback,omitempty"`
+	ID           string `json:"id"`
+	TenantID     string `json:"tenant_id,omitempty"`
+	TicketNo     string `json:"ticket_no"`
+	IssueType    string `json:"issue_type"`
+	Type         string `json:"type"`
+	InstanceID   string `json:"instance_id"`
+	DatabaseID   string `json:"database_id,omitempty"`
+	DBName       string `json:"db_name"`
+	SQLContent   string `json:"sql_content"`
+	Description  string `json:"description"`
+	Status       string `json:"status"`
+	Submitter    string `json:"submitter_name"`
+	AssignedTo   string `json:"assigned_to"`
+	RejectReason string `json:"reject_reason,omitempty"`
+	NeedRollback string `json:"need_rollback,omitempty"`
 	// AssigneeTransferHistory JSON 字符串数组，如 ["a->b by=a at=..."]
 	AssigneeTransferHistory string `json:"assignee_transfer_history,omitempty"`
 	ScheduledAt             string `json:"scheduled_at,omitempty"`
@@ -182,6 +189,7 @@ type CDCSyncLog struct {
 
 type CDCTask struct {
 	ID             string `json:"id"`
+	TenantID       string `json:"tenant_id,omitempty"`
 	Name           string `json:"name"`
 	TaskType       string `json:"task_type"`
 	Status         string `json:"status"`
@@ -371,6 +379,7 @@ type FlashbackSQL struct {
 
 type ArchiveTask struct {
 	ID             string `json:"id"`
+	TenantID       string `json:"tenant_id,omitempty"`
 	Name           string `json:"name"`
 	Status         string `json:"status"`
 	SourceID       string `json:"source_instance_id"`
@@ -450,6 +459,8 @@ type ReviewRule struct {
 // DBAccount 是「配置 → 账号管理」中的业务库账号，密码以 enc:v1: 密文落库。
 type DBAccount struct {
 	ID           string   `json:"id"`
+	TenantID     string   `json:"tenant_id,omitempty"`
+	TenantName   string   `json:"tenant_name,omitempty"`
 	InstanceID   string   `json:"instance_id"`
 	DatabaseID   string   `json:"database_id,omitempty"`
 	DBName       string   `json:"db_name"`
@@ -627,21 +638,22 @@ type QueryAudit struct {
 
 // HACluster 高可用集群登记（独立于 Instance，不改动实例表语义）
 type HACluster struct {
-	ID                    string   `json:"id"`
-	Name                  string   `json:"name"`
-	Engine                string   `json:"engine"` // mysql | postgres | redis
-	EnvID                 string   `json:"env_id"`
-	Mode                  string   `json:"mode"` // async_repl | patroni | sentinel | manual
-	ControllerID          string   `json:"controller_id,omitempty"`
-	StandbyControllerIDs  []string `json:"standby_controller_ids,omitempty"`
-	MaintStatus           string   `json:"maint_status"` // normal | maintaining
-	VIP                   string   `json:"vip,omitempty"`
-	Remark                string   `json:"remark,omitempty"`
-	CreatedBy             string   `json:"created_by,omitempty"`
-	UpdatedBy             string   `json:"updated_by,omitempty"`
-	CreatedAt             string   `json:"created_at"`
-	UpdatedAt             string   `json:"updated_at"`
-	Members               []HAMember `json:"members,omitempty"`
+	ID                   string     `json:"id"`
+	TenantID             string     `json:"tenant_id,omitempty"`
+	Name                 string     `json:"name"`
+	Engine               string     `json:"engine"` // mysql | postgres | redis
+	EnvID                string     `json:"env_id"`
+	Mode                 string     `json:"mode"` // async_repl | patroni | sentinel | manual
+	ControllerID         string     `json:"controller_id,omitempty"`
+	StandbyControllerIDs []string   `json:"standby_controller_ids,omitempty"`
+	MaintStatus          string     `json:"maint_status"` // normal | maintaining
+	VIP                  string     `json:"vip,omitempty"`
+	Remark               string     `json:"remark,omitempty"`
+	CreatedBy            string     `json:"created_by,omitempty"`
+	UpdatedBy            string     `json:"updated_by,omitempty"`
+	CreatedAt            string     `json:"created_at"`
+	UpdatedAt            string     `json:"updated_at"`
+	Members              []HAMember `json:"members,omitempty"`
 }
 
 type HAMember struct {
@@ -699,18 +711,18 @@ type HATask struct {
 }
 
 const (
-	IssueTypeDDL       = "ddl"
-	IssueTypeDML       = "dml"
-	IssueTypeDCL       = "dcl"
-	IssueTypeDQL       = "dql"
-	IssueTypeKafka     = "kafka"
-	IssueTypeCDC       = "cdc_sync"
-	IssueTypeArchive   = "archive"
-	IssueTypeFlashback = "flashback"
-	IssueTypeMigration = "migration"
-	IssueTypeMullang   = "mullang"
-	IssueTypeCreateDB  = "createdb"
-	IssueTypeRedis     = "redis"
+	IssueTypeDDL           = "ddl"
+	IssueTypeDML           = "dml"
+	IssueTypeDCL           = "dcl"
+	IssueTypeDQL           = "dql"
+	IssueTypeKafka         = "kafka"
+	IssueTypeCDC           = "cdc_sync"
+	IssueTypeArchive       = "archive"
+	IssueTypeFlashback     = "flashback"
+	IssueTypeMigration     = "migration"
+	IssueTypeMullang       = "mullang"
+	IssueTypeCreateDB      = "createdb"
+	IssueTypeRedis         = "redis"
 	IssueTypeHA            = "ha"
 	IssueTypeBackupRestore = "backup_restore"
 	IssueTypeSrCluster     = "sr_cluster"

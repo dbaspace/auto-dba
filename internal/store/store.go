@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	_ "github.com/jackc/pgx/v4/stdlib"
 )
 
 type DB struct {
+	mu     sync.RWMutex
 	db     *sql.DB
 	driver string
 }
@@ -69,10 +71,45 @@ func applyPool(db *sql.DB, p PoolSettings) {
 }
 
 func (d *DB) Ping() error {
-	if d == nil || d.db == nil {
+	if d == nil {
+		return fmt.Errorf("db not open")
+	}
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	if d.db == nil {
 		return fmt.Errorf("db not open")
 	}
 	return d.db.Ping()
+}
+
+// ApplyPool 热更新连接池参数（DSN 不变）。
+func (d *DB) ApplyPool(p PoolSettings) {
+	if d == nil {
+		return
+	}
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	if d.db != nil {
+		applyPool(d.db, p)
+	}
+}
+
+// Reopen 用新 DSN 打开连接并替换底层 *sql.DB（含 migrate/seed）。
+func (d *DB) Reopen(driver, dsn string, pool PoolSettings) error {
+	nd, err := Open(driver, dsn, pool)
+	if err != nil {
+		return err
+	}
+	d.mu.Lock()
+	old := d.db
+	d.db = nd.db
+	d.driver = nd.driver
+	nd.db = nil
+	d.mu.Unlock()
+	if old != nil {
+		_ = old.Close()
+	}
+	return nil
 }
 
 // Open 打开元库。可选传入 PoolSettings；省略时使用默认池上限。
@@ -160,19 +197,38 @@ func ensurePostgresDatabase(dsn string) error {
 	return fmt.Errorf("database %s does not exist (account has no CREATEDB privilege); existing databases: %s", dbName, strings.Join(avail, ", "))
 }
 
-func (d *DB) Close() error { return d.db.Close() }
+func (d *DB) Close() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.db == nil {
+		return nil
+	}
+	err := d.db.Close()
+	d.db = nil
+	return err
+}
 
-func (d *DB) Driver() string { return d.driver }
+func (d *DB) Driver() string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.driver
+}
 
 func (d *DB) Exec(query string, args ...any) (sql.Result, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
 	return d.db.Exec(d.rewrite(query), args...)
 }
 
 func (d *DB) Query(query string, args ...any) (*sql.Rows, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
 	return d.db.Query(d.rewrite(query), args...)
 }
 
 func (d *DB) QueryRow(query string, args ...any) *sql.Row {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
 	return d.db.QueryRow(d.rewrite(query), args...)
 }
 

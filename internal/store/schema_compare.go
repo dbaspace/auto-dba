@@ -13,6 +13,7 @@ import (
 // SchemaCompareTask 表结构对比异步任务。
 type SchemaCompareTask struct {
 	ID                string          `json:"id"`
+	TenantID          string          `json:"tenant_id,omitempty"`
 	Status            string          `json:"status"`
 	LeftInstanceID    string          `json:"left_instance_id"`
 	RightInstanceID   string          `json:"right_instance_id"`
@@ -103,7 +104,13 @@ func (d *DB) CreateSchemaCompareTask(t *SchemaCompareTask) error {
 		t.LeftSchema, t.RightSchema, t.TablesJSON, t.Engine, t.SummaryJSON, t.ResultJSON, t.FixSQL, t.ErrorMessage,
 		t.Progress, t.ProgressMessage, t.CreatedBy, t.StartedAt, t.FinishedAt, t.CreatedAt, t.UpdatedAt,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	if t.TenantID == "" {
+		t.TenantID = d.inheritTenantFromInstance(t.LeftInstanceID)
+	}
+	return d.AssignTenantID("tbl_schema_compare_tasks", t.ID, t.TenantID)
 }
 
 func (d *DB) GetSchemaCompareTask(id string, withResult bool) (*SchemaCompareTask, error) {
@@ -119,11 +126,25 @@ func (d *DB) GetSchemaCompareTask(id string, withResult bool) (*SchemaCompareTas
 	return t, nil
 }
 
+func (d *DB) GetSchemaCompareTaskInTenant(id, tenantID string, withResult bool) (*SchemaCompareTask, error) {
+	t, err := d.GetSchemaCompareTask(id, withResult)
+	return ownedInTenant(d, t, err, "tbl_schema_compare_tasks", id, tenantID)
+}
+
 func (d *DB) ListSchemaCompareTasks(limit int) ([]SchemaCompareTask, error) {
+	return d.ListSchemaCompareTasksInTenant("", limit)
+}
+
+func (d *DB) ListSchemaCompareTasksInTenant(tenantID string, limit int) ([]SchemaCompareTask, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	rows, err := d.Query(`SELECT `+schemaCompareTaskCols+` FROM tbl_schema_compare_tasks ORDER BY created_at DESC LIMIT ?`, limit)
+	q := `SELECT ` + schemaCompareTaskCols + ` FROM tbl_schema_compare_tasks WHERE 1=1`
+	args := []any{}
+	q, args = appendTenantFilter(q, args, tenantID)
+	q += ` ORDER BY created_at DESC LIMIT ?`
+	args = append(args, limit)
+	rows, err := d.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}

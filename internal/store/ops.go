@@ -24,7 +24,13 @@ func (d *DB) CreateCDC(t *CDCTask) error {
 		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		t.ID, t.Name, t.TaskType, t.Status, t.SourceID, t.TargetID, t.SourceDB, t.TargetDB, t.ParentID, t.ApprovalStatus, t.IssueID, t.Description, t.CreatedAt, t.UpdatedAt,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	if t.TenantID == "" {
+		t.TenantID = d.inheritTenantFromInstance(t.SourceID)
+	}
+	return d.AssignTenantID("tbl_cdc_tasks", t.ID, t.TenantID)
 }
 
 func (d *DB) GetCDCByIssueID(issueID string) (*CDCTask, error) {
@@ -73,8 +79,13 @@ func (d *DB) GetCDC(id string) (*CDCTask, error) {
 }
 
 func (d *DB) ListCDC(status, taskType string) ([]CDCTask, error) {
+	return d.ListCDCInTenant("", status, taskType)
+}
+
+func (d *DB) ListCDCInTenant(tenantID, status, taskType string) ([]CDCTask, error) {
 	q := `SELECT id, name, task_type, status, source_instance_id, target_instance_id, source_db, target_db, parent_id, approval_status, issue_id, description, created_at, updated_at FROM tbl_cdc_tasks WHERE 1=1`
 	var args []any
+	q, args = appendTenantFilter(q, args, tenantID)
 	if status != "" {
 		q += ` AND status=?`
 		args = append(args, status)
@@ -113,7 +124,15 @@ func (d *DB) DeleteCDC(id string) error {
 }
 
 func (d *DB) ListSlots() ([]SyncSlot, error) {
-	rows, err := d.Query(`SELECT id, host, port, slot_name, database_name, active, restart_lsn, plugin, updated_at FROM tbl_sync_slots ORDER BY host, slot_name`)
+	return d.ListSlotsInTenant("")
+}
+
+func (d *DB) ListSlotsInTenant(tenantID string) ([]SyncSlot, error) {
+	q := `SELECT id, host, port, slot_name, database_name, active, restart_lsn, plugin, updated_at FROM tbl_sync_slots WHERE 1=1`
+	args := []any{}
+	q, args = appendTenantFilter(q, args, tenantID)
+	q += ` ORDER BY host, slot_name`
+	rows, err := d.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -154,7 +173,13 @@ func (d *DB) UpsertSlot(s *SyncSlot) error {
 		`INSERT INTO tbl_sync_slots(id, host, port, slot_name, database_name, active, restart_lsn, plugin, updated_at) VALUES(?,?,?,?,?,?,?,?,?)`,
 		s.ID, s.Host, s.Port, s.SlotName, s.Database, active, s.RestartLSN, s.Plugin, now,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	if tid := d.inheritTenantFromHostPort(s.Host, s.Port); tid != "" {
+		return d.AssignTenantID("tbl_sync_slots", s.ID, tid)
+	}
+	return nil
 }
 
 func (d *DB) DeleteSlot(id string) error {
@@ -175,7 +200,13 @@ func (d *DB) CreateArchive(t *ArchiveTask) error {
 		`INSERT INTO tbl_archive_tasks(id, name, status, source_instance_id, source_db, table_name, condition_sql, issue_id, approval_status, assigned_to, schedule_expr, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		t.ID, t.Name, t.Status, t.SourceID, t.SourceDB, t.TableName, t.Condition, t.IssueID, t.ApprovalStatus, t.AssignedTo, t.ScheduleExpr, t.CreatedAt, t.UpdatedAt,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	if t.TenantID == "" {
+		t.TenantID = d.inheritTenantFromInstance(t.SourceID)
+	}
+	return d.AssignTenantID("tbl_archive_tasks", t.ID, t.TenantID)
 }
 
 func archiveTaskSelect() string {
@@ -208,7 +239,15 @@ func (d *DB) GetArchiveByIssueID(issueID string) (*ArchiveTask, error) {
 }
 
 func (d *DB) ListArchives() ([]ArchiveTask, error) {
-	rows, err := d.Query(`SELECT ` + archiveTaskSelect() + ` FROM tbl_archive_tasks ORDER BY created_at DESC`)
+	return d.ListArchivesInTenant("")
+}
+
+func (d *DB) ListArchivesInTenant(tenantID string) ([]ArchiveTask, error) {
+	q := `SELECT ` + archiveTaskSelect() + ` FROM tbl_archive_tasks WHERE 1=1`
+	args := []any{}
+	q, args = appendTenantFilter(q, args, tenantID)
+	q += ` ORDER BY created_at DESC`
+	rows, err := d.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -265,7 +304,11 @@ func ArchiveRunMode(t *ArchiveTask) string {
 }
 
 func (d *DB) ArchiveStats() (map[string]any, error) {
-	list, err := d.ListArchives()
+	return d.ArchiveStatsInTenant("")
+}
+
+func (d *DB) ArchiveStatsInTenant(tenantID string) (map[string]any, error) {
+	list, err := d.ListArchivesInTenant(tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -358,7 +401,12 @@ func (d *DB) CreateKafka(t *KafkaOrder) error {
 }
 
 func (d *DB) ListKafka() ([]KafkaOrder, error) {
-	rows, err := d.Query(`SELECT id, ticket_no, cluster, topic, action, status, submitter, assigned_to, description, created_at FROM tbl_kafka_orders ORDER BY created_at DESC`)
+	return d.ListKafkaInTenant("")
+}
+
+func (d *DB) ListKafkaInTenant(tenantID string) ([]KafkaOrder, error) {
+	q, args := appendTenantFilter(`SELECT id, ticket_no, cluster, topic, action, status, submitter, assigned_to, description, created_at FROM tbl_kafka_orders WHERE 1=1`, nil, tenantID)
+	rows, err := d.Query(q+` ORDER BY created_at DESC`, args...)
 	if err != nil {
 		return nil, err
 	}

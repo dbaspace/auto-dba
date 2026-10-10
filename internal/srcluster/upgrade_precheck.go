@@ -151,6 +151,7 @@ func (e *Engine) PrecheckUpgrade(ctx context.Context, clusterID, targetReleaseID
 	}
 
 	nodes, err := e.Store.ListSrNodes(clusterID)
+	nodes = activeNodes(nodes)
 	if err != nil {
 		res.add("nodes", false, err.Error())
 	} else if len(nodes) == 0 {
@@ -251,6 +252,7 @@ func (e *Engine) PrecheckUpgrade(ctx context.Context, clusterID, targetReleaseID
 // sameReleaseUpgradeCheck 目标版本与集群绑定版本相同时，按节点实际版本判断是否需要补升级。
 func (e *Engine) sameReleaseUpgradeCheck(ctx context.Context, cl *store.SrCluster, rel *store.SrRelease) (bool, string) {
 	nodes, err := e.Store.ListSrNodes(cl.ID)
+	nodes = activeNodes(nodes)
 	if err != nil || len(nodes) == 0 {
 		return false, "目标版本与当前集群绑定版本相同，且无法列出节点，无需升级"
 	}

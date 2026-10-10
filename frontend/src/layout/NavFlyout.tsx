@@ -138,10 +138,11 @@ export default function NavFlyout({
         links: [{ title: child.title, path: child.path, icon: leafIcon(child, group.icon) }],
       }
     }
-    return null
+    return { title: child.title, icon: child.icon, links: [] }
   })
 
-  const leafOnly = (group.children || []).every((c) => c.path && !c.children?.length)
+  const leafOnly = (group.children || []).length > 0
+    && (group.children || []).every((c) => c.path && !c.children?.length)
   const blocks: FlyoutSection[] = leafOnly
     ? [
         {
@@ -157,6 +158,7 @@ export default function NavFlyout({
         },
       ]
     : (sections.filter(Boolean) as FlyoutSection[])
+  if (blocks.length === 0) blocks.push({ title: directSectionTitle, icon: group.icon, links: [] })
 
   const merged: FlyoutSection[] = []
   for (const b of blocks) {
@@ -273,7 +275,9 @@ export default function NavFlyout({
                         )
                       })}
                     </div>
-                  ) : null}
+                  ) : (
+                    <div className="nav-flyout-empty">暂无页面，可在「菜单管理」中为该目录添加页面</div>
+                  )}
                 </div>
               ) : null}
             </React.Fragment>

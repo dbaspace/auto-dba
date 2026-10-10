@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"sort"
 	"strings"
 	"time"
 
@@ -102,10 +103,13 @@ func (d *DB) UpdateRole(r *Role) error {
 	return err
 }
 
+// builtinRoleCodes 内置角色：不可删除；seed 的 GrantMenuToAllRoles 仅向这些角色灌菜单。
 var builtinRoleCodes = map[string]bool{
 	"admin": true, "operator": true, "viewer": true, "developer": true,
+	"dba": true, "platform_admin": true, "super_admin": true,
 }
 
+// IsBuiltinRoleCode 内置角色判定（自定义角色如 pos_read 为 false）。
 func IsBuiltinRoleCode(code string) bool {
 	return builtinRoleCodes[strings.ToLower(strings.TrimSpace(code))]
 }
@@ -218,11 +222,19 @@ func buildMenuTree(list []Menu, parentID string, enabledOnly, skipEmpty bool) []
 		if p, ok := byID[m.ParentID]; ok {
 			node.ParentTitle = p.Title
 		}
-		if skipEmpty && m.Path == "" && len(node.Children) == 0 {
+		// 只去掉操作节点；空目录保留，便于在菜单管理新建后先在侧栏看到
+		if skipEmpty && m.Path == "" && len(node.Children) == 0 && IsActionMenu(m) {
 			continue
 		}
 		nodes = append(nodes, node)
 	}
+	// 补全父目录时可能 append 到切片末尾，同级必须按 sort_order 排，避免侧栏一级顺序错乱
+	sort.SliceStable(nodes, func(i, j int) bool {
+		if nodes[i].SortOrder != nodes[j].SortOrder {
+			return nodes[i].SortOrder < nodes[j].SortOrder
+		}
+		return nodes[i].Title < nodes[j].Title
+	})
 	return nodes
 }
 
@@ -232,6 +244,40 @@ func (d *DB) MenuTree(enabledOnly bool) ([]MenuNode, error) {
 		return nil, err
 	}
 	return buildMenuTree(list, "", enabledOnly, enabledOnly), nil
+}
+
+// PageActionMenus 按页面 path 找到启用的页面菜单，返回其下启用的操作节点。
+func (d *DB) PageActionMenus(path string) (*Menu, []Menu, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil, nil, nil
+	}
+	list, err := d.ListMenus()
+	if err != nil {
+		return nil, nil, err
+	}
+	page, actions := pageActionMenus(list, path)
+	return page, actions, nil
+}
+
+func pageActionMenus(list []Menu, path string) (*Menu, []Menu) {
+	var page *Menu
+	for i := range list {
+		if list[i].Enabled && list[i].Path == path && !IsActionMenu(list[i]) {
+			page = &list[i]
+			break
+		}
+	}
+	if page == nil {
+		return nil, nil
+	}
+	var actions []Menu
+	for _, m := range list {
+		if m.ParentID == page.ID && m.Enabled && IsActionMenu(m) {
+			actions = append(actions, m)
+		}
+	}
+	return page, actions
 }
 
 func (d *DB) MenuAdminTree() ([]MenuNode, error) {
@@ -486,6 +532,9 @@ func (d *DB) GrantMenuToAllRoles(menuID string) error {
 		return err
 	}
 	for _, r := range roles {
+		if !IsBuiltinRoleCode(r.Code) {
+			continue
+		}
 		ids, err := d.ListRoleMenuIDs(r.ID)
 		if err != nil {
 			return err
@@ -604,7 +653,7 @@ func (d *DB) CreateUser(u *User, passwordHash string) error {
 			return err
 		}
 	}
-	return nil
+	return d.EnsureDefaultMembership(u.ID, roleIDs)
 }
 
 func (d *DB) UpdateUserRole(id, roleID, roleCode, displayName string) error {

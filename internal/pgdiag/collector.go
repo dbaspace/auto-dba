@@ -15,14 +15,15 @@ const (
 )
 
 // StartCollector 后台定时采集全部 PostgreSQL 实例活动快照，并按保留天数清理。
-func StartCollector(ctx context.Context, meta *store.DB, appSecret string) {
+// appSecret 指向配置中的 jwt_secret 字段，热更后无需重启采集协程。
+func StartCollector(ctx context.Context, meta *store.DB, appSecret *string) {
 	interval := time.Duration(defaultIntervalSec) * time.Second
 	select {
 	case <-ctx.Done():
 		return
 	case <-time.After(firstDelay):
 	}
-	runOnce(ctx, meta, appSecret)
+	runOnce(ctx, meta, derefSecret(appSecret))
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -30,9 +31,16 @@ func StartCollector(ctx context.Context, meta *store.DB, appSecret string) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			runOnce(ctx, meta, appSecret)
+			runOnce(ctx, meta, derefSecret(appSecret))
 		}
 	}
+}
+
+func derefSecret(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }
 
 func runOnce(ctx context.Context, meta *store.DB, appSecret string) {

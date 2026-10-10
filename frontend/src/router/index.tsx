@@ -2,6 +2,7 @@ import React from 'react'
 import { createHashRouter, Navigate, useParams } from 'react-router-dom'
 import AppLayout from '../layout/AppLayout'
 import Login from '../views/Login'
+import SelectTenant from '../views/SelectTenant'
 import ForgotPassword from '../views/ForgotPassword'
 import ResetPassword from '../views/ResetPassword'
 import Forbidden from '../views/Forbidden'
@@ -88,6 +89,7 @@ function RedirectWithId({ toPrefix }: { toPrefix: string }) {
 
 const router = createHashRouter([
   { path: '/login', element: <Login /> },
+  { path: '/select-tenant', element: <SelectTenant /> },
   { path: '/forgot-password', element: <ForgotPassword /> },
   { path: '/reset-password', element: <ResetPassword /> },
   { path: '/403', element: <Forbidden /> },

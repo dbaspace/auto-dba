@@ -92,7 +92,7 @@ func (h *HAHandler) bindStandbyControllers(engine, mode, primaryID string, ids [
 }
 
 func (h *HAHandler) ListClusters(c *gin.Context) {
-	list, err := h.Store.ListHAClusters(c.Query("engine"), c.Query("env_id"), c.Query("keyword"))
+	list, err := h.Store.ListHAClustersInTenant(effectiveListTenantID(h.Store, c), c.Query("engine"), c.Query("env_id"), c.Query("keyword"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -101,7 +101,7 @@ func (h *HAHandler) ListClusters(c *gin.Context) {
 }
 
 func (h *HAHandler) GetCluster(c *gin.Context) {
-	it, err := h.Store.GetHACluster(c.Param("id"))
+	it, err := h.Store.GetHAClusterInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -122,16 +122,16 @@ type haMemberReq struct {
 
 func (h *HAHandler) CreateCluster(c *gin.Context) {
 	var req struct {
-		Name                   string        `json:"name"`
-		Engine                 string        `json:"engine"`
-		EnvID                  string        `json:"env_id"`
-		Mode                   string        `json:"mode"`
-		ControllerID           string        `json:"controller_id"`
-		StandbyControllerIDs   []string      `json:"standby_controller_ids"`
-		VIP                    string        `json:"vip"`
-		Remark                 string        `json:"remark"`
-		Members                []haMemberReq `json:"members"`
-		DbDeployClusterID      string        `json:"dbdeploy_cluster_id"`
+		Name                 string        `json:"name"`
+		Engine               string        `json:"engine"`
+		EnvID                string        `json:"env_id"`
+		Mode                 string        `json:"mode"`
+		ControllerID         string        `json:"controller_id"`
+		StandbyControllerIDs []string      `json:"standby_controller_ids"`
+		VIP                  string        `json:"vip"`
+		Remark               string        `json:"remark"`
+		Members              []haMemberReq `json:"members"`
+		DbDeployClusterID    string        `json:"dbdeploy_cluster_id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
@@ -157,7 +157,7 @@ func (h *HAHandler) CreateCluster(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
-	members, err := h.buildMembers(engine, mode, req.Members)
+	members, err := h.buildMembers(middleware.TenantID(c), engine, mode, req.Members)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
@@ -175,6 +175,7 @@ func (h *HAHandler) CreateCluster(c *gin.Context) {
 		MaintStatus:          "normal",
 		CreatedBy:            who,
 		UpdatedBy:            who,
+		TenantID:             middleware.TenantID(c),
 	}
 	if err := h.Store.CreateHACluster(cluster); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
@@ -189,12 +190,12 @@ func (h *HAHandler) CreateCluster(c *gin.Context) {
 		_ = h.Store.SetDbDeployClusterHALink(depID, cluster.ID, ctrlID)
 		_ = h.Store.MarkDbDeployHAReady(depID)
 	}
-	out, _ := h.Store.GetHACluster(cluster.ID)
+	out, _ := h.Store.GetHAClusterInTenant(cluster.ID, effectiveListTenantID(h.Store, c))
 	c.JSON(http.StatusOK, gin.H{"data": out})
 }
 
 func (h *HAHandler) UpdateCluster(c *gin.Context) {
-	exist, err := h.Store.GetHACluster(c.Param("id"))
+	exist, err := h.Store.GetHAClusterInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || exist == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "集群不存在"})
 		return
@@ -238,7 +239,7 @@ func (h *HAHandler) UpdateCluster(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
-	members, err := h.buildMembers(engine, mode, req.Members)
+	members, err := h.buildMembers(middleware.TenantID(c), engine, mode, req.Members)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
@@ -262,19 +263,24 @@ func (h *HAHandler) UpdateCluster(c *gin.Context) {
 			return
 		}
 	}
-	out, _ := h.Store.GetHACluster(exist.ID)
+	out, _ := h.Store.GetHAClusterInTenant(exist.ID, effectiveListTenantID(h.Store, c))
 	c.JSON(http.StatusOK, gin.H{"data": out})
 }
 
 func (h *HAHandler) DeleteCluster(c *gin.Context) {
-	if err := h.Store.DeleteHACluster(c.Param("id")); err != nil {
+	exist, err := h.Store.GetHAClusterInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
+	if err != nil || exist == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "集群不存在"})
+		return
+	}
+	if err := h.Store.DeleteHACluster(exist.ID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
-func (h *HAHandler) buildMembers(engine, mode string, reqs []haMemberReq) ([]store.HAMember, error) {
+func (h *HAHandler) buildMembers(tenantID, engine, mode string, reqs []haMemberReq) ([]store.HAMember, error) {
 	var out []store.HAMember
 	primaries := 0
 	for _, r := range reqs {
@@ -282,7 +288,7 @@ func (h *HAHandler) buildMembers(engine, mode string, reqs []haMemberReq) ([]sto
 		if id == "" {
 			continue
 		}
-		inst, err := h.Store.GetInstance(id)
+		inst, err := h.Store.GetInstanceInTenant(id, tenantID)
 		if err != nil {
 			return nil, err
 		}
@@ -339,7 +345,7 @@ func (h *HAHandler) buildMembers(engine, mode string, reqs []haMemberReq) ([]sto
 
 func (h *HAHandler) Topology(c *gin.Context) {
 	h.ensureLoader()
-	cluster, err := h.Store.GetHACluster(c.Param("id"))
+	cluster, err := h.Store.GetHAClusterInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -441,7 +447,7 @@ func (h *HAHandler) Precheck(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
-	cluster, err := h.Store.GetHACluster(req.ClusterID)
+	cluster, err := h.Store.GetHAClusterInTenant(req.ClusterID, effectiveListTenantID(h.Store, c))
 	if err != nil || cluster == nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "集群不存在"})
 		return
@@ -734,7 +740,7 @@ func (h *HAHandler) SubmitChange(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "不支持的操作类型"})
 		return
 	}
-	cluster, err := h.Store.GetHACluster(req.ClusterID)
+	cluster, err := h.Store.GetHAClusterInTenant(req.ClusterID, effectiveListTenantID(h.Store, c))
 	if err != nil || cluster == nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "集群不存在"})
 		return
@@ -771,9 +777,10 @@ func (h *HAHandler) SubmitChange(c *gin.Context) {
 		primaryID = cluster.Members[0].InstanceID
 	}
 
-	assigned := strings.TrimSpace(req.AssignedTo)
-	if assigned == "" {
-		assigned, _ = h.Store.GetGlobalArg("sync_default_approver")
+	assigned, aerr := resolveTenantAssignee(h.Store, middleware.TenantID(c), req.AssignedTo)
+	if aerr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": aerr.Error()})
+		return
 	}
 	desc := strings.TrimSpace(req.Description)
 	if desc == "" {
@@ -803,6 +810,11 @@ func (h *HAHandler) SubmitChange(c *gin.Context) {
 		AssignedTo:   assigned,
 		NeedRollback: string(preJSON),
 	}
+	stampTenantID(c, func(tid string) {
+		if issue != nil {
+			issue.TenantID = tid
+		}
+	})
 	if err := h.Store.CreateIssue(issue); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -826,7 +838,7 @@ func (h *HAHandler) SubmitChange(c *gin.Context) {
 }
 
 func (h *HAHandler) ListTasks(c *gin.Context) {
-	list, err := h.Store.ListHATasks(c.Query("cluster_id"), 100)
+	list, err := h.Store.ListHATasksInTenant(effectiveListTenantID(h.Store, c), c.Query("cluster_id"), 100)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -835,7 +847,7 @@ func (h *HAHandler) ListTasks(c *gin.Context) {
 }
 
 func (h *HAHandler) ListControllers(c *gin.Context) {
-	list, err := h.Store.ListHAControllers(c.Query("engine"), c.Query("env_id"))
+	list, err := h.Store.ListHAControllersInTenant(effectiveListTenantID(h.Store, c), c.Query("engine"), c.Query("env_id"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -880,7 +892,7 @@ func (h *HAHandler) CreateController(c *gin.Context) {
 	username := req.Username
 	enc := ""
 	if agentID != "" {
-		a, err := h.Store.GetBackupAgent(agentID)
+		a, err := h.Store.GetBackupAgentInTenant(agentID, effectiveListTenantID(h.Store, c))
 		if err != nil || a == nil {
 			c.JSON(http.StatusBadRequest, gin.H{"message": "平台 Agent 不存在"})
 			return
@@ -943,6 +955,9 @@ func (h *HAHandler) CreateController(c *gin.Context) {
 	if err := h.Store.CreateHAController(it); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
+	}
+	if tid := middleware.TenantID(c); tid != "" {
+		_ = h.Store.AssignTenantID("tbl_ha_controllers", it.ID, tid)
 	}
 	it.PasswordEnc = ""
 	it.PasswordSet = enc != ""

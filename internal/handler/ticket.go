@@ -96,13 +96,23 @@ func usernameInList(username string, list []string) bool {
 	return false
 }
 
-func (h *TicketHandler) canActOnTarget(instanceID, dbName, username string) (bool, targetActDeny, string, error) {
+func (h *TicketHandler) canActOnTarget(tenantID, instanceID, dbName, username string) (bool, targetActDeny, string, error) {
 	inst, err := h.Store.GetInstance(instanceID)
 	if err != nil {
 		return false, targetActAllow, "", err
 	}
 	if inst == nil {
 		return false, targetActDenyInstanceMissing, "实例未登记，请先在「配置 → 实例」中登记", nil
+	}
+	ownsInst := strings.TrimSpace(inst.TenantID) == strings.TrimSpace(tenantID)
+	if !ownsInst {
+		n, err := h.Store.CountDatabasesOnInstanceInTenant(instanceID, tenantID)
+		if err != nil {
+			return false, targetActAllow, "", err
+		}
+		if n == 0 {
+			return false, targetActDenyInstanceMissing, "实例未登记，请先在「配置 → 实例」中登记", nil
+		}
 	}
 	instApprovers := store.ExpandApproverNames(inst.Approvers)
 	if strings.TrimSpace(dbName) == "" {
@@ -116,6 +126,9 @@ func (h *TicketHandler) canActOnTarget(instanceID, dbName, username string) (boo
 		return false, targetActAllow, "", err
 	}
 	if dbEnt == nil {
+		return false, targetActDenyDBNotRegistered, "库未登记，请先在「配置 → 已登记库」中登记 " + dbName, nil
+	}
+	if tid := strings.TrimSpace(tenantID); tid != "" && strings.TrimSpace(dbEnt.TenantID) != tid {
 		return false, targetActDenyDBNotRegistered, "库未登记，请先在「配置 → 已登记库」中登记 " + dbName, nil
 	}
 	dbApprovers := store.ExpandApproverNames(dbEnt.Approvers)
@@ -148,7 +161,7 @@ func (h *TicketHandler) ListDBTypes(c *gin.Context) {
 }
 
 func (h *TicketHandler) GetTargets(c *gin.Context) {
-	list, err := h.Store.ListInstances(c.Query("db_type"), c.Query("q"))
+	list, err := h.Store.ListInstancesInTenant(effectiveListTenantID(h.Store, c), c.Query("db_type"), c.Query("q"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -161,18 +174,28 @@ func (h *TicketHandler) ListInstances(c *gin.Context) {
 }
 
 func (h *TicketHandler) ListInstanceDatabases(c *gin.Context) {
-	list, err := h.Store.ListDatabases(c.Param("instance_id"), c.Query("q"))
+	list, err := h.Store.ListDatabasesInTenant(effectiveListTenantID(h.Store, c), c.Param("instance_id"), c.Query("q"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
-	viewer := h.Store.ViewerOf(middleware.Username(c), middleware.Role(c))
-	c.JSON(http.StatusOK, gin.H{"data": store.FilterVisibleDatabases(list, viewer)})
+	list = store.FilterVisibleDatabasesByTenant(list, viewerForRequest(h.Store, c))
+	c.JSON(http.StatusOK, gin.H{"data": list})
 }
 
 func (h *TicketHandler) GetTargetApprovers(c *gin.Context) {
+	tid := middleware.TenantID(c)
+	if tid == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "请先选择租户"})
+		return
+	}
+	memberSet := map[string]struct{}{}
+	if members, err := listTenantMemberUsernames(h.Store, tid); err == nil {
+		for _, n := range members {
+			memberSet[strings.ToLower(n)] = struct{}{}
+		}
+	}
 	list := h.resolveApprovers(c.Query("instance_id"), c.Query("db_name"))
-	users, _ := h.Store.ListUsers()
 	type item struct {
 		Type string `json:"type"`
 		Name string `json:"name"`
@@ -182,6 +205,9 @@ func (h *TicketHandler) GetTargetApprovers(c *gin.Context) {
 	add := func(name string) {
 		for _, n := range store.ExpandApproverNames([]string{name}) {
 			key := strings.ToLower(n)
+			if _, ok := memberSet[key]; !ok {
+				continue
+			}
 			if seen[key] {
 				continue
 			}
@@ -207,8 +233,10 @@ func (h *TicketHandler) GetTargetApprovers(c *gin.Context) {
 		if def, _ := h.Store.GetGlobalArg("sync_default_approver"); def != "" {
 			add(def)
 		}
-		for _, u := range users {
-			add(u.Username)
+		if members, err := listTenantMemberUsernames(h.Store, tid); err == nil {
+			for _, name := range members {
+				add(name)
+			}
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{"data": out})
@@ -413,7 +441,7 @@ func (h *TicketHandler) Submit(c *gin.Context) {
 			return
 		}
 		for _, id := range ids {
-			ok, _, msg, err := h.canActOnTarget(id, req.DBName, username)
+			ok, _, msg, err := h.canActOnTarget(middleware.TenantID(c), id, req.DBName, username)
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 				return
@@ -424,7 +452,7 @@ func (h *TicketHandler) Submit(c *gin.Context) {
 			}
 		}
 	} else {
-		ok, _, msg, err := h.canActOnTarget(req.InstanceID, req.DBName, username)
+		ok, _, msg, err := h.canActOnTarget(middleware.TenantID(c), req.InstanceID, req.DBName, username)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 			return
@@ -434,12 +462,9 @@ func (h *TicketHandler) Submit(c *gin.Context) {
 			return
 		}
 	}
-	reviewer := req.reviewer()
-	if reviewer == "" {
-		reviewer, _ = h.Store.GetGlobalArg("sync_default_approver")
-	}
-	if reviewer == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "审批人必填（assigned_to），或在全局参数配置 sync_default_approver"})
+	reviewer, err := resolveTenantAssignee(h.Store, middleware.TenantID(c), req.reviewer())
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
 	approvers := h.resolveApprovers(req.InstanceID, req.DBName)
@@ -476,6 +501,7 @@ func (h *TicketHandler) Submit(c *gin.Context) {
 		NeedRollback: req.NeedRollback,
 		ScheduledAt:  req.ScheduledAt,
 	}
+	stampTenantID(c, func(tid string) { issue.TenantID = tid })
 	if err := h.Store.CreateIssue(issue); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -501,7 +527,7 @@ func (h *TicketHandler) prepareDQLSubmit(c *gin.Context, req *ticketSubmitReq) e
 	}
 	var rec *store.Database
 	if strings.TrimSpace(req.DatabaseID) != "" {
-		it, err := h.Store.GetDatabase(req.DatabaseID)
+		it, err := h.Store.GetDatabaseInTenant(req.DatabaseID, effectiveListTenantID(h.Store, c))
 		if err != nil {
 			return err
 		}
@@ -517,7 +543,7 @@ func (h *TicketHandler) prepareDQLSubmit(c *gin.Context, req *ticketSubmitReq) e
 	if rec == nil {
 		return errors.New("库未登记，请先在「配置 → 已登记库」中登记")
 	}
-	viewer := h.Store.ViewerOf(middleware.Username(c), middleware.Role(c))
+	viewer := h.Store.ViewerOfInTenant(middleware.Username(c), middleware.Role(c), rec.TenantID)
 	if !rec.VisibleTo(viewer) {
 		return errors.New("无权限访问该库")
 	}
@@ -529,7 +555,7 @@ func (h *TicketHandler) prepareDQLSubmit(c *gin.Context, req *ticketSubmitReq) e
 
 func (h *TicketHandler) List(c *gin.Context) {
 	role := middleware.Role(c)
-	list, err := h.Store.ListIssues(c.Query("type"), c.Query("status"), c.Query("q"), middleware.Username(c), middleware.IsPrivileged(role))
+	list, err := h.Store.ListIssuesInTenant(effectiveListTenantID(h.Store, c), c.Query("type"), c.Query("status"), c.Query("q"), middleware.Username(c), middleware.IsPrivileged(role))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -541,7 +567,7 @@ func (h *TicketHandler) List(c *gin.Context) {
 }
 
 func (h *TicketHandler) GetDetail(c *gin.Context) {
-	it, err := h.Store.GetIssue(c.Param("id"))
+	it, err := h.Store.GetIssueInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -556,14 +582,14 @@ func (h *TicketHandler) GetDetail(c *gin.Context) {
 	canApprove := it.Status == store.StatusPending && h.Store.CanApproveIssue(it, user, priv)
 	canTransfer := it.Status == store.StatusPending && strings.EqualFold(it.Submitter, user)
 	c.JSON(http.StatusOK, gin.H{
-		"data": it,
+		"data":         it,
 		"can_approve":  canApprove,
 		"can_transfer": canTransfer,
 	})
 }
 
 func (h *TicketHandler) Approve(c *gin.Context) {
-	it, err := h.Store.GetIssue(c.Param("id"))
+	it, err := h.Store.GetIssueInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || it == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "工单不存在"})
 		return
@@ -631,7 +657,7 @@ func (h *TicketHandler) Reject(c *gin.Context) {
 		Reason string `json:"reason"`
 	}
 	_ = c.ShouldBindJSON(&req)
-	it, err := h.Store.GetIssue(c.Param("id"))
+	it, err := h.Store.GetIssueInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || it == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "工单不存在"})
 		return
@@ -676,7 +702,7 @@ func (h *TicketHandler) TransferAssignee(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "assigned_to 必填"})
 		return
 	}
-	it, err := h.Store.GetIssue(c.Param("id"))
+	it, err := h.Store.GetIssueInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || it == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "工单不存在"})
 		return
@@ -720,19 +746,16 @@ func (h *TicketHandler) validateTransferAssignee(it *store.Issue, newAssignee st
 	if strings.EqualFold(strings.TrimSpace(it.Submitter), newAssignee) {
 		return "不能将审核人转给提交人本人"
 	}
+	tid := strings.TrimSpace(it.TenantID)
+	if tid == "" {
+		tid = store.DefaultTenantID
+	}
+	if err := requireTenantMemberUsernames(h.Store, tid, []string{newAssignee}); err != nil {
+		return err.Error()
+	}
 	switch it.IssueType {
 	case store.IssueTypeCreateDB:
-		users, _ := h.Store.ListUsers()
-		for _, u := range users {
-			if strings.EqualFold(u.Username, newAssignee) {
-				return ""
-			}
-		}
-		def, _ := h.Store.GetGlobalArg("sync_default_approver")
-		if strings.EqualFold(strings.TrimSpace(def), newAssignee) {
-			return ""
-		}
-		return "新审核人未登记"
+		return ""
 	case store.IssueTypeMigration:
 		if !h.migrationApproverAllowed(newAssignee) {
 			return "审核人不在迁移审批人列表"
@@ -783,7 +806,7 @@ func (h *TicketHandler) syncMigrationAssigneeAfterTransfer(it *store.Issue, newA
 }
 
 func (h *TicketHandler) Cancel(c *gin.Context) {
-	it, err := h.Store.GetIssue(c.Param("id"))
+	it, err := h.Store.GetIssueInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || it == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "工单不存在"})
 		return
@@ -814,7 +837,7 @@ func (h *TicketHandler) cancelIssue(ctx context.Context, it *store.Issue, reason
 }
 
 func (h *TicketHandler) Execute(c *gin.Context) {
-	it, err := h.Store.GetIssue(c.Param("id"))
+	it, err := h.Store.GetIssueInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || it == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "工单不存在"})
 		return
@@ -1129,7 +1152,7 @@ func (h *TicketHandler) executeTicket(ctx context.Context, it *store.Issue) erro
 	if it.IssueType == store.IssueTypeDbDeploy {
 		return h.executeDbDeployTicket(ctx, it)
 	}
-	inst, err := h.Store.GetInstance(it.InstanceID)
+	inst, err := h.Store.GetInstanceUsableInTenant(it.InstanceID, it.TenantID)
 	if err != nil {
 		return err
 	}
@@ -1224,7 +1247,7 @@ func (h *TicketHandler) executeDDLTicket(ctx context.Context, it *store.Issue) e
 	}
 	var skipped []string
 	for _, id := range ids {
-		inst, err := h.Store.GetInstance(id)
+		inst, err := h.Store.GetInstanceUsableInTenant(id, it.TenantID)
 		if err != nil {
 			return err
 		}
@@ -1331,7 +1354,7 @@ func (h *TicketHandler) executeDbDeployTicket(ctx context.Context, it *store.Iss
 }
 
 func (h *TicketHandler) executeRedisTicket(ctx context.Context, it *store.Issue) error {
-	inst, err := h.Store.GetInstance(it.InstanceID)
+	inst, err := h.Store.GetInstanceUsableInTenant(it.InstanceID, it.TenantID)
 	if err != nil {
 		return err
 	}
@@ -1499,6 +1522,7 @@ func dashboardFilterFromQuery(c *gin.Context, viewer string) store.DashboardFilt
 		DateFrom:  c.Query("date_from"),
 		DateTo:    c.Query("date_to"),
 		Viewer:    viewer,
+		TenantID:  middleware.TenantID(c),
 	}
 }
 

@@ -40,7 +40,7 @@ func (h *TicketHandler) Export(c *gin.Context) {
 		return
 	}
 
-	it, err := h.Store.GetIssue(c.Param("id"))
+	it, err := h.Store.GetIssueInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || it == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "工单不存在"})
 		return
@@ -61,7 +61,7 @@ func (h *TicketHandler) Export(c *gin.Context) {
 
 	var rec *store.Database
 	if strings.TrimSpace(it.DatabaseID) != "" {
-		rec, err = h.Store.GetDatabase(it.DatabaseID)
+		rec, err = h.Store.GetDatabaseInTenant(it.DatabaseID, effectiveListTenantID(h.Store, c))
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 			return
@@ -78,7 +78,7 @@ func (h *TicketHandler) Export(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "库未登记，无法导出"})
 		return
 	}
-	inst, err := h.Store.GetInstance(rec.InstanceID)
+	inst, err := resolveInstanceInTenant(h.Store, c, rec.InstanceID)
 	if err != nil || inst == nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "所属实例不存在"})
 		return

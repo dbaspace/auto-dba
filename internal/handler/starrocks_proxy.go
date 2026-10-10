@@ -84,12 +84,12 @@ func MountStarRocksWebroot(e *gin.Engine) {
 	e.Static(srLocalWebrootURL, root)
 }
 
-func (h *StarRocksWebHandler) resolveFeUpstream(id string) (base, user, pass string, err error) {
+func (h *StarRocksWebHandler) resolveFeUpstream(c *gin.Context, id string) (base, user, pass string, err error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return "", "", "", fmt.Errorf("缺少 FE 凭据 id")
 	}
-	it, e := h.Store.GetFeAdmin(id)
+	it, e := h.Store.GetFeAdminInTenant(id, effectiveListTenantID(h.Store, c))
 	if e != nil {
 		return "", "", "", e
 	}
@@ -139,7 +139,7 @@ func normalizeBeHostURL(host string) (string, error) {
 // FeProxy 反向代理 FE Web（Basic 来自 FE管理）。
 func (h *StarRocksWebHandler) FeProxy(c *gin.Context) {
 	id := strings.TrimSpace(c.Param("id"))
-	base, user, pass, err := h.resolveFeUpstream(id)
+	base, user, pass, err := h.resolveFeUpstream(c, id)
 	if err != nil {
 		c.Header("Content-Type", "text/html; charset=utf-8")
 		c.String(http.StatusBadGateway, `<!DOCTYPE html><html><body style="font-family:sans-serif;padding:24px;color:#c00">%s</body></html>`, html.EscapeString(err.Error()))

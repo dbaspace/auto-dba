@@ -23,6 +23,17 @@ var runtime *Runtime
 
 func SetRuntime(r *Runtime) { runtime = r }
 
+// ApplyConfig 热更闪回运行参数（保留 Store 指针）。
+func ApplyConfig(cfg config.FlashbackConfig, secret string) {
+	if runtime == nil {
+		return
+	}
+	runtime.Cfg = cfg
+	if strings.TrimSpace(secret) != "" {
+		runtime.Secret = secret
+	}
+}
+
 func fbLog(msg string, args ...any) {
 	if len(args) == 0 {
 		log.Printf("flashback %s", msg)

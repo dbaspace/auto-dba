@@ -41,19 +41,53 @@ func (h *RBACHandler) MineMenus(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"message": "unauthorized"})
 		return
 	}
-	tree, err := h.menusForUser(u)
+	tid := middleware.TenantID(c)
+	if tid == "" {
+		c.JSON(http.StatusOK, gin.H{"data": []store.MenuNode{}})
+		return
+	}
+	var tree []store.MenuNode
+	if middleware.IsImpersonating(c) {
+		tree, err = h.Store.MenuTree(true)
+	} else {
+		tree, err = h.Store.MenusForUserInTenant(u.ID, tid, true)
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
+	if tree == nil {
+		tree = []store.MenuNode{}
+	}
 	c.JSON(http.StatusOK, gin.H{"data": tree})
 }
 
-func (h *RBACHandler) menusForUser(u *store.User) ([]store.MenuNode, error) {
-	if u == nil || u.ID == "" {
-		return []store.MenuNode{}, nil
+// PageActions GET /menus/page-actions?path= — 菜单登记的页面及其操作节点（granted 表示当前用户是否有权），
+// 供尚未接入功能的页面展示占位。
+func (h *RBACHandler) PageActions(c *gin.Context) {
+	u, err := h.Store.GetUserByUsername(middleware.Username(c))
+	if err != nil || u == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"message": "unauthorized"})
+		return
 	}
-	return h.Store.MenusForUser(u.ID, true)
+	page, actions, err := h.Store.PageActionMenus(c.Query("path"))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	if page == nil {
+		c.JSON(http.StatusOK, gin.H{"data": nil})
+		return
+	}
+	out := make([]gin.H, 0, len(actions))
+	for _, a := range actions {
+		ok, _ := h.Store.UserHasURNInTenant(u.ID, middleware.TenantID(c), a.URN)
+		out = append(out, gin.H{"id": a.ID, "title": a.Title, "urn": a.URN, "granted": ok})
+	}
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{
+		"page":    gin.H{"id": page.ID, "title": page.Title, "path": page.Path, "urn": page.URN, "permission_desc": page.PermissionDesc},
+		"actions": out,
+	}})
 }
 
 func (h *RBACHandler) MenuTree(c *gin.Context) {

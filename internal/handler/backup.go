@@ -53,7 +53,7 @@ func (h *BackupHandler) Meta(c *gin.Context) {
 // --- Policies ---
 
 func (h *BackupHandler) ListPolicies(c *gin.Context) {
-	list, err := h.Store.ListBackupPolicies(c.Query("instance_id"))
+	list, err := h.Store.ListBackupPoliciesInTenant(effectiveListTenantID(h.Store, c), c.Query("instance_id"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -62,7 +62,7 @@ func (h *BackupHandler) ListPolicies(c *gin.Context) {
 }
 
 func (h *BackupHandler) GetPolicy(c *gin.Context) {
-	p, err := h.Store.GetBackupPolicy(c.Param("id"))
+	p, err := h.Store.GetBackupPolicyInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || p == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "策略不存在"})
 		return
@@ -76,13 +76,14 @@ func (h *BackupHandler) CreatePolicy(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
-	if err := h.validatePolicy(&req); err != nil {
+	if err := h.validatePolicy(c, &req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
 	who := middleware.Username(c)
 	req.CreatedBy, req.UpdatedBy = who, who
 	req.Enabled = true
+	stampTenantID(c, func(tid string) { req.TenantID = tid })
 	if err := h.Store.CreateBackupPolicy(&req); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -91,7 +92,7 @@ func (h *BackupHandler) CreatePolicy(c *gin.Context) {
 }
 
 func (h *BackupHandler) UpdatePolicy(c *gin.Context) {
-	exist, err := h.Store.GetBackupPolicy(c.Param("id"))
+	exist, err := h.Store.GetBackupPolicyInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || exist == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "策略不存在"})
 		return
@@ -102,7 +103,7 @@ func (h *BackupHandler) UpdatePolicy(c *gin.Context) {
 		return
 	}
 	req.ID = exist.ID
-	if err := h.validatePolicy(&req); err != nil {
+	if err := h.validatePolicy(c, &req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
@@ -116,7 +117,19 @@ func (h *BackupHandler) UpdatePolicy(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": req})
 }
 
+func (h *BackupHandler) policyInTenant(c *gin.Context) (*store.BackupPolicy, bool) {
+	p, err := h.Store.GetBackupPolicyInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
+	if err != nil || p == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "策略不存在"})
+		return nil, false
+	}
+	return p, true
+}
+
 func (h *BackupHandler) DeletePolicy(c *gin.Context) {
+	if _, ok := h.policyInTenant(c); !ok {
+		return
+	}
 	if err := h.Store.DeleteBackupPolicy(c.Param("id")); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -132,6 +145,9 @@ func (h *BackupHandler) SetPolicyEnabled(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
+	if _, ok := h.policyInTenant(c); !ok {
+		return
+	}
 	if err := h.Store.SetBackupPolicyEnabled(c.Param("id"), req.Enabled, middleware.Username(c)); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -140,6 +156,9 @@ func (h *BackupHandler) SetPolicyEnabled(c *gin.Context) {
 }
 
 func (h *BackupHandler) RunPolicy(c *gin.Context) {
+	if _, ok := h.policyInTenant(c); !ok {
+		return
+	}
 	runID, err := h.eng().Start(c.Param("id"), store.BackupTriggerManual, middleware.Username(c))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
@@ -148,14 +167,15 @@ func (h *BackupHandler) RunPolicy(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{"run_id": runID}})
 }
 
-func (h *BackupHandler) validatePolicy(p *store.BackupPolicy) error {
+func (h *BackupHandler) validatePolicy(c *gin.Context, p *store.BackupPolicy) error {
+	tid := middleware.TenantID(c)
 	p.Name = strings.TrimSpace(p.Name)
 	p.InstanceID = strings.TrimSpace(p.InstanceID)
 	p.StorageID = strings.TrimSpace(p.StorageID)
 	if p.Name == "" || p.InstanceID == "" || p.StorageID == "" {
 		return errMsg("名称、实例、存储必填")
 	}
-	inst, err := h.Store.GetInstance(p.InstanceID)
+	inst, err := resolveInstanceInTenant(h.Store, c, p.InstanceID)
 	if err != nil || inst == nil {
 		return errMsg("实例不存在")
 	}
@@ -170,7 +190,7 @@ func (h *BackupHandler) validatePolicy(p *store.BackupPolicy) error {
 	if !store.ValidBackupMethod(p.Method) {
 		return errMsg("不支持的备份方式")
 	}
-	st, err := h.Store.GetBackupStorage(p.StorageID)
+	st, err := h.Store.GetBackupStorageInTenant(p.StorageID, tid)
 	if err != nil || st == nil {
 		return errMsg("存储不存在")
 	}
@@ -184,7 +204,7 @@ func (h *BackupHandler) validatePolicy(p *store.BackupPolicy) error {
 		}
 	}
 	if aid := strings.TrimSpace(p.AgentID); aid != "" {
-		a, err := h.Store.GetBackupAgent(aid)
+		a, err := h.Store.GetBackupAgentInTenant(aid, tid)
 		if err != nil || a == nil {
 			return errMsg("Agent 不存在")
 		}
@@ -202,7 +222,7 @@ func errMsg(s string) error { return strErr(s) }
 
 func (h *BackupHandler) ListRuns(c *gin.Context) {
 	limit, _ := strconv.Atoi(c.Query("limit"))
-	list, err := h.Store.ListBackupRuns(c.Query("policy_id"), c.Query("instance_id"), c.Query("status"), limit)
+	list, err := h.Store.ListBackupRunsInTenant(effectiveListTenantID(h.Store, c), c.Query("policy_id"), c.Query("instance_id"), c.Query("status"), limit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -211,7 +231,7 @@ func (h *BackupHandler) ListRuns(c *gin.Context) {
 }
 
 func (h *BackupHandler) GetRun(c *gin.Context) {
-	r, err := h.Store.GetBackupRun(c.Param("id"))
+	r, err := h.Store.GetBackupRunInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || r == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "记录不存在"})
 		return
@@ -222,7 +242,7 @@ func (h *BackupHandler) GetRun(c *gin.Context) {
 // --- Storages ---
 
 func (h *BackupHandler) ListStorages(c *gin.Context) {
-	list, err := h.Store.ListBackupStorages()
+	list, err := h.Store.ListBackupStoragesInTenant(effectiveListTenantID(h.Store, c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -269,6 +289,7 @@ func (h *BackupHandler) CreateStorage(c *gin.Context) {
 		AccessKey: req.AccessKey, SecretKeyEnc: enc, LocalPath: req.LocalPath, Remark: req.Remark,
 		CreatedBy: who, UpdatedBy: who,
 	}
+	stampTenantID(c, func(tid string) { it.TenantID = tid })
 	if err := h.Store.CreateBackupStorage(it); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -279,7 +300,7 @@ func (h *BackupHandler) CreateStorage(c *gin.Context) {
 }
 
 func (h *BackupHandler) UpdateStorage(c *gin.Context) {
-	exist, err := h.Store.GetBackupStorage(c.Param("id"))
+	exist, err := h.Store.GetBackupStorageInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || exist == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "存储不存在"})
 		return
@@ -330,6 +351,10 @@ func (h *BackupHandler) UpdateStorage(c *gin.Context) {
 }
 
 func (h *BackupHandler) DeleteStorage(c *gin.Context) {
+	if st, err := h.Store.GetBackupStorageInTenant(c.Param("id"), effectiveListTenantID(h.Store, c)); err != nil || st == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "存储不存在"})
+		return
+	}
 	if err := h.Store.DeleteBackupStorage(c.Param("id")); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
@@ -340,7 +365,7 @@ func (h *BackupHandler) DeleteStorage(c *gin.Context) {
 // --- Agents ---
 
 func (h *BackupHandler) ListAgents(c *gin.Context) {
-	list, err := h.Store.ListBackupAgents()
+	list, err := h.Store.ListBackupAgentsInTenant(effectiveListTenantID(h.Store, c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -430,6 +455,7 @@ func (h *BackupHandler) CreateAgent(c *gin.Context) {
 		Engines: enginesField, EnabledGroups: backup.GroupsCSV(groups),
 		Tags: req.Tags, Remark: req.Remark, CreatedBy: who, UpdatedBy: who,
 	}
+	stampTenantID(c, func(tid string) { it.TenantID = tid })
 	if err := h.Store.CreateBackupAgent(it); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -441,7 +467,7 @@ func (h *BackupHandler) CreateAgent(c *gin.Context) {
 
 func (h *BackupHandler) DeleteAgent(c *gin.Context) {
 	id := c.Param("id")
-	a, err := h.Store.GetBackupAgent(id)
+	a, err := h.Store.GetBackupAgentInTenant(id, effectiveListTenantID(h.Store, c))
 	if err != nil || a == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "Agent 不存在"})
 		return
@@ -466,7 +492,7 @@ func (h *BackupHandler) DeleteAgent(c *gin.Context) {
 }
 
 func (h *BackupHandler) ProbeAgent(c *gin.Context) {
-	a, err := h.Store.GetBackupAgent(c.Param("id"))
+	a, err := h.Store.GetBackupAgentInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || a == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "Agent 不存在"})
 		return
@@ -484,7 +510,7 @@ func (h *BackupHandler) ProbeAgent(c *gin.Context) {
 
 // ListAgentStatus GET /backup/agents/status — 批量探活运行状态。
 func (h *BackupHandler) ListAgentStatus(c *gin.Context) {
-	list, err := h.Store.ListBackupAgents()
+	list, err := h.Store.ListBackupAgentsInTenant(effectiveListTenantID(h.Store, c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -516,7 +542,7 @@ func (h *BackupHandler) ListAgentStatus(c *gin.Context) {
 
 // StartAgent POST /backup/agents/:id/start
 func (h *BackupHandler) StartAgent(c *gin.Context) {
-	a, err := h.Store.GetBackupAgent(c.Param("id"))
+	a, err := h.Store.GetBackupAgentInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || a == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "Agent 不存在"})
 		return
@@ -533,7 +559,7 @@ func (h *BackupHandler) StartAgent(c *gin.Context) {
 
 // StopAgent POST /backup/agents/:id/stop
 func (h *BackupHandler) StopAgent(c *gin.Context) {
-	a, err := h.Store.GetBackupAgent(c.Param("id"))
+	a, err := h.Store.GetBackupAgentInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || a == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "Agent 不存在"})
 		return
@@ -616,7 +642,7 @@ func (h *BackupHandler) PreflightAgent(c *gin.Context) {
 }
 
 func (h *BackupHandler) GetDeploy(c *gin.Context) {
-	it, err := h.Store.GetBackupAgentDeploy(c.Param("id"))
+	it, err := h.Store.GetBackupAgentDeployInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || it == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "部署记录不存在"})
 		return
@@ -626,7 +652,7 @@ func (h *BackupHandler) GetDeploy(c *gin.Context) {
 
 func (h *BackupHandler) ListDeploys(c *gin.Context) {
 	limit, _ := strconv.Atoi(c.Query("limit"))
-	list, err := h.Store.ListBackupAgentDeploys(c.Query("host_instance_id"), limit)
+	list, err := h.Store.ListBackupAgentDeploysInTenant(effectiveListTenantID(h.Store, c), c.Query("host_instance_id"), limit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -636,7 +662,7 @@ func (h *BackupHandler) ListDeploys(c *gin.Context) {
 
 // RedeployAgent 对已登记 Agent 按绑定 host 重新下发。
 func (h *BackupHandler) RedeployAgent(c *gin.Context) {
-	a, err := h.Store.GetBackupAgent(c.Param("id"))
+	a, err := h.Store.GetBackupAgentInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || a == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "Agent 不存在"})
 		return

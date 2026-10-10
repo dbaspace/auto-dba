@@ -119,7 +119,7 @@ func collectHostRefs(st *store.DB, inst *store.Instance) ([]hostRef, error) {
 	addrs := nodecheck.HostAddrs(inst)
 	var refs []hostRef
 
-	srAgents, err := st.ListSrAgents()
+	srAgents, err := st.ListSrAgentsInTenant(inst.TenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -129,7 +129,7 @@ func collectHostRefs(st *store.DB, inst *store.Instance) ([]hostRef, error) {
 	}
 	refs = append(refs, matchHostAgents("sr_agent", lites, inst.ID, addrs)...)
 
-	dbAgents, err := st.ListDbDeployAgents()
+	dbAgents, err := st.ListDbDeployAgentsInTenant(inst.TenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -139,7 +139,7 @@ func collectHostRefs(st *store.DB, inst *store.Instance) ([]hostRef, error) {
 	}
 	refs = append(refs, matchHostAgents("db_agent", lites, inst.ID, addrs)...)
 
-	pAgents, err := st.ListBackupAgents()
+	pAgents, err := st.ListBackupAgentsInTenant(inst.TenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -154,11 +154,34 @@ func collectHostRefs(st *store.DB, inst *store.Instance) ([]hostRef, error) {
 	if err != nil {
 		return nil, err
 	}
+	srNodes = filterNodesByClusterTenant(st, "tbl_sr_clusters", inst.TenantID, srNodes, func(n *store.SrNode) string { return n.ClusterID })
 	refs = append(refs, srNodeRefs(names, srNodes)...)
 	dbNodes, err := st.ListDbDeployNodesByHostRef(inst.ID, addrs)
 	if err != nil {
 		return nil, err
 	}
+	dbNodes = filterNodesByClusterTenant(st, "tbl_db_deploy_clusters", inst.TenantID, dbNodes, func(n *store.DbDeployNode) string { return n.ClusterID })
 	refs = append(refs, dbNodeRefs(names, dbNodes)...)
 	return refs, nil
+}
+
+// filterNodesByClusterTenant 仅保留所属集群在 tenantID 下的节点。
+func filterNodesByClusterTenant[T any](st *store.DB, table, tenantID string, nodes []T, clusterOf func(*T) string) []T {
+	if strings.TrimSpace(tenantID) == "" {
+		return nodes
+	}
+	seen := map[string]bool{}
+	out := nodes[:0]
+	for i := range nodes {
+		cid := clusterOf(&nodes[i])
+		ok, cached := seen[cid]
+		if !cached {
+			ok, _ = st.RowVisibleInTenant(table, cid, tenantID)
+			seen[cid] = ok
+		}
+		if ok {
+			out = append(out, nodes[i])
+		}
+	}
+	return out
 }

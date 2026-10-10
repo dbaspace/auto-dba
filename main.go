@@ -31,7 +31,7 @@ func main() {
 			_ = os.WriteFile(cfg.HTTP.PidFile, []byte(strconv.Itoa(os.Getpid())+"\n"), 0644)
 			defer func() { _ = os.Remove(cfg.HTTP.PidFile) }()
 		}
-		server.Run(cfg)
+		server.Run(cfg, *configPath)
 	case "status":
 		fmt.Println("use process manager or check GET /healthz")
 	default:

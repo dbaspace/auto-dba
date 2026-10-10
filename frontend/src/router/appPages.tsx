@@ -33,6 +33,7 @@ import FlashbackCloud from '../views/flashback/FlashbackCloud'
 import Environments from '../views/config/Environments'
 import Regions from '../views/config/Regions'
 import Users from '../views/config/Users'
+import Tenants from '../views/config/Tenants'
 import Roles from '../views/config/Roles'
 import GlobalArgs from '../views/config/GlobalArgs'
 import SqlInsightSettings from '../views/config/SqlInsightSettings'
@@ -73,6 +74,15 @@ import CmdbDiscover from '../views/cmdb/Discover'
 import CmdbImportExport from '../views/cmdb/ImportExport'
 import CmdbAudit from '../views/cmdb/Audit'
 import CmdbSync from '../views/cmdb/Sync'
+import TodoFollowUp from '../views/todo/TodoFollowUp'
+import ActiveAlerts from '../views/alerts/ActiveAlerts'
+import AlertHistory from '../views/alerts/AlertHistory'
+import AlertRules from '../views/alerts/AlertRules'
+import AlertRoutes from '../views/alerts/AlertRoutes'
+import AlertInhibitions from '../views/alerts/AlertInhibitions'
+import AlertOncall from '../views/alerts/AlertOncall'
+import AlertSilences from '../views/alerts/AlertSilences'
+import MenuPagePlaceholder from '../views/MenuPagePlaceholder'
 
 function RedirectWithId({ toPrefix }: { toPrefix: string }) {
   const { id } = useParams()
@@ -243,11 +253,21 @@ export function TabPagePanel({ pathname, search }: { pathname: string; search?: 
       <Route path="/config/menus" element={<Menus />} />
       <Route path="/config/roles" element={<Roles />} />
       <Route path="/config/users" element={<Users />} />
+      <Route path="/config/tenants" element={<Tenants />} />
       <Route path="/config/login-logs" element={<LoginLogs />} />
       <Route path="/config/query-audits" element={<QueryAudits />} />
       <Route path="/config/ldap" element={<AuthConfig />} />
 
-      <Route path="*" element={<div style={{ padding: 24, color: '#999' }}>页面不存在</div>} />
+      <Route path="/ops/todo" element={<TodoFollowUp />} />
+      <Route path="/ops/alerts" element={<ActiveAlerts />} />
+      <Route path="/ops/alerts/history" element={<AlertHistory />} />
+      <Route path="/ops/alerts/rules" element={<AlertRules />} />
+      <Route path="/ops/alerts/silences" element={<AlertSilences />} />
+      <Route path="/ops/alerts/routes" element={<AlertRoutes />} />
+      <Route path="/ops/alerts/inhibitions" element={<AlertInhibitions />} />
+      <Route path="/ops/alerts/oncall" element={<AlertOncall />} />
+
+      <Route path="*" element={<MenuPagePlaceholder pathname={pathname} />} />
     </Routes>
   )
 }

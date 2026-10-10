@@ -12,6 +12,8 @@ import (
 // ProxyService 接入层代理服务（HAProxy / Nginx / LVS）。
 type ProxyService struct {
 	ID           string `json:"id"`
+	TenantID     string `json:"tenant_id,omitempty"`
+	TenantName   string `json:"tenant_name,omitempty"`
 	Name         string `json:"name"`
 	Kind         string `json:"kind"` // haproxy | nginx | lvs
 	EnvID        string `json:"env_id,omitempty"`
@@ -74,14 +76,27 @@ func ValidProxyKind(k string) bool {
 	}
 }
 
+const proxyServiceSelectCols = `id, COALESCE(tenant_id,''), name, kind, env_id, agent_id, agent_base_url, agent_user, password_enc, conf_path, conf_content,
+		systemd_unit, vip, listen_port, backends_json, options_json, remark, status, pushed_at, created_by, updated_by, created_at, updated_at`
+
+func scanProxyService(sc interface{ Scan(dest ...any) error }, s *ProxyService) error {
+	return sc.Scan(&s.ID, &s.TenantID, &s.Name, &s.Kind, &s.EnvID, &s.AgentID, &s.AgentBaseURL, &s.AgentUser, &s.PasswordEnc,
+		&s.ConfPath, &s.ConfContent, &s.SystemdUnit, &s.VIP, &s.ListenPort, &s.BackendsJSON, &s.OptionsJSON,
+		&s.Remark, &s.Status, &s.PushedAt, &s.CreatedBy, &s.UpdatedBy, &s.CreatedAt, &s.UpdatedAt)
+}
+
 func (d *DB) ListProxyServices(kind, envID string) ([]ProxyService, error) {
+	return d.ListProxyServicesInTenant("", kind, envID)
+}
+
+func (d *DB) ListProxyServicesInTenant(tenantID, kind, envID string) ([]ProxyService, error) {
 	if err := d.ensureProxyTables(); err != nil {
 		return nil, err
 	}
-	q := `SELECT id, name, kind, env_id, agent_id, agent_base_url, agent_user, password_enc, conf_path, conf_content,
-		systemd_unit, vip, listen_port, backends_json, options_json, remark, status, pushed_at, created_by, updated_by, created_at, updated_at
+	q := `SELECT ` + proxyServiceSelectCols + `
 		FROM tbl_proxy_services WHERE 1=1`
 	var args []any
+	q, args = appendTenantFilter(q, args, tenantID)
 	if k := strings.ToLower(strings.TrimSpace(kind)); k != "" {
 		q += ` AND kind=?`
 		args = append(args, k)
@@ -99,9 +114,7 @@ func (d *DB) ListProxyServices(kind, envID string) ([]ProxyService, error) {
 	var out []ProxyService
 	for rows.Next() {
 		var s ProxyService
-		if err := rows.Scan(&s.ID, &s.Name, &s.Kind, &s.EnvID, &s.AgentID, &s.AgentBaseURL, &s.AgentUser, &s.PasswordEnc,
-			&s.ConfPath, &s.ConfContent, &s.SystemdUnit, &s.VIP, &s.ListenPort, &s.BackendsJSON, &s.OptionsJSON,
-			&s.Remark, &s.Status, &s.PushedAt, &s.CreatedBy, &s.UpdatedBy, &s.CreatedAt, &s.UpdatedAt); err != nil {
+		if err := scanProxyService(rows, &s); err != nil {
 			return nil, err
 		}
 		s.PasswordSet = strings.TrimSpace(s.PasswordEnc) != ""
@@ -116,12 +129,7 @@ func (d *DB) GetProxyService(id string) (*ProxyService, error) {
 		return nil, err
 	}
 	s := &ProxyService{}
-	err := d.QueryRow(`SELECT id, name, kind, env_id, agent_id, agent_base_url, agent_user, password_enc, conf_path, conf_content,
-		systemd_unit, vip, listen_port, backends_json, options_json, remark, status, pushed_at, created_by, updated_by, created_at, updated_at
-		FROM tbl_proxy_services WHERE id=?`, id).Scan(
-		&s.ID, &s.Name, &s.Kind, &s.EnvID, &s.AgentID, &s.AgentBaseURL, &s.AgentUser, &s.PasswordEnc,
-		&s.ConfPath, &s.ConfContent, &s.SystemdUnit, &s.VIP, &s.ListenPort, &s.BackendsJSON, &s.OptionsJSON,
-		&s.Remark, &s.Status, &s.PushedAt, &s.CreatedBy, &s.UpdatedBy, &s.CreatedAt, &s.UpdatedAt)
+	err := scanProxyService(d.QueryRow(`SELECT `+proxyServiceSelectCols+` FROM tbl_proxy_services WHERE id=?`, id), s)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -161,7 +169,13 @@ func (d *DB) UpsertProxyService(s *ProxyService) error {
 		s.ID, s.Name, s.Kind, s.EnvID, s.AgentID, s.AgentBaseURL, s.AgentUser, s.PasswordEnc, s.ConfPath, s.ConfContent,
 		s.SystemdUnit, s.VIP, s.ListenPort, s.BackendsJSON, s.OptionsJSON, s.Remark, s.Status, s.PushedAt,
 		s.CreatedBy, s.UpdatedBy, s.CreatedAt, s.UpdatedAt)
-	return err
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(s.TenantID) != "" {
+		return d.AssignTenantID("tbl_proxy_services", s.ID, s.TenantID)
+	}
+	return nil
 }
 
 func (d *DB) DeleteProxyService(id string) error {

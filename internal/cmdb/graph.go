@@ -8,13 +8,17 @@ import (
 
 // BuildGraph 推导关系 + 显式关系，depth=1|2。
 func (s *Service) BuildGraph(ciType, ciID string, depth int) (*Graph, error) {
+	return s.BuildGraphInTenant(ciType, ciID, "", depth)
+}
+
+func (s *Service) BuildGraphInTenant(ciType, ciID, tenantID string, depth int) (*Graph, error) {
 	if depth < 1 {
 		depth = 1
 	}
 	if depth > 2 {
 		depth = 2
 	}
-	root, err := s.GetCI(ciType, ciID)
+	root, err := s.GetCIInTenant(ciType, ciID, tenantID)
 	if err != nil {
 		return nil, err
 	}

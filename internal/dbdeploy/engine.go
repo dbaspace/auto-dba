@@ -460,10 +460,15 @@ func (e *Engine) stepInstall(ctx context.Context, cl *store.DbDeployCluster, n *
 		return err
 	}
 	target := softBase(cl, n)
-	resp, err := e.Agent.ArtifactInstall(ctx, auth, map[string]any{
+	body := map[string]any{
 		"download_url": urlStr, "checksum": sum, "target_dir": target,
 		"change_id": step.ChangeID, "step_id": step.ID, "dry_run": e.Cfg.DryRun,
-	})
+	}
+	// 官方 MySQL / PG 二进制包带一层顶级目录；新版 Agent 仅在包确为单目录时剥离，旧版 Agent 忽略该字段
+	if cl.Engine == store.DbDeployEngineMySQL || cl.Engine == store.DbDeployEnginePostgres {
+		body["strip_components"] = 1
+	}
+	resp, err := e.Agent.ArtifactInstall(ctx, auth, body)
 	if err != nil {
 		return err
 	}
@@ -496,7 +501,16 @@ func (e *Engine) stepPutConf(ctx context.Context, cl *store.DbDeployCluster, n *
 		return err
 	}
 	primary := pickPrimary(nodes)
-	path, body := renderConf(cl, n, primary, nodes)
+	var path, body, srcLabel string
+	if TemplatedConfEngine(cl.Engine) {
+		var src ConfTplSource
+		if path, body, src, err = RenderTemplatedConf(e.Store, cl, n, primary, nil); err != nil {
+			return err
+		}
+		srcLabel = src.Label
+	} else {
+		path, body = renderConf(cl, n, primary, nodes)
+	}
 	_, err = e.Agent.FilePut(ctx, auth, map[string]any{
 		"path": path, "content": body, "mode": "0644",
 		"change_id": step.ChangeID, "step_id": step.ID,
@@ -510,6 +524,9 @@ func (e *Engine) stepPutConf(ctx context.Context, cl *store.DbDeployCluster, n *
 		_, _ = e.Agent.FilePut(ctx, auth, map[string]any{"path": sig, "content": "", "mode": "0644"})
 	}
 	step.LogText = path
+	if srcLabel != "" {
+		step.LogText += "（" + srcLabel + "）"
+	}
 	return nil
 }
 

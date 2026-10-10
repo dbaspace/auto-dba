@@ -19,6 +19,17 @@ export default function RequireAuth({ children }: { children: React.ReactNode })
   if (!token) {
     return <Navigate to={`/login?redirect=${encodeURIComponent(location.pathname + location.search)}`} replace />
   }
+  if (path !== '/select-tenant') {
+    try {
+      const u = JSON.parse(localStorage.getItem('user') || '{}')
+      const tid = u?.current_tenant?.id
+      if (!tid) {
+        return <Navigate to="/select-tenant" replace />
+      }
+    } catch {
+      return <Navigate to="/select-tenant" replace />
+    }
+  }
   if (path === '/') {
     return <Navigate to={firstAllowed(allowedPaths())} replace />
   }

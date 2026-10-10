@@ -18,21 +18,21 @@ const (
 	DbDeployEngineRedis    = "redis"
 	DbDeployEngineCodis    = "codis"
 
-	DbDeployStatusDraft        = "draft"
-	DbDeployStatusDeploying    = "deploying"
-	DbDeployStatusReady        = "ready"
-	DbDeployStatusFailed       = "failed"
-	DbDeployStatusHaPending    = "ha_pending"
+	DbDeployStatusDraft     = "draft"
+	DbDeployStatusDeploying = "deploying"
+	DbDeployStatusReady     = "ready"
+	DbDeployStatusFailed    = "failed"
+	DbDeployStatusHaPending = "ha_pending"
 
-	DbDeployTopoStandalone     = "standalone"
-	DbDeployTopoMasterReplica  = "master_replica"
-	DbDeployTopoSentinel       = "sentinel"
-	DbDeployTopoCodis          = "codis"
-	DbDeployTopoCloudEndpoint  = "cloud_endpoint"
-	DbDeployTopoPdTikvTidb     = "pd_tikv_tidb"
-	DbDeployTopoMultiNode      = "multi_node"
-	DbDeployTopoReplset        = "replset"
-	DbDeployTopoBrokerCluster  = "broker_cluster"
+	DbDeployTopoStandalone    = "standalone"
+	DbDeployTopoMasterReplica = "master_replica"
+	DbDeployTopoSentinel      = "sentinel"
+	DbDeployTopoCodis         = "codis"
+	DbDeployTopoCloudEndpoint = "cloud_endpoint"
+	DbDeployTopoPdTikvTidb    = "pd_tikv_tidb"
+	DbDeployTopoMultiNode     = "multi_node"
+	DbDeployTopoReplset       = "replset"
+	DbDeployTopoBrokerCluster = "broker_cluster"
 
 	DbDeployKindSelf  = "self"
 	DbDeployKindCloud = "cloud"
@@ -65,15 +65,15 @@ const (
 
 // DbDeployChange 部署/运维变更单。
 type DbDeployChange struct {
-	ID          string           `json:"id"`
-	ClusterID   string           `json:"cluster_id"`
-	Type        string           `json:"type"`
-	Status      string           `json:"status"`
-	PayloadJSON string           `json:"payload_json,omitempty"`
-	LogText     string           `json:"log_text,omitempty"`
-	CreatedBy   string           `json:"created_by,omitempty"`
-	CreatedAt   string           `json:"created_at"`
-	UpdatedAt   string           `json:"updated_at"`
+	ID          string               `json:"id"`
+	ClusterID   string               `json:"cluster_id"`
+	Type        string               `json:"type"`
+	Status      string               `json:"status"`
+	PayloadJSON string               `json:"payload_json,omitempty"`
+	LogText     string               `json:"log_text,omitempty"`
+	CreatedBy   string               `json:"created_by,omitempty"`
+	CreatedAt   string               `json:"created_at"`
+	UpdatedAt   string               `json:"updated_at"`
 	Steps       []DbDeployChangeStep `json:"steps,omitempty"`
 }
 
@@ -92,31 +92,36 @@ type DbDeployChangeStep struct {
 }
 
 type DbDeployRelease struct {
-	ID          string `json:"id"`
-	Engine      string `json:"engine"`
-	Version     string `json:"version"`
-	Channel     string `json:"channel,omitempty"`
-	ObjectKey   string `json:"object_key"`
-	Checksum    string `json:"checksum"`
-	Filename    string `json:"filename,omitempty"`
-	Arch        string `json:"arch,omitempty"`
-	OS          string `json:"os,omitempty"`
-	PackFormat  string `json:"pack_format,omitempty"`
-	SizeBytes   int64  `json:"size_bytes,omitempty"`
-	Enabled     bool   `json:"enabled"`
-	Remark      string `json:"remark,omitempty"`
-	CreatedBy   string `json:"created_by,omitempty"`
-	UpdatedBy   string `json:"updated_by,omitempty"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
+	ID         string `json:"id"`
+	Engine     string `json:"engine"`
+	Version    string `json:"version"`
+	Channel    string `json:"channel,omitempty"`
+	ObjectKey  string `json:"object_key"`
+	Checksum   string `json:"checksum"`
+	Filename   string `json:"filename,omitempty"`
+	Arch       string `json:"arch,omitempty"`
+	OS         string `json:"os,omitempty"`
+	PackFormat string `json:"pack_format,omitempty"`
+	SizeBytes  int64  `json:"size_bytes,omitempty"`
+	Enabled    bool   `json:"enabled"`
+	Remark     string `json:"remark,omitempty"`
+	CreatedBy  string `json:"created_by,omitempty"`
+	UpdatedBy  string `json:"updated_by,omitempty"`
+	CreatedAt  string `json:"created_at"`
+	UpdatedAt  string `json:"updated_at"`
+	// 展示（不落库）
+	MajorVersion string `json:"major_version,omitempty"`
+	Status       string `json:"status,omitempty"` // ready | pending | hashing
 }
 
 type DbDeployCluster struct {
 	ID            string `json:"id"`
+	TenantID      string `json:"tenant_id,omitempty"`
+	TenantName    string `json:"tenant_name,omitempty"`
 	Engine        string `json:"engine"`
 	Name          string `json:"name"`
 	Environment   string `json:"environment"`
-	Topology      string `json:"topology"` // standalone | master_replica | sentinel | codis | cloud_endpoint
+	Topology      string `json:"topology"`    // standalone | master_replica | sentinel | codis | cloud_endpoint
 	DeployKind    string `json:"deploy_kind"` // self | cloud
 	ReleaseID     string `json:"release_id,omitempty"`
 	Version       string `json:"version,omitempty"`
@@ -347,6 +352,7 @@ func (d *DB) ensureDbDeployTables() error {
 	} {
 		_, _ = d.Exec(`ALTER TABLE tbl_db_deploy_clusters ADD COLUMN IF NOT EXISTS ` + col.name + ` ` + col.def)
 	}
+	d.ensureDbDeployConfTables()
 	return nil
 }
 
@@ -364,7 +370,10 @@ func (d *DB) CreateDbDeployChange(ch *DbDeployChange) error {
 	_, err := d.Exec(`INSERT INTO tbl_db_deploy_changes(id,cluster_id,type,status,payload_json,log_text,created_by,created_at,updated_at)
 		VALUES(?,?,?,?,?,?,?,?,?)`,
 		ch.ID, ch.ClusterID, ch.Type, ch.Status, ch.PayloadJSON, ch.LogText, ch.CreatedBy, ch.CreatedAt, ch.UpdatedAt)
-	return err
+	if err != nil {
+		return err
+	}
+	return d.inheritTenantFromParent("tbl_db_deploy_changes", ch.ID, "tbl_db_deploy_clusters", ch.ClusterID)
 }
 
 func (d *DB) UpdateDbDeployChangeStatus(id, status, logAppend string) error {
@@ -404,15 +413,34 @@ func (d *DB) GetDbDeployChange(id string) (*DbDeployChange, error) {
 }
 
 func (d *DB) ListDbDeployChanges(clusterID string, limit int) ([]DbDeployChange, error) {
+	return d.ListDbDeployChangesInTenant("", clusterID, limit)
+}
+
+func (d *DB) ListDbDeployChangesInTenant(tenantID, clusterID string, limit int) ([]DbDeployChange, error) {
 	if limit <= 0 {
 		limit = 50
 	}
 	var rows *sql.Rows
 	var err error
-	if strings.TrimSpace(clusterID) != "" {
+	tid := strings.TrimSpace(tenantID)
+	cid := strings.TrimSpace(clusterID)
+	switch {
+	case tid != "" && cid != "":
+		rows, err = d.Query(`SELECT c.id,c.cluster_id,c.type,c.status,c.payload_json,c.log_text,c.created_by,c.created_at,c.updated_at
+			FROM tbl_db_deploy_changes c
+			JOIN tbl_db_deploy_clusters cl ON cl.id=c.cluster_id
+			WHERE c.cluster_id=? AND COALESCE(cl.tenant_id,'')=?
+			ORDER BY c.created_at DESC LIMIT ?`, cid, tid, limit)
+	case tid != "":
+		rows, err = d.Query(`SELECT c.id,c.cluster_id,c.type,c.status,c.payload_json,c.log_text,c.created_by,c.created_at,c.updated_at
+			FROM tbl_db_deploy_changes c
+			JOIN tbl_db_deploy_clusters cl ON cl.id=c.cluster_id
+			WHERE COALESCE(cl.tenant_id,'')=?
+			ORDER BY c.created_at DESC LIMIT ?`, tid, limit)
+	case cid != "":
 		rows, err = d.Query(`SELECT id,cluster_id,type,status,payload_json,log_text,created_by,created_at,updated_at
-			FROM tbl_db_deploy_changes WHERE cluster_id=? ORDER BY created_at DESC LIMIT ?`, clusterID, limit)
-	} else {
+			FROM tbl_db_deploy_changes WHERE cluster_id=? ORDER BY created_at DESC LIMIT ?`, cid, limit)
+	default:
 		rows, err = d.Query(`SELECT id,cluster_id,type,status,payload_json,log_text,created_by,created_at,updated_at
 			FROM tbl_db_deploy_changes ORDER BY created_at DESC LIMIT ?`, limit)
 	}
@@ -565,9 +593,6 @@ func (d *DB) UpsertDbDeployRelease(r *DbDeployRelease) error {
 	if r.Engine == "" || r.Version == "" {
 		return errors.New("engine/version 必填")
 	}
-	if r.ObjectKey == "" || r.Checksum == "" {
-		return errors.New("object_key/checksum 必填（包须预置于配置中心 OSS）")
-	}
 	if r.Arch == "" {
 		r.Arch = "x86_64"
 	}
@@ -602,16 +627,19 @@ func (d *DB) DeleteDbDeployRelease(id string) error {
 }
 
 func (d *DB) ListDbDeployClusters(engine string) ([]DbDeployCluster, error) {
-	q := `SELECT id, engine, name, environment, topology, COALESCE(deploy_kind,'self'), release_id, version, software_base, data_root,
-		ha_enabled, ha_mode, controller_id, ha_cluster_id,
-		COALESCE(ha_vip,''), COALESCE(ha_options_json,''),
-		COALESCE(cloud_vendor,''), COALESCE(cloud_instance_id,''), COALESCE(cloud_region,''),
-		COALESCE(endpoint_host,''), COALESCE(endpoint_port,0), COALESCE(linked_instance_id,''),
-		status, remark, created_by, updated_by, created_at, updated_at
-		FROM tbl_db_deploy_clusters`
+	return d.ListDbDeployClustersInTenant("", engine)
+}
+
+func (d *DB) ListDbDeployClustersInTenant(tenantID, engine string) ([]DbDeployCluster, error) {
+	q := `SELECT ` + dbDeployClusterSelectCols + `
+		FROM tbl_db_deploy_clusters WHERE 1=1`
 	args := []any{}
+	if tid := strings.TrimSpace(tenantID); tid != "" {
+		q += ` AND COALESCE(tenant_id,'')=?`
+		args = append(args, tid)
+	}
 	if e := normalizeDbEngine(engine); e != "" {
-		q += ` WHERE engine=?`
+		q += ` AND engine=?`
 		args = append(args, e)
 	}
 	q += ` ORDER BY updated_at DESC`
@@ -635,12 +663,7 @@ func (d *DB) ListDbDeployClusters(engine string) ([]DbDeployCluster, error) {
 }
 
 func (d *DB) GetDbDeployCluster(id string) (*DbDeployCluster, error) {
-	row := d.QueryRow(`SELECT id, engine, name, environment, topology, COALESCE(deploy_kind,'self'), release_id, version, software_base, data_root,
-		ha_enabled, ha_mode, controller_id, ha_cluster_id,
-		COALESCE(ha_vip,''), COALESCE(ha_options_json,''),
-		COALESCE(cloud_vendor,''), COALESCE(cloud_instance_id,''), COALESCE(cloud_region,''),
-		COALESCE(endpoint_host,''), COALESCE(endpoint_port,0), COALESCE(linked_instance_id,''),
-		status, remark, created_by, updated_by, created_at, updated_at
+	row := d.QueryRow(`SELECT `+dbDeployClusterSelectCols+`
 		FROM tbl_db_deploy_clusters WHERE id=?`, strings.TrimSpace(id))
 	c, err := scanDbDeployCluster(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -653,10 +676,17 @@ type dbDeployClusterScanner interface {
 	Scan(dest ...any) error
 }
 
+const dbDeployClusterSelectCols = `id, COALESCE(tenant_id,''), engine, name, environment, topology, COALESCE(deploy_kind,'self'), release_id, version, software_base, data_root,
+		ha_enabled, ha_mode, controller_id, ha_cluster_id,
+		COALESCE(ha_vip,''), COALESCE(ha_options_json,''),
+		COALESCE(cloud_vendor,''), COALESCE(cloud_instance_id,''), COALESCE(cloud_region,''),
+		COALESCE(endpoint_host,''), COALESCE(endpoint_port,0), COALESCE(linked_instance_id,''),
+		status, remark, created_by, updated_by, created_at, updated_at`
+
 func scanDbDeployCluster(row dbDeployClusterScanner) (*DbDeployCluster, error) {
 	var c DbDeployCluster
 	var ha int
-	err := row.Scan(&c.ID, &c.Engine, &c.Name, &c.Environment, &c.Topology, &c.DeployKind, &c.ReleaseID, &c.Version, &c.SoftwareBase, &c.DataRoot,
+	err := row.Scan(&c.ID, &c.TenantID, &c.Engine, &c.Name, &c.Environment, &c.Topology, &c.DeployKind, &c.ReleaseID, &c.Version, &c.SoftwareBase, &c.DataRoot,
 		&ha, &c.HaMode, &c.ControllerID, &c.HaClusterID,
 		&c.HaVIP, &c.HaOptionsJSON,
 		&c.CloudVendor, &c.CloudInstanceID, &c.CloudRegion, &c.EndpointHost, &c.EndpointPort, &c.LinkedInstanceID,
@@ -786,7 +816,10 @@ func (d *DB) UpsertDbDeployCluster(c *DbDeployCluster) error {
 		c.CloudVendor, c.CloudInstanceID, c.CloudRegion, c.EndpointHost, c.EndpointPort, c.LinkedInstanceID,
 		c.Status, c.Remark, c.CreatedBy, c.UpdatedBy, c.CreatedAt, c.UpdatedAt,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	return d.AssignTenantID("tbl_db_deploy_clusters", c.ID, c.TenantID)
 }
 
 // dbDeployCloudEngines 允许 cloud_endpoint（与 dbdeploy 注册表对齐；store 不依赖 dbdeploy）。
@@ -927,6 +960,7 @@ func (d *DB) DeleteDbDeployCluster(id string) error {
 	if _, err := d.Exec(`DELETE FROM tbl_db_deploy_nodes WHERE cluster_id=?`, id); err != nil {
 		return err
 	}
+	_ = d.DeleteDbDeployClusterConf(id)
 	_, err := d.Exec(`DELETE FROM tbl_db_deploy_clusters WHERE id=?`, id)
 	return err
 }
@@ -1046,7 +1080,10 @@ func (d *DB) UpsertDbDeployNode(n *DbDeployNode) error {
 		 host_instance_id=EXCLUDED.host_instance_id, systemd_unit=EXCLUDED.systemd_unit, status=EXCLUDED.status, remark=EXCLUDED.remark, updated_at=EXCLUDED.updated_at`,
 		n.ID, n.ClusterID, n.Role, n.Host, n.Port, n.AgentID, n.HostInstanceID, n.SystemdUnit, n.Status, n.Remark, n.CreatedAt, n.UpdatedAt,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	return d.inheritTenantFromParent("tbl_db_deploy_nodes", n.ID, "tbl_db_deploy_clusters", n.ClusterID)
 }
 
 func (d *DB) DeleteDbDeployNode(id string) error {
@@ -1100,9 +1137,11 @@ func (d *DB) UpsertDbDeployAgent(a *DbDeployAgent) error {
 		return errors.New("name/base_url 必填")
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
+	isNew := false
 	if a.ID == "" {
 		a.ID = uuid.NewString()
 		a.CreatedAt = now
+		isNew = true
 	} else if a.PasswordEnc == "" {
 		old, _ := d.GetDbDeployAgent(a.ID)
 		if old != nil {
@@ -1118,7 +1157,15 @@ func (d *DB) UpsertDbDeployAgent(a *DbDeployAgent) error {
 		 updated_by=EXCLUDED.updated_by, updated_at=EXCLUDED.updated_at`,
 		a.ID, a.Name, a.BaseURL, a.Username, a.PasswordEnc, a.HostInstID, a.Remark, a.CreatedBy, a.UpdatedBy, a.CreatedAt, a.UpdatedAt,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	if isNew {
+		if tid := d.inheritTenantFromInstance(a.HostInstID); tid != "" {
+			return d.AssignTenantID("tbl_db_deploy_agents", a.ID, tid)
+		}
+	}
+	return nil
 }
 
 func (d *DB) DeleteDbDeployAgent(id string) error {
@@ -1186,12 +1233,17 @@ func (d *DB) GetDbDeployAgentDeploy(id string) (*DbDeployAgentDeploy, error) {
 }
 
 func (d *DB) ListDbDeployAgentDeploys(hostInstanceID string, limit int) ([]DbDeployAgentDeploy, error) {
+	return d.ListDbDeployAgentDeploysInTenant("", hostInstanceID, limit)
+}
+
+func (d *DB) ListDbDeployAgentDeploysInTenant(tenantID, hostInstanceID string, limit int) ([]DbDeployAgentDeploy, error) {
 	if limit <= 0 {
 		limit = 50
 	}
 	q := `SELECT id,host_instance_id,agent_id,status,listen_port,remote_dir,base_url,log_text,created_by,created_at,updated_at,finished_at
 		FROM tbl_db_deploy_agent_deploys WHERE 1=1`
 	var args []any
+	q, args = appendTenantFilter(q, args, tenantID)
 	if strings.TrimSpace(hostInstanceID) != "" {
 		q += ` AND host_instance_id=?`
 		args = append(args, hostInstanceID)

@@ -590,7 +590,16 @@ func (d *DB) ensureLoginLogsTable() error {
 	if err := d.ensureOSSUploadTables(); err != nil {
 		return err
 	}
-	return d.ensureCmdbTables()
+	if err := d.ensureTodoTables(); err != nil {
+		return err
+	}
+	if err := d.ensureAlertTables(); err != nil {
+		return err
+	}
+	if err := d.ensureCmdbTables(); err != nil {
+		return err
+	}
+	return d.ensureTenancy()
 }
 
 func (d *DB) ensureOSSSettingsTable() error {

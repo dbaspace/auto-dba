@@ -16,6 +16,7 @@ type DashboardFilter struct {
 	DateFrom  string
 	DateTo    string
 	Viewer    string
+	TenantID  string
 }
 
 type StatCount struct {
@@ -107,6 +108,10 @@ func (d *DB) listIssueDashRows(f DashboardFilter) ([]issueDashRow, error) {
 		COALESCE(inst.idc,''), COALESCE(inst.db_type,'')
 		FROM tbl_issues i LEFT JOIN tbl_instances inst ON inst.id = i.instance_id WHERE 1=1`
 	var args []any
+	if tid := strings.TrimSpace(f.TenantID); tid != "" {
+		q += ` AND COALESCE(i.tenant_id,'')=?`
+		args = append(args, tid)
+	}
 	if f.IssueType != "" {
 		q += ` AND i.issue_type=?`
 		args = append(args, f.IssueType)

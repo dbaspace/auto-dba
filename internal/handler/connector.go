@@ -15,7 +15,7 @@ type ConnectorHandler struct {
 }
 
 func (h *ConnectorHandler) List(c *gin.Context) {
-	list, err := h.Store.ListConnectors(c.Query("env"))
+	list, err := h.Store.ListConnectorsInTenant(effectiveListTenantID(h.Store, c), c.Query("env"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -30,7 +30,7 @@ func (h *ConnectorHandler) List(c *gin.Context) {
 }
 
 func (h *ConnectorHandler) Get(c *gin.Context) {
-	it, err := h.Store.GetConnector(c.Param("id"))
+	it, err := h.Store.GetConnectorInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -77,6 +77,7 @@ func (h *ConnectorHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
+	stampTenantID(c, func(tid string) { it.TenantID = tid })
 	if err := h.Store.CreateConnector(&it); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
@@ -85,7 +86,7 @@ func (h *ConnectorHandler) Create(c *gin.Context) {
 }
 
 func (h *ConnectorHandler) Update(c *gin.Context) {
-	exist, err := h.Store.GetConnector(c.Param("id"))
+	exist, err := h.Store.GetConnectorInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || exist == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "连接器不存在"})
 		return
@@ -108,6 +109,10 @@ func (h *ConnectorHandler) Update(c *gin.Context) {
 }
 
 func (h *ConnectorHandler) Delete(c *gin.Context) {
+	if it, err := h.Store.GetConnectorInTenant(c.Param("id"), effectiveListTenantID(h.Store, c)); err != nil || it == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "连接器不存在"})
+		return
+	}
 	if err := h.Store.DeleteConnector(c.Param("id")); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return

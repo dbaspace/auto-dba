@@ -42,7 +42,7 @@ type CDCHandler struct {
 }
 
 func (h *CDCHandler) ListInstances(c *gin.Context) {
-	list, err := h.Store.ListInstances(c.Query("db_type"), c.Query("q"))
+	list, err := h.Store.ListInstancesInTenant(effectiveListTenantID(h.Store, c), c.Query("db_type"), c.Query("q"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -51,7 +51,7 @@ func (h *CDCHandler) ListInstances(c *gin.Context) {
 }
 
 func (h *CDCHandler) List(c *gin.Context) {
-	list, err := h.Store.ListCDC(c.Query("status"), c.Query("task_type"))
+	list, err := h.Store.ListCDCInTenant(effectiveListTenantID(h.Store, c), c.Query("status"), c.Query("task_type"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -69,7 +69,7 @@ func (h *CDCHandler) List(c *gin.Context) {
 }
 
 func (h *CDCHandler) Get(c *gin.Context) {
-	t, err := h.Store.GetCDC(c.Param("id"))
+	t, err := h.Store.GetCDCInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || t == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "任务不存在"})
 		return
@@ -138,7 +138,7 @@ func (h *CDCHandler) DebeziumPreview(c *gin.Context) {
 		in.Mappings = cdcMappingsFromAny(extra["mappings"])
 	}
 	if srcID != "" {
-		if inst, _ := h.Store.GetInstance(srcID); inst != nil {
+		if inst, _ := resolveInstanceInTenant(h.Store, c, srcID); inst != nil {
 			in.PGHost = strings.TrimSpace(inst.Host)
 			if in.PGHost == "" {
 				in.PGHost = strings.TrimSpace(inst.DomainName)
@@ -417,7 +417,7 @@ func (h *CDCHandler) Create(c *gin.Context) {
 	if t.TaskType == "" {
 		t.TaskType = "init"
 	}
-	if err := h.prepareCDCCreate(&t); err != nil {
+	if err := h.prepareCDCCreate(c, &t); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
@@ -429,7 +429,8 @@ func (h *CDCHandler) Create(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": created})
 }
 
-func (h *CDCHandler) prepareCDCCreate(t *store.CDCTask) error {
+func (h *CDCHandler) prepareCDCCreate(c *gin.Context, t *store.CDCTask) error {
+	tid := middleware.TenantID(c)
 	if t.TaskType == "" {
 		t.TaskType = "init"
 	}
@@ -437,7 +438,7 @@ func (h *CDCHandler) prepareCDCCreate(t *store.CDCTask) error {
 		if t.ParentID == "" {
 			return fmt.Errorf("%s 必须指定 parent_id", t.TaskType)
 		}
-		parent, _ := h.Store.GetCDC(t.ParentID)
+		parent, _ := h.Store.GetCDCInTenant(t.ParentID, tid)
 		if parent == nil || parent.TaskType != "init" {
 			return fmt.Errorf("%s 要求 parent 为初始化任务", t.TaskType)
 		}
@@ -463,6 +464,14 @@ func (h *CDCHandler) prepareCDCCreate(t *store.CDCTask) error {
 	if t.Name == "" || t.SourceID == "" {
 		return fmt.Errorf("name/source_instance_id 必填")
 	}
+	if it, err := resolveInstanceInTenant(h.Store, c, t.SourceID); err != nil || it == nil {
+		return fmt.Errorf("源实例不存在")
+	}
+	if t.TargetID != "" {
+		if it, err := resolveInstanceInTenant(h.Store, c, t.TargetID); err != nil || it == nil {
+			return fmt.Errorf("目标实例不存在")
+		}
+	}
 	if t.TaskType == "init" && t.TargetID == "" && cdcAutoCreateEnabled(map[string]any{"description": t.Description}) {
 		return fmt.Errorf("自动建表开启时必须指定 target_instance_id")
 	}
@@ -481,7 +490,11 @@ func (h *CDCHandler) prepareCDCCreate(t *store.CDCTask) error {
 		extraAny["connector_name"] = n.ConnectorName
 		extraAny["topic_prefix"] = n.TopicPrefix
 		if id := extraMap["connector_id"]; id != "" {
-			if conn, _ := h.Store.GetConnector(id); conn != nil {
+			conn, _ := h.Store.GetConnectorInTenant(id, tid)
+			if conn == nil {
+				return fmt.Errorf("Debezium 服务不存在：%s", id)
+			}
+			{
 				if u := cdc.NormalizeConnectBaseURL(conn.DBZHost); u != "" {
 					extraAny["connect_base_url"] = u
 				}
@@ -498,7 +511,7 @@ func (h *CDCHandler) prepareCDCCreate(t *store.CDCTask) error {
 	maps := cdc.ParseMappingsJSON(extra["mappings"])
 	taskDBs := cdc.ResolveShardDBs(extra, t.SourceDB)
 	if t.TaskType != "init" && t.ParentID != "" {
-		if parent, _ := h.Store.GetCDC(t.ParentID); parent != nil {
+		if parent, _ := h.Store.GetCDCInTenant(t.ParentID, tid); parent != nil {
 			taskDBs = cdc.ResolveShardDBs(cdc.ParseTaskExtra(parent.Description), parent.SourceDB)
 		}
 	}
@@ -513,10 +526,13 @@ func (h *CDCHandler) persistCDCTask(c *gin.Context, t *store.CDCTask, reviewerRa
 }
 
 func (h *CDCHandler) createSharedCDCIssue(c *gin.Context, t *store.CDCTask, reviewerRaw ...string) (*store.Issue, error) {
-	def, _ := h.Store.GetGlobalArg("sync_default_approver")
-	reviewer := cdcResolveReviewer(append(reviewerRaw, def)...)
-	if reviewer == "" {
-		return nil, fmt.Errorf("审核人必填，或在全局参数配置 sync_default_approver")
+	preferred := ""
+	if len(reviewerRaw) > 0 {
+		preferred = strings.TrimSpace(reviewerRaw[0])
+	}
+	reviewer, err := resolveTenantAssignee(h.Store, middleware.TenantID(c), preferred)
+	if err != nil {
+		return nil, err
 	}
 	th := &TicketHandler{Store: h.Store}
 	if approvers := th.resolveApprovers(t.SourceID, t.SourceDB); len(approvers) > 0 && !usernameInList(reviewer, approvers) {
@@ -535,6 +551,9 @@ func (h *CDCHandler) createSharedCDCIssue(c *gin.Context, t *store.CDCTask, revi
 		Submitter:   middleware.Username(c),
 		AssignedTo:  reviewer,
 	}
+	stampTenantID(c, func(tid string) {
+		if issue != nil { issue.TenantID = tid }
+	})
 	if err := h.Store.CreateIssue(issue); err != nil {
 		return nil, err
 	}
@@ -580,6 +599,7 @@ func (h *CDCHandler) persistCDCTaskShared(c *gin.Context, t *store.CDCTask, shar
 			t.Description = encodeCDCExtraJSON(text, extra)
 		}
 	}
+	stampTenantID(c, func(tid string) { t.TenantID = tid })
 	if err := h.Store.CreateCDC(t); err != nil {
 		return nil, err
 	}
@@ -636,7 +656,7 @@ func (h *CDCHandler) logCDCUserAction(taskID, action, operator string, actionErr
 
 func (h *CDCHandler) Action(status, approval string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		t, err := h.Store.GetCDC(c.Param("id"))
+		t, err := h.Store.GetCDCInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 		if err != nil || t == nil {
 			c.JSON(http.StatusNotFound, gin.H{"message": "任务不存在"})
 			return
@@ -693,7 +713,7 @@ func (h *CDCHandler) Action(status, approval string) gin.HandlerFunc {
 }
 
 func (h *CDCHandler) Delete(c *gin.Context) {
-	t, err := h.Store.GetCDC(c.Param("id"))
+	t, err := h.Store.GetCDCInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || t == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "任务不存在"})
 		return
@@ -713,7 +733,7 @@ func (h *CDCHandler) Delete(c *gin.Context) {
 type SlotHandler struct{ Store *store.DB }
 
 func (h *SlotHandler) List(c *gin.Context) {
-	list, err := h.Store.ListSlots()
+	list, err := h.Store.ListSlotsInTenant(effectiveListTenantID(h.Store, c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -725,7 +745,7 @@ func (h *SlotHandler) List(c *gin.Context) {
 }
 
 func (h *SlotHandler) Collect(c *gin.Context) {
-	insts, err := h.Store.ListInstances("postgres", "")
+	insts, err := h.Store.ListInstancesInTenant(effectiveListTenantID(h.Store, c), "postgres", "")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -753,6 +773,10 @@ func (h *SlotHandler) Delete(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "id 必填"})
 		return
 	}
+	if ok, err := h.Store.GetSlotInTenant(req.ID, effectiveListTenantID(h.Store, c)); err != nil || !ok {
+		c.JSON(http.StatusNotFound, gin.H{"message": "复制槽不存在"})
+		return
+	}
 	if err := h.Store.DeleteSlot(req.ID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -771,7 +795,7 @@ type ArchiveHandler struct {
 }
 
 func (h *ArchiveHandler) List(c *gin.Context) {
-	list, err := h.Store.ListArchives()
+	list, err := h.Store.ListArchivesInTenant(effectiveListTenantID(h.Store, c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -808,21 +832,20 @@ func (h *ArchiveHandler) Create(c *gin.Context) {
 	if strings.TrimSpace(t.TableName) == "" {
 		t.TableName = "script"
 	}
-	approver := strings.TrimSpace(req.Approver)
-	if approver == "" {
-		approver = strings.TrimSpace(t.AssignedTo)
+	preferred := strings.TrimSpace(req.Approver)
+	if preferred == "" {
+		preferred = strings.TrimSpace(t.AssignedTo)
 	}
-	if approver == "" {
-		approver, _ = h.Store.GetGlobalArg("migration_approver_user_ids")
-		if i := strings.Index(approver, ","); i >= 0 {
-			approver = strings.TrimSpace(approver[:i])
+	if preferred == "" {
+		mig, _ := h.Store.GetGlobalArg("migration_approver_user_ids")
+		if i := strings.Index(mig, ","); i >= 0 {
+			mig = strings.TrimSpace(mig[:i])
 		}
+		preferred = strings.TrimSpace(mig)
 	}
-	if approver == "" {
-		approver, _ = h.Store.GetGlobalArg("sync_default_approver")
-	}
-	if approver == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "审核人必填，或在全局参数配置 migration_approver_user_ids / sync_default_approver"})
+	approver, aerr := resolveTenantAssignee(h.Store, middleware.TenantID(c), preferred)
+	if aerr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": aerr.Error()})
 		return
 	}
 	t.AssignedTo = approver
@@ -838,6 +861,9 @@ func (h *ArchiveHandler) Create(c *gin.Context) {
 		Submitter:   middleware.Username(c),
 		AssignedTo:  approver,
 	}
+	stampTenantID(c, func(tid string) {
+		if issue != nil { issue.TenantID = tid }
+	})
 	if err := h.Store.CreateIssue(issue); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -852,12 +878,12 @@ func (h *ArchiveHandler) Create(c *gin.Context) {
 }
 
 func (h *ArchiveHandler) Stats(c *gin.Context) {
-	st, err := h.Store.ArchiveStats()
+	st, err := h.Store.ArchiveStatsInTenant(effectiveListTenantID(h.Store, c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
-	if runs, err := h.Store.ListArchiveRuns("", 20); err == nil && len(runs) > 0 {
+	if runs, err := h.Store.ListArchiveRunsInTenant(effectiveListTenantID(h.Store, c), "", 20); err == nil && len(runs) > 0 {
 		recent := make([]map[string]any, 0, len(runs))
 		for _, r := range runs {
 			recent = append(recent, map[string]any{
@@ -891,7 +917,7 @@ type KafkaHandler struct {
 }
 
 func (h *KafkaHandler) List(c *gin.Context) {
-	list, err := h.Store.ListKafka()
+	list, err := h.Store.ListKafkaInTenant(effectiveListTenantID(h.Store, c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -912,25 +938,34 @@ func (h *KafkaHandler) Create(c *gin.Context) {
 	if t.TicketNo == "" {
 		t.TicketNo = "K" + strings.ReplaceAll(uuid.NewString(), "-", "")[:10]
 	}
-	if t.AssignedTo == "" {
-		t.AssignedTo, _ = h.Store.GetGlobalArg("sync_default_approver")
+	assigned, aerr := resolveTenantAssignee(h.Store, middleware.TenantID(c), t.AssignedTo)
+	if aerr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": aerr.Error()})
+		return
 	}
+	t.AssignedTo = assigned
 	if err := h.Store.CreateKafka(&t); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
+	}
+	if tid := middleware.TenantID(c); tid != "" {
+		_ = h.Store.AssignTenantID("tbl_kafka_orders", t.ID, tid)
 	}
 	issue := &store.Issue{
 		ID: t.ID, TicketNo: t.TicketNo, IssueType: store.IssueTypeKafka,
 		SQLContent:  fmt.Sprintf("%s %s/%s", t.Action, t.Cluster, t.Topic),
 		Description: t.Description, Submitter: t.Submitter, AssignedTo: t.AssignedTo,
 	}
+	stampTenantID(c, func(tid string) {
+		if issue != nil { issue.TenantID = tid }
+	})
 	_ = h.Store.CreateIssue(issue)
 	NotifyIssueCreatedAsync(h.Store, h.Secret, issue)
 	c.JSON(http.StatusOK, gin.H{"data": t})
 }
 
 func (h *KafkaHandler) Instances(c *gin.Context) {
-	list, err := h.Store.ListInstances("kafka", "")
+	list, err := h.Store.ListInstancesInTenant(effectiveListTenantID(h.Store, c), "kafka", "")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -1039,7 +1074,7 @@ func (h *DCLHandler) Submit(c *gin.Context) {
 	c.Request.Header.Set("Content-Type", "application/json")
 	// reuse submit logic via constructing issue
 	username := middleware.Username(c)
-	ok, _, msg, err := th.canActOnTarget(req.InstanceID, req.DBName, username)
+	ok, _, msg, err := th.canActOnTarget(middleware.TenantID(c), req.InstanceID, req.DBName, username)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -1048,14 +1083,18 @@ func (h *DCLHandler) Submit(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": msg})
 		return
 	}
-	reviewer := req.reviewer()
-	if reviewer == "" {
-		reviewer, _ = h.Store.GetGlobalArg("sync_default_approver")
+	reviewer, aerr := resolveTenantAssignee(h.Store, middleware.TenantID(c), req.reviewer())
+	if aerr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": aerr.Error()})
+		return
 	}
 	issue := &store.Issue{
 		IssueType: store.IssueTypeDCL, InstanceID: req.InstanceID, DBName: req.DBName,
 		SQLContent: req.SQLContent, Description: req.Description, Submitter: username, AssignedTo: reviewer,
 	}
+	stampTenantID(c, func(tid string) {
+		if issue != nil { issue.TenantID = tid }
+	})
 	if err := h.Store.CreateIssue(issue); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return

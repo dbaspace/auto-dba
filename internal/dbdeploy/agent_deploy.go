@@ -59,6 +59,14 @@ func (e *Engine) StartAgentDeploy(opts DeployOpts) (string, error) {
 	if !store.IsHostInstanceType(inst.DBType) {
 		return "", fmt.Errorf("仅支持 host 类型实例下发 DB Agent")
 	}
+	if recent, err := e.Store.ListDbDeployAgentDeploys(hostID, 5); err == nil {
+		now := time.Now()
+		for _, d := range recent {
+			if store.AgentDeployActive(d.Status, d.CreatedAt, now) {
+				return "", fmt.Errorf("主机 %s 已有进行中的 DB Agent 下发任务（%s 创建），请等待完成", inst.Name, d.CreatedAt)
+			}
+		}
+	}
 	artifact := ResolveDbAgentArtifact(e.Cfg.AgentArtifact)
 	if artifact == "" {
 		return "", fmt.Errorf("未找到 db-agent 制品（请先 cd deploy/db-agent && ./build.sh）")

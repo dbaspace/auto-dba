@@ -47,12 +47,12 @@ func (h *MigrationHandler) SchemaCompareCreate(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "left_db / right_db 必填"})
 		return
 	}
-	leftInst, err := h.Store.GetInstance(req.LeftInstanceID)
+	leftInst, err := resolveInstanceInTenant(h.Store, c, req.LeftInstanceID)
 	if err != nil || leftInst == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "左侧实例不存在"})
 		return
 	}
-	rightInst, err := h.Store.GetInstance(req.RightInstanceID)
+	rightInst, err := resolveInstanceInTenant(h.Store, c, req.RightInstanceID)
 	if err != nil || rightInst == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "右侧实例不存在"})
 		return
@@ -89,6 +89,7 @@ func (h *MigrationHandler) SchemaCompareCreate(c *gin.Context) {
 		CreatedBy:       middleware.Username(c),
 		ProgressMessage: "排队中",
 	}
+	stampTenantID(c, func(tid string) { t.TenantID = tid })
 	if err := h.Store.CreateSchemaCompareTask(t); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -101,7 +102,7 @@ func (h *MigrationHandler) SchemaCompareCreate(c *gin.Context) {
 
 func (h *MigrationHandler) SchemaCompareList(c *gin.Context) {
 	limit, _ := strconv.Atoi(c.Query("limit"))
-	list, err := h.Store.ListSchemaCompareTasks(limit)
+	list, err := h.Store.ListSchemaCompareTasksInTenant(effectiveListTenantID(h.Store, c), limit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -116,7 +117,7 @@ func (h *MigrationHandler) SchemaCompareList(c *gin.Context) {
 }
 
 func (h *MigrationHandler) SchemaCompareGet(c *gin.Context) {
-	t, err := h.Store.GetSchemaCompareTask(c.Param("id"), true)
+	t, err := h.Store.GetSchemaCompareTaskInTenant(c.Param("id"), effectiveListTenantID(h.Store, c), true)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -130,7 +131,7 @@ func (h *MigrationHandler) SchemaCompareGet(c *gin.Context) {
 }
 
 func (h *MigrationHandler) SchemaCompareDelete(c *gin.Context) {
-	t, err := h.Store.GetSchemaCompareTask(c.Param("id"), false)
+	t, err := h.Store.GetSchemaCompareTaskInTenant(c.Param("id"), effectiveListTenantID(h.Store, c), false)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -151,7 +152,7 @@ func (h *MigrationHandler) SchemaCompareDelete(c *gin.Context) {
 }
 
 func (h *MigrationHandler) SchemaCompareExport(c *gin.Context) {
-	t, err := h.Store.GetSchemaCompareTask(c.Param("id"), true)
+	t, err := h.Store.GetSchemaCompareTaskInTenant(c.Param("id"), effectiveListTenantID(h.Store, c), true)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -197,10 +198,10 @@ func (h *MigrationHandler) enrichSchemaCompareTask(t *store.SchemaCompareTask) {
 	if t == nil {
 		return
 	}
-	if left, _ := h.Store.GetInstance(t.LeftInstanceID); left != nil {
+	if left, _ := h.Store.GetInstanceInTenant(t.LeftInstanceID, t.TenantID); left != nil {
 		t.LeftInstanceName = left.Name
 	}
-	if right, _ := h.Store.GetInstance(t.RightInstanceID); right != nil {
+	if right, _ := h.Store.GetInstanceInTenant(t.RightInstanceID, t.TenantID); right != nil {
 		t.RightInstanceName = right.Name
 	}
 }

@@ -35,6 +35,7 @@ type loginReq struct {
 	AuthMode    string `json:"auth_mode"`
 	CaptchaID   string `json:"captcha_id"`
 	CaptchaCode string `json:"captcha_code"`
+	TenantID    string `json:"tenant_id"`
 }
 
 func ldapErrorMessage(err error) string {
@@ -81,6 +82,36 @@ func ssoErrorMessage(err error) string {
 	default:
 		return "SSO 认证失败: " + msg
 	}
+}
+
+// ssoAuthorizeGate 授权码跳转 IdP：只需 Enabled，Client Secret 解密失败不阻塞。
+// 返回空字符串表示可继续。
+func ssoAuthorizeGate(cfg *store.SsoConfig, err error) string {
+	if cfg != nil && cfg.Enabled {
+		return ""
+	}
+	if cfg == nil && err != nil {
+		return ssoErrorMessage(err)
+	}
+	return "SSO 未启用"
+}
+
+// ssoExchangeGate 换票/回调：Enabled 且 Secret 可用（若曾加密保存）。解密失败返回明确提示，不伪装成「未启用」。
+func ssoExchangeGate(cfg *store.SsoConfig, err error) string {
+	if cfg == nil || !cfg.Enabled {
+		if cfg == nil && err != nil {
+			return ssoErrorMessage(err)
+		}
+		return "SSO 未启用"
+	}
+	if err != nil {
+		return ssoErrorMessage(err)
+	}
+	// 有密文却解不出明文：与 GetSsoConfig 解密失败等价的兜底
+	if strings.TrimSpace(cfg.ClientSecret) == "" && strings.TrimSpace(cfg.ClientSecretEnc) != "" {
+		return "SSO Client Secret 解密失败，请到「认证配置 → SSO」重新保存"
+	}
+	return ""
 }
 
 func isExternalUserSource(source string) bool {
@@ -274,7 +305,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 				if created {
 					msg = "SSO 登录成功（已自动创建本地账号）"
 				}
-				h.respondLogin(c, u, msg)
+				h.respondLoginWithTenant(c, u, msg, req.TenantID)
 				return
 			}
 			if serr != nil {
@@ -321,7 +352,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 				if created {
 					msg = "LDAP 登录成功（已自动创建本地账号）"
 				}
-				h.respondLogin(c, u, msg)
+				h.respondLoginWithTenant(c, u, msg, req.TenantID)
 				return
 			}
 			if lerr != nil {
@@ -388,7 +419,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		failAuth(u.Username, u.ID, u.DisplayName, "用户名或密码错误", true)
 		return
 	}
-	h.respondLogin(c, u, "登录成功")
+	h.respondLoginWithTenant(c, u, "登录成功", req.TenantID)
 }
 
 func idOrEmpty(u *store.User) string {
@@ -600,8 +631,8 @@ func normalizeLoopbackHost(host string) string {
 
 func (h *AuthHandler) SSOStart(c *gin.Context) {
 	cfg, err := h.Store.GetSsoConfig(h.encKey())
-	if err != nil || cfg == nil || !cfg.Enabled {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "SSO 未启用"})
+	if msg := ssoAuthorizeGate(cfg, err); msg != "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": msg})
 		return
 	}
 	if !cfg.UseAuthorizeGrant() {
@@ -668,7 +699,8 @@ func (h *AuthHandler) finishSSOCodeExchange(c *gin.Context, cfg *store.SsoConfig
 	_ = h.Store.ClearLoginFailures(u.ID)
 	_, _ = h.Store.ClearExternalLoginFailure(u.Username)
 	ttl := time.Duration(h.Cfg.App.JWTTTLHours) * time.Hour
-	tok, err := middleware.SignToken(h.Cfg.App.JWTSecret, u.ID, u.Username, u.Role, ttl)
+	tid, tcode := h.resolveLoginTenantIDs(u.ID, "")
+	tok, err := middleware.SignToken(h.Cfg.App.JWTSecret, u.ID, u.Username, u.Role, tid, tcode, ttl)
 	if err != nil {
 		return "", "", "", err.Error(), http.StatusInternalServerError
 	}
@@ -678,16 +710,28 @@ func (h *AuthHandler) finishSSOCodeExchange(c *gin.Context, cfg *store.SsoConfig
 	}
 	h.recordLogin(c, u.Username, u.ID, u.DisplayName, true, msg)
 	middleware.TouchIdle(u.ID)
-	menus, _ := h.menusForUser(u)
-	userBlob, _ := json.Marshal(h.userPublicJSON(u, menus))
+	menus, _ := h.menusForUserInTenant(u, tid)
+	out := h.userPublicJSON(u, menus)
+	if tid != "" {
+		if t, _ := h.Store.GetTenant(tid); t != nil {
+			out["current_tenant"] = t
+		}
+		if perms, err := h.Store.ListUserURNsInTenant(u.ID, tid); err == nil {
+			out["permissions"] = perms
+		}
+	}
+	if plat, err := h.Store.ListPlatformURNs(u.ID); err == nil {
+		out["platform_permissions"] = plat
+	}
+	userBlob, _ := json.Marshal(out)
 	ticket = ssoauth.PutTicket(tok, userBlob)
 	return ticket, frontend, redirectPath, "", http.StatusOK
 }
 
 func (h *AuthHandler) SSOCallback(c *gin.Context) {
 	cfg, err := h.Store.GetSsoConfig(h.encKey())
-	if err != nil || cfg == nil || !cfg.Enabled {
-		c.String(http.StatusBadRequest, "SSO 未启用")
+	if msg := ssoExchangeGate(cfg, err); msg != "" {
+		c.String(http.StatusBadRequest, "%s", msg)
 		return
 	}
 	if errMsg := strings.TrimSpace(c.Query("error")); errMsg != "" {
@@ -726,8 +770,8 @@ type ssoExchangeReq struct {
 // SSOExchange 供前端回调页用：IdP 把 code 打到前端后，再 POST 到此换 ticket。
 func (h *AuthHandler) SSOExchange(c *gin.Context) {
 	cfg, err := h.Store.GetSsoConfig(h.encKey())
-	if err != nil || cfg == nil || !cfg.Enabled {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "SSO 未启用"})
+	if msg := ssoExchangeGate(cfg, err); msg != "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": msg})
 		return
 	}
 	if !cfg.UseAuthorizeGrant() {
@@ -774,21 +818,79 @@ func (h *AuthHandler) SSOTicket(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"token": tok, "user": user})
 }
 
+func (h *AuthHandler) resolveLoginTenantIDs(userID, preferred string) (tid, tcode string) {
+	t, list, err := h.Store.PickLoginTenant(userID, preferred)
+	if err != nil || t == nil {
+		if len(list) == 1 {
+			return list[0].ID, list[0].Code
+		}
+		return "", ""
+	}
+	return t.ID, t.Code
+}
+
 func (h *AuthHandler) respondLogin(c *gin.Context, u *store.User, logMsg string) {
+	h.respondLoginWithTenant(c, u, logMsg, "")
+}
+
+func (h *AuthHandler) respondLoginWithTenant(c *gin.Context, u *store.User, logMsg, preferredTenant string) {
 	_ = h.Store.ClearLoginFailures(u.ID)
 	_, _ = h.Store.ClearExternalLoginFailure(u.Username)
+	preferred := strings.TrimSpace(preferredTenant)
+	if preferred == "" {
+		preferred = strings.TrimSpace(c.Query("tenant_id"))
+	}
+	t, tenants, err := h.Store.PickLoginTenant(u.ID, preferred)
 	ttl := time.Duration(h.Cfg.App.JWTTTLHours) * time.Hour
-	tok, err := middleware.SignToken(h.Cfg.App.JWTSecret, u.ID, u.Username, u.Role, ttl)
+	if err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"message": err.Error(), "tenants": tenants})
+		return
+	}
+	if t == nil && len(tenants) > 1 {
+		tok, err := middleware.SignToken(h.Cfg.App.JWTSecret, u.ID, u.Username, u.Role, "", "", ttl)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+			return
+		}
+		h.recordLogin(c, u.Username, u.ID, u.DisplayName, true, logMsg+"（待选租户）")
+		middleware.TouchIdle(u.ID)
+		c.JSON(http.StatusOK, gin.H{
+			"token":              tok,
+			"need_tenant_select": true,
+			"tenants":            tenants,
+			"user":               userPublicJSON(u, nil),
+		})
+		return
+	}
+	tid, tcode := "", ""
+	if t != nil {
+		tid, tcode = t.ID, t.Code
+	} else if len(tenants) == 1 {
+		tid, tcode = tenants[0].ID, tenants[0].Code
+		t = &tenants[0]
+	}
+	tok, err := middleware.SignToken(h.Cfg.App.JWTSecret, u.ID, u.Username, u.Role, tid, tcode, ttl)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
 	h.recordLogin(c, u.Username, u.ID, u.DisplayName, true, logMsg)
 	middleware.TouchIdle(u.ID)
-	menus, _ := h.menusForUser(u)
+	menus, _ := h.Store.MenusForUserInTenant(u.ID, tid, true)
+	out := h.userPublicJSON(u, menus)
+	out["current_tenant"] = t
+	out["tenants"] = tenants
+	if tid != "" {
+		if perms, err := h.Store.ListUserURNsInTenant(u.ID, tid); err == nil {
+			out["permissions"] = perms
+		}
+	}
+	if plat, err := h.Store.ListPlatformURNs(u.ID); err == nil {
+		out["platform_permissions"] = plat
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"token": tok,
-		"user":  userPublicJSON(u, menus),
+		"user":  out,
 	})
 }
 
@@ -999,11 +1101,16 @@ func (h *AuthHandler) ListQueryAudits(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": list, "total": total})
 }
 
-func (h *AuthHandler) menusForUser(u *store.User) ([]store.MenuNode, error) {
+// menusForUserInTenant 按租户成员角色出菜单；tenantID 空则空树（不再回退平台全量角色菜单）。
+func (h *AuthHandler) menusForUserInTenant(u *store.User, tenantID string) ([]store.MenuNode, error) {
 	if u == nil || u.ID == "" {
 		return []store.MenuNode{}, nil
 	}
-	return h.Store.MenusForUser(u.ID, true)
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		return []store.MenuNode{}, nil
+	}
+	return h.Store.MenusForUserInTenant(u.ID, tenantID, true)
 }
 
 func (h *AuthHandler) Me(c *gin.Context) {
@@ -1012,8 +1119,90 @@ func (h *AuthHandler) Me(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"message": "unauthorized"})
 		return
 	}
-	menus, _ := h.menusForUser(u)
-	c.JSON(http.StatusOK, gin.H{"data": h.userPublicJSON(u, menus)})
+	tid := middleware.TenantID(c)
+	imp := middleware.IsImpersonating(c)
+	var menus []store.MenuNode
+	// 平台审计进入：admin 未必是目标租户成员，仍应保留完整菜单以便代配资源
+	if imp {
+		menus, _ = h.Store.MenuTree(true)
+	} else {
+		menus, _ = h.Store.MenusForUserInTenant(u.ID, tid, true)
+	}
+	out := h.userPublicJSON(u, menus)
+	tenants, _ := h.Store.ListUserTenants(u.ID)
+	if imp {
+		// 审计会话：顶栏列出全部活跃租户，避免只剩 UUID
+		if all, err := h.Store.ListTenants(); err == nil {
+			active := make([]store.Tenant, 0, len(all))
+			for _, t := range all {
+				if t.Status == store.TenantStatusActive {
+					active = append(active, t)
+				}
+			}
+			out["tenants"] = active
+		}
+	} else {
+		out["tenants"] = tenants
+	}
+	if tid != "" {
+		if t, _ := h.Store.GetTenant(tid); t != nil {
+			out["current_tenant"] = t
+		}
+		if imp {
+			if perms, err := h.Store.ListUserURNs(u.ID); err == nil {
+				out["permissions"] = perms
+			}
+		} else if perms, err := h.Store.ListUserURNsInTenant(u.ID, tid); err == nil {
+			out["permissions"] = perms
+		}
+	}
+	if plat, err := h.Store.ListPlatformURNs(u.ID); err == nil {
+		out["platform_permissions"] = plat
+	}
+	out["impersonating"] = imp
+	c.JSON(http.StatusOK, gin.H{"data": out})
+}
+
+func (h *AuthHandler) SelectTenant(c *gin.Context) {
+	var req struct {
+		TenantID string `json:"tenant_id"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.TenantID) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "tenant_id 必填"})
+		return
+	}
+	u, err := h.Store.GetUserByUsername(middleware.Username(c))
+	if err != nil || u == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"message": "unauthorized"})
+		return
+	}
+	t, tenants, err := h.Store.PickLoginTenant(u.ID, req.TenantID)
+	if err != nil || t == nil {
+		msg := "无权进入该租户"
+		if err != nil {
+			msg = err.Error()
+		}
+		c.JSON(http.StatusForbidden, gin.H{"message": msg, "tenants": tenants})
+		return
+	}
+	ttl := time.Duration(h.Cfg.App.JWTTTLHours) * time.Hour
+	tok, err := middleware.SignToken(h.Cfg.App.JWTSecret, u.ID, u.Username, u.Role, t.ID, t.Code, ttl)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	_ = h.Store.AppendTenantAudit(t.ID, u.ID, "tenant.select", t.Code)
+	menus, _ := h.Store.MenusForUserInTenant(u.ID, t.ID, true)
+	out := h.userPublicJSON(u, menus)
+	out["current_tenant"] = t
+	out["tenants"] = tenants
+	if perms, err := h.Store.ListUserURNsInTenant(u.ID, t.ID); err == nil {
+		out["permissions"] = perms
+	}
+	if plat, err := h.Store.ListPlatformURNs(u.ID); err == nil {
+		out["platform_permissions"] = plat
+	}
+	c.JSON(http.StatusOK, gin.H{"token": tok, "user": out})
 }
 
 func (h *AuthHandler) userPublicJSON(u *store.User, menus any) gin.H {
@@ -1031,13 +1220,10 @@ func (h *AuthHandler) userPublicJSON(u *store.User, menus any) gin.H {
 	} else {
 		out["user_watermark_enabled"] = false
 	}
-	perms := []string{}
-	if h != nil && h.Store != nil && u != nil && u.ID != "" {
-		if list, err := h.Store.ListUserURNs(u.ID); err == nil && list != nil {
-			perms = list
-		}
+	// permissions 由 Me/SelectTenant/SSO 等按租户写入；此处不再默认灌平台 ListUserURNs。
+	if _, ok := out["permissions"]; !ok {
+		out["permissions"] = []string{}
 	}
-	out["permissions"] = perms
 	if u != nil && len(u.RoleIDs) > 0 {
 		out["role_ids"] = u.RoleIDs
 	}
@@ -1103,8 +1289,18 @@ func (h *AuthHandler) UpdateProfile(c *gin.Context) {
 		latest = u
 		latest.DisplayName = req.DisplayName
 	}
-	menus, _ := h.menusForUser(latest)
-	c.JSON(http.StatusOK, gin.H{"ok": true, "data": h.userPublicJSON(latest, menus)})
+	tid := middleware.TenantID(c)
+	menus, _ := h.menusForUserInTenant(latest, tid)
+	out := h.userPublicJSON(latest, menus)
+	if tid != "" {
+		if perms, err := h.Store.ListUserURNsInTenant(latest.ID, tid); err == nil {
+			out["permissions"] = perms
+		}
+	}
+	if plat, err := h.Store.ListPlatformURNs(latest.ID); err == nil {
+		out["platform_permissions"] = plat
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "data": out})
 }
 
 func (h *AuthHandler) Logout(c *gin.Context) {

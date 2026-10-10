@@ -132,7 +132,10 @@ func (d *DB) CreateArchiveRun(r *ArchiveRun) error {
 		 VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
 		r.ID, r.TaskID, r.Status, r.Strategy, r.DeletedRows, r.Rounds, r.Message, r.SQLPreview, r.StartedAt, r.FinishedAt, r.CreatedAt,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	return d.inheritTenantFromParent("tbl_archive_runs", r.ID, "tbl_archive_tasks", r.TaskID)
 }
 
 func (d *DB) UpdateArchiveRun(r *ArchiveRun) error {

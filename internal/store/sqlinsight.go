@@ -291,6 +291,7 @@ func (d *DB) ListSqlInsightEnabledRules(ctx context.Context) ([]*SqlInsightRuleR
 
 type SqlInsightRunRow struct {
 	ID               string
+	TenantID         string
 	AnalysisDate     time.Time
 	Host             string
 	Port             int
@@ -332,7 +333,17 @@ INSERT INTO tbl_sql_insight_analysis_runs (
 		r.ID, r.AnalysisDate, r.Host, r.Port, r.Status, r.Severity, r.FindingCount, r.CriticalCount, r.WarningCount, r.InfoCount,
 		r.ErrorMessage, r.UserScenario, tags, r.NarrativeStatus, nj, r.NarrativeText, r.NarrativeSource,
 		r.TriggerType, r.CreatedBy)
-	return err
+	if err != nil {
+		return err
+	}
+	tid := strings.TrimSpace(r.TenantID)
+	if tid == "" {
+		tid = d.inheritTenantFromHostPort(r.Host, r.Port)
+	}
+	if tid != "" {
+		return d.AssignTenantID("tbl_sql_insight_analysis_runs", r.ID, tid)
+	}
+	return nil
 }
 
 func (d *DB) FinishSqlInsightRun(ctx context.Context, r *SqlInsightRunRow) error {
@@ -482,6 +493,15 @@ INSERT INTO tbl_sql_insight_findings (
 			r.Severity, r.Title, r.Message, r.Value, r.Threshold, r.BaselineValue, r.Unit, ev, r.Suggestion, r.Fingerprint)
 		if err != nil {
 			return err
+		}
+		tid := d.inheritTenantFromInstance(r.InstanceID)
+		if tid == "" {
+			tid = d.inheritTenantFromHostPort(r.Host, r.Port)
+		}
+		if tid != "" {
+			if err := d.AssignTenantID("tbl_sql_insight_findings", r.ID, tid); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

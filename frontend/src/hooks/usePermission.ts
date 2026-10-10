@@ -105,6 +105,28 @@ export const Perm = {
     analyze: 'um.action.sql-insight.analyze',
     settings: 'um.sidebar.config-sql-insight',
   },
+  todo: {
+    create: 'um.action.todo.create',
+    edit: 'um.action.todo.edit',
+    follow: 'um.action.todo.follow',
+    delete: 'um.action.todo.delete',
+  },
+  alert: {
+    claim: 'um.action.alert.claim',
+    resolve: 'um.action.alert.resolve',
+    silence: 'um.action.alert.silence',
+    ruleEdit: 'um.action.alert.rule.edit',
+    ruleDelete: 'um.action.alert.rule.delete',
+  },
+  tenants: {
+    create: 'um.action.tenants.create',
+    edit: 'um.action.tenants.edit',
+    disable: 'um.action.tenants.disable',
+    members: 'um.action.tenants.members',
+    grants: 'um.action.tenants.grants',
+    impersonate: 'um.action.tenants.impersonate',
+    sidebar: 'um.sidebar.tenants',
+  },
 } as const
 
 function isAdminRole(role: unknown): boolean {
@@ -112,19 +134,41 @@ function isAdminRole(role: unknown): boolean {
   return r === 'admin' || r === 'platform_admin' || r === 'super_admin'
 }
 
+/** 与后端 store.IsPlatformURN 对齐：仅这些走 platform_permissions。 */
+function isPlatformUrn(urn: string): boolean {
+  const u = urn.trim()
+  if (!u) return false
+  if (u.startsWith('um.action.tenants.') || u === 'um.sidebar.tenants') return true
+  return (
+    u === 'um.action.menus.create' ||
+    u === 'um.action.menus.edit' ||
+    u === 'um.action.menus.delete' ||
+    u === 'um.action.users.create' ||
+    u === 'um.action.users.edit' ||
+    u === 'um.action.users.delete' ||
+    u === 'um.action.ldap.edit'
+  )
+}
+
 export function usePermission() {
   const user = useAppSelector((s) => s.auth.user)
+  const tenantPerms = useMemo(() => new Set((user?.permissions as string[]) || []), [user?.permissions])
+  const platformPerms = useMemo(
+    () => new Set((user?.platform_permissions as string[]) || []),
+    [user?.platform_permissions],
+  )
   const permissions = useMemo(() => {
-    const list = (user?.permissions as string[]) || []
+    const list = [...tenantPerms, ...platformPerms]
     return new Set(list)
-  }, [user?.permissions])
+  }, [tenantPerms, platformPerms])
 
   const isAdmin = isAdminRole(user?.role)
 
   function hasUrn(urn: string | undefined | null): boolean {
     if (!urn) return false
     if (isAdmin) return true
-    return permissions.has(urn)
+    if (isPlatformUrn(urn)) return platformPerms.has(urn)
+    return tenantPerms.has(urn)
   }
 
   return { hasUrn, isAdmin, permissions }

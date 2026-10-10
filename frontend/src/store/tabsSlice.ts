@@ -1,6 +1,6 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit'
 import type { MenuNode } from './authSlice'
-import { PAGE_ROUTES, collectPaths, firstAllowed, pathAllowed } from '../constants/routes'
+import { PAGE_ROUTES, clusterDeployEngineTitle, collectPaths, firstAllowed, pathAllowed } from '../constants/routes'
 
 export const HOME_PATH = '/ops/dashboard'
 export const MAX_CLOSABLE_TABS = 12
@@ -34,6 +34,8 @@ function tabKey(path: string, search = ''): string {
 export function titleForPath(path: string, menus?: MenuNode[]): string {
   const p = normPath(path)
   if (p === HOME_PATH || p === '/metadata/database/search/dashboard') return '工作台'
+  const engineTitle = clusterDeployEngineTitle(p)
+  if (engineTitle) return engineTitle
   const exactRoute = PAGE_ROUTES.find((r) => r.path === p)
   if (exactRoute) return exactRoute.title
   const fromMenu = findMenuTitle(menus, p)
@@ -135,7 +137,7 @@ export function loadTabsState(menus?: MenuNode[]): TabsState {
       key: t.key,
       path: normPath(t.path),
       search: typeof t.search === 'string' ? t.search : '',
-      title: t.title || titleForPath(t.path, menus),
+      title: clusterDeployEngineTitle(normPath(t.path)) || t.title || titleForPath(t.path, menus),
       closable: !!t.closable,
     }))
     if (!tabs.length) return fallback

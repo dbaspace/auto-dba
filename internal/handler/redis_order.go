@@ -72,7 +72,7 @@ func (h *RedisHandler) UpdateCommandRules(c *gin.Context) {
 }
 
 func (h *RedisHandler) Instances(c *gin.Context) {
-	list, err := h.Store.ListInstances("redis", "")
+	list, err := h.Store.ListInstancesInTenant(effectiveListTenantID(h.Store, c), "redis", "")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -109,7 +109,7 @@ func (h *RedisHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
-	inst, err := h.Store.GetInstance(instanceID)
+	inst, err := resolveInstanceInTenant(h.Store, c, instanceID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -130,9 +130,10 @@ func (h *RedisHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
-	assigned := strings.TrimSpace(req.AssignedTo)
-	if assigned == "" {
-		assigned, _ = h.Store.GetGlobalArg("sync_default_approver")
+	assigned, aerr := resolveTenantAssignee(h.Store, middleware.TenantID(c), req.AssignedTo)
+	if aerr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": aerr.Error()})
+		return
 	}
 	stats := rediscmd.ParseScriptWith(rules, command)
 	cmdName := ""
@@ -171,6 +172,9 @@ func (h *RedisHandler) Create(c *gin.Context) {
 		AssignedTo:   assigned,
 		NeedRollback: string(extra),
 	}
+	stampTenantID(c, func(tid string) {
+		if issue != nil { issue.TenantID = tid }
+	})
 	if err := h.Store.CreateIssue(issue); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return

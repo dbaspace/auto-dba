@@ -80,6 +80,25 @@ const (
 	URNSqlInsightAwrGenerate  = "um.action.sql-insight.awr-generate"
 	URNSqlInsightSpaceCollect = "um.action.sql-insight.space-collect"
 	URNSqlInsightAnalyze      = "um.action.sql-insight.analyze"
+
+	URNTodoCreate = "um.action.todo.create"
+	URNTodoEdit   = "um.action.todo.edit"
+	URNTodoFollow = "um.action.todo.follow"
+	URNTodoDelete = "um.action.todo.delete"
+
+	URNAlertClaim      = "um.action.alert.claim"
+	URNAlertResolve    = "um.action.alert.resolve"
+	URNAlertSilence    = "um.action.alert.silence"
+	URNAlertRuleEdit   = "um.action.alert.rule.edit"
+	URNAlertRuleDelete = "um.action.alert.rule.delete"
+
+	URNTenantsCreate      = "um.action.tenants.create"
+	URNTenantsEdit        = "um.action.tenants.edit"
+	URNTenantsDisable     = "um.action.tenants.disable"
+	URNTenantsMembers     = "um.action.tenants.members"
+	URNTenantsGrants      = "um.action.tenants.grants"
+	URNTenantsImpersonate = "um.action.tenants.impersonate"
+	URNSidebarTenants     = "um.sidebar.tenants"
 )
 
 func IsActionURN(urn string) bool {

@@ -261,9 +261,10 @@ func handleFileGet(w http.ResponseWriter, r *http.Request) {
 
 func handleArtifactInstall(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		DownloadURL string `json:"download_url"`
-		Checksum    string `json:"checksum"`
-		TargetDir   string `json:"target_dir"`
+		DownloadURL     string `json:"download_url"`
+		Checksum        string `json:"checksum"`
+		TargetDir       string `json:"target_dir"`
+		StripComponents int    `json:"strip_components"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), 400)
@@ -280,7 +281,7 @@ func handleArtifactInstall(w http.ResponseWriter, r *http.Request) {
 		status := "success"
 		if *dryRun {
 			msg = "dry-run skip download"
-		} else if err := downloadAndExtract(req.DownloadURL, req.Checksum, req.TargetDir); err != nil {
+		} else if err := downloadAndExtract(req.DownloadURL, req.Checksum, req.TargetDir, req.StripComponents); err != nil {
 			status = "failed"
 			msg = err.Error()
 		}
@@ -293,7 +294,7 @@ func httpClientShort() *http.Client {
 	return &http.Client{Timeout: 10 * time.Second}
 }
 
-func downloadAndExtract(urlStr, wantSum, target string) error {
+func downloadAndExtract(urlStr, wantSum, target string, strip int) error {
 	client := &http.Client{Timeout: 2 * time.Hour}
 	resp, err := client.Get(urlStr) //nolint:gosec // controlled by platform presign
 	if err != nil {
@@ -322,13 +323,42 @@ func downloadAndExtract(urlStr, wantSum, target string) error {
 	if err := os.MkdirAll(target, 0o755); err != nil {
 		return err
 	}
-	cmd := exec.Command("tar", "-xf", tmp, "-C", target)
+	args := []string{"-xf", tmp, "-C", target}
+	// 只在包内确实只有一个顶级目录时剥离，避免已按 bin/ lib/ 平铺打包的制品被剥坏
+	if strip > 0 && archiveHasSingleTopDir(tmp) {
+		args = append(args, fmt.Sprintf("--strip-components=%d", strip))
+	}
+	cmd := exec.Command("tar", args...)
 	out, err := cmd.CombinedOutput()
 	_ = os.Remove(tmp)
 	if err != nil {
 		return fmt.Errorf("tar: %v %s", err, string(out))
 	}
 	return nil
+}
+
+func archiveHasSingleTopDir(archive string) bool {
+	out, err := exec.Command("tar", "-tf", archive).Output()
+	if err != nil {
+		return false
+	}
+	top := ""
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimPrefix(strings.TrimSpace(line), "./")
+		if line == "" {
+			continue
+		}
+		first, _, hasSlash := strings.Cut(line, "/")
+		if !hasSlash {
+			return false // 顶层有普通文件，不是单目录包
+		}
+		if top == "" {
+			top = first
+		} else if first != top {
+			return false
+		}
+	}
+	return top != ""
 }
 
 func handleSystemdInstall(w http.ResponseWriter, r *http.Request) {

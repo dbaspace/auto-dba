@@ -64,7 +64,10 @@ func (d *DB) CreateMigration(t *MigrationTask) error {
 		t.ApprovalStatus, t.AssignedApprover, t.ApprovedBy, t.ApprovalComment, t.BatchSize, t.SpeedLimit,
 		t.TotalObjects, t.CompletedObjects, t.TotalRows, t.CompletedRows, t.ErrorMessage, t.StartedAt, t.FinishedAt, t.IssueID,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	return d.AssignTenantID("tbl_migration_tasks", t.ID, d.inheritTenantFromInstance(t.SourceID))
 }
 
 func (d *DB) ReplaceMigrationObjects(taskID string, objs []MigrationObject) error {
@@ -110,7 +113,15 @@ func (d *DB) ReplaceMigrationObjects(taskID string, objs []MigrationObject) erro
 }
 
 func (d *DB) ListMigrations() ([]MigrationTask, error) {
-	rows, err := d.Query(`SELECT ` + migTaskCols + ` FROM tbl_migration_tasks ORDER BY created_at DESC`)
+	return d.ListMigrationsInTenant("")
+}
+
+func (d *DB) ListMigrationsInTenant(tenantID string) ([]MigrationTask, error) {
+	q := `SELECT ` + migTaskCols + ` FROM tbl_migration_tasks WHERE 1=1`
+	args := []any{}
+	q, args = appendTenantFilter(q, args, tenantID)
+	q += ` ORDER BY created_at DESC`
+	rows, err := d.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}

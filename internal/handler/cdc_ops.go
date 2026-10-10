@@ -11,6 +11,7 @@ import (
 
 	"auto-dba/internal/cdc"
 	"auto-dba/internal/dbmig"
+	"auto-dba/internal/middleware"
 	"auto-dba/internal/store"
 )
 
@@ -25,7 +26,7 @@ func encodeCDCExtraJSON(text string, extra map[string]any) string {
 }
 
 func (h *CDCHandler) InitList(c *gin.Context) {
-	list, err := h.Store.ListCDC("", "init")
+	list, err := h.Store.ListCDCInTenant(effectiveListTenantID(h.Store, c), "", "init")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -53,7 +54,7 @@ func (h *CDCHandler) InitList(c *gin.Context) {
 }
 
 func (h *CDCHandler) SyncedTables(c *gin.Context) {
-	init, err := h.resolveInitTask(c.Param("id"))
+	init, err := h.resolveInitTask(c.Param("id"), middleware.TenantID(c))
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": err.Error()})
 		return
@@ -68,7 +69,7 @@ func (h *CDCHandler) SyncedTablesBatch(c *gin.Context) {
 	_ = c.ShouldBindJSON(&req)
 	out := map[string][]string{}
 	for _, id := range uniqueNonEmpty(req.IDs) {
-		if t, _ := h.Store.GetCDC(id); t != nil {
+		if t, _ := h.Store.GetCDCInTenant(id, effectiveListTenantID(h.Store, c)); t != nil {
 			out[id] = extraCSVTables(t.Description)
 		}
 	}
@@ -76,12 +77,12 @@ func (h *CDCHandler) SyncedTablesBatch(c *gin.Context) {
 }
 
 func (h *CDCHandler) AvailableTables(c *gin.Context) {
-	init, err := h.resolveInitTask(c.Param("id"))
+	init, err := h.resolveInitTask(c.Param("id"), middleware.TenantID(c))
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": err.Error()})
 		return
 	}
-	inst, _ := h.Store.GetInstance(init.SourceID)
+	inst, _ := resolveInstanceInTenant(h.Store, c, init.SourceID)
 	if inst == nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "源端实例不存在"})
 		return
@@ -132,14 +133,14 @@ func (h *CDCHandler) AvailableTables(c *gin.Context) {
 }
 
 func (h *CDCHandler) Publication(c *gin.Context) {
-	init, err := h.resolveInitTask(c.Param("id"))
+	init, err := h.resolveInitTask(c.Param("id"), middleware.TenantID(c))
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": err.Error()})
 		return
 	}
 	extra := cdc.ParseTaskExtra(init.Description)
 	pub := extra["publication_name"]
-	inst, _ := h.Store.GetInstance(init.SourceID)
+	inst, _ := resolveInstanceInTenant(h.Store, c, init.SourceID)
 	live := []string{}
 	msg := ""
 	if inst != nil && pub != "" {
@@ -172,7 +173,7 @@ func (h *CDCHandler) RemovePublicationTables(c *gin.Context) {
 }
 
 func (h *CDCHandler) createChildFromPublication(c *gin.Context, taskType string) {
-	parent, err := h.resolveInitTask(c.Param("id"))
+	parent, err := h.resolveInitTask(c.Param("id"), middleware.TenantID(c))
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": err.Error()})
 		return
@@ -221,7 +222,7 @@ func (h *CDCHandler) createChildFromPublication(c *gin.Context, taskType string)
 		SourceID: parent.SourceID, TargetID: parent.TargetID, SourceDB: parent.SourceDB, TargetDB: parent.TargetDB,
 		Description: encodeCDCExtraJSON("", extra),
 	}
-	if err := h.prepareCDCCreate(&child); err != nil {
+	if err := h.prepareCDCCreate(c, &child); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
@@ -234,7 +235,7 @@ func (h *CDCHandler) createChildFromPublication(c *gin.Context, taskType string)
 }
 
 func (h *CDCHandler) RequestDelete(c *gin.Context) {
-	parent, err := h.Store.GetCDC(c.Param("id"))
+	parent, err := h.Store.GetCDCInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || parent == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "任务不存在"})
 		return
@@ -258,7 +259,7 @@ func (h *CDCHandler) RequestDelete(c *gin.Context) {
 			"env": extra["env"],
 		}),
 	}
-	if err := h.prepareCDCCreate(&child); err != nil {
+	if err := h.prepareCDCCreate(c, &child); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}

@@ -44,8 +44,26 @@ func enrichAccount(st *store.DB, it *store.DBAccount) {
 	}
 }
 
+func (h *AccountHandler) enrichAccountTenants(list []store.DBAccount) {
+	names := map[string]string{}
+	if ts, err := h.Store.ListTenants(); err == nil {
+		for _, t := range ts {
+			n := t.Name
+			if n == "" {
+				n = t.Code
+			}
+			names[t.ID] = n
+		}
+	}
+	for i := range list {
+		if n := names[list[i].TenantID]; n != "" {
+			list[i].TenantName = n
+		}
+	}
+}
+
 func (h *AccountHandler) List(c *gin.Context) {
-	list, err := h.Store.ListAccounts(c.Query("db_type"), c.Query("idc"), c.Query("instance_id"), c.Query("q"))
+	list, err := h.Store.ListAccountsInTenant(effectiveListTenantID(h.Store, c), c.Query("db_type"), c.Query("idc"), c.Query("instance_id"), c.Query("q"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -54,11 +72,14 @@ func (h *AccountHandler) List(c *gin.Context) {
 		enrichAccount(h.Store, &list[i])
 		redactAccount(&list[i])
 	}
-	c.JSON(http.StatusOK, gin.H{"data": list})
+	if auditScope(h.Store, c) {
+		h.enrichAccountTenants(list)
+	}
+	c.JSON(http.StatusOK, gin.H{"data": list, "audit_scope": auditScope(h.Store, c)})
 }
 
 func (h *AccountHandler) Get(c *gin.Context) {
-	it, err := h.Store.GetAccount(c.Param("id"))
+	it, err := h.Store.GetAccountInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -98,7 +119,7 @@ func (h *AccountHandler) fillFromInstance(it *store.DBAccount) error {
 	if it.InstanceID == "" {
 		return nil
 	}
-	inst, err := h.Store.GetInstance(it.InstanceID)
+	inst, err := h.Store.GetInstanceInTenant(it.InstanceID, it.TenantID)
 	if err != nil {
 		return err
 	}
@@ -147,6 +168,7 @@ func (h *AccountHandler) Create(c *gin.Context) {
 		return
 	}
 	it := &store.DBAccount{
+		TenantID:    middleware.TenantID(c),
 		InstanceID:  req.InstanceID,
 		DatabaseID:  req.DatabaseID,
 		DBName:      req.DBName,
@@ -177,7 +199,7 @@ func (h *AccountHandler) Create(c *gin.Context) {
 }
 
 func (h *AccountHandler) Update(c *gin.Context) {
-	exist, err := h.Store.GetAccount(c.Param("id"))
+	exist, err := h.Store.GetAccountInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || exist == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "账号不存在"})
 		return
@@ -232,7 +254,12 @@ func (h *AccountHandler) Update(c *gin.Context) {
 }
 
 func (h *AccountHandler) Delete(c *gin.Context) {
-	if err := h.Store.DeleteAccount(c.Param("id")); err != nil {
+	exist, err := h.Store.GetAccountInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
+	if err != nil || exist == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "账号不存在"})
+		return
+	}
+	if err := h.Store.DeleteAccount(exist.ID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}

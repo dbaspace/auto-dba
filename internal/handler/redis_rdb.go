@@ -21,6 +21,15 @@ func (h *RedisRDBHandler) Instances(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
+	if set := tenantInstanceIDSet(h.Svc.Store, c); set != nil {
+		kept := list[:0]
+		for _, it := range list {
+			if set[it.ID] {
+				kept = append(kept, it)
+			}
+		}
+		list = kept
+	}
 	if list == nil {
 		list = []*redisrdb.InstanceItem{}
 	}
@@ -31,6 +40,10 @@ func (h *RedisRDBHandler) Online(c *gin.Context) {
 	id := strings.TrimSpace(c.Query("instance_id"))
 	if id == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "instance_id required"})
+		return
+	}
+	if it, err := resolveInstanceInTenant(h.Svc.Store, c, id); err != nil || it == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "实例不存在"})
 		return
 	}
 	data, err := h.Svc.OnlineSummary(c.Request.Context(), id)
@@ -53,6 +66,12 @@ func (h *RedisRDBHandler) Upload(c *gin.Context) {
 		return
 	}
 	defer src.Close()
+	if iid := strings.TrimSpace(c.PostForm("instance_id")); iid != "" {
+		if it, err := resolveInstanceInTenant(h.Svc.Store, c, iid); err != nil || it == nil {
+			c.JSON(http.StatusNotFound, gin.H{"message": "实例不存在"})
+			return
+		}
+	}
 
 	job, err := h.Svc.CreateUploadJob(
 		c.Request.Context(),
@@ -90,6 +109,10 @@ func (h *RedisRDBHandler) Fetch(c *gin.Context) {
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "invalid json"})
+		return
+	}
+	if it, err := resolveInstanceInTenant(h.Svc.Store, c, req.InstanceID); err != nil || it == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "实例不存在"})
 		return
 	}
 	job, err := h.Svc.CreateAgentFetchJob(

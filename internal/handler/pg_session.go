@@ -29,7 +29,7 @@ func (h *SessionHandler) loadPostgres(c *gin.Context) (*store.Instance, string, 
 		c.JSON(http.StatusBadRequest, gin.H{"message": "instance_id 必填"})
 		return nil, "", false
 	}
-	inst, err := h.Store.GetInstance(id)
+	inst, err := resolveInstanceInTenant(h.Store, c, id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return nil, "", false

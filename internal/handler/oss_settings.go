@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"auto-dba/internal/dbmig"
+	"auto-dba/internal/middleware"
 	"auto-dba/internal/secret"
 	"auto-dba/internal/store"
 )
@@ -23,7 +24,7 @@ func (h *OSSSettingsHandler) List(c *gin.Context) {
 	if env == "" {
 		env = c.Query("env")
 	}
-	list, err := h.Store.ListOSSSettings(env)
+	list, err := h.Store.ListOSSSettingsInTenant(effectiveListTenantID(h.Store, c), env)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -35,7 +36,7 @@ func (h *OSSSettingsHandler) List(c *gin.Context) {
 }
 
 func (h *OSSSettingsHandler) Get(c *gin.Context) {
-	it, err := h.Store.GetOSSSetting(c.Param("id"))
+	it, err := h.Store.GetOSSSettingInTenant(c.Param("id"), middleware.TenantID(c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -75,7 +76,7 @@ func (h *OSSSettingsHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "请输入 AccessKey Secret"})
 		return
 	}
-	if exist, _ := h.Store.GetOSSSettingByEnv(req.Environment); exist != nil {
+	if exist, _ := h.Store.GetOSSSettingByEnvInTenant(req.Environment, middleware.TenantID(c)); exist != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "该环境已存在 OSS 配置，请编辑现有记录"})
 		return
 	}
@@ -86,6 +87,7 @@ func (h *OSSSettingsHandler) Create(c *gin.Context) {
 	}
 	it := store.OSSSetting{
 		ID:            uuid.NewString(),
+		TenantID:      middleware.TenantID(c),
 		Environment:   req.Environment,
 		CloudProduct:  req.CloudProduct,
 		Endpoint:      req.Endpoint,
@@ -107,7 +109,7 @@ func (h *OSSSettingsHandler) Create(c *gin.Context) {
 }
 
 func (h *OSSSettingsHandler) Update(c *gin.Context) {
-	exist, err := h.Store.GetOSSSetting(c.Param("id"))
+	exist, err := h.Store.GetOSSSettingInTenant(c.Param("id"), middleware.TenantID(c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -135,7 +137,7 @@ func (h *OSSSettingsHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "访问地址与存储桶不能为空"})
 		return
 	}
-	if other, _ := h.Store.GetOSSSettingByEnv(req.Environment); other != nil && other.ID != exist.ID {
+	if other, _ := h.Store.GetOSSSettingByEnvInTenant(req.Environment, middleware.TenantID(c)); other != nil && other.ID != exist.ID {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "该环境已存在其它 OSS 配置"})
 		return
 	}
@@ -182,7 +184,12 @@ func (h *OSSSettingsHandler) Update(c *gin.Context) {
 }
 
 func (h *OSSSettingsHandler) Delete(c *gin.Context) {
-	if err := h.Store.DeleteOSSSetting(c.Param("id")); err != nil {
+	exist, err := h.Store.GetOSSSettingInTenant(c.Param("id"), middleware.TenantID(c))
+	if err != nil || exist == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "配置不存在"})
+		return
+	}
+	if err := h.Store.DeleteOSSSetting(exist.ID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
@@ -204,7 +211,7 @@ func (h *OSSSettingsHandler) Test(c *gin.Context) {
 	}
 	// 编辑态脱敏：用环境已存密钥补齐
 	if (cfg.AccessKey == "" || isMaskedOSSSecret(cfg.AccessKey) || cfg.SecretKey == "" || isMaskedOSSSecret(cfg.SecretKey)) && strings.TrimSpace(req.Environment) != "" {
-		plain, err := h.Store.GetOSSSettingPlainByEnv(req.Environment)
+		plain, err := h.Store.GetOSSSettingPlainByEnvInTenant(req.Environment, middleware.TenantID(c))
 		if err == nil && plain != nil {
 			if cfg.AccessKey == "" || isMaskedOSSSecret(cfg.AccessKey) {
 				cfg.AccessKey = plain.AccessKey

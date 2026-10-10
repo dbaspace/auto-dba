@@ -38,6 +38,12 @@ func (s *Service) PresignRelease(engine, releaseID string, expire time.Duration)
 	if rel.Engine != eng && engine != "" {
 		return "", "", "", fmt.Errorf("版本引擎不匹配")
 	}
+	if !rel.Enabled {
+		return "", "", "", fmt.Errorf("版本 %s 已停用", rel.Version)
+	}
+	if !ReleaseReady(rel) {
+		return "", "", "", fmt.Errorf("版本 %s 的安装包未就绪（缺 object_key 或 64 位 sha256），请在版本目录上传或从 OSS 同步", rel.Version)
+	}
 	bind, err := s.Store.GetDbDeployOSSBind(rel.Engine)
 	if err != nil {
 		return "", "", "", err

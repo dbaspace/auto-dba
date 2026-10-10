@@ -57,6 +57,7 @@ func NormalizeOSSCloudProduct(v string) string {
 // OSSSetting 配置中心 · 按环境的对象存储（供数据迁移 OSS 中转等引用）。
 type OSSSetting struct {
 	ID            string `json:"id"`
+	TenantID      string `json:"tenant_id,omitempty"`
 	Environment   string `json:"environment"`
 	CloudProduct  string `json:"cloud_product"`
 	Endpoint      string `json:"endpoint"`
@@ -102,8 +103,13 @@ func scanOSSSettingRaw(scanner interface {
 }
 
 func (d *DB) ListOSSSettings(env string) ([]OSSSetting, error) {
+	return d.ListOSSSettingsInTenant("", env)
+}
+
+func (d *DB) ListOSSSettingsInTenant(tenantID, env string) ([]OSSSetting, error) {
 	q := `SELECT ` + ossSettingCols + ` FROM tbl_oss_settings WHERE 1=1`
 	var args []any
+	q, args = appendTenantFilter(q, args, tenantID)
 	if e := strings.TrimSpace(env); e != "" {
 		q += ` AND environment=?`
 		args = append(args, e)
@@ -133,12 +139,22 @@ func (d *DB) GetOSSSetting(id string) (*OSSSetting, error) {
 	return it, err
 }
 
+func (d *DB) GetOSSSettingInTenant(id, tenantID string) (*OSSSetting, error) {
+	it, err := d.GetOSSSetting(id)
+	return ownedInTenant(d, it, err, "tbl_oss_settings", id, tenantID)
+}
+
 func (d *DB) GetOSSSettingByEnv(env string) (*OSSSetting, error) {
+	return d.GetOSSSettingByEnvInTenant(env, "")
+}
+
+func (d *DB) GetOSSSettingByEnvInTenant(env, tenantID string) (*OSSSetting, error) {
 	env = strings.TrimSpace(env)
 	if env == "" {
 		return nil, nil
 	}
-	it, err := scanOSSSettingRaw(d.QueryRow(`SELECT `+ossSettingCols+` FROM tbl_oss_settings WHERE environment=?`, env))
+	q, args := appendTenantFilter(`SELECT `+ossSettingCols+` FROM tbl_oss_settings WHERE environment=?`, []any{env}, tenantID)
+	it, err := scanOSSSettingRaw(d.QueryRow(q+` LIMIT 1`, args...))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -165,12 +181,17 @@ func (d *DB) GetOSSSettingPlain(id string) (*OSSSetting, error) {
 
 // GetOSSSettingPlainByEnv 返回未脱敏的 AccessKey 与 SecretEnc（供解密后连通性测试 / 运行时使用）。
 func (d *DB) GetOSSSettingPlainByEnv(env string) (*OSSSetting, error) {
+	return d.GetOSSSettingPlainByEnvInTenant(env, "")
+}
+
+func (d *DB) GetOSSSettingPlainByEnvInTenant(env, tenantID string) (*OSSSetting, error) {
 	env = strings.TrimSpace(env)
 	if env == "" {
 		return nil, nil
 	}
 	var it OSSSetting
-	err := d.QueryRow(`SELECT `+ossSettingCols+` FROM tbl_oss_settings WHERE environment=?`, env).Scan(
+	q, args := appendTenantFilter(`SELECT `+ossSettingCols+` FROM tbl_oss_settings WHERE environment=?`, []any{env}, tenantID)
+	err := d.QueryRow(q+` LIMIT 1`, args...).Scan(
 		&it.ID, &it.Environment, &it.CloudProduct, &it.Endpoint, &it.Bucket, &it.Prefix, &it.AccessKey, &it.SecretEnc,
 		&it.RetentionDays, &it.ChunkSizeMB, &it.CreatedBy, &it.UpdatedBy, &it.CreatedAt, &it.UpdatedAt,
 	)
@@ -212,7 +233,13 @@ func (d *DB) CreateOSSSetting(it *OSSSetting) error {
 	) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		it.ID, it.Environment, it.CloudProduct, it.Endpoint, it.Bucket, it.Prefix, it.AccessKey, it.SecretEnc,
 		it.RetentionDays, it.ChunkSizeMB, it.CreatedBy, it.UpdatedBy, it.CreatedAt, it.UpdatedAt)
-	return err
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(it.TenantID) != "" {
+		return d.AssignTenantID("tbl_oss_settings", it.ID, it.TenantID)
+	}
+	return nil
 }
 
 func (d *DB) UpdateOSSSetting(it *OSSSetting) error {
@@ -268,9 +295,13 @@ func (d *DB) ListConfiguredOSSEnvs() ([]string, error) {
 
 // ResolveMigrationOSS 按任务环境解析 OSS：优先 tbl_oss_settings，否则回退旧版 global_args。
 func (d *DB) ResolveMigrationOSS(env string) MigrationOSSSettings {
+	return d.ResolveMigrationOSSInTenant("", env)
+}
+
+func (d *DB) ResolveMigrationOSSInTenant(tenantID, env string) MigrationOSSSettings {
 	env = strings.TrimSpace(env)
 	if env != "" {
-		if plain, err := d.GetOSSSettingPlainByEnv(env); err == nil && plain != nil && plain.Configured {
+		if plain, err := d.GetOSSSettingPlainByEnvInTenant(env, tenantID); err == nil && plain != nil && plain.Configured {
 			return MigrationOSSSettings{
 				Endpoint:      plain.Endpoint,
 				Bucket:        plain.Bucket,
@@ -282,7 +313,7 @@ func (d *DB) ResolveMigrationOSS(env string) MigrationOSSSettings {
 				Configured:    true,
 			}
 		}
-		if row, err := d.GetOSSSettingByEnv(env); err == nil && row != nil {
+		if row, err := d.GetOSSSettingByEnvInTenant(env, tenantID); err == nil && row != nil {
 			return MigrationOSSSettings{
 				Endpoint:      row.Endpoint,
 				Bucket:        row.Bucket,
@@ -298,9 +329,13 @@ func (d *DB) ResolveMigrationOSS(env string) MigrationOSSSettings {
 
 // ResolveMigrationOSSConfigured 仅判断某环境是否已配置（不解密）。
 func (d *DB) ResolveMigrationOSSConfigured(env string) bool {
+	return d.ResolveMigrationOSSConfiguredInTenant("", env)
+}
+
+func (d *DB) ResolveMigrationOSSConfiguredInTenant(tenantID, env string) bool {
 	env = strings.TrimSpace(env)
 	if env != "" {
-		plain, err := d.GetOSSSettingPlainByEnv(env)
+		plain, err := d.GetOSSSettingPlainByEnvInTenant(env, tenantID)
 		if err == nil && plain != nil && plain.Configured {
 			return true
 		}

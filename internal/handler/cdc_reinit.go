@@ -56,7 +56,7 @@ func bindReinitRequest(c *gin.Context) (cdc.ReinitRequest, map[string]any, error
 }
 
 func (h *CDCHandler) loadReinitTask(c *gin.Context) *store.CDCTask {
-	t, err := h.Store.GetCDC(c.Param("id"))
+	t, err := h.Store.GetCDCInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || t == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "任务不存在"})
 		return nil
@@ -185,8 +185,8 @@ type reinitCandidates struct {
 	tasks            map[string]*store.CDCTask
 }
 
-func (h *CDCHandler) collectReinitCandidates(ctx context.Context, connectorID string) (*reinitCandidates, error) {
-	conn, err := h.Store.GetConnector(connectorID)
+func (h *CDCHandler) collectReinitCandidates(ctx context.Context, tenantID, connectorID string) (*reinitCandidates, error) {
+	conn, err := h.Store.GetConnectorInTenant(connectorID, tenantID)
 	if err != nil || conn == nil {
 		return nil, fmt.Errorf("Debezium 服务不存在：%s", connectorID)
 	}
@@ -207,7 +207,7 @@ func (h *CDCHandler) collectReinitCandidates(ctx context.Context, connectorID st
 			out.ConnectReachable = true
 		}
 	}
-	list, err := h.Store.ListCDC("", "init")
+	list, err := h.Store.ListCDCInTenant(tenantID, "", "init")
 	if err != nil {
 		return nil, err
 	}
@@ -266,7 +266,7 @@ func (h *CDCHandler) ReinitCandidates(c *gin.Context) {
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
-	out, err := h.collectReinitCandidates(ctx, id)
+	out, err := h.collectReinitCandidates(ctx, middleware.TenantID(c), id)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
@@ -302,7 +302,7 @@ func (h *CDCHandler) ReinitBatch(c *gin.Context) {
 	taskIDs = uniqueNonEmpty(taskIDs)
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
 	defer cancel()
-	cands, err := h.collectReinitCandidates(ctx, connectorID)
+	cands, err := h.collectReinitCandidates(ctx, middleware.TenantID(c), connectorID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
@@ -329,7 +329,7 @@ func (h *CDCHandler) ReinitBatch(c *gin.Context) {
 		switch {
 		case !ok:
 			status := ""
-			if t, _ := h.Store.GetCDC(id); t != nil {
+			if t, _ := h.Store.GetCDCInTenant(id, effectiveListTenantID(h.Store, c)); t != nil {
 				status = t.Status
 			}
 			results = append(results, cdc.ReinitBatchResult{TaskID: id, Status: status, Message: "任务不属于该 Debezium 服务或不是 init 主任务"})

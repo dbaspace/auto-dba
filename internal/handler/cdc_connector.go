@@ -36,7 +36,8 @@ func (h *CDCHandler) cdcRootTask(t *store.CDCTask) *store.CDCTask {
 	if id == "" || id == t.ID {
 		return t
 	}
-	parent, err := h.Store.GetCDC(id)
+	// 同租户内解析父任务；跨租户则保持当前任务，避免越权读到其它租户 CDC。
+	parent, err := h.Store.GetCDCInTenant(id, strings.TrimSpace(t.TenantID))
 	if err != nil || parent == nil {
 		return t
 	}
@@ -77,7 +78,7 @@ func decorateVersion(it *store.CDCConnectorConfigVersion) gin.H {
 }
 
 func (h *CDCHandler) ConnectorUpdate(c *gin.Context) {
-	t, err := h.Store.GetCDC(c.Param("id"))
+	t, err := h.Store.GetCDCInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || t == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "任务不存在"})
 		return
@@ -127,7 +128,7 @@ func (h *CDCHandler) ConnectorUpdate(c *gin.Context) {
 }
 
 func (h *CDCHandler) ConnectorVersionList(c *gin.Context) {
-	t, err := h.Store.GetCDC(c.Param("id"))
+	t, err := h.Store.GetCDCInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || t == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "任务不存在"})
 		return
@@ -157,7 +158,7 @@ func (h *CDCHandler) ConnectorVersionList(c *gin.Context) {
 }
 
 func (h *CDCHandler) ConnectorVersionDetail(c *gin.Context) {
-	t, err := h.Store.GetCDC(c.Param("id"))
+	t, err := h.Store.GetCDCInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || t == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "任务不存在"})
 		return
@@ -178,7 +179,7 @@ func (h *CDCHandler) ConnectorVersionDetail(c *gin.Context) {
 }
 
 func (h *CDCHandler) ConnectorVersionRestorePreview(c *gin.Context) {
-	t, err := h.Store.GetCDC(c.Param("id"))
+	t, err := h.Store.GetCDCInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || t == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "任务不存在"})
 		return
@@ -212,7 +213,7 @@ func (h *CDCHandler) ConnectorVersionRestorePreview(c *gin.Context) {
 }
 
 func (h *CDCHandler) ConnectorVersionRestore(c *gin.Context) {
-	t, err := h.Store.GetCDC(c.Param("id"))
+	t, err := h.Store.GetCDCInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || t == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "任务不存在"})
 		return

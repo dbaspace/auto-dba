@@ -25,7 +25,10 @@ import (
 
 // RunDbMonitor 独立启动数据库监控服务（可单独 Pod 部署）。
 // 与主服务共用 JWT Secret + 元数据库，便于互通鉴权与实例发现。
-func RunDbMonitor(cfg *config.Config) {
+func RunDbMonitor(cfg *config.Config, configPath string) {
+	if configPath == "" {
+		configPath = "config/config.yaml"
+	}
 	if cfg.App.RunMode == "release" {
 		gin.SetMode(gin.ReleaseMode)
 	}
@@ -42,6 +45,23 @@ func RunDbMonitor(cfg *config.Config) {
 
 	svc := dbmonitor.New(db, cfg.App.JWTSecret)
 	h := &handler.DbMonitorHandler{Svc: svc}
+	hot := &hotReloadTargets{cfg: cfg, db: db, secrets: []*string{&svc.Secret}}
+	if err := config.StartNacosWatchOpts(cfg, configPath, config.WatchOptions{
+		BeforeApply: hot.beforeApply,
+		AfterApply: func(diff config.ReloadDiff) {
+			hot.apply(diff)
+			if diff.Services {
+				log.Printf("nacos reload(db-monitor): services 变更请重启本进程（当前仍绑 %s）", cfg.DbMonitorListenAddr())
+				if cfg.Nacos.RestartOnListenChange {
+					if err := config.SelfRestart(); err != nil {
+						log.Printf("nacos reload(db-monitor): self-restart failed: %v", err)
+					}
+				}
+			}
+		},
+	}); err != nil {
+		log.Printf("nacos watch(db-monitor): start failed: %v", err)
+	}
 
 	engine := gin.New()
 	engine.Use(gin.Recovery(), gin.Logger())
@@ -67,7 +87,7 @@ func RunDbMonitor(cfg *config.Config) {
 		c.JSON(http.StatusOK, gin.H{"status": "ready", "service": "db-monitor"})
 	})
 
-	auth := middleware.Auth(cfg.App.JWTSecret, db, "/healthz", "/readyz")
+	auth := middleware.Auth(&cfg.App.JWTSecret, db, "/healthz", "/readyz")
 	api := engine.Group("/api/v1")
 	api.Use(auth)
 	dm := api.Group("/db-monitor")

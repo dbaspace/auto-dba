@@ -1,6 +1,25 @@
+# Nacos 引导（只连配置中心；业务密钥放 DataId，勿把 dsn/jwt/私钥写进本文件的生产副本）
+# 详情见 docs/nacos-config.md
+nacos:
+  enabled: false
+  # 单机一个地址；集群逗号分隔，客户端自动兼容
+  server_addr: "10.100.113.151:8848"
+  # namespace = 平台部署用的 Nacos「命名空间 ID」（不是显示名，也不是环境管理里的 code）：
+  #   public（默认）→ "" 或 public
+  #   autosql       → e4dec2e2-4711-432f-9110-cc9b67d66b81
+  # 勿填 beijing / test；见 docs/nacos-config.md「业务环境 vs Nacos Namespace」
+  namespace: "e4dec2e2-4711-432f-9110-cc9b67d66b81" # autosql；生产勿用 public
+  group: DEFAULT_GROUP
+  data_id: auto-dba.yaml
+  username: nacos
+  password: "" # 建议用环境变量 NACOS_PASSWORD
+  # watch: true                      # 默认开启 ListenConfig 热更
+  # restart_on_listen_change: false  # true：http.port 变更时自重启
+
 app:
   name: auto-dba
   run_mode: debug
+  # enabled=true 时由 Nacos 覆盖；本地开发可填
   jwt_secret: change-me-in-production
   jwt_ttl_hours: 24
 
@@ -10,15 +29,20 @@ http:
   read_timeout: 30
   write_timeout: 120
   pid_file: /tmp/auto-dba.pid
-  # 前后端分离：默认不托管 frontend/dist。页面只走 Vite（5174/5175）。
+  # 前后端分离：默认不托管 frontend/dist。页面只走 Vite（见 frontend.dev_port）。
   serve_static: false
+
+# 可同步进 Nacos DataId；Vite 启动时自动读取
+frontend:
+  dev_host: "127.0.0.1"
+  dev_port: 5174
 
 log:
   level: debug
 
 db:
   driver: postgres
-  # 本地填写，勿提交真实账号密码
+  # 本地填写或放 Nacos DataId；勿提交真实账号密码
   dsn: "postgres://user:password@127.0.0.1:5432/db_autosql?sslmode=disable"
   # 元库连接池（防耗尽 PostgreSQL max_connections）
   max_open_conns: 50
@@ -62,7 +86,12 @@ external:
 terminal:
   enabled: true
   ssh_user: ""
+  # 本地开发用路径；生产在 Nacos 配 ssh_private_key（PEM），启动后写成 config/terminal/.runtime_id_ed25519
   ssh_identity_file: config/terminal/id_ed25519
+  # ssh_private_key: |
+  #   -----BEGIN OPENSSH PRIVATE KEY-----
+  #   ...
+  #   -----END OPENSSH PRIVATE KEY-----
   # Agent SSH 下发的主机密钥校验：
   #   accept-new（默认）首次连接自动记录指纹，之后指纹变化才拒绝（同 OpenSSH StrictHostKeyChecking=accept-new）
   #   strict 必须预先登记指纹；insecure 不校验（仅开发）

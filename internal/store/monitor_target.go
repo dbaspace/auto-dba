@@ -12,6 +12,7 @@ import (
 
 type MonitorJob struct {
 	ID             string              `json:"id"`
+	TenantID       string              `json:"tenant_id,omitempty"`
 	Name           string              `json:"name"`
 	Template       string              `json:"template"`
 	Collector      string              `json:"collector"`
@@ -116,8 +117,13 @@ func scanMonitorTG(scanner interface {
 }
 
 func (d *DB) ListMonitorJobs(keyword string) ([]MonitorJob, error) {
+	return d.ListMonitorJobsInTenant("", keyword)
+}
+
+func (d *DB) ListMonitorJobsInTenant(tenantID, keyword string) ([]MonitorJob, error) {
 	q := `SELECT ` + monitorJobCols + ` FROM tbl_monitor_job WHERE 1=1`
 	var args []any
+	q, args = appendTenantFilter(q, args, tenantID)
 	if kw := strings.TrimSpace(keyword); kw != "" {
 		q += ` AND (name ILIKE ? OR collector ILIKE ? OR description ILIKE ?)`
 		like := "%" + kw + "%"
@@ -154,6 +160,11 @@ func (d *DB) GetMonitorJob(id string) (*MonitorJob, error) {
 	}
 	it.TargetGroups = groups
 	return it, nil
+}
+
+func (d *DB) GetMonitorJobInTenant(id, tenantID string) (*MonitorJob, error) {
+	it, err := d.GetMonitorJob(id)
+	return ownedInTenant(d, it, err, "tbl_monitor_job", id, tenantID)
 }
 
 func (d *DB) ListMonitorTargetGroups(jobID string) ([]MonitorTargetGroup, error) {
@@ -203,7 +214,13 @@ func (d *DB) CreateMonitorJob(it *MonitorJob) error {
 			return err
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if strings.TrimSpace(it.TenantID) == "" {
+		it.TenantID = DefaultTenantID
+	}
+	return d.AssignTenantID("tbl_monitor_job", it.ID, it.TenantID)
 }
 
 func (d *DB) insertMonitorTGTx(tx *sql.Tx, g *MonitorTargetGroup) error {

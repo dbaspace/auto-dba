@@ -11,8 +11,10 @@ import (
 )
 
 type Config struct {
+	Nacos     NacosConfig     `yaml:"nacos"`
 	App       AppConfig       `yaml:"app"`
 	HTTP      HTTPConfig      `yaml:"http"`
+	Frontend  FrontendConfig  `yaml:"frontend"` // 开发态 Vite；可放 Nacos，与后端端口一并管理
 	Log       LogConfig       `yaml:"log"`
 	DB        DBConfig        `yaml:"db"`
 	CDC       CDCConfig       `yaml:"cdc"`
@@ -22,6 +24,36 @@ type Config struct {
 	External  ExternalConfig  `yaml:"external"`
 	Terminal  TerminalConfig  `yaml:"terminal"`
 	Services  ServicesConfig  `yaml:"services"`
+}
+
+// FrontendConfig 前端开发服务（Vite）；生产静态资源不由此端口提供。
+type FrontendConfig struct {
+	DevHost string `yaml:"dev_host"` // 默认 127.0.0.1
+	DevPort int    `yaml:"dev_port"` // 默认 5174；Nacos 可覆盖
+}
+
+// NacosConfig 本地引导：只写如何连配置中心，不含业务密钥正文。
+// server_addr 支持逗号分隔多节点，单机与集群同一套客户端逻辑。
+type NacosConfig struct {
+	Enabled    bool   `yaml:"enabled"`
+	ServerAddr string `yaml:"server_addr"` // 例 10.100.113.151:8848 或 a:8848,b:8848
+	Namespace  string `yaml:"namespace"`   // Namespace ID；public 填 "" 或 public；autosql 填 UUID
+	Group      string `yaml:"group"`
+	DataID     string `yaml:"data_id"`
+	Username   string `yaml:"username"`
+	Password   string `yaml:"password"`
+	// Watch 为 nil 时默认开启 ListenConfig；显式 false 关闭热更。
+	Watch *bool `yaml:"watch"`
+	// RestartOnListenChange 为 true 时，http.port/host 变更会 Exec 自重启。
+	RestartOnListenChange bool `yaml:"restart_on_listen_change"`
+}
+
+// WatchEnabled 默认 true（未配置 watch 时开启监听）。
+func (nc NacosConfig) WatchEnabled() bool {
+	if nc.Watch == nil {
+		return true
+	}
+	return *nc.Watch
 }
 
 // ServicesConfig 可拆分微服务地址（Pod 互通）。
@@ -62,12 +94,12 @@ type LogConfig struct {
 }
 
 type DBConfig struct {
-	Driver              string `yaml:"driver"`
-	DSN                 string `yaml:"dsn"`
-	MaxOpenConns        int    `yaml:"max_open_conns"`         // 默认 50；0 用默认
-	MaxIdleConns        int    `yaml:"max_idle_conns"`         // 默认 10
-	ConnMaxLifetimeSec   int    `yaml:"conn_max_lifetime_sec"`  // 默认 1800
-	ConnMaxIdleTimeSec  int    `yaml:"conn_max_idle_time_sec"` // 默认 300
+	Driver             string `yaml:"driver"`
+	DSN                string `yaml:"dsn"`
+	MaxOpenConns       int    `yaml:"max_open_conns"`         // 默认 50；0 用默认
+	MaxIdleConns       int    `yaml:"max_idle_conns"`         // 默认 10
+	ConnMaxLifetimeSec int    `yaml:"conn_max_lifetime_sec"`  // 默认 1800
+	ConnMaxIdleTimeSec int    `yaml:"conn_max_idle_time_sec"` // 默认 300
 }
 
 type CDCConfig struct {
@@ -94,7 +126,7 @@ type FlashbackConfig struct {
 type BackupConfig struct {
 	WorkDir         string `yaml:"workdir"`
 	AllowEmbedded   bool   `yaml:"allow_embedded"` // 无 Agent 时是否允许平台本机执行 dump
-	AgentArtifact   string `yaml:"agent_artifact"`  // 平台侧 linux 制品，如 deploy/backup-agent/bin/backup-agent
+	AgentArtifact   string `yaml:"agent_artifact"` // 平台侧 linux 制品，如 deploy/backup-agent/bin/backup-agent
 	AgentRemoteDir  string `yaml:"agent_remote_dir"`
 	AgentListenPort int    `yaml:"agent_listen_port"`
 }
@@ -106,9 +138,11 @@ type ExternalConfig struct {
 
 // TerminalConfig WebTTY / SSH 终端（迁入 neptune-terminal 精简核心）
 type TerminalConfig struct {
-	Enabled            bool   `yaml:"enabled"`
-	SSHUser            string `yaml:"ssh_user"`
-	SSHIdentityFile    string `yaml:"ssh_identity_file"`
+	Enabled         bool   `yaml:"enabled"`
+	SSHUser         string `yaml:"ssh_user"`
+	SSHIdentityFile string `yaml:"ssh_identity_file"`
+	// SSHPrivateKey Nacos/远程配置中的 PEM 正文；Load 后物化为 ssh_identity_file，内存中清空
+	SSHPrivateKey      string `yaml:"ssh_private_key,omitempty"`
 	SSHInsecureHostKey bool   `yaml:"ssh_insecure_host_key"` // true：忽略 known_hosts（仅开发），等同 ssh_host_key_policy=insecure
 	SSHHostKeyPolicy   string `yaml:"ssh_host_key_policy"`   // accept-new（默认）| strict | insecure
 	SSHKnownHostsFile  string `yaml:"ssh_known_hosts_file"`  // 平台自管 known_hosts，默认 config/terminal/known_hosts
@@ -126,11 +160,48 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(b, cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
+	applyNacosEnvOverrides(&cfg.Nacos)
+	if cfg.Nacos.Enabled {
+		boot := cfg.Nacos
+		// 远程可能只改 http.port，Unmarshal 会把同段其它字段置零；先记下再回填
+		localHTTP := cfg.HTTP
+		localFE := cfg.Frontend
+		content, err := fetchNacosConfig(boot)
+		if err != nil {
+			return nil, fmt.Errorf("nacos: %w", err)
+		}
+		if strings.TrimSpace(content) == "" {
+			return nil, fmt.Errorf("nacos: data_id %q group %q 内容为空", boot.DataID, boot.Group)
+		}
+		if err := yaml.Unmarshal([]byte(content), cfg); err != nil {
+			return nil, fmt.Errorf("nacos: parse yaml: %w", err)
+		}
+		// 远程 DataId 不应嵌套 nacos 引导；始终保留本地/环境变量引导
+		cfg.Nacos = boot
+		preserveHTTPFromLocal(&cfg.HTTP, localHTTP)
+		preserveFrontendFromLocal(&cfg.Frontend, localFE)
+	}
+	applyDefaults(cfg, path)
+	if err := materializeSSHPrivateKey(cfg, path); err != nil {
+		return nil, err
+	}
+	BindLive(cfg)
+	PublishJWT(cfg.App.JWTSecret)
+	return cfg, nil
+}
+
+func applyDefaults(cfg *Config, path string) {
 	if cfg.HTTP.Host == "" {
 		cfg.HTTP.Host = "0.0.0.0"
 	}
 	if cfg.HTTP.Port == 0 {
 		cfg.HTTP.Port = 8800
+	}
+	if cfg.Frontend.DevHost == "" {
+		cfg.Frontend.DevHost = "127.0.0.1"
+	}
+	if cfg.Frontend.DevPort <= 0 {
+		cfg.Frontend.DevPort = 5174
 	}
 	if cfg.HTTP.ReadTimeout <= 0 {
 		cfg.HTTP.ReadTimeout = 30
@@ -194,7 +265,6 @@ func Load(path string) (*Config, error) {
 	}
 	applyDbMonitorServiceDefaults(cfg)
 	applyTerminalDefaults(cfg, path)
-	return cfg, nil
 }
 
 func applyDbMonitorServiceDefaults(cfg *Config) {
@@ -257,15 +327,7 @@ func (c *Config) DbMonitorListenAddr() string {
 }
 
 func applyTerminalDefaults(cfg *Config, configPath string) {
-	root := "."
-	if abs, err := filepath.Abs(filepath.Dir(configPath)); err == nil {
-		// config/config.yaml → repo root
-		if filepath.Base(abs) == "config" {
-			root = filepath.Dir(abs)
-		} else {
-			root = abs
-		}
-	}
+	root := repoRootFromConfigPath(configPath)
 	t := &cfg.Terminal
 	if t.SSHUser == "" {
 		t.SSHUser = "sysadmin"

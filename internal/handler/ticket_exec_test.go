@@ -47,6 +47,7 @@ func TestBeginAsyncAutoExecReturnsImmediately(t *testing.T) {
 	db := testStore(t)
 	h := &TicketHandler{Store: db}
 	it := &store.Issue{
+		TenantID: store.DefaultTenantID,
 		IssueType:   store.IssueTypeDDL,
 		Description: "async-approve-fast-return",
 		SQLContent:  "ALTER TABLE t ADD COLUMN c int",
@@ -102,6 +103,7 @@ func TestFailAsyncIssueWritesRecord(t *testing.T) {
 	db := testStore(t)
 	h := &TicketHandler{Store: db}
 	it := &store.Issue{
+		TenantID: store.DefaultTenantID,
 		IssueType:   store.IssueTypeDML,
 		Description: "async-fail-record",
 		SQLContent:  "UPDATE t SET a=1",

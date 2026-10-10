@@ -76,11 +76,22 @@ func (d *DB) CreateFlashback(t *FlashbackTask) error {
 		t.DMLTicketID, t.CreatedBy, t.StartXID, t.StopXID, t.StartFile, t.StartPos, t.StopFile, t.StopPos,
 		t.StartedAt, t.FinishedAt, t.CreatedAt, t.UpdatedAt, t.IssueID, t.ApprovalStatus,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	return d.AssignTenantID("tbl_flashback_tasks", t.ID, d.inheritTenantFromInstance(t.InstanceID))
 }
 
 func (d *DB) ListFlashbacks() ([]FlashbackTask, error) {
-	rows, err := d.Query(`SELECT ` + fbTaskCols + ` FROM tbl_flashback_tasks ORDER BY created_at DESC`)
+	return d.ListFlashbacksInTenant("")
+}
+
+func (d *DB) ListFlashbacksInTenant(tenantID string) ([]FlashbackTask, error) {
+	q := `SELECT ` + fbTaskCols + ` FROM tbl_flashback_tasks WHERE 1=1`
+	args := []any{}
+	q, args = appendTenantFilter(q, args, tenantID)
+	q += ` ORDER BY created_at DESC`
+	rows, err := d.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}

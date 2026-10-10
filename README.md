@@ -39,7 +39,7 @@ go build -o bin/auto-dba ./cmd/auto-dba
 默认监听 `0.0.0.0:8800`。健康检查：`GET /healthz`。  
 `http.serve_static` 默认为 `false`，**不要用 8800 打开页面**。
 
-元数据使用 PostgreSQL。复制 `config/config.example.yaml` 为本地 `config/config.yaml` 后填写 `db.dsn`。该文件和 `config/terminal/` 下的终端密钥已忽略，不要提交账号密码或密钥。  
+元数据使用 PostgreSQL。复制 `config/config.example.yaml` 为本地 `config/config.yaml`。生产可将 `db.dsn`、`jwt_secret`、SSH 私钥放到 **Nacos**（见 [docs/nacos-config.md](docs/nacos-config.md)，含 [业务环境 vs Nacos Namespace](docs/nacos-config.md#业务环境-vs-nacos-namespace方案-a)；引导片段见 [config/bootstrap.example.yaml](config/bootstrap.example.yaml)），本地只写 `nacos:` 引导；`enabled: false` 时仍只读本地 YAML。该文件和 `config/terminal/` 已忽略，不要提交账号密码或密钥。Nacos Namespace 对应平台部署（开发/生产），不是配置中心里的 `beijing`/`test` 等业务环境编码。  
 启动时按 `schema_version` / `seed_version` 做引导：版本未变则跳过全量 migrate/seed（二次启动通常亚秒～2s 级）；改了 `migrate.go`/`seed.go` 需递增 `internal/store/bootstrap.go` 中的版本常量，或设 `AUTO_DBA_FORCE_BOOTSTRAP=1` 强制重跑。账号无 CREATEDB 权限，因此不会自动创建新库。
 
 首次启动会种子：

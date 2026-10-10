@@ -22,7 +22,7 @@ type CreateDBHandler struct {
 }
 
 func (h *CreateDBHandler) ListInstances(c *gin.Context) {
-	list, err := h.Store.ListInstances(c.Query("db_type"), c.Query("q"))
+	list, err := h.Store.ListInstancesInTenant(effectiveListTenantID(h.Store, c), c.Query("db_type"), c.Query("q"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -55,11 +55,19 @@ func unionApproverNames(groups ...[]string) []string {
 }
 
 func (h *CreateDBHandler) ListApprovers(c *gin.Context) {
+	tid := middleware.TenantID(c)
+	if tid == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "请先选择租户"})
+		return
+	}
+	userNames, err := listTenantMemberUsernames(h.Store, tid)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
 	def, _ := h.Store.GetGlobalArg("sync_default_approver")
-	users, _ := h.Store.ListUsers()
-	userNames := make([]string, 0, len(users))
-	for _, u := range users {
-		userNames = append(userNames, u.Username)
+	if strings.TrimSpace(def) != "" && requireTenantMemberUsernames(h.Store, tid, []string{def}) != nil {
+		def = ""
 	}
 	type item struct {
 		Type string `json:"type"`
@@ -93,7 +101,7 @@ func (h *CreateDBHandler) CheckSQL(c *gin.Context) {
 	res := applyCreateDBReview(th, req.SQLContent, req.DBType, instID)
 	names := sqlcheck.ParseCreateDBNames(req.SQLContent)
 	for _, id := range ids {
-		inst, err := h.Store.GetInstance(id)
+		inst, err := resolveInstanceInTenant(h.Store, c, id)
 		if err != nil || inst == nil {
 			res.OK = false
 			res.Statements = append(res.Statements, sqlcheck.StatementRow{
@@ -162,7 +170,7 @@ func (h *CreateDBHandler) Submit(c *gin.Context) {
 		return
 	}
 	user := middleware.Username(c)
-	ok, _, msg, err := th.canActOnTarget(ids[0], "", user)
+	ok, _, msg, err := th.canActOnTarget(middleware.TenantID(c), ids[0], "", user)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -171,22 +179,17 @@ func (h *CreateDBHandler) Submit(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": msg})
 		return
 	}
-	approver := ""
+	preferred := ""
 	if names := unionApproverNames([]string{req.AssignedTo}); len(names) > 0 {
-		approver = names[0]
+		preferred = names[0]
 	}
-	if approver == "" {
-		def, _ := h.Store.GetGlobalArg("sync_default_approver")
-		if names := unionApproverNames([]string{def}); len(names) > 0 {
-			approver = names[0]
-		}
-	}
-	if approver == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "审批人必填，或配置全局参数 sync_default_approver"})
+	approver, aerr := resolveTenantAssignee(h.Store, middleware.TenantID(c), preferred)
+	if aerr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": aerr.Error()})
 		return
 	}
 	for _, id := range ids {
-		inst, _ := h.Store.GetInstance(id)
+		inst, _ := resolveInstanceInTenant(h.Store, c, id)
 		if inst == nil {
 			c.JSON(http.StatusBadRequest, gin.H{"message": "实例未登记: " + id})
 			return
@@ -223,6 +226,9 @@ func (h *CreateDBHandler) Submit(c *gin.Context) {
 		NeedRollback: string(extra),
 		ScheduledAt:  req.ScheduledAt,
 	}
+	stampTenantID(c, func(tid string) {
+		if issue != nil { issue.TenantID = tid }
+	})
 	if err := h.Store.CreateIssue(issue); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return

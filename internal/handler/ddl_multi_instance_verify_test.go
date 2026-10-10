@@ -234,7 +234,7 @@ func TestDDLMultiInstanceSubmitVerify(t *testing.T) {
 		row.CheckInst = shortID(checkSQLInstanceID(selectIDs))
 		row.CheckMatchPrim = checkSQLInstanceID(selectIDs) == primary
 
-		ok, _, msg, err := h.canActOnTarget(primary, multiDDLVerifyDB, "admin")
+		ok, _, msg, err := h.canActOnTarget("", primary, multiDDLVerifyDB, "admin")
 		if err != nil {
 			row.Pass = false
 			row.Note = err.Error()
@@ -260,6 +260,7 @@ func TestDDLMultiInstanceSubmitVerify(t *testing.T) {
 			"data_source_ids": selectIDs,
 		})
 		issue := &store.Issue{
+		TenantID: store.DefaultTenantID,
 			IssueType:    store.IssueTypeDDL,
 			InstanceID:   primary,
 			DBName:       multiDDLVerifyDB,

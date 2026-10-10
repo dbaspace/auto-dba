@@ -56,7 +56,7 @@ func (h *HAHandler) PGAFServiceCtrl(c *gin.Context) {
 }
 
 func (h *HAHandler) pgafServiceAuth(c *gin.Context) (ha.ControllerAuth, int, string) {
-	cluster, err := h.Store.GetHACluster(c.Param("id"))
+	cluster, err := h.Store.GetHAClusterInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || cluster == nil {
 		return ha.ControllerAuth{}, http.StatusNotFound, "集群不存在"
 	}

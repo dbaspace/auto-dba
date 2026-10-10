@@ -12,20 +12,21 @@ import (
 
 	"auto-dba/internal/cdc"
 	"auto-dba/internal/dbmig"
+	"auto-dba/internal/middleware"
 	"auto-dba/internal/store"
 )
 
 const cdcBatchAddTableMaxParents = 50
 
-func (h *CDCHandler) resolveInitTask(id string) (*store.CDCTask, error) {
-	t, err := h.Store.GetCDC(id)
+func (h *CDCHandler) resolveInitTask(id, tenantID string) (*store.CDCTask, error) {
+	t, err := h.Store.GetCDCInTenant(id, tenantID)
 	if err != nil || t == nil {
 		return nil, fmt.Errorf("任务不存在")
 	}
 	if t.TaskType == "init" || strings.TrimSpace(t.ParentID) == "" {
 		return t, nil
 	}
-	parent, err := h.Store.GetCDC(t.ParentID)
+	parent, err := h.Store.GetCDCInTenant(t.ParentID, tenantID)
 	if err != nil || parent == nil {
 		return nil, fmt.Errorf("父任务不存在")
 	}
@@ -33,7 +34,7 @@ func (h *CDCHandler) resolveInitTask(id string) (*store.CDCTask, error) {
 }
 
 func (h *CDCHandler) SchemaDiff(c *gin.Context) {
-	init, err := h.resolveInitTask(c.Param("id"))
+	init, err := h.resolveInitTask(c.Param("id"), middleware.TenantID(c))
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": err.Error()})
 		return
@@ -63,7 +64,7 @@ func (h *CDCHandler) SchemaDiff(c *gin.Context) {
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
-	srcInst, _ := h.Store.GetInstance(init.SourceID)
+	srcInst, _ := resolveInstanceInTenant(h.Store, c, init.SourceID)
 	if srcInst == nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "源端实例不存在"})
 		return
@@ -81,7 +82,7 @@ func (h *CDCHandler) SchemaDiff(c *gin.Context) {
 		return nil, fmt.Errorf("目标端未连接")
 	}
 	if init.TargetID != "" && init.TargetDB != "" {
-		if tgt, _ := h.Store.GetInstance(init.TargetID); tgt != nil {
+		if tgt, _ := resolveInstanceInTenant(h.Store, c, init.TargetID); tgt != nil {
 			if db, oerr := dbmig.OpenInstance(ctx, tgt, h.Secret, init.TargetDB); oerr == nil {
 				srDB = db
 				srQuery = func(target string) ([]string, error) {
@@ -139,7 +140,7 @@ func (h *CDCHandler) SchemaDiff(c *gin.Context) {
 }
 
 func (h *CDCHandler) SchemaMigrateSQL(c *gin.Context) {
-	init, err := h.resolveInitTask(c.Param("id"))
+	init, err := h.resolveInitTask(c.Param("id"), middleware.TenantID(c))
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": err.Error()})
 		return
@@ -225,7 +226,7 @@ func (h *CDCHandler) BatchAddTablePrecheck(c *gin.Context) {
 	okN, skipN, failN := 0, 0, 0
 	for _, id := range ids {
 		item := gin.H{"parent_id": id}
-		p, _ := h.Store.GetCDC(id)
+		p, _ := h.Store.GetCDCInTenant(id, effectiveListTenantID(h.Store, c))
 		if p == nil || p.TaskType != "init" {
 			item["ok"] = false
 			item["ready"] = false
@@ -286,7 +287,7 @@ func (h *CDCHandler) BatchAddTable(c *gin.Context) {
 	parents := make([]*store.CDCTask, 0, len(ids))
 	var instKey string
 	for _, id := range ids {
-		p, _ := h.Store.GetCDC(id)
+		p, _ := h.Store.GetCDCInTenant(id, effectiveListTenantID(h.Store, c))
 		if p == nil || p.TaskType != "init" {
 			c.JSON(http.StatusBadRequest, gin.H{"message": "parent " + id + " 不是初始化任务"})
 			return
@@ -340,7 +341,7 @@ func (h *CDCHandler) BatchAddTable(c *gin.Context) {
 				child.Name = child.Name + "_" + p.Name
 			}
 		}
-		if err := h.prepareCDCCreate(&child); err != nil {
+		if err := h.prepareCDCCreate(c, &child); err != nil {
 			item["ok"] = false
 			item["message"] = err.Error()
 			failN++
@@ -396,7 +397,7 @@ func (h *CDCHandler) BatchAlterSchema(c *gin.Context) {
 	parents := make([]*store.CDCTask, 0, len(ids))
 	var instKey string
 	for _, id := range ids {
-		p, _ := h.Store.GetCDC(id)
+		p, _ := h.Store.GetCDCInTenant(id, effectiveListTenantID(h.Store, c))
 		if p == nil || p.TaskType != "init" {
 			c.JSON(http.StatusBadRequest, gin.H{"message": "parent " + id + " 不是初始化任务"})
 			return
@@ -457,7 +458,7 @@ func (h *CDCHandler) BatchAlterSchema(c *gin.Context) {
 				child.Name = child.Name + "_" + p.Name
 			}
 		}
-		if err := h.prepareCDCCreate(&child); err != nil {
+		if err := h.prepareCDCCreate(c, &child); err != nil {
 			item["ok"] = false
 			item["message"] = err.Error()
 			failN++

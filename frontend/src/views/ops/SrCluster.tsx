@@ -2,25 +2,45 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert, AutoComplete, Breadcrumb, Button, Card, Checkbox, Descriptions, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tabs, Tag, Tooltip, Upload, message,
 } from 'antd'
-import { MinusCircleOutlined, PlusOutlined } from '@ant-design/icons'
+import { MinusCircleOutlined, PlusOutlined, SyncOutlined } from '@ant-design/icons'
+import type { ColumnType } from 'antd/es/table'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import api from '../../api/request'
+import Auth from '../../components/Auth'
+import { Perm } from '../../hooks/usePermission'
+import { useAppSelector } from '../../store'
 import {
   NodePrecheckPanel, agentMatchesHost, agentMismatchMessage, hostPrimaryAddr, resolveNodeHostInstanceId, useHostApprovers,
   type NodePrecheckResult,
 } from './node-precheck/nodePrecheck'
+import {
+  ChangeCategoryTabs, SR_CHANGE_CATEGORIES, changeCategoryLabel, changeCategoryOf, filterChangesByCategory, pickChangeInCategory,
+  type ChangeCategoryKey,
+} from './changeCategories'
+import {
+  ChangeConfRollbackModal, ConfApplyConfirmModal, ConfHistoryPanel, keySummary, type ConfPatchPlan,
+} from './SrConfDiff'
+import { activeDeployHostIds, isAgentDeployActive, useAgentDeployTracker } from './agentDeployTracker'
 import './SrCluster.css'
 
 type SrAgent = { id: string; name?: string; base_url: string; username?: string; password_set?: boolean; host_instance_id?: string }
 type SrCluster = {
   id: string; name: string; environment?: string; version?: string; release_id?: string
   software_base?: string; data_root?: string; fe_host?: string; fe_query_port?: number; status?: string
+  tenant_id?: string; tenant_name?: string
 }
 type SrNode = {
   id: string; component: string; host: string; agent_id?: string; is_primary_fe?: boolean
   fe_role?: string; status?: string; systemd_unit?: string
   software_path?: string; data_root?: string
 }
+type SrNodeLive = {
+  role?: string; alive?: string; version?: string; decommissioned?: boolean; tablet_num?: string
+  replayed_journal_id?: string; last_heartbeat?: string; start_time?: string
+  cpu_cores?: string; total_capacity?: string; avail_capacity?: string; data_used?: string; used_pct?: string
+}
+type SrInstanceLink = { id: string; name: string; host: string; port: number; password_set?: boolean; matched_by?: string }
+type SrMonitorLink = { id: string; name: string; collector?: string; fe_count: number; be_count: number; missing?: string[] }
 type SrChangeStep = {
   id: string; seq: number; step_key: string; title: string; status: string; log_text?: string
   node_id?: string; started_at?: string; ended_at?: string
@@ -34,8 +54,8 @@ type SrChange = {
 const CHANGE_TYPE_LABEL: Record<string, string> = {
   cluster_init: '集群初始化', cluster_reinit: '集群重装', add_fe: '扩容 FE', add_be: '扩容 BE',
   restart_node: '重启节点', start_node: '启动节点', stop_node: '停止节点', remove_fe: '下线 FE',
-  remove_be: '下线 BE', decommission_be: '下线 BE', upgrade: '版本升级', upgrade_rollback: '升级回滚',
-  config_apply: '配置下发',
+  remove_be: '下线 BE', decommission_be: '下线 BE', recommission_be: '恢复 BE', upgrade: '版本升级', upgrade_rollback: '升级回滚',
+  config_apply: '配置下发', config_rollback: '配置回退',
 }
 
 function fmtDuration(start?: string, end?: string): string {
@@ -330,6 +350,11 @@ function changeFailureHint(raw: string): FailureHint {
 
 export default function SrClusterPage() {
   const navigate = useNavigate()
+  const authUser = useAppSelector((s) => s.auth.user)
+  const impersonating = Boolean((authUser as { impersonating?: boolean })?.impersonating)
+  const currentTenant = (authUser as { current_tenant?: { id?: string; name?: string; code?: string } })?.current_tenant
+  const currentTenantId = currentTenant?.id || ''
+  const currentTenantLabel = currentTenant?.name || currentTenant?.code || '当前租户'
   const [tab, setTab] = useState('clusters')
   const [clusters, setClusters] = useState<SrCluster[]>([])
   const [agents, setAgents] = useState<SrAgent[]>([])
@@ -342,7 +367,15 @@ export default function SrClusterPage() {
   const [loading, setLoading] = useState(false)
   const [selected, setSelected] = useState<SrCluster | null>(null)
   const [nodes, setNodes] = useState<SrNode[]>([])
+  const [nodeLive, setNodeLive] = useState<Record<string, SrNodeLive>>({})
+  const [nodeLiveErr, setNodeLiveErr] = useState('')
+  const [nodeLiveLoading, setNodeLiveLoading] = useState(false)
+  const nodeLiveReq = useRef('')
+  const [clusterInst, setClusterInst] = useState<SrInstanceLink | null>(null)
+  const [clusterMon, setClusterMon] = useState<SrMonitorLink | null>(null)
+  const [registrySyncing, setRegistrySyncing] = useState(false)
   const [changeDetail, setChangeDetail] = useState<SrChange | null>(null)
+  const [changeCat, setChangeCat] = useState<ChangeCategoryKey>('init')
   const [clusterModal, setClusterModal] = useState(false)
   const [clusterModalMode, setClusterModalMode] = useState<'create' | 'register'>('create')
   const [fePreview, setFePreview] = useState<MonitorPreview[]>([])
@@ -390,6 +423,9 @@ export default function SrClusterPage() {
   const [configShowTpl, setConfigShowTpl] = useState(false)
   const [configFe, setConfigFe] = useState('')
   const [configBe, setConfigBe] = useState('')
+  const [configTab, setConfigTab] = useState<'edit' | 'history'>('edit')
+  const [configPatchPlan, setConfigPatchPlan] = useState<ConfPatchPlan | null>(null)
+  const [changeConfRollback, setChangeConfRollback] = useState<SrChange | null>(null)
   const [tplFe, setTplFe] = useState('')
   const [tplBe, setTplBe] = useState('')
   const [tplBusy, setTplBusy] = useState(false)
@@ -410,6 +446,7 @@ export default function SrClusterPage() {
     summary: string
     clusterId: string
     payload: Record<string, unknown>
+    nodeComponent?: string
   } | null>(null)
   const [ticketBusy, setTicketBusy] = useState(false)
 
@@ -508,6 +545,22 @@ export default function SrClusterPage() {
     void loadTicketApprovers(targetNodes, ticketForm)
   }
 
+  function assignClusterToCurrentTenant(row: SrCluster, e?: React.MouseEvent) {
+    e?.stopPropagation()
+    if (!row.id || !currentTenantId) return
+    const from = row.tenant_name || row.tenant_id || '其它租户'
+    Modal.confirm({
+      title: '划拨到当前租户',
+      content: `将集群「${row.name}」（当前归属：${from}）划拨到「${currentTenantLabel}」？关联的资源实例、已登记库/账号与监控任务一并迁移。`,
+      okText: '划拨',
+      onOk: async () => {
+        await api.post(`/sr-cluster/clusters/${row.id}/assign-tenant`, { tenant_id: currentTenantId })
+        message.success('已划拨到 ' + currentTenantLabel)
+        await loadClusters()
+      },
+    })
+  }
+
   const loadClusters = useCallback(async () => {
     setLoading(true)
     try {
@@ -547,12 +600,26 @@ export default function SrClusterPage() {
   }, [])
   const loadDeploys = useCallback(async () => {
     try {
-      const res = await api.get('/sr-cluster/agents/deploys', { params: { limit: 50 } })
+      const res = await api.get('/sr-cluster/agents/deploys', { params: { limit: 200 } })
       setDeploys(res.data?.data || [])
     } catch {
       setDeploys([])
     }
   }, [])
+  const deployTracker = useAgentDeployTracker<SrAgentDeploy>({
+    basePath: '/sr-cluster/agents/deploys',
+    agentName: 'Node Agent',
+    hostLabel: (id) => {
+      const h = hosts.find((x) => x.id === id)
+      return h ? `${h.name} (${h.host || h.domain_name || '-'})` : id
+    },
+    onShowLog: (row) => setDeployLog(row),
+    onFinished: () => { void loadAgents() },
+    refreshList: () => { void loadDeploys() },
+  })
+  const { trackFromList: trackDeploysFromList } = deployTracker
+  useEffect(() => { trackDeploysFromList(deploys) }, [deploys, trackDeploysFromList])
+  const deployingHostIds = useMemo(() => activeDeployHostIds(deploys), [deploys])
   const loadChanges = useCallback(async (clusterId?: string) => {
     const res = await api.get('/sr-cluster/changes', { params: { cluster_id: clusterId || undefined, limit: 50 } })
     setChanges(res.data?.data || [])
@@ -702,16 +769,104 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
       return
     }
     setSelected(row)
-    const res = await api.get(`/sr-cluster/clusters/${row.id}`)
-    setSelected(res.data?.data?.cluster || row)
-    setNodes(res.data?.data?.nodes || [])
+    setClusterInst(null)
+    setClusterMon(null)
+    await reloadClusterDetail(row.id, row)
   }
+
+  const reloadClusterDetail = async (clusterId: string, fallback?: SrCluster) => {
+    const res = await api.get(`/sr-cluster/clusters/${clusterId}`)
+    const d = res.data?.data || {}
+    setSelected(d.cluster || fallback || null)
+    setNodes(d.nodes || [])
+    setClusterInst(d.instance || null)
+    setClusterMon(d.monitor_job || null)
+  }
+
+  const syncRegistry = async (clusterId: string) => {
+    setRegistrySyncing(true)
+    try {
+      const res = await api.post(`/sr-cluster/clusters/${clusterId}/sync-registry`)
+      const r = res.data?.data || {}
+      const inst = r.instance as SrInstanceLink | undefined
+      const mon = r.monitor_job as SrMonitorLink | undefined
+      const warnings: string[] = r.warnings || []
+      Modal[warnings.length ? 'warning' : 'success']({
+        title: '同步到配置中心',
+        width: 560,
+        content: (
+          <div style={{ lineHeight: 1.9 }}>
+            <div>
+              资源实例：
+              {inst ? `${r.instance_created ? '已登记' : '已关联'} ${inst.name}（${inst.host}:${inst.port}）` : '未登记'}
+            </div>
+            <div>
+              监控任务：
+              {mon ? `${r.monitor_created ? '已注册' : '已同步'} ${mon.name}（FE ${mon.fe_count} / BE ${mon.be_count}）` : '无可同步的节点'}
+            </div>
+            {warnings.map((w) => <div key={w} style={{ color: '#d46b08' }}>{w}</div>)}
+          </div>
+        ),
+      })
+      await reloadClusterDetail(clusterId)
+      void loadNodeLive(clusterId)
+    } catch (e: any) {
+      message.error(e?.response?.data?.message || e.message)
+    } finally {
+      setRegistrySyncing(false)
+    }
+  }
+
+  const loadNodeLive = useCallback(async (clusterId: string) => {
+    nodeLiveReq.current = clusterId
+    setNodeLiveLoading(true)
+    try {
+      const res = await api.get(`/sr-cluster/clusters/${clusterId}/live`, { silent: true })
+      if (nodeLiveReq.current !== clusterId) return
+      setNodeLive(res.data?.data?.nodes || {})
+      setNodeLiveErr(res.data?.message || '')
+      const removed: { host: string }[] = res.data?.data?.removed_nodes || []
+      if (removed.length > 0) {
+        message.info(`BE ${removed.map((n) => n.host).join('、')} 已完成在线缩容并移出集群，已移除节点登记`)
+        void reloadClusterDetail(clusterId)
+      }
+    } catch (e: any) {
+      if (nodeLiveReq.current !== clusterId) return
+      setNodeLive({})
+      setNodeLiveErr(e?.response?.data?.message || e.message || '请求失败')
+    } finally {
+      if (nodeLiveReq.current === clusterId) setNodeLiveLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    setNodeLive({})
+    setNodeLiveErr('')
+    if (!selected?.id) {
+      nodeLiveReq.current = ''
+      setNodeLiveLoading(false)
+      return
+    }
+    void loadNodeLive(selected.id)
+  }, [selected?.id, loadNodeLive])
 
   const pollChange = useCallback(async (id: string) => {
     const res = await api.get(`/sr-cluster/changes/${id}`)
     setChangeDetail(res.data?.data || null)
     return res.data?.data as SrChange
   }, [])
+
+  // 任意入口打开变更时，分类子 Tab 跟随该变更，保证列表与详情一致
+  useEffect(() => {
+    if (changeDetail?.type) setChangeCat(changeCategoryOf(SR_CHANGE_CATEGORIES, changeDetail.type))
+  }, [changeDetail?.id, changeDetail?.type])
+
+  const selectChangeCategory = (key: ChangeCategoryKey) => {
+    setChangeCat(key)
+    const id = pickChangeInCategory(filterChangesByCategory(SR_CHANGE_CATEGORIES, changes, key))
+    if (id) void pollChange(id)
+    else setChangeDetail(null)
+  }
 
   useEffect(() => {
     loadClusters(); loadAgents(); loadChanges(); loadReleases(); loadOSS(); loadHosts(); loadDeploys(); loadConfTemplates(); loadEnvironments()
@@ -787,39 +942,20 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
     if (selected) openCluster(selected)
   }
 
-  const INIT_CHANGE_TYPES = ['cluster_init', 'cluster_reinit']
-
-  /** 打开变更页并展示匹配类型的最近一次变更日志 */
-  const showClusterChangeLogs = async (
-    clusterId: string,
-    opts?: {
-      preferChangeId?: string
-      types?: string[]
-      excludeTypes?: string[]
-      emptyHint?: string
-    },
-  ) => {
+  /** 打开变更页的指定分类，并展示该分类最近一次（失败 / 执行中优先）变更日志 */
+  const showClusterChangeLogs = async (clusterId: string, category: ChangeCategoryKey) => {
     setTab('changes')
+    setChangeCat(category)
     const res = await api.get('/sr-cluster/changes', { params: { cluster_id: clusterId, limit: 50 } })
     const list: SrChange[] = res.data?.data || []
     setChanges(list)
-    let filtered = list
-    if (opts?.types?.length) {
-      const allow = new Set(opts.types)
-      filtered = list.filter((c) => allow.has(c.type))
-    } else if (opts?.excludeTypes?.length) {
-      const deny = new Set(opts.excludeTypes)
-      filtered = list.filter((c) => !deny.has(c.type))
-    }
-    const target = opts?.preferChangeId
-      || filtered.find((c) => c.status === 'failed' || c.status === 'running' || c.status === 'pending')?.id
-      || filtered[0]?.id
+    const target = pickChangeInCategory(filterChangesByCategory(SR_CHANGE_CATEGORIES, list, category))
     if (target) {
       await pollChange(target)
       return
     }
     setChangeDetail(null)
-    if (opts?.emptyHint) message.info(opts.emptyHint)
+    message.info(`暂无${changeCategoryLabel(SR_CHANGE_CATEGORIES, category)}`)
   }
 
   const startClusterInit = async (cluster: SrCluster) => {
@@ -852,10 +988,7 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
         ),
         okText: '查看变更并重试',
         onOk: () => {
-          void showClusterChangeLogs(cluster.id, {
-            types: INIT_CHANGE_TYPES,
-            emptyHint: '暂无初始化变更日志',
-          })
+          void showClusterChangeLogs(cluster.id, 'init')
         },
       })
     }
@@ -882,9 +1015,8 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
       ])
       const list = prevRes.data?.data || []
       setConfigPreviews(list)
-      const ids = list.map((p: { node_id: string }) => p.node_id)
-      setConfigNodeIds(focusNodeId && ids.includes(focusNodeId) ? [focusNodeId] : ids)
       const prefer = (focusNodeId && list.find((p: { node_id: string }) => p.node_id === focusNodeId)) || list[0]
+      setConfigNodeIds(prefer?.node_id ? [prefer.node_id] : [])
       setConfigSelectedNodeId(prefer?.node_id || '')
       setConfigEditBody(prefer?.editable || '')
       const d = cfgRes.data?.data || {}
@@ -892,15 +1024,19 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
       setConfigBe(d.be || '')
       setConfigRestart(false)
       setConfigShowTpl(false)
+      setConfigTab('edit')
       setConfigModal(true)
     } catch (e: any) {
       message.error(e?.response?.data?.message || e.message)
     }
   }
 
+  // 同一次下发只能勾选与当前编辑节点同角色的节点；切到另一角色时只保留该节点
+  const configCurRole = configPreviews.find((p) => p.node_id === configSelectedNodeId)?.role || ''
   const selectConfigNode = (nodeId: string) => {
-    setConfigSelectedNodeId(nodeId)
     const p = configPreviews.find((x) => x.node_id === nodeId)
+    if (p && p.role !== configCurRole) setConfigNodeIds([nodeId])
+    setConfigSelectedNodeId(nodeId)
     setConfigEditBody(p?.editable || '')
   }
 
@@ -1134,6 +1270,14 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                   <Button onClick={() => openClusterModal('register')}>登记已有集群</Button>
                   <Button onClick={loadClusters}>刷新</Button>
                 </Space>
+                {impersonating ? (
+                  <Alert
+                    type="info"
+                    showIcon
+                    style={{ marginBottom: 8 }}
+                    message={`审计中：列表含全平台集群。其它租户资源可划拨到「${currentTenantLabel}」，该租户成员即可运维。`}
+                  />
+                ) : null}
                 <Table
                   rowKey="id"
                   loading={loading}
@@ -1157,10 +1301,36 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                         </Button>
                       ),
                     },
+                    ...(impersonating
+                      ? [{
+                          title: '所属租户',
+                          width: 140,
+                          render: (_: unknown, row: SrCluster) => {
+                            const same = row.tenant_id && currentTenantId && row.tenant_id === currentTenantId
+                            const label = row.tenant_name || row.tenant_id || '—'
+                            return same ? <Tag color="green">{label}</Tag> : <Tag color="orange">{label}</Tag>
+                          },
+                        } as ColumnType<SrCluster>]
+                      : []),
                     { title: '环境', dataIndex: 'environment' },
                     { title: '版本', dataIndex: 'version' },
                     { title: '状态', dataIndex: 'status', render: (s: string) => <Tag color={statusColor[s]}>{s}</Tag> },
                     { title: 'FE', dataIndex: 'fe_host' },
+                    ...(impersonating
+                      ? [{
+                          title: '操作',
+                          width: 140,
+                          render: (_: unknown, row: SrCluster) => (
+                            row.tenant_id && row.tenant_id !== currentTenantId ? (
+                              <Auth urn={Perm.tenants.impersonate}>
+                                <Button type="link" onClick={(e) => assignClusterToCurrentTenant(row, e)}>
+                                  划拨到当前租户
+                                </Button>
+                              </Auth>
+                            ) : null
+                          ),
+                        } as ColumnType<SrCluster>]
+                      : []),
                   ]}
                 />
                 {selected && (
@@ -1168,24 +1338,6 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                     title={`集群 · ${selected.name}`}
                     extra={(
                       <Space wrap onClick={(e) => e.stopPropagation()}>
-                        <Button onClick={() => {
-                          void showClusterChangeLogs(selected.id, {
-                            types: INIT_CHANGE_TYPES,
-                            emptyHint: '暂无初始化变更日志',
-                          })
-                        }}
-                        >
-                          初始化日志
-                        </Button>
-                        <Button onClick={() => {
-                          void showClusterChangeLogs(selected.id, {
-                            excludeTypes: INIT_CHANGE_TYPES,
-                            emptyHint: '暂无运行变更日志',
-                          })
-                        }}
-                        >
-                          运行日志
-                        </Button>
                         <Button onClick={() => {
                           nodeForm.resetFields()
                           nodeForm.setFieldsValue({
@@ -1223,6 +1375,9 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                           升级
                         </Button>
                         <Button type="primary" onClick={() => { void openConfigModal() }}>配置</Button>
+                        <Tooltip title="登记/关联「资源配置 → 实例管理」中的 StarRocks 实例，并同步「配置中心 → 监控目标注册」">
+                          <Button loading={registrySyncing} onClick={() => { void syncRegistry(selected.id) }}>同步到配置中心</Button>
+                        </Tooltip>
                         <Button type="link" onClick={() => { setSelected(null); setNodes([]) }}>关闭</Button>
                       </Space>
                     )}
@@ -1232,6 +1387,33 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                       <Descriptions.Item label="状态"><Tag color={statusColor[selected.status || '']}>{selected.status}</Tag></Descriptions.Item>
                       <Descriptions.Item label="环境">{selected.environment}</Descriptions.Item>
                       <Descriptions.Item label="software_base">{selected.software_base}</Descriptions.Item>
+                      <Descriptions.Item label="资源实例">
+                        {clusterInst ? (
+                          <Space size={4} wrap>
+                            <Link to="/config/instances?db_type=starrocks">{clusterInst.name}</Link>
+                            <span style={{ color: '#999' }}>{clusterInst.host}:{clusterInst.port}</span>
+                            {clusterInst.password_set
+                              ? <Tag color="success">已设密码</Tag>
+                              : <Tooltip title="实例未设密码时，连接 FE 使用集群自身保存的密码（初装为空）"><Tag>未设密码</Tag></Tooltip>}
+                            <Tag>{clusterInst.matched_by === 'tag' ? '标签关联' : '按主机匹配'}</Tag>
+                          </Space>
+                        ) : <span style={{ color: '#999' }}>未登记</span>}
+                      </Descriptions.Item>
+                      <Descriptions.Item label="监控任务">
+                        {clusterMon ? (
+                          <Space size={4} wrap>
+                            <Link to="/config/monitor-targets">{clusterMon.name}</Link>
+                            <span style={{ color: '#999' }}>
+                              采集点 {clusterMon.collector || '—'} · FE {clusterMon.fe_count} / BE {clusterMon.be_count} 个目标
+                            </span>
+                            {(clusterMon.missing || []).length > 0 && (
+                              <Tooltip title="平台无法推导，请到「配置中心 → 监控目标注册」手动补充">
+                                <Tag color="warning">待补充：{(clusterMon.missing || []).join('、')}</Tag>
+                              </Tooltip>
+                            )}
+                          </Space>
+                        ) : <span style={{ color: '#999' }}>未注册</span>}
+                      </Descriptions.Item>
                     </Descriptions>
                     {(() => {
                       const rid = selected.release_id || ''
@@ -1249,38 +1431,195 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                         />
                       )
                     })()}
-                    <Table
-                      style={{ marginTop: 12 }}
-                      rowKey="id"
-                      size="small"
-                      dataSource={nodes}
-                      pagination={false}
-                      columns={[
-                        { title: '角色', dataIndex: 'component' },
-                        { title: '子角色', dataIndex: 'fe_role', render: (v: string, row: SrNode) => (row.component === 'fe' ? (v || 'follower') : '—') },
-                        { title: 'Host', dataIndex: 'host' },
-                        { title: '软件路径', dataIndex: 'software_path', ellipsis: true, render: (v: string) => v || '—' },
-                        { title: '数据目录', dataIndex: 'data_root', ellipsis: true, render: (v: string, row: SrNode) => (row.component === 'be' ? (v || selected?.data_root || '/data') : '—') },
-                        { title: '首FE', dataIndex: 'is_primary_fe', render: (v: boolean) => (v ? '是' : '') },
-                        {
-                          title: '状态',
-                          dataIndex: 'status',
-                          render: (s: string) => {
-                            const map: Record<string, { color: string; text: string }> = {
-                              ready: { color: 'success', text: '运行中' },
-                              stopped: { color: 'default', text: '已停止' },
-                              pending: { color: 'processing', text: '待加入' },
-                              failed: { color: 'error', text: '失败' },
-                            }
-                            const m = map[s] || { color: 'default', text: s || '—' }
-                            return <Tag color={m.color}>{m.text}</Tag>
-                          },
+                    {nodeLiveErr && !nodeLiveLoading && (
+                      <Alert
+                        type="warning"
+                        showIcon
+                        style={{ marginTop: 12 }}
+                        message={`无法读取 FE 实时状态：${nodeLiveErr}`}
+                        description={(
+                          <>
+                            角色显示为登记值；升级、扩缩容等需要连接 FE 的操作也会失败。请在
+                            {' '}
+                            <Link to="/config/instances?db_type=starrocks">资源配置 → 实例管理 → StarRocks</Link>
+                            {' '}
+                            中维护该集群的实例密码
+                            {clusterInst ? `（当前关联 ${clusterInst.name}）` : '，或点「同步到配置中心」自动登记后补填密码'}
+                            。
+                          </>
+                        )}
+                      />
+                    )}
+                    {(() => {
+                      const feNodes = nodes.filter((n) => n.component === 'fe')
+                      const beNodes = nodes.filter((n) => n.component !== 'fe')
+                      const feRoleCol: ColumnType<SrNode> = {
+                        title: '角色',
+                        dataIndex: 'fe_role',
+                        width: 120,
+                        render: (v: string, row: SrNode) => {
+                          const live = nodeLive[row.id]
+                          const registered = (v || 'follower').toLowerCase()
+                          const role = (live?.role || '').toUpperCase()
+                          if (!role) {
+                            const why = nodeLiveLoading
+                              ? '正在读取实时角色'
+                              : `未能读取实时角色${nodeLiveErr ? `（${nodeLiveErr}）` : '（该节点未出现在 SHOW PROC \'/frontends\' 中）'}，显示为登记值`
+                            return (
+                              <Tooltip title={why}>
+                                <span style={{ color: '#999' }}>{registered}</span>
+                              </Tooltip>
+                            )
+                          }
+                          const roleColor: Record<string, string> = { LEADER: 'gold', FOLLOWER: 'blue', OBSERVER: 'default' }
+                          const liveRoleTag = <Tag color={roleColor[role] || 'default'}>{role}</Tag>
+                          const registeredMismatch = role !== 'LEADER' && role.toLowerCase() !== registered
+                          return registeredMismatch
+                            ? <Tooltip title={`登记为 ${registered}`}>{liveRoleTag}</Tooltip>
+                            : liveRoleTag
                         },
-                        {
+                      }
+                      const hostCol: ColumnType<SrNode> = {
+                        title: 'Host',
+                        dataIndex: 'host',
+                        width: 190,
+                        render: (v: string, row: SrNode) => (
+                          <Space size={4}>
+                            <Tooltip title={`软件路径：${row.software_path || '—'}`}>
+                              <span>{v}</span>
+                            </Tooltip>
+                            {row.is_primary_fe && (
+                              <Tooltip title="集群初始化时第一个启动的 FE，不代表当前 Leader">
+                                <Tag>首FE</Tag>
+                              </Tooltip>
+                            )}
+                          </Space>
+                        ),
+                      }
+                      const journalCol: ColumnType<SrNode> = {
+                        title: <Tooltip title="已回放的元数据日志 ID（ReplayedJournalId）；Follower/Observer 明显小于 Leader 说明元数据回放落后">ReplayedJournalId</Tooltip>,
+                        key: 'replayed_journal_id',
+                        width: 150,
+                        render: (_: unknown, row: SrNode) => nodeLive[row.id]?.replayed_journal_id || '—',
+                      }
+                      const heartbeatCol: ColumnType<SrNode> = {
+                        title: 'LastHeartbeat',
+                        key: 'last_heartbeat',
+                        width: 170,
+                        render: (_: unknown, row: SrNode) => nodeLive[row.id]?.last_heartbeat || '—',
+                      }
+                      const startTimeCol: ColumnType<SrNode> = {
+                        title: 'StartTime',
+                        key: 'start_time',
+                        width: 170,
+                        render: (_: unknown, row: SrNode) => nodeLive[row.id]?.start_time || '—',
+                      }
+                      const dataRootCol: ColumnType<SrNode> = {
+                        title: '数据目录',
+                        dataIndex: 'data_root',
+                        ellipsis: true,
+                        render: (v: string) => v || selected?.data_root || '/data',
+                      }
+                      const cpuCol: ColumnType<SrNode> = {
+                        title: 'CPU核数',
+                        key: 'cpu_cores',
+                        width: 80,
+                        render: (_: unknown, row: SrNode) => nodeLive[row.id]?.cpu_cores || '—',
+                      }
+                      const tabletCol: ColumnType<SrNode> = {
+                        title: <Tooltip title="该 BE 上的 tablet 数量（TabletNum），来自 SHOW PROC '/backends'">Tablet数</Tooltip>,
+                        key: 'tablet_num',
+                        width: 90,
+                        render: (_: unknown, row: SrNode) => nodeLive[row.id]?.tablet_num || '—',
+                      }
+                      const storageCol: ColumnType<SrNode> = {
+                        title: <Tooltip title="数据目录所在磁盘的总量与使用率（含非 StarRocks 文件），来自 SHOW PROC '/backends'">存储</Tooltip>,
+                        key: 'storage',
+                        render: (_: unknown, row: SrNode) => {
+                          const live = nodeLive[row.id]
+                          if (!live?.total_capacity) return '—'
+                          const pct = (live.used_pct || '').replace(/\s+/g, '')
+                          const pctNum = parseFloat(pct)
+                          const color = pctNum >= 95 ? '#cf1322' : pctNum >= 85 ? '#d46b08' : undefined
+                          return (
+                            <Tooltip title={`StarRocks 数据 ${live.data_used || '—'}，可用 ${live.avail_capacity || '—'}`}>
+                              <span style={{ whiteSpace: 'nowrap' }}>
+                                {live.total_capacity}
+                                {pct ? <>（已用 <span style={{ color }}>{pct}</span>）</> : ''}
+                              </span>
+                            </Tooltip>
+                          )
+                        },
+                      }
+                      const statusCol: ColumnType<SrNode> = {
+                        title: '状态',
+                        dataIndex: 'status',
+                        width: 170,
+                        render: (s: string, row: SrNode) => {
+                          const live = nodeLive[row.id]
+                          const offline = live?.alive === 'false' ? <Tag color="error">离线</Tag> : null
+                          if (live?.decommissioned || s === 'decommissioning') {
+                            const tablets = live?.tablet_num
+                            return (
+                              <Space size={4}>
+                                <Tooltip title="SystemDecommissioned=true；tablet 迁移完成后自动移出集群">
+                                  <Tag color="orange">下线中</Tag>
+                                </Tooltip>
+                                {tablets && <span style={{ color: '#999', fontSize: 12 }}>剩余 tablet {tablets}</span>}
+                                {offline}
+                              </Space>
+                            )
+                          }
+                          const map: Record<string, { color: string; text: string }> = {
+                            ready: { color: 'success', text: '运行中' },
+                            stopped: { color: 'default', text: '已停止' },
+                            pending: { color: 'processing', text: '待加入' },
+                            failed: { color: 'error', text: '失败' },
+                          }
+                          const m = map[s] || { color: 'default', text: s || '—' }
+                          return (
+                            <Space size={4}>
+                              <Tag color={m.color}>{m.text}</Tag>
+                              {offline}
+                            </Space>
+                          )
+                        },
+                      }
+                      const actionCol: ColumnType<SrNode> = {
                           title: '操作',
-                          render: (_: unknown, row: SrNode) => (
+                          width: 180,
+                          render: (_: unknown, row: SrNode) => {
+                            const live = nodeLive[row.id]
+                            if (row.component === 'be' && live?.decommissioned) {
+                              return (
+                                <Space size="small" onClick={(e) => e.stopPropagation()}>
+                                  <Button size="small" type="link" onClick={() => {
+                                    if (!selected) return
+                                    openTicketDraft({
+                                      action: 'restore_node',
+                                      title: '提交恢复节点审批',
+                                      summary: `将恢复下线中的 BE ${row.host}（集群 ${selected.name}）：审批通过后执行 CANCEL DECOMMISSION BACKEND "${row.host}:<heartbeat_port>"（BE 进程已停止则先启动），确认 SystemDecommissioned=false 且 Alive 后状态恢复为运行中。在线缩容一旦完成（节点已移出 SHOW PROC '/backends'）则无法恢复。`,
+                                      clusterId: selected.id,
+                                      payload: { node_id: row.id },
+                                      nodeComponent: row.component,
+                                    }, [row])
+                                  }}
+                                  >
+                                    恢复
+                                  </Button>
+                                </Space>
+                              )
+                            }
+                            if (row.status === 'decommissioning') {
+                              return (
+                                <Tooltip title={nodeLiveErr ? `未能读取实时状态（${nodeLiveErr}），点「刷新」后可恢复` : '下线中；迁移完成后自动移出集群'}>
+                                  <span style={{ color: '#999' }}>下线中</span>
+                                </Tooltip>
+                              )
+                            }
+                            return (
                             <Space size="small" onClick={(e) => e.stopPropagation()}>
-                              {row.status !== 'ready' && row.status !== 'stopped' && (
+                              {(row.status === 'pending' || row.status === 'failed') && (
                                 <Button size="small" type="link" onClick={() => {
                                   if (!selected) return
                                   openTicketDraft({
@@ -1331,19 +1670,63 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                                 openTicketDraft({
                                   action: 'remove_node',
                                   title: '提交下线节点审批',
-                                  summary: `将下线节点 ${row.component}@${row.host}（集群 ${selected.name}）。审批通过后自动执行。`,
+                                  summary: row.component === 'be'
+                                    ? `将在线缩容 BE ${row.host}（集群 ${selected.name}）：审批通过后执行 ALTER SYSTEM DECOMMISSION BACKEND，BE 进程不停止；tablet 迁移完成、节点移出 SHOW PROC '/backends' 后平台自动删除登记，迁移期间可走工单恢复。`
+                                    : `将下线节点 ${row.component}@${row.host}（集群 ${selected.name}）。审批通过后自动执行。`,
                                   clusterId: selected.id,
                                   payload: { node_id: row.id, force_drop: false },
+                                  nodeComponent: row.component,
                                 }, [row])
                               }}
                               >
                                 下线
                               </Button>
                             </Space>
-                          ),
-                        },
-                      ]}
-                    />
+                            )
+                          },
+                      }
+                      const groupTitle = (label: string, count: number) => (
+                        <span style={{ fontWeight: 500 }}>
+                          {label}
+                          <span style={{ marginLeft: 6, color: '#999', fontWeight: 400 }}>{count}</span>
+                        </span>
+                      )
+                      return (
+                        <>
+                          <div style={{ marginTop: 16, marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                            {groupTitle('Frontend（FE）', feNodes.length)}
+                            <Button size="small" loading={nodeLiveLoading} onClick={() => { void loadNodeLive(selected.id) }}>
+                              刷新
+                            </Button>
+                          </div>
+                          <Table
+                            rowKey="id"
+                            size="small"
+                            dataSource={feNodes}
+                            pagination={false}
+                            locale={{ emptyText: '暂无 FE 节点' }}
+                            columns={[feRoleCol, hostCol, journalCol, heartbeatCol, startTimeCol, statusCol, actionCol]}
+                          />
+                          <div style={{ marginTop: 20, marginBottom: 8 }}>
+                            {groupTitle('Backend（BE）', beNodes.length)}
+                          </div>
+                          <Table
+                            key={selected.id}
+                            rowKey="id"
+                            size="small"
+                            dataSource={beNodes}
+                            pagination={{
+                              defaultPageSize: 20,
+                              pageSizeOptions: [20, 50, 100],
+                              showSizeChanger: true,
+                              showTotal: (total) => `共 ${total} 个 BE`,
+                            }}
+                            locale={{ emptyText: '暂无 BE 节点' }}
+                            columns={[hostCol, dataRootCol, cpuCol, storageCol, tabletCol, statusCol, actionCol]}
+                          />
+                        </>
+                      )
+                    })()}
                   </Card>
                 )}
               </Space>
@@ -1355,9 +1738,16 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
             children: (
               <Space direction="vertical" style={{ width: '100%' }} size="middle">
                 <Button onClick={() => loadChanges(selected?.id)}>刷新</Button>
+                <ChangeCategoryTabs
+                  categories={SR_CHANGE_CATEGORIES}
+                  changes={changes}
+                  active={changeCat}
+                  onChange={selectChangeCategory}
+                />
                 <Table
                   rowKey="id"
-                  dataSource={changes}
+                  dataSource={filterChangesByCategory(SR_CHANGE_CATEGORIES, changes, changeCat)}
+                  locale={{ emptyText: `暂无${changeCategoryLabel(SR_CHANGE_CATEGORIES, changeCat)}` }}
                   pagination={false}
                   onRow={(row) => ({
                     onClick: () => { void pollChange(row.id) },
@@ -1429,6 +1819,14 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                           <Tooltip title="变更已成功但节点实际版本与目标不符时使用（例如 bin/lib 未替换成功），只升级版本不符的节点">
                             <Button size="small" onClick={() => openReupgradeByActualVersion(changeDetail)}>
                               按实际版本补升级
+                            </Button>
+                          </Tooltip>
+                        )}
+                        {(changeDetail.type === 'config_apply' || changeDetail.type === 'config_rollback')
+                          && changeDetail.status !== 'running' && changeDetail.status !== 'pending' && (
+                          <Tooltip title="各节点回到本次下发前的远端原文件">
+                            <Button size="small" danger onClick={() => setChangeConfRollback(changeDetail)}>
+                              回退本次下发
                             </Button>
                           </Tooltip>
                         )}
@@ -1547,7 +1945,7 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                       ]}
                     />
                     <div style={{ marginTop: 12, fontWeight: 600 }}>
-                      {INIT_CHANGE_TYPES.includes(changeDetail.type) ? '初始化日志' : '运行日志'}
+                      {changeCategoryLabel(SR_CHANGE_CATEGORIES, changeCategoryOf(SR_CHANGE_CATEGORIES, changeDetail.type))}
                     </div>
                     <pre className={`sr-change-log${isFailed ? ' sr-change-log-fail' : ''}`}>
                       {[
@@ -1875,7 +2273,10 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                   size="small"
                   title={() => '已登记 Agent'}
                   dataSource={agents}
-                  pagination={false}
+                  pagination={{
+                    pageSize: 10, size: 'small', showSizeChanger: true, pageSizeOptions: [10, 20, 50],
+                    showTotal: (t) => `共 ${t} 个`,
+                  }}
                   columns={[
                     { title: '名称', dataIndex: 'name' },
                     { title: 'URL', dataIndex: 'base_url' },
@@ -2018,7 +2419,10 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                   size="small"
                   title={() => '下发记录'}
                   dataSource={deploys}
-                  pagination={false}
+                  pagination={{
+                    pageSize: 10, size: 'small', showSizeChanger: true, pageSizeOptions: [10, 20, 50],
+                    showTotal: (t) => `共 ${t} 条`,
+                  }}
                   columns={[
                     {
                       title: '主机',
@@ -2031,8 +2435,10 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                     {
                       title: '状态',
                       dataIndex: 'status',
-                      width: 100,
-                      render: (s: string) => <Tag color={statusColor[s] || 'default'}>{s}</Tag>,
+                      width: 110,
+                      render: (s: string, row: SrAgentDeploy) => (
+                        <Tag color={statusColor[s] || 'default'} icon={isAgentDeployActive(row) ? <SyncOutlined spin /> : undefined}>{s}</Tag>
+                      ),
                     },
                     { title: '端口', dataIndex: 'listen_port', width: 70 },
                     { title: 'Base URL', dataIndex: 'base_url', ellipsis: true },
@@ -2115,6 +2521,7 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                 ? '已登记为 ready，可直接维护'
                 : (res.data?.data?.change_id ? '已创建并提交初始化' : '已创建'),
             )
+            if (res.data?.warning) message.warning(res.data.warning, 8)
             setClusterModal(false)
             clusterForm.resetFields()
             loadClusters()
@@ -2269,7 +2676,15 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
           )}
           <Form.Item name="software_base" label="software_base"><Input /></Form.Item>
           <Form.Item name="data_root" label="BE 数据盘挂载点" extra="不存在时自动选用未使用磁盘格式化挂载；已存在时须位于非系统盘"><Input /></Form.Item>
-          <Form.Item name="fe_password" label={clusterModalMode === 'register' ? 'FE 密码' : 'FE 密码（初装可空）'}><Input.Password /></Form.Item>
+          <Form.Item
+            name="fe_password"
+            label={clusterModalMode === 'register' ? 'FE 密码' : 'FE 密码（初装可空）'}
+            extra={clusterModalMode === 'register'
+              ? '可留空：留空时使用「资源配置 → 实例管理 → StarRocks」中匹配到的实例密码；提交时会校验 FE 连接'
+              : '初装后 root 上了密码，请在「资源配置 → 实例管理 → StarRocks」的对应实例中维护，平台优先使用实例密码'}
+          >
+            <Input.Password />
+          </Form.Item>
 
           {agents.length === 0 && (
             <Alert
@@ -2522,24 +2937,10 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
               escalate: v.escalate ? 'sudo_su' : '',
             })
             const deployId = res.data?.data?.deploy_id as string
-            message.success('已提交下发')
+            message.success('已提交下发，进度见下发记录，完成后会通知')
             setDeployModal(false)
+            if (deployId) deployTracker.track(deployId)
             loadDeploys()
-            if (deployId) {
-              for (let i = 0; i < 60; i++) {
-                await new Promise((r) => setTimeout(r, 2000))
-                const dRes = await api.get(`/sr-cluster/agents/deploys/${deployId}`)
-                const dep = dRes.data?.data as SrAgentDeploy
-                if (dep && dep.status !== 'pending' && dep.status !== 'running') {
-                  setDeployLog(dep)
-                  loadAgents()
-                  loadDeploys()
-                  if (dep.status === 'success') message.success('下发成功，已登记 Node Agent')
-                  else message.error('下发失败，请查看日志')
-                  break
-                }
-              }
-            }
           } catch (e: any) {
             message.error(e?.response?.data?.message || e.message)
           } finally {
@@ -2569,7 +2970,8 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
               placeholder={hosts.length ? '选择主机' : '暂无 host 实例'}
               options={hosts.map((h) => ({
                 value: h.id,
-                label: `${h.name} — ${h.host || h.domain_name || '-'} :${h.port || 22}`,
+                disabled: deployingHostIds.has(h.id),
+                label: `${h.name} — ${h.host || h.domain_name || '-'} :${h.port || 22}${deployingHostIds.has(h.id) ? '（下发中）' : ''}`,
               }))}
             />
           </Form.Item>
@@ -2910,8 +3312,12 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
       >
         <Alert type="warning" showIcon style={{ marginBottom: 12 }} message={ticketDraft?.summary || ''} />
         <Form form={ticketForm} layout="vertical">
-          {ticketDraft?.action === 'remove_node' && (
-            <Form.Item name="force_drop" valuePropName="checked" extra="BE 默认 decommission；勾选则 DROP BACKEND">
+          {ticketDraft?.action === 'remove_node' && ticketDraft.nodeComponent === 'be' && (
+            <Form.Item
+              name="force_drop"
+              valuePropName="checked"
+              extra="默认 DECOMMISSION 在线缩容（不停服，迁移期间可恢复）；勾选则直接 DROP BACKEND，BE 立即移出集群且不可恢复"
+            >
               <Checkbox>强制 DROP（force_drop）</Checkbox>
             </Form.Item>
           )}
@@ -2975,21 +3381,13 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                 }
                 setConfigBusy(true)
                 try {
-                  // 若编辑区相对预览有改动，先落当前节点
-                  const cur = configPreviews.find((p) => p.node_id === configSelectedNodeId)
-                  if (configSelectedNodeId && configEditBody !== (cur?.editable || '')) {
-                    await api.put(
-                      `/sr-cluster/clusters/${selected.id}/nodes/${configSelectedNodeId}/config`,
-                      { content: configEditBody },
-                    )
-                  }
-                  const res = await api.post(`/sr-cluster/clusters/${selected.id}/config-apply`, {
+                  const res = await api.post(`/sr-cluster/clusters/${selected.id}/conf-patch`, {
+                    source_node_id: configSelectedNodeId,
+                    content: configEditBody,
                     node_ids: configNodeIds,
-                    restart: configRestart,
+                    dry_run: true,
                   })
-                  message.success('已提交配置下发')
-                  setConfigModal(false)
-                  afterChange(res.data?.data?.change_id)
+                  setConfigPatchPlan(res.data?.data || null)
                 } catch (e: any) {
                   message.error(e?.response?.data?.message || e.message)
                 } finally {
@@ -2997,7 +3395,7 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                 }
               }}
             >
-              下发到勾选节点
+              下发到勾选节点…
             </Button>
           </Space>
         )}
@@ -3006,7 +3404,13 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
           type="info"
           showIcon
           style={{ marginBottom: 12 }}
-          message="左侧选节点查看已解析参数（非 {{模板}}）；可编辑后「保存当前节点」，再勾选节点「下发」。meta_dir / storage_root_path 由平台按 data_root 锁定追加。"
+          message={(
+            <>
+              左侧选节点查看已解析参数（非 {'{{模板}}'}），编辑后「下发」。一次只能下发同一角色（FE 或 BE）：当前节点下发编辑后的全文，
+              其他勾选节点只同步本次改动的参数（frontend_address / priority_networks 等节点专属参数不同步）。
+              meta_dir / storage_root_path 由平台按 data_root 锁定追加。
+            </>
+          )}
         />
         <div style={{ display: 'flex', gap: 16, alignItems: 'stretch', minHeight: 420 }}>
           <div style={{ width: 280, flexShrink: 0 }}>
@@ -3016,11 +3420,13 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                 type="link"
                 size="small"
                 onClick={() => {
-                  const all = configPreviews.map((p) => p.node_id)
-                  setConfigNodeIds(configNodeIds.length === all.length ? [] : all)
+                  const same = configPreviews.filter((p) => p.role === configCurRole).map((p) => p.node_id)
+                  setConfigNodeIds(configNodeIds.length === same.length ? [configSelectedNodeId] : same)
                 }}
               >
-                {configNodeIds.length === configPreviews.length ? '取消全选' : '全选'}
+                {configNodeIds.length === configPreviews.filter((p) => p.role === configCurRole).length
+                  ? '只选当前'
+                  : `全选 ${configCurRole.toUpperCase()}`}
               </Button>
             </div>
             <Table
@@ -3038,7 +3444,12 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
               })}
               rowSelection={{
                 selectedRowKeys: configNodeIds,
+                hideSelectAll: true,
                 onChange: (keys) => setConfigNodeIds(keys as string[]),
+                getCheckboxProps: (row) => ({
+                  disabled: row.role !== configCurRole,
+                  title: row.role !== configCurRole ? '不同角色不能同时下发，请点击该行切换后单独下发' : undefined,
+                }),
               }}
               columns={[
                 {
@@ -3071,30 +3482,59 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
           <div style={{ flex: 1, minWidth: 0 }}>
             {(() => {
               const cur = configPreviews.find((p) => p.node_id === configSelectedNodeId)
-              if (!cur) return <Alert type="warning" message="暂无节点" />
+              if (!cur || !selected) return <Alert type="warning" message="暂无节点" />
               const v = cur.vars || {}
               return (
-                <>
-                  <Descriptions size="small" column={2} style={{ marginBottom: 8 }}>
-                    <Descriptions.Item label="节点">{cur.role} · {cur.host}</Descriptions.Item>
-                    <Descriptions.Item label="远端">{cur.remote_path || '-'}</Descriptions.Item>
-                    <Descriptions.Item label="来源">{cur.source}{cur.has_draft ? '（已改）' : ''}</Descriptions.Item>
-                    <Descriptions.Item label="关键参数">
-                      {cur.role === 'be'
-                        ? `be_port=${v.BEPort ?? '-'} be_http=${v.HTTPPort ?? '-'} hb=${v.HeartbeatPort ?? '-'} brpc=${v.BRPCPort ?? '-'} starlet=${v.StarletPort ?? '-'} net=${v.PriorityNetworks || '-'}`
-                        : `http=${v.HTTPPort ?? '-'} rpc=${v.RPCPort ?? '-'} query=${v.QueryPort ?? '-'} edit=${v.EditPort ?? '-'} net=${v.PriorityNetworks || '-'}`}
-                    </Descriptions.Item>
-                  </Descriptions>
-                  <Input.TextArea
-                    value={configEditBody}
-                    onChange={(e) => setConfigEditBody(e.target.value)}
-                    rows={16}
-                    style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12 }}
-                  />
-                </>
+                <Tabs
+                  size="small"
+                  activeKey={configTab}
+                  onChange={(k) => setConfigTab(k as 'edit' | 'history')}
+                  style={{ marginTop: -8 }}
+                  items={[
+                    {
+                      key: 'edit',
+                      label: '编辑',
+                      children: (
+                        <>
+                          <Descriptions size="small" column={2} style={{ marginBottom: 8 }}>
+                            <Descriptions.Item label="节点">{cur.role} · {cur.host}</Descriptions.Item>
+                            <Descriptions.Item label="远端">{cur.remote_path || '-'}</Descriptions.Item>
+                            <Descriptions.Item label="来源">{cur.source}{cur.has_draft ? '（已改）' : ''}</Descriptions.Item>
+                            <Descriptions.Item label="关键参数">
+                              {cur.role === 'be'
+                                ? `be_port=${v.BEPort ?? '-'} be_http=${v.HTTPPort ?? '-'} hb=${v.HeartbeatPort ?? '-'} brpc=${v.BRPCPort ?? '-'} starlet=${v.StarletPort ?? '-'} net=${v.PriorityNetworks || '-'}`
+                                : `http=${v.HTTPPort ?? '-'} rpc=${v.RPCPort ?? '-'} query=${v.QueryPort ?? '-'} edit=${v.EditPort ?? '-'} net=${v.PriorityNetworks || '-'}`}
+                            </Descriptions.Item>
+                          </Descriptions>
+                          <Input.TextArea
+                            value={configEditBody}
+                            onChange={(e) => setConfigEditBody(e.target.value)}
+                            rows={16}
+                            style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12 }}
+                          />
+                        </>
+                      ),
+                    },
+                    {
+                      key: 'history',
+                      label: '下发记录',
+                      children: (
+                        <ConfHistoryPanel
+                          clusterId={selected.id}
+                          node={{ node_id: cur.node_id, host: cur.host, role: cur.role }}
+                          active={configTab === 'history'}
+                          onRolledBack={(changeId) => {
+                            setConfigModal(false)
+                            afterChange(changeId)
+                          }}
+                        />
+                      ),
+                    },
+                  ]}
+                />
               )
             })()}
-            <div style={{ marginTop: 12 }}>
+            <div style={{ marginTop: 12, display: configTab === 'edit' ? undefined : 'none' }}>
               <Button type="link" size="small" style={{ padding: 0 }} onClick={() => setConfigShowTpl(!configShowTpl)}>
                 {configShowTpl ? '收起角色模板（高级）' : '编辑角色模板（高级，含 {{变量}}）'}
               </Button>
@@ -3152,6 +3592,56 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
           </div>
         </div>
       </Modal>
+
+      {selected && (
+        <ConfApplyConfirmModal
+          open={!!configPatchPlan}
+          clusterId={selected.id}
+          nodes={(configPatchPlan?.nodes || []).map((n) => ({ node_id: n.node_id, host: n.host, role: n.role }))}
+          contents={Object.fromEntries((configPatchPlan?.nodes || []).map((n) => [n.node_id, n.content]))}
+          summary={configPatchPlan && (
+            <Alert
+              type={configPatchPlan.changes.length ? 'success' : 'warning'}
+              showIcon
+              style={{ marginBottom: 12 }}
+              message={configPatchPlan.changes.length
+                ? `本次改动（相对${configPatchPlan.base_label}）：${keySummary(configPatchPlan.changes, 6)}`
+                : `相对${configPatchPlan.base_label}没有参数改动`}
+              description={configPatchPlan.nodes.length > 1
+                ? `当前节点下发编辑后的全文；其余 ${configPatchPlan.nodes.length - 1} 个 ${configPatchPlan.role.toUpperCase()} 节点只同步上述参数${configPatchPlan.local_keys?.length ? `，节点专属参数 ${configPatchPlan.local_keys.join(', ')} 不同步` : ''}。`
+                : undefined}
+            />
+          )}
+          restart={configRestart}
+          onCancel={() => setConfigPatchPlan(null)}
+          onSubmit={async (nodeIds, restart) => {
+            try {
+              const res = await api.post(`/sr-cluster/clusters/${selected.id}/conf-patch`, {
+                source_node_id: configSelectedNodeId,
+                content: configEditBody,
+                node_ids: nodeIds,
+                restart,
+                dry_run: false,
+              })
+              message.success('已提交配置下发')
+              setConfigPatchPlan(null)
+              setConfigModal(false)
+              afterChange(res.data?.data?.change_id)
+            } catch (e: any) {
+              message.error(e?.response?.data?.message || e.message)
+            }
+          }}
+        />
+      )}
+      <ChangeConfRollbackModal
+        clusterId={changeConfRollback?.cluster_id || ''}
+        change={changeConfRollback}
+        onCancel={() => setChangeConfRollback(null)}
+        onDone={(id) => {
+          setChangeConfRollback(null)
+          afterChange(id)
+        }}
+      />
     </div>
   )
 }

@@ -28,7 +28,7 @@ func (h *FlashbackHandler) engine() *flashback.FlashbackImpl {
 }
 
 func (h *FlashbackHandler) List(c *gin.Context) {
-	list, err := h.Store.ListFlashbacks()
+	list, err := h.Store.ListFlashbacksInTenant(effectiveListTenantID(h.Store, c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -40,7 +40,7 @@ func (h *FlashbackHandler) List(c *gin.Context) {
 }
 
 func (h *FlashbackHandler) Get(c *gin.Context) {
-	t, err := h.Store.GetFlashback(c.Param("id"))
+	t, err := h.Store.GetFlashbackInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || t == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "任务不存在"})
 		return
@@ -85,18 +85,16 @@ func (h *FlashbackHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "参数无效"})
 		return
 	}
-	reviewer := strings.TrimSpace(req.Reviewer)
-	if reviewer == "" {
-		reviewer = strings.TrimSpace(req.Approver)
+	preferred := strings.TrimSpace(req.Reviewer)
+	if preferred == "" {
+		preferred = strings.TrimSpace(req.Approver)
 	}
-	if reviewer == "" {
-		reviewer = strings.TrimSpace(req.AssignedTo)
+	if preferred == "" {
+		preferred = strings.TrimSpace(req.AssignedTo)
 	}
-	if reviewer == "" {
-		reviewer, _ = h.Store.GetGlobalArg("sync_default_approver")
-	}
-	if reviewer == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "审核人必填"})
+	reviewer, aerr := resolveTenantAssignee(h.Store, middleware.TenantID(c), preferred)
+	if aerr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": aerr.Error()})
 		return
 	}
 	dbName := strings.TrimSpace(req.Database)

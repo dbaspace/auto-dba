@@ -22,7 +22,7 @@ func (h *ArchiveHandler) engine() *archive.Engine {
 }
 
 func (h *ArchiveHandler) Get(c *gin.Context) {
-	t, err := h.Store.GetArchive(c.Param("id"))
+	t, err := h.Store.GetArchiveInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || t == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "任务不存在"})
 		return
@@ -31,7 +31,7 @@ func (h *ArchiveHandler) Get(c *gin.Context) {
 }
 
 func (h *ArchiveHandler) Update(c *gin.Context) {
-	t, err := h.Store.GetArchive(c.Param("id"))
+	t, err := h.Store.GetArchiveInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || t == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "任务不存在"})
 		return
@@ -92,7 +92,7 @@ func (h *ArchiveHandler) ListRuns(c *gin.Context) {
 	if taskID == "" {
 		taskID = c.Query("task_id")
 	}
-	list, err := h.Store.ListArchiveRuns(taskID, 100)
+	list, err := h.Store.ListArchiveRunsInTenant(effectiveListTenantID(h.Store, c), taskID, 100)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return

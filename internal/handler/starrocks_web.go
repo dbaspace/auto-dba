@@ -101,7 +101,7 @@ func (h *StarRocksWebHandler) FetchPage(c *gin.Context) {
 	if kind == "" {
 		kind = "fe"
 	}
-	base, user, pass, err := h.resolveAuth(&req)
+	base, user, pass, err := h.resolveAuth(c, &req)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
@@ -167,7 +167,7 @@ func (h *StarRocksWebHandler) FetchPage(c *gin.Context) {
 }
 
 // resolveAuth 对齐 Hub：fe_admin_id 取凭据；可选 base_url/be_base_url/host 覆盖实际请求地址。
-func (h *StarRocksWebHandler) resolveAuth(req *starrocksWebPageReq) (base, user, pass string, err error) {
+func (h *StarRocksWebHandler) resolveAuth(c *gin.Context, req *starrocksWebPageReq) (base, user, pass string, err error) {
 	kind := strings.ToLower(strings.TrimSpace(req.Kind))
 	override := firstNonEmpty(
 		strings.TrimSpace(req.BaseURL),
@@ -176,7 +176,7 @@ func (h *StarRocksWebHandler) resolveAuth(req *starrocksWebPageReq) (base, user,
 	)
 
 	if id := strings.TrimSpace(req.FeAdminID); id != "" {
-		it, e := h.Store.GetFeAdmin(id)
+		it, e := h.Store.GetFeAdminInTenant(id, effectiveListTenantID(h.Store, c))
 		if e != nil {
 			return "", "", "", e
 		}

@@ -76,13 +76,18 @@ func (e *Engine) ApplyConfToNode(ctx context.Context, cl *store.SrCluster, n *st
 		Mode:     "0644",
 		ChangeID: changeID,
 		StepID:   stepID,
+		Backup:   true,
 	})
 	if err != nil {
 		return "", err
 	}
+	e.recordApplyRevisions(cl, n, changeID, content, source, resp)
 	msg := fmt.Sprintf("%s (source=%s hash=%s)", remotePath, source, shortContentHash(content))
 	if resp != nil && resp.Message != "" {
 		msg += "; " + resp.Message
+	}
+	if resp != nil && !resp.PreviousExists {
+		msg += "; 未取得下发前原文件（首次下发或 Agent 版本过低）"
 	}
 	return msg, nil
 }

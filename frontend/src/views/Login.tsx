@@ -66,9 +66,15 @@ export default function Login() {
     localStorage.setItem('user', JSON.stringify(data.user))
     localStorage.setItem('last_activity_at', String(Date.now()))
     dispatch(setUser(data.user))
-    message.success('登录成功')
     setRequireCaptcha(false)
     startCooldown(0)
+    if (data.need_tenant_select) {
+      localStorage.setItem('pending_tenants', JSON.stringify(data.tenants || data.user?.tenants || []))
+      message.info('请选择要进入的租户')
+      navigate('/select-tenant', { replace: true })
+      return
+    }
+    message.success('登录成功')
     const first = (data.user?.menus || []).flatMap(function walk(n: any): string[] {
       return n.path ? [n.path] : (n.children || []).flatMap(walk)
     })[0]

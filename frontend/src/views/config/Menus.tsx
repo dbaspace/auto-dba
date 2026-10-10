@@ -48,7 +48,7 @@ const MENU_ICON_OPTIONS = [
   'edit', 'share', 'key', 'plus', 'refresh', 'connection', 'upload', 'sort', 'lock',
   'clock', 'folder', 'location', 'monitor', 'search', 'cpu', 'grid', 'files',
   'histogram', 'coin', 'setting', 'menu', 'user', 'user-filled', 'team', 'login',
-  'safety', 'audit', 'warning',
+  'safety', 'audit', 'warning', 'todo-list',
 ]
 
 function emptyForm(): MenuForm {

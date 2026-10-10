@@ -1,29 +1,34 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert, Breadcrumb, Button, Card, Col, Form, Input, InputNumber, Modal, Row, Select, Space, Switch, Table, Tabs, Tag, message,
 } from 'antd'
+import { SyncOutlined } from '@ant-design/icons'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import api from '../../api/request'
+import Auth from '../../components/Auth'
+import { Perm } from '../../hooks/usePermission'
+import { useAppSelector } from '../../store'
+import { activeDeployHostIds, isAgentDeployActive, useAgentDeployTracker } from './agentDeployTracker'
 import {
   NodePrecheckPanel, agentMatchesHost, agentMismatchMessage, hostPrimaryAddr, useHostApprovers,
   type NodePrecheckResult,
 } from './node-precheck/nodePrecheck'
+import {
+  ChangeCategoryTabs, DB_CHANGE_CATEGORIES, changeCategoryLabel, changeCategoryOf, filterChangesByCategory, pickChangeInCategory,
+  type ChangeCategoryKey,
+} from './changeCategories'
+import DbReleasePanel, { type DbRelease } from './DbReleasePanel'
+import { CONF_TEMPLATE_ENGINES, DbClusterConfModal, DbConfTemplatesCard } from './DbConfTemplates'
 import './DbDeployWorkbench.css'
 
 export type DbEngine = string
 
-type Release = {
-  id: string
-  engine: string
-  version: string
-  object_key: string
-  checksum: string
-  arch?: string
-  enabled: boolean
-}
+type Release = DbRelease
 
 type Cluster = {
   id: string
+  tenant_id?: string
+  tenant_name?: string
   engine: string
   name: string
   environment: string
@@ -114,6 +119,93 @@ type Meta = {
   roles?: string[]
 }
 
+type RegInstance = {
+  id: string
+  name: string
+  db_type?: string
+  host?: string
+  domain_name?: string
+  domains?: string[]
+  port?: number
+  env_id?: string
+  cloud_vendor?: string
+  cloud_instance_id?: string
+  cloud_region?: string
+}
+
+const CLOUD_VENDOR_OPTIONS = [
+  { value: 'tencent', label: '腾讯云' },
+  { value: 'aliyun', label: '阿里云' },
+  { value: 'huawei', label: '华为云' },
+  { value: 'aws', label: 'AWS' },
+]
+
+const cloudVendorText = (v?: string) => CLOUD_VENDOR_OPTIONS.find((o) => o.value === v)?.label || v || ''
+
+function instanceTypeKey(t?: string) {
+  const n = String(t || '').toLowerCase()
+  if (n === 'postgresql' || n === 'pg' || n === 'pgsql') return 'postgres'
+  return n
+}
+
+function instanceEndpointHost(it: RegInstance) {
+  const domain = (it.domains || []).find(Boolean) || it.domain_name
+  if (domain) return domain.trim()
+  return String(it.host || '').split(/[,，]/)[0].trim()
+}
+
+type RegNode = { role: string; host: string; port?: number; source?: string }
+
+type InstanceProbe = {
+  version?: string
+  major?: string
+  base_dir?: string
+  data_dir?: string
+  port?: number
+  topology?: string
+  connected_role?: string
+  nodes?: RegNode[]
+  warnings?: string[]
+}
+
+/** 实例登记的地址（逗号分隔多节点，可带 :port）→ 节点：第一个为主，其余为从。 */
+function instanceFallbackNodes(it: RegInstance, defPort?: number): RegNode[] {
+  const raw = String(it.host || it.domain_name || '')
+  const addrs = raw.split(/[,，\s]+/).map((s) => s.trim()).filter(Boolean).map((s) => {
+    const m = s.match(/^(.+):(\d+)$/)
+    return m ? { host: m[1], port: Number(m[2]) } : { host: s, port: it.port || defPort }
+  })
+  return addrs.map((a, i) => ({
+    ...a,
+    role: i === 0 ? 'primary' : 'replica',
+    source: 'instance',
+  }))
+}
+
+/** MySQL / PG 节点角色只有主、从：单机即 1 个主、无从库（旧值 single 视同主）。 */
+const isPrimaryRole = (role?: string) => role === 'primary' || role === 'single'
+
+function dbRoleText(role?: string): string {
+  if (isPrimaryRole(role)) return '主'
+  if (role === 'replica') return '从/备'
+  return role || '-'
+}
+
+function registerNodesError(topology: string, nodes: RegNode[]): string {
+  if (!nodes.length) return ''
+  if (nodes.some((n) => !String(n.host || '').trim())) return '节点主机不能为空'
+  const noPort = nodes.find((n) => !n.port)
+  if (noPort) return `节点 ${noPort.host} 端口未填写`
+  const primaries = nodes.filter((n) => isPrimaryRole(n.role)).length
+  const replicas = nodes.filter((n) => n.role === 'replica').length
+  if (topology === 'standalone' && (primaries !== 1 || replicas !== 0)) return '单机拓扑只能登记 1 个主节点'
+  if (topology === 'master_replica') {
+    if (primaries !== 1) return '主从拓扑须且仅能有 1 个主节点'
+    if (!replicas) return '主从拓扑至少需要 1 个从节点，没有从库请选择单机'
+  }
+  return ''
+}
+
 const TOPO_LABEL: Record<string, string> = {
   standalone: '自建·单机/登记',
   master_replica: '自建·主从/主备',
@@ -155,7 +247,10 @@ const STATUS_COLOR: Record<string, string> = {
   stopped: 'default',
 }
 
-const INIT_CHANGE_TYPES = ['cluster_deploy', 'ha_init']
+const DB_CHANGE_TYPE_LABEL: Record<string, string> = {
+  cluster_deploy: '集群部署', ha_init: '高可用初始化', add_node: '扩容节点', remove_node: '下线节点',
+  start_node: '启动节点', stop_node: '停止节点', restart_node: '重启节点',
+}
 
 type HAController = {
   id: string
@@ -196,6 +291,11 @@ function needsHAController(mode: string): boolean {
 
 export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
   const navigate = useNavigate()
+  const authUser = useAppSelector((s) => s.auth.user)
+  const impersonating = Boolean((authUser as { impersonating?: boolean })?.impersonating)
+  const currentTenant = (authUser as { current_tenant?: { id?: string; name?: string; code?: string } })?.current_tenant
+  const currentTenantId = currentTenant?.id || ''
+  const currentTenantLabel = currentTenant?.name || currentTenant?.code || '当前租户'
   const [meta, setMeta] = useState<Meta>({})
   const engineTitle = meta.label || ENGINE_TITLE_FALLBACK[engine] || engine
   const allowDeploy = meta.allow_deploy === true || (meta.allow_deploy === undefined && meta.capability === undefined && ['mysql', 'postgres', 'redis'].includes(engine))
@@ -211,11 +311,39 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
   const [nodes, setNodes] = useState<Node[]>([])
   const [changes, setChanges] = useState<DbChange[]>([])
   const [changeDetail, setChangeDetail] = useState<DbChange | null>(null)
+  const [changeCat, setChangeCat] = useState<ChangeCategoryKey>('init')
   const [tab, setTab] = useState('clusters')
   const [createOpen, setCreateOpen] = useState(false)
   const [createMode, setCreateMode] = useState<'create' | 'register'>('create')
-  const [releaseOpen, setReleaseOpen] = useState(false)
+  const [envOptions, setEnvOptions] = useState<{ value: string; label: string }[]>([])
+  const [envList, setEnvList] = useState<{ id?: string; code?: string; name?: string }[]>([])
+  const [regInstances, setRegInstances] = useState<RegInstance[]>([])
+  const loadRegInstances = useCallback(async () => {
+    try {
+      const res = await api.get('/instances')
+      const list: RegInstance[] = res.data?.data || []
+      setRegInstances(list.filter((it) => instanceTypeKey(it.db_type) === instanceTypeKey(engine)))
+    } catch (err: any) {
+      message.error(err?.response?.data?.message || '加载资源配置实例失败')
+    }
+  }, [engine])
+  const loadEnvironments = useCallback(async () => {
+    try {
+      const res = await api.get('/environments')
+      const list: { id?: string; code?: string; name?: string }[] = res.data?.data || []
+      setEnvList(list)
+      setEnvOptions(list
+        .map((e) => ({
+          value: e.code || e.name || '',
+          label: e.name && e.code && e.name !== e.code ? `${e.name} (${e.code})` : (e.name || e.code || ''),
+        }))
+        .filter((e) => e.value))
+    } catch (err: any) {
+      message.error(err?.response?.data?.message || '加载环境失败')
+    }
+  }, [])
   const [nodeOpen, setNodeOpen] = useState(false)
+  const [confOpen, setConfOpen] = useState(false)
   const [nodePrecheck, setNodePrecheck] = useState<NodePrecheckResult | null>(null)
   const [nodePrecheckBusy, setNodePrecheckBusy] = useState(false)
   const [nodeSubmitBusy, setNodeSubmitBusy] = useState(false)
@@ -228,7 +356,47 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
   const [haControllers, setHaControllers] = useState<HAController[]>([])
   const [mhaEnvOk, setMhaEnvOk] = useState(false)
   const [form] = Form.useForm()
-  const [relForm] = Form.useForm()
+  const [probeState, setProbeState] = useState<{ status: 'idle' | 'running' | 'ok' | 'failed'; message?: string; warnings?: string[] }>({ status: 'idle' })
+  const fillFromInstance = (it: RegInstance) => {
+    const patch: Record<string, unknown> = {}
+    if (!form.getFieldValue('name')) patch.name = it.name
+    const envCode = envList.find((e) => e.id === it.env_id)?.code
+    if (!form.getFieldValue('environment') && envCode) patch.environment = envCode
+    form.setFieldsValue(patch)
+  }
+  const applyTopology = (topo: string) => {
+    form.setFieldsValue({
+      topology: topo,
+      deploy_kind: 'self',
+      ...(topo !== 'master_replica' ? { ha_enabled: false, controller_id: undefined } : {}),
+    })
+    if (topo !== 'master_replica') setMhaEnvOk(false)
+  }
+  const probeRegInstance = async (it: RegInstance) => {
+    setProbeState({ status: 'running' })
+    try {
+      const res = await api.post('/db-deploy/instance-probe', { instance_id: it.id })
+      if (form.getFieldValue('linked_instance_id') !== it.id) return
+      if (!res.data?.ok) {
+        const nodes = instanceFallbackNodes(it, meta.defaults?.port)
+        if (nodes.length) applyTopology(nodes.length > 1 ? 'master_replica' : 'standalone')
+        form.setFieldsValue({ nodes })
+        setProbeState({ status: 'failed', message: res.data?.message || '探测失败' })
+        return
+      }
+      const p: InstanceProbe = res.data.data || {}
+      if (p.topology) applyTopology(p.topology)
+      form.setFieldsValue({
+        version: p.version || form.getFieldValue('version'),
+        software_base: p.base_dir || undefined,
+        ...(p.data_dir ? { data_root: p.data_dir } : {}),
+        nodes: (p.nodes || []).map((n) => ({ role: n.role, host: n.host, port: n.port, source: n.source })),
+      })
+      setProbeState({ status: 'ok', warnings: p.warnings || [] })
+    } catch (err: any) {
+      setProbeState({ status: 'failed', message: err?.response?.data?.message || String(err) })
+    }
+  }
   const [nodeForm] = Form.useForm()
   const [ossForm] = Form.useForm()
   const [agentForm] = Form.useForm()
@@ -280,6 +448,22 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
     setTicketDraft(draft)
   }
 
+  function assignClusterToCurrentTenant(row: Cluster, e?: React.MouseEvent) {
+    e?.stopPropagation()
+    if (!row.id || !currentTenantId) return
+    const from = row.tenant_name || row.tenant_id || '其它租户'
+    Modal.confirm({
+      title: '划拨到当前租户',
+      content: `将集群「${row.name}」（当前归属：${from}）划拨到「${currentTenantLabel}」？关联的资源实例、已登记库/账号一并迁移。`,
+      okText: '划拨',
+      onOk: async () => {
+        await api.post(`/db-deploy/clusters/${row.id}/assign-tenant`, { tenant_id: currentTenantId })
+        message.success('已划拨到 ' + currentTenantLabel)
+        await load()
+      },
+    })
+  }
+
   const load = useCallback(async () => {
     const [m, c, r, o, ossList, ag, dep, hostRes, haCtrl] = await Promise.all([
       api.get('/db-deploy/meta', { params: { engine } }),
@@ -320,6 +504,38 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
   }, [engine, ossForm])
 
   useEffect(() => { load().catch((e) => message.error(String(e))) }, [load])
+  const linkedLookupTried = useRef(new Set<string>())
+  useEffect(() => {
+    const linked = selected?.linked_instance_id
+    if (!linked || linkedLookupTried.current.has(linked) || regInstances.some((it) => it.id === linked)) return
+    linkedLookupTried.current.add(linked)
+    void loadRegInstances()
+  }, [selected?.linked_instance_id, regInstances, loadRegInstances])
+
+  // 轮询下发进度时只刷新 Agent 与下发记录，避免整页重载
+  const loadAgentLists = useCallback(async () => {
+    const [ag, dep] = await Promise.all([
+      api.get('/db-deploy/agents').catch(() => null),
+      api.get('/db-deploy/agents/deploys', { params: { limit: 50 } }).catch(() => null),
+    ])
+    if (ag) setAgents(ag.data?.data || [])
+    if (dep) setAgentDeploys(dep.data?.data || [])
+  }, [])
+  const hostLabel = (id: string) => {
+    const h = hosts.find((x) => x.id === id)
+    return h ? `${h.name} (${h.host || h.domain_name || '-'})` : id
+  }
+  const deployTracker = useAgentDeployTracker<{ id: string; host_instance_id: string; status: string; log_text?: string; base_url?: string; created_at?: string }>({
+    basePath: '/db-deploy/agents/deploys',
+    agentName: 'DB Agent',
+    hostLabel,
+    onShowLog: (row) => setDeployLog(row),
+    onFinished: () => { void loadAgentLists() },
+    refreshList: () => { void loadAgentLists() },
+  })
+  const { trackFromList: trackDeploysFromList } = deployTracker
+  useEffect(() => { trackDeploysFromList(agentDeploys) }, [agentDeploys, trackDeploysFromList])
+  const deployingHostIds = useMemo(() => activeDeployHostIds(agentDeploys), [agentDeploys])
 
   const pollChange = useCallback(async (id: string) => {
     const res = await api.get(`/db-deploy/changes/${id}`)
@@ -375,30 +591,31 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
     await load()
   }
 
-  const showClusterChangeLogs = async (
-    clusterId: string,
-    opts?: { types?: string[]; excludeTypes?: string[]; emptyHint?: string },
-  ) => {
+  // 任意入口打开变更时，分类子 Tab 跟随该变更，保证列表与详情一致
+  useEffect(() => {
+    if (changeDetail?.type) setChangeCat(changeCategoryOf(DB_CHANGE_CATEGORIES, changeDetail.type))
+  }, [changeDetail?.id, changeDetail?.type])
+
+  const selectChangeCategory = (key: ChangeCategoryKey) => {
+    setChangeCat(key)
+    const id = pickChangeInCategory(filterChangesByCategory(DB_CHANGE_CATEGORIES, changes, key))
+    if (id) void pollChange(id)
+    else setChangeDetail(null)
+  }
+
+  /** 打开变更页的指定分类（默认当前分类），并展示该分类最近一次（失败 / 执行中优先）变更日志 */
+  const showClusterChangeLogs = async (clusterId: string, category: ChangeCategoryKey = changeCat) => {
     setTab('changes')
+    setChangeCat(category)
     const res = await api.get('/db-deploy/changes', { params: { cluster_id: clusterId, limit: 50 } })
     const list: DbChange[] = res.data?.data || []
     setChanges(list)
-    let filtered = list
-    if (opts?.types?.length) {
-      const allow = new Set(opts.types)
-      filtered = list.filter((c) => allow.has(c.type))
-    } else if (opts?.excludeTypes?.length) {
-      const deny = new Set(opts.excludeTypes)
-      filtered = list.filter((c) => !deny.has(c.type))
-    }
-    const target = filtered.find((c) => c.status === 'failed' || c.status === 'running' || c.status === 'pending')?.id
-      || filtered[0]?.id
+    const target = pickChangeInCategory(filterChangesByCategory(DB_CHANGE_CATEGORIES, list, category))
     if (target) {
       await pollChange(target)
       return
     }
     setChangeDetail(null)
-    if (opts?.emptyHint) message.info(opts.emptyHint)
   }
 
   const nodeHostId = Form.useWatch('host_instance_id', nodeForm) as string | undefined
@@ -477,7 +694,6 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
         ...(meta.codis_roles || []).map((r) => ({ value: r, label: r })),
       ]
     : [
-        { value: 'single', label: '单机' },
         { value: 'primary', label: '主' },
         { value: 'replica', label: '从/备' },
       ]
@@ -503,6 +719,14 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
         )}
         description={meta.notes || (isRegisterOnly ? '本期仅支持登记已有或云单入口。' : '版本包预置配置中心 OSS；自建节点须绑定 DB Agent（:8092）；部署走变更单。')}
       />
+      {impersonating ? (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message={`审计中：列表含全平台集群。其它租户资源可划拨到「${currentTenantLabel}」，该租户成员即可运维。`}
+        />
+      ) : null}
       <Tabs
         activeKey={tab}
         onChange={setTab}
@@ -542,6 +766,8 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
                         data_root: meta.defaults?.data_root,
                         ha_enabled: false,
                       })
+                      setProbeState({ status: 'idle' })
+                      void loadEnvironments()
                       setCreateOpen(true)
                     }}
                     >
@@ -559,6 +785,9 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
                         data_root: meta.defaults?.data_root,
                         endpoint_port: meta.defaults?.port,
                       })
+                      setProbeState({ status: 'idle' })
+                      void loadEnvironments()
+                      void loadRegInstances()
                       setCreateOpen(true)
                     }}
                     >
@@ -572,6 +801,17 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
                     onRow={(row) => ({ onClick: () => { void openCluster(row) }, style: { cursor: 'pointer' } })}
                     columns={[
                       { title: '名称', dataIndex: 'name' },
+                      ...(impersonating
+                        ? [{
+                            title: '所属租户',
+                            width: 120,
+                            render: (_: unknown, row: Cluster) => {
+                              const same = row.tenant_id && currentTenantId && row.tenant_id === currentTenantId
+                              const label = row.tenant_name || row.tenant_id || '—'
+                              return same ? <Tag color="green">{label}</Tag> : <Tag color="orange">{label}</Tag>
+                            },
+                          }]
+                        : []),
                       { title: '引擎', dataIndex: 'engine', width: 90 },
                       {
                         title: '部署',
@@ -596,6 +836,21 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
                         render: (s: string) => <Tag color={STATUS_COLOR[s]}>{s}</Tag>,
                       },
                       { title: '环境', dataIndex: 'environment', width: 100 },
+                      ...(impersonating
+                        ? [{
+                            title: '操作',
+                            width: 140,
+                            render: (_: unknown, row: Cluster) => (
+                              row.tenant_id && row.tenant_id !== currentTenantId ? (
+                                <Auth urn={Perm.tenants.impersonate}>
+                                  <Button type="link" size="small" onClick={(e) => assignClusterToCurrentTenant(row, e)}>
+                                    划拨到当前租户
+                                  </Button>
+                                </Auth>
+                              ) : null
+                            ),
+                          }]
+                        : []),
                     ]}
                   />
                 </Col>
@@ -605,24 +860,6 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
                       title={selected.name}
                       extra={(
                         <Space wrap size="small">
-                          <Button type="link" size="small" onClick={() => {
-                            void showClusterChangeLogs(selected.id, {
-                              types: INIT_CHANGE_TYPES,
-                              emptyHint: '暂无初始化/部署日志',
-                            })
-                          }}
-                          >
-                            部署日志
-                          </Button>
-                          <Button type="link" size="small" onClick={() => {
-                            void showClusterChangeLogs(selected.id, {
-                              excludeTypes: INIT_CHANGE_TYPES,
-                              emptyHint: '暂无运行变更日志',
-                            })
-                          }}
-                          >
-                            运行日志
-                          </Button>
                           <Button type="link" size="small" onClick={() => setSelected(null)}>关闭</Button>
                         </Space>
                       )}
@@ -640,8 +877,13 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
                       {(selected.deploy_kind === 'cloud' || selected.topology === 'cloud_endpoint') ? (
                         <Card size="small" title="访问入口（厂商 HA 对用户仍是单入口）">
                           <p><b>Endpoint</b>：{selected.endpoint_host || nodes[0]?.host || '—'}:{selected.endpoint_port || nodes[0]?.port || meta.defaults?.port || '—'}</p>
-                          <p><b>厂商</b>：{selected.cloud_vendor || '—'} · <b>云实例 ID</b>：{selected.cloud_instance_id || '—'}</p>
-                          <p><b>Region</b>：{selected.cloud_region || '—'} · <b>关联实例</b>：{selected.linked_instance_id || '—'}</p>
+                          <p><b>厂商</b>：{cloudVendorText(selected.cloud_vendor) || '—'} · <b>云实例 ID</b>：{selected.cloud_instance_id || '—'}</p>
+                          <p>
+                            <b>Region</b>：{selected.cloud_region || '—'} · <b>关联实例</b>：
+                            {selected.linked_instance_id
+                              ? (regInstances.find((it) => it.id === selected.linked_instance_id)?.name || selected.linked_instance_id)
+                              : '—'}
+                          </p>
                           <Alert type="info" showIcon message="云托管不走 Agent 装机/启停；切主与扩缩由云厂商控制台完成。" />
                         </Card>
                       ) : selected.topology === 'codis' ? (
@@ -679,7 +921,12 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
                           pagination={false}
                           dataSource={nodes}
                           columns={[
-                            { title: '角色', dataIndex: 'role', width: 90 },
+                            {
+                              title: '角色',
+                              dataIndex: 'role',
+                              width: 90,
+                              render: (r: string) => (engine === 'mysql' || engine === 'postgres' ? dbRoleText(r) : r),
+                            },
                             { title: '主机', dataIndex: 'host' },
                             { title: '端口', dataIndex: 'port', width: 60 },
                             {
@@ -774,7 +1021,9 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
                           <Button size="small" onClick={() => {
                             nodeForm.resetFields()
                             nodeForm.setFieldsValue({
-                              role: selected.topology === 'standalone' ? 'single' : 'primary',
+                              role: engine === 'redis'
+                                ? (selected.topology === 'standalone' ? 'single' : 'primary')
+                                : (nodes.some((n) => isPrimaryRole(n.role)) ? 'replica' : 'primary'),
                               port: meta.defaults?.port,
                             })
                             setNodePrecheck(null)
@@ -784,6 +1033,10 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
                           >
                             添加节点
                           </Button>
+                        )}
+                        {CONF_TEMPLATE_ENGINES.includes(selected.engine || engine)
+                          && !(selected.deploy_kind === 'cloud' || selected.topology === 'cloud_endpoint') && (
+                          <Button size="small" onClick={() => setConfOpen(true)}>参数</Button>
                         )}
                         {allowDeploy && selected.status !== 'ready' && selected.status !== 'ha_pending'
                           && !(selected.deploy_kind === 'cloud' || selected.topology === 'cloud_endpoint') && (
@@ -869,16 +1122,23 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
                   </Button>
                   {!selected && <span className="muted">请先在「集群」选中集群</span>}
                 </Space>
+                <ChangeCategoryTabs
+                  categories={DB_CHANGE_CATEGORIES}
+                  changes={changes}
+                  active={changeCat}
+                  onChange={selectChangeCategory}
+                />
                 <Table
                   rowKey="id"
                   size="small"
-                  dataSource={changes}
+                  dataSource={filterChangesByCategory(DB_CHANGE_CATEGORIES, changes, changeCat)}
+                  locale={{ emptyText: `暂无${changeCategoryLabel(DB_CHANGE_CATEGORIES, changeCat)}` }}
                   onRow={(row) => ({
                     onClick: () => { void pollChange(row.id) },
                     style: { cursor: 'pointer', background: changeDetail?.id === row.id ? 'var(--ant-color-primary-bg, #e6f4ff)' : undefined },
                   })}
                   columns={[
-                    { title: '类型', dataIndex: 'type', width: 140 },
+                    { title: '类型', dataIndex: 'type', width: 140, render: (t: string) => DB_CHANGE_TYPE_LABEL[t] || t },
                     {
                       title: '状态',
                       dataIndex: 'status',
@@ -971,7 +1231,7 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
                       ]}
                     />
                     <div style={{ marginTop: 12, fontWeight: 600 }}>
-                      {INIT_CHANGE_TYPES.includes(changeDetail.type) ? '部署日志' : '运行日志'}
+                      {changeCategoryLabel(DB_CHANGE_CATEGORIES, changeCategoryOf(DB_CHANGE_CATEGORIES, changeDetail.type))}
                     </div>
                     <pre className="db-change-log">
                       {[
@@ -991,56 +1251,12 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
             key: 'releases',
             label: '版本目录',
             children: (
-              <>
-                <Alert
-                  type="warning"
-                  showIcon
-                  style={{ marginBottom: 12 }}
-                  message="请先将安装包上传到配置中心 OSS，再在此登记 object_key 与 sha256"
-                />
-                <Button type="primary" style={{ marginBottom: 12 }} onClick={() => { relForm.resetFields(); relForm.setFieldsValue({ engine: engine === 'redis' ? 'redis' : engine, arch: 'x86_64', enabled: true }); setReleaseOpen(true) }}>
-                  登记版本
-                </Button>
-                <Table
-                  rowKey="id"
-                  size="small"
-                  dataSource={releases}
-                  columns={[
-                    { title: '引擎', dataIndex: 'engine', width: 90 },
-                    { title: '版本', dataIndex: 'version', width: 120 },
-                    { title: 'object_key', dataIndex: 'object_key', ellipsis: true },
-                    { title: 'checksum', dataIndex: 'checksum', ellipsis: true, width: 140 },
-                    {
-                      title: '启用',
-                      dataIndex: 'enabled',
-                      width: 70,
-                      render: (v: boolean) => (v ? '是' : '否'),
-                    },
-                    {
-                      title: '操作',
-                      width: 160,
-                      render: (_: unknown, r: Release) => (
-                        <Space>
-                          <Button
-                            size="small"
-                            onClick={async () => {
-                              try {
-                                await api.post(`/db-deploy/releases/${r.id}/presign`)
-                                message.success('签发成功（URL 不下发到界面）')
-                              } catch (e: any) {
-                                message.error(e?.response?.data?.message || String(e))
-                              }
-                            }}
-                          >
-                            试签发
-                          </Button>
-                          <Button size="small" danger onClick={async () => { await api.delete(`/db-deploy/releases/${r.id}`); load() }}>删除</Button>
-                        </Space>
-                      ),
-                    },
-                  ]}
-                />
-              </>
+              <DbReleasePanel
+                engine={engine}
+                releases={releases}
+                prefix={ossBind.prefix || ''}
+                onChanged={() => { load().catch((e) => message.error(String(e))) }}
+              />
             ),
           },
           {
@@ -1160,7 +1376,15 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
                   dataSource={agentDeploys}
                   pagination={{ pageSize: 8 }}
                   columns={[
-                    { title: '状态', dataIndex: 'status', width: 90, render: (s: string) => <Tag color={STATUS_COLOR[s]}>{s}</Tag> },
+                    { title: '主机', dataIndex: 'host_instance_id', ellipsis: true, render: (id: string) => hostLabel(id) },
+                    {
+                      title: '状态',
+                      dataIndex: 'status',
+                      width: 110,
+                      render: (s: string, row: { id: string; host_instance_id: string; status: string; created_at?: string }) => (
+                        <Tag color={STATUS_COLOR[s]} icon={isAgentDeployActive(row) ? <SyncOutlined spin /> : undefined}>{s}</Tag>
+                      ),
+                    },
                     { title: '端口', dataIndex: 'listen_port', width: 70 },
                     { title: 'URL', dataIndex: 'base_url', ellipsis: true },
                     { title: '时间', dataIndex: 'created_at', width: 180 },
@@ -1180,6 +1404,7 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
             key: 'settings',
             label: '设置',
             children: (
+              <>
               <Card size="small" title="制品 OSS（引用配置中心）">
                 <p className="muted">
                   当前绑定：{ossBind.oss_environment || '未选择'} · prefix={ossBind.prefix || '—'}
@@ -1215,9 +1440,18 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
                   <Button type="primary" htmlType="submit">保存</Button>
                 </Form>
               </Card>
+              {CONF_TEMPLATE_ENGINES.includes(engine) && <DbConfTemplatesCard engine={engine} />}
+              </>
             ),
           },
         ].filter((it) => allowDeploy || (it.key !== 'releases' && it.key !== 'agents'))}
+      />
+
+      <DbClusterConfModal
+        open={confOpen && !!selected}
+        clusterId={selected?.id}
+        clusterName={selected?.name}
+        onClose={() => setConfOpen(false)}
       />
 
       <Modal
@@ -1303,7 +1537,20 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
                 delete payload.vip_hook_script
                 delete payload.vip_hook_args
               }
+              delete payload.nodes
+              if (!isCloud && createMode === 'register') {
+                const regNodes: RegNode[] = (v.nodes || []).filter((n: RegNode) => n && String(n.host || '').trim())
+                const nodeErr = registerNodesError(v.topology, regNodes)
+                if (nodeErr) {
+                  message.error(nodeErr)
+                  return
+                }
+                if (regNodes.length) {
+                  payload.nodes = regNodes.map((n) => ({ role: n.role, host: n.host.trim(), port: n.port }))
+                }
+              }
               const res = await api.post('/db-deploy/clusters', payload)
+              if (res.data?.warning) message.warning(res.data.warning)
               message.success(isCloud || createMode === 'register' ? '已登记为 ready' : '已创建')
               setCreateOpen(false)
               await load()
@@ -1333,7 +1580,26 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
           )}
           {engine !== 'redis' && <Form.Item name="engine" hidden><Input /></Form.Item>}
           <Form.Item name="name" label="名称" rules={[{ required: true }]}><Input /></Form.Item>
-          <Form.Item name="environment" label="环境" rules={[{ required: true }]}><Input placeholder="环境标识" /></Form.Item>
+          <Form.Item
+            name="environment"
+            label="环境"
+            rules={[{ required: true, message: '请选择环境' }]}
+            extra={(
+              <>
+                来自
+                {' '}
+                <Link to="/config/environments">配置中心 · 环境管理</Link>
+              </>
+            )}
+          >
+            <Select
+              showSearch
+              optionFilterProp="label"
+              placeholder="请选择环境"
+              options={envOptions}
+              notFoundContent="暂无环境，请先在配置中心 · 环境管理添加"
+            />
+          </Form.Item>
           <Form.Item name="topology" label="拓扑" rules={[{ required: true }]}>
             <Select
               options={(meta.topologies || [])
@@ -1343,6 +1609,7 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
                 if (val === 'cloud_endpoint') {
                   form.setFieldsValue({ deploy_kind: 'cloud', engine: engine === 'redis' ? 'redis' : engine, ha_enabled: false })
                   setMhaEnvOk(false)
+                  void loadRegInstances()
                 } else {
                   form.setFieldsValue({
                     deploy_kind: 'self',
@@ -1359,34 +1626,196 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
               if (cloud) {
                 return (
                   <>
+                    <Form.Item
+                      name="linked_instance_id"
+                      label="从资源配置选择实例"
+                      extra={(
+                        <>
+                          可选；选中后自动带出下列字段，仍可修改；不选则自定义填写。实例来自
+                          {' '}
+                          <Link to="/config/instances">资源配置</Link>
+                        </>
+                      )}
+                    >
+                      <Select
+                        showSearch
+                        allowClear
+                        optionFilterProp="label"
+                        placeholder="选择实例，或留空自定义"
+                        notFoundContent="资源配置中暂无该类型实例"
+                        options={regInstances.map((it) => {
+                          const host = instanceEndpointHost(it)
+                          const vendor = cloudVendorText(it.cloud_vendor)
+                          return {
+                            value: it.id,
+                            label: [it.name, host ? `${host}${it.port ? `:${it.port}` : ''}` : '', vendor].filter(Boolean).join(' · '),
+                          }
+                        })}
+                        onChange={(id?: string) => {
+                          const it = regInstances.find((x) => x.id === id)
+                          if (!it) return
+                          const patch: Record<string, unknown> = {
+                            endpoint_host: instanceEndpointHost(it) || undefined,
+                            endpoint_port: it.port || meta.defaults?.port,
+                            cloud_vendor: it.cloud_vendor || undefined,
+                            cloud_instance_id: it.cloud_instance_id || undefined,
+                            cloud_region: it.cloud_region || undefined,
+                          }
+                          form.setFieldsValue(patch)
+                          fillFromInstance(it)
+                        }}
+                      />
+                    </Form.Item>
                     <Form.Item name="endpoint_host" label="访问入口 Host/域名" rules={[{ required: true }]}><Input placeholder="vip.xxx.rds.aliyuncs.com" /></Form.Item>
                     <Form.Item name="endpoint_port" label="端口" rules={[{ required: true }]}><InputNumber style={{ width: '100%' }} /></Form.Item>
-                    <Form.Item name="cloud_vendor" label="云厂商"><Input placeholder="aliyun / tencent / huawei / aws" /></Form.Item>
+                    <Form.Item name="cloud_vendor" label="云厂商">
+                      <Select allowClear placeholder="选择云厂商" options={CLOUD_VENDOR_OPTIONS} />
+                    </Form.Item>
                     <Form.Item name="cloud_instance_id" label="云实例 ID"><Input /></Form.Item>
                     <Form.Item name="cloud_region" label="Region"><Input placeholder="cn-hangzhou / ap-guangzhou" /></Form.Item>
-                    <Form.Item name="linked_instance_id" label="关联配置中心实例 ID" extra="可选，便于监控/闪回复用云字段"><Input /></Form.Item>
                     <Form.Item name="version" label="版本备注（可选）"><Input placeholder="如 8.0 / 16" /></Form.Item>
                   </>
                 )
               }
+              const regFromInstance = createMode === 'register' && (engine === 'mysql' || engine === 'postgres')
               return (
                 <>
+                  {regFromInstance && (
+                    <>
+                      <Form.Item
+                        name="linked_instance_id"
+                        label="从资源配置选择实例"
+                        extra={(
+                          <>
+                            可选；选中后用实例账号只读连库，自动填写版本、目录、拓扑与节点，均可修改。实例来自
+                            {' '}
+                            <Link to="/config/instances">资源配置</Link>
+                          </>
+                        )}
+                      >
+                        <Select
+                          showSearch
+                          allowClear
+                          optionFilterProp="label"
+                          placeholder="选择实例，或留空手动填写"
+                          notFoundContent="资源配置中暂无该类型实例"
+                          options={regInstances.map((it) => ({
+                            value: it.id,
+                            label: [it.name, `${String(it.host || it.domain_name || '').trim()}${it.port ? `:${it.port}` : ''}`].filter(Boolean).join(' · '),
+                          }))}
+                          onChange={(id?: string) => {
+                            const it = regInstances.find((x) => x.id === id)
+                            if (!it) {
+                              setProbeState({ status: 'idle' })
+                              return
+                            }
+                            fillFromInstance(it)
+                            void probeRegInstance(it)
+                          }}
+                        />
+                      </Form.Item>
+                      {probeState.status !== 'idle' && (
+                        <div style={{ marginTop: -12, marginBottom: 16 }}>
+                          <Space size={8} style={{ marginBottom: 6 }}>
+                            {probeState.status === 'running' && <Tag icon={<SyncOutlined spin />} color="processing">探测中</Tag>}
+                            {probeState.status === 'ok' && <Tag color="success">已探测并填写</Tag>}
+                            {probeState.status === 'failed' && <Tag color="error">探测失败</Tag>}
+                            <Button
+                              size="small"
+                              type="link"
+                              disabled={probeState.status === 'running'}
+                              onClick={() => {
+                                const it = regInstances.find((x) => x.id === form.getFieldValue('linked_instance_id'))
+                                if (it) void probeRegInstance(it)
+                              }}
+                            >
+                              重新探测
+                            </Button>
+                          </Space>
+                          {probeState.status === 'failed' && (
+                            <Alert
+                              type="error"
+                              showIcon
+                              message={probeState.message}
+                              description="已按实例登记的主机生成节点，版本与目录请手动填写。"
+                            />
+                          )}
+                          {probeState.status === 'ok' && !!probeState.warnings?.length && (
+                            <Alert
+                              type="warning"
+                              showIcon
+                              message="请核对以下信息"
+                              description={<ul style={{ margin: 0, paddingLeft: 18 }}>{probeState.warnings.map((w) => <li key={w}>{w}</li>)}</ul>}
+                            />
+                          )}
+                        </div>
+                      )}
+                      <Form.Item name="version" label="版本" extra="已有集群的实际版本；版本目录里有对应安装包时可在下方另选 DbRelease">
+                        <Input placeholder={engine === 'mysql' ? '如 8.0.36' : '如 16.4'} />
+                      </Form.Item>
+                    </>
+                  )}
                   <Form.Item
                     name="release_id"
-                    label="版本（DbRelease）"
+                    label={regFromInstance ? '版本目录（可选）' : '版本（DbRelease）'}
                     rules={createMode === 'create' ? [{ required: true }] : []}
                   >
                     <Select
                       allowClear
-                      options={releases.filter((r) => r.enabled).map((r) => ({
+                      options={releases.filter((r) => r.enabled && (r.status === undefined || r.status === 'ready')).map((r) => ({
                         value: r.id,
-                        label: `${r.engine} ${r.version}`,
+                        label: `${r.engine} ${r.version}${r.arch && r.arch !== 'x86_64' ? ` (${r.arch})` : ''}`,
                       }))}
-                      placeholder="从版本目录选择"
+                      placeholder="从版本目录选择（仅列出安装包已就绪的版本）"
+                      notFoundContent="暂无就绪版本，请先到「版本目录」登记并上传 / 同步安装包"
                     />
                   </Form.Item>
-                  <Form.Item name="software_base" label="软件目录"><Input /></Form.Item>
+                  <Form.Item name="software_base" label="软件目录">
+                    <Input placeholder={regFromInstance ? '未探测到，请填写实际安装目录（如 /usr/lib/postgresql/15）' : undefined} />
+                  </Form.Item>
                   <Form.Item name="data_root" label="数据目录"><Input /></Form.Item>
+                  {regFromInstance && (
+                    <Form.Item
+                      label="节点"
+                      extra="提交时一并登记为运行中；DB Agent 与节点主机地址一致时自动绑定，否则在该主机下发 Agent 后自动补绑"
+                    >
+                      <Form.List name="nodes">
+                        {(fields, { add, remove }) => (
+                          <>
+                            {fields.map((f) => (
+                              <Space key={f.key} align="baseline" style={{ display: 'flex', marginBottom: 4 }}>
+                                <Form.Item name={[f.name, 'role']} noStyle rules={[{ required: true }]}>
+                                  <Select
+                                    style={{ width: 110 }}
+                                    options={[
+                                      { value: 'primary', label: '主' },
+                                      { value: 'replica', label: '从/备' },
+                                    ]}
+                                  />
+                                </Form.Item>
+                                <Form.Item name={[f.name, 'host']} noStyle rules={[{ required: true, message: '主机必填' }]}>
+                                  <Input style={{ width: 200 }} placeholder="主机 / IP" />
+                                </Form.Item>
+                                <Form.Item name={[f.name, 'port']} noStyle rules={[{ required: true, message: '端口必填' }]}>
+                                  <InputNumber style={{ width: 100 }} placeholder="端口" min={1} max={65535} />
+                                </Form.Item>
+                                <Button type="link" size="small" danger onClick={() => remove(f.name)}>删除</Button>
+                              </Space>
+                            ))}
+                            <Button
+                              size="small"
+                              onClick={() => add({
+                                role: fields.length ? 'replica' : 'primary',
+                                port: meta.defaults?.port,
+                              })}
+                            >
+                              添加节点
+                            </Button>
+                          </>
+                        )}
+                      </Form.List>
+                    </Form.Item>
+                  )}
                   {engine === 'mysql' || engine === 'postgres' ? (
                     <Form.Item noStyle shouldUpdate={(a, b) => a.topology !== b.topology}>
                       {() => {
@@ -1557,37 +1986,6 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
               )
             }}
           </Form.Item>
-        </Form>
-      </Modal>
-
-      <Modal title="登记版本" open={releaseOpen} onCancel={() => setReleaseOpen(false)} onOk={() => relForm.submit()} destroyOnClose>
-        <Form
-          form={relForm}
-          layout="vertical"
-          onFinish={async (v) => {
-            try {
-              await api.post('/db-deploy/releases', v)
-              message.success('已登记')
-              setReleaseOpen(false)
-              load()
-            } catch (e: any) {
-              message.error(e?.response?.data?.message || String(e))
-            }
-          }}
-        >
-          <Form.Item name="engine" label="引擎" rules={[{ required: true }]}>
-            <Select options={
-              engine === 'redis'
-                ? [{ value: 'redis', label: 'redis' }, { value: 'codis', label: 'codis' }]
-                : [{ value: engine, label: engine }]
-            }
-            />
-          </Form.Item>
-          <Form.Item name="version" label="版本号" rules={[{ required: true }]}><Input placeholder="8.0.36 / 16.4 / 7.2.4" /></Form.Item>
-          <Form.Item name="object_key" label="OSS object_key" rules={[{ required: true }]}><Input placeholder="db-artifacts/mysql/8.0.36/x86_64/xxx.tar.gz" /></Form.Item>
-          <Form.Item name="checksum" label="sha256" rules={[{ required: true }]}><Input /></Form.Item>
-          <Form.Item name="arch" label="架构"><Input /></Form.Item>
-          <Form.Item name="enabled" label="启用" valuePropName="checked"><Switch /></Form.Item>
         </Form>
       </Modal>
 
@@ -1770,24 +2168,10 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
               escalate: v.escalate ? 'sudo_su' : '',
             })
             const deployId = res.data?.data?.deploy_id as string
-            message.success('已提交下发')
+            message.success('已提交下发，进度见下发记录，完成后会通知')
             setDeployModal(false)
-            if (deployId) {
-              for (let i = 0; i < 60; i++) {
-                await new Promise((r) => setTimeout(r, 2000))
-                const dRes = await api.get(`/db-deploy/agents/deploys/${deployId}`)
-                const depRow = dRes.data?.data
-                if (depRow && depRow.status !== 'pending' && depRow.status !== 'running') {
-                  setDeployLog(depRow)
-                  await load()
-                  if (depRow.status === 'success') message.success('下发成功，已登记 DB Agent')
-                  else message.error('下发失败，请查看日志')
-                  break
-                }
-              }
-            } else {
-              await load()
-            }
+            if (deployId) deployTracker.track(deployId)
+            void loadAgentLists()
           } catch (e: any) {
             message.error(e?.response?.data?.message || e.message)
           } finally {
@@ -1817,7 +2201,8 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
               placeholder={hosts.length ? '选择主机' : '暂无 host 实例'}
               options={hosts.map((h) => ({
                 value: h.id,
-                label: `${h.name} — ${h.host || h.domain_name || '-'} :${h.port || 22}`,
+                disabled: deployingHostIds.has(h.id),
+                label: `${h.name} — ${h.host || h.domain_name || '-'} :${h.port || 22}${deployingHostIds.has(h.id) ? '（下发中）' : ''}`,
               }))}
             />
           </Form.Item>

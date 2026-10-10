@@ -39,6 +39,7 @@ func TestTransferAssignee_SubmitterOK(t *testing.T) {
 	_ = db.SetGlobalArg(store.ArgIssueGlobalApproverWhitelist, "", "")
 	h := &TicketHandler{Store: db}
 	it := &store.Issue{
+		TenantID: store.DefaultTenantID,
 		IssueType: store.IssueTypeDML, Status: store.StatusPending,
 		Submitter: "alice", AssignedTo: "bob", DBName: "appdb", SQLContent: "SELECT 1",
 	}
@@ -74,6 +75,7 @@ func TestTransferAssignee_NonSubmitterForbidden(t *testing.T) {
 	db := ticketAssigneeTestStore(t)
 	h := &TicketHandler{Store: db}
 	it := &store.Issue{
+		TenantID: store.DefaultTenantID,
 		IssueType: store.IssueTypeDML, Status: store.StatusPending,
 		Submitter: "alice", AssignedTo: "bob", SQLContent: "SELECT 1",
 	}
@@ -100,6 +102,7 @@ func TestTransferAssignee_NonPending(t *testing.T) {
 	db := ticketAssigneeTestStore(t)
 	h := &TicketHandler{Store: db}
 	it := &store.Issue{
+		TenantID: store.DefaultTenantID,
 		IssueType: store.IssueTypeDML, Status: store.StatusApproved,
 		Submitter: "alice", AssignedTo: "bob", SQLContent: "SELECT 1",
 	}
@@ -140,6 +143,7 @@ func TestTransferAssignee_ToSubmitterRejected(t *testing.T) {
 	db := ticketAssigneeTestStore(t)
 	h := &TicketHandler{Store: db}
 	it := &store.Issue{
+		TenantID: store.DefaultTenantID,
 		IssueType: store.IssueTypeDML, Status: store.StatusPending,
 		Submitter: "alice", AssignedTo: "bob", SQLContent: "SELECT 1",
 	}
@@ -161,6 +165,7 @@ func TestTransferAssignee_MigrationWhitelist(t *testing.T) {
 	t.Cleanup(func() { _ = db.SetGlobalArg("migration_approver_user_ids", prev, "") })
 	h := &TicketHandler{Store: db}
 	it := &store.Issue{
+		TenantID: store.DefaultTenantID,
 		IssueType: store.IssueTypeMigration, Status: store.StatusPending,
 		Submitter: "alice", AssignedTo: "bob", SQLContent: "migration noop",
 	}
@@ -182,6 +187,7 @@ func TestApprove_Whitelist(t *testing.T) {
 	_ = db.SetGlobalArg(store.ArgIssueGlobalApproverWhitelist, "whitelist_user", "test")
 	h := &TicketHandler{Store: db}
 	it := &store.Issue{
+		TenantID: store.DefaultTenantID,
 		IssueType: store.IssueTypeKafka, Status: store.StatusPending,
 		Submitter: "alice", AssignedTo: "bob", SQLContent: "kafka noop", Description: "wl-test",
 	}

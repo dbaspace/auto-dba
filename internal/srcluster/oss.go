@@ -52,11 +52,16 @@ func (e *Engine) loadOSSPlain() (*ossRuntime, error) {
 	if strings.TrimSpace(bind.OSSSettingID) == "" {
 		return nil, fmt.Errorf("请先在集群部署 · StarRocks 设置中选择配置中心的 OSS，并填写制品 prefix")
 	}
-	plain, err := e.Store.GetOSSSettingPlain(bind.OSSSettingID)
+	return newOSSRuntime(e.Store, e.Secret, bind.OSSSettingID, bind.Prefix, "starrocks/")
+}
+
+// newOSSRuntime 由配置中心 OSS + 制品 prefix 构造连接参数；prefix 为空时用 defaultPrefix。
+func newOSSRuntime(st *store.DB, secretKey, ossSettingID, prefix, defaultPrefix string) (*ossRuntime, error) {
+	plain, err := st.GetOSSSettingPlain(ossSettingID)
 	if err != nil || plain == nil {
 		return nil, fmt.Errorf("配置中心 OSS 不存在，请到「配置中心 → OSS 配置」维护")
 	}
-	sk, err := secret.Decrypt(e.Secret, plain.SecretEnc)
+	sk, err := secret.Decrypt(secretKey, plain.SecretEnc)
 	if err != nil {
 		return nil, err
 	}
@@ -64,11 +69,10 @@ func (e *Engine) loadOSSPlain() (*ossRuntime, error) {
 		strings.TrimSpace(plain.AccessKey) == "" || strings.TrimSpace(sk) == "" {
 		return nil, fmt.Errorf("所选 OSS（环境 %s）凭证不完整，请到配置中心补全", plain.Environment)
 	}
-	prefix := bind.Prefix
-	if prefix == "" {
-		prefix = "starrocks/"
+	if strings.TrimSpace(prefix) == "" {
+		prefix = defaultPrefix
 	}
-	if !strings.HasSuffix(prefix, "/") {
+	if prefix != "" && !strings.HasSuffix(prefix, "/") {
 		prefix += "/"
 	}
 	endpoint, host, err := normalizeOSSEndpoint(plain.Endpoint, plain.Bucket)

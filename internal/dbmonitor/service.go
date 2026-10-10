@@ -185,48 +185,53 @@ func (s *Service) labelKeys() (dbLabel, hostLabel string) {
 
 // ListInstances 按引擎返回可监控实例。
 func (s *Service) ListInstances(dbType string) ([]InstanceItem, error) {
+	return s.ListInstancesInTenant("", dbType)
+}
+
+// ListInstancesInTenant 按租户+引擎返回可监控实例。
+func (s *Service) ListInstancesInTenant(tenantID, dbType string) ([]InstanceItem, error) {
 	engine := NormalizeEngine(dbType)
 	if engine == "" {
 		engine = "postgres"
 	}
-	list, err := s.Store.ListInstances(engine, "")
+	list, err := s.Store.ListInstancesInTenant(tenantID, engine, "")
 	if err != nil {
 		return nil, err
 	}
 	// mysql 不再合并 tidb（tidb 有独立看板）；其它引擎兼容别名
 	if engine == "postgres" {
 		for _, alias := range []string{"postgresql", "pg"} {
-			extra, _ := s.Store.ListInstances(alias, "")
+			extra, _ := s.Store.ListInstancesInTenant(tenantID, alias, "")
 			list = append(list, extra...)
 		}
 	}
 	if engine == "mongodb" {
-		extra, _ := s.Store.ListInstances("mongo", "")
+		extra, _ := s.Store.ListInstancesInTenant(tenantID, "mongo", "")
 		list = append(list, extra...)
 	}
 	if engine == "elasticsearch" {
 		for _, alias := range []string{"es", "elastic"} {
-			extra, _ := s.Store.ListInstances(alias, "")
+			extra, _ := s.Store.ListInstancesInTenant(tenantID, alias, "")
 			list = append(list, extra...)
 		}
 	}
 	if engine == "sqlserver" {
-		extra, _ := s.Store.ListInstances("mssql", "")
+		extra, _ := s.Store.ListInstancesInTenant(tenantID, "mssql", "")
 		list = append(list, extra...)
 	}
 	if engine == "cockroachdb" {
 		for _, alias := range []string{"cockroach", "crdb"} {
-			extra, _ := s.Store.ListInstances(alias, "")
+			extra, _ := s.Store.ListInstancesInTenant(tenantID, alias, "")
 			list = append(list, extra...)
 		}
 	}
 	if engine == "oceanbase" {
-		extra, _ := s.Store.ListInstances("ob", "")
+		extra, _ := s.Store.ListInstancesInTenant(tenantID, "ob", "")
 		list = append(list, extra...)
 	}
 	if engine == "host" {
 		for _, alias := range []string{"node", "server"} {
-			extra, _ := s.Store.ListInstances(alias, "")
+			extra, _ := s.Store.ListInstancesInTenant(tenantID, alias, "")
 			list = append(list, extra...)
 		}
 	}

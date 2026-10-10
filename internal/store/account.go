@@ -8,7 +8,8 @@ import (
 	"github.com/google/uuid"
 )
 
-const accountCols = `id, instance_id, database_id, db_name, db_type, idc, username, password, permissions, description, ticket_id, created_by, updated_by, created_at, updated_at`
+const accountCols = `id, COALESCE(tenant_id,''), instance_id, database_id, db_name, db_type, idc, username, password, permissions, description, ticket_id, created_by, updated_by, created_at, updated_at`
+const accountInsertCols = `id, instance_id, database_id, db_name, db_type, idc, username, password, permissions, description, ticket_id, created_by, updated_by, created_at, updated_at`
 
 func nullStr(n sql.NullString) string {
 	if n.Valid {
@@ -23,7 +24,7 @@ func scanAccount(sc interface {
 	it := &DBAccount{}
 	var perms, databaseID, ticketID, createdBy, updatedBy, desc sql.NullString
 	if err := sc.Scan(
-		&it.ID, &it.InstanceID, &databaseID, &it.DBName, &it.DBType, &it.IDC, &it.Username, &it.Password,
+		&it.ID, &it.TenantID, &it.InstanceID, &databaseID, &it.DBName, &it.DBType, &it.IDC, &it.Username, &it.Password,
 		&perms, &desc, &ticketID, &createdBy, &updatedBy, &it.CreatedAt, &it.UpdatedAt,
 	); err != nil {
 		return nil, err
@@ -39,8 +40,13 @@ func scanAccount(sc interface {
 }
 
 func (d *DB) ListAccounts(dbType, idc, instanceID, q string) ([]DBAccount, error) {
+	return d.ListAccountsInTenant("", dbType, idc, instanceID, q)
+}
+
+func (d *DB) ListAccountsInTenant(tenantID, dbType, idc, instanceID, q string) ([]DBAccount, error) {
 	query := `SELECT ` + accountCols + ` FROM tbl_db_accounts WHERE 1=1`
 	args := []any{}
+	query, args = appendTenantFilter(query, args, tenantID)
 	if dbType != "" {
 		query += ` AND db_type=?`
 		args = append(args, dbType)
@@ -81,6 +87,11 @@ func (d *DB) GetAccount(id string) (*DBAccount, error) {
 		return nil, nil
 	}
 	return it, err
+}
+
+func (d *DB) GetAccountInTenant(id, tenantID string) (*DBAccount, error) {
+	it, err := d.GetAccount(id)
+	return ownedInTenant(d, it, err, "tbl_db_accounts", id, tenantID)
 }
 
 func (d *DB) FindAccount(instanceID, username, dbName string) (*DBAccount, error) {
@@ -124,11 +135,17 @@ func (d *DB) CreateAccount(it *DBAccount) error {
 		it.Permissions = []string{}
 	}
 	_, err := d.Exec(
-		`INSERT INTO tbl_db_accounts(`+accountCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		`INSERT INTO tbl_db_accounts(`+accountInsertCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		it.ID, it.InstanceID, it.DatabaseID, it.DBName, it.DBType, it.IDC, it.Username, it.Password,
 		encodeJSON(it.Permissions), it.Description, it.TicketID, it.CreatedBy, it.UpdatedBy, it.CreatedAt, it.UpdatedAt,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	if it.TenantID == "" {
+		it.TenantID = d.inheritTenantFromInstance(it.InstanceID)
+	}
+	return d.AssignTenantID("tbl_db_accounts", it.ID, it.TenantID)
 }
 
 func (d *DB) UpdateAccount(it *DBAccount) error {

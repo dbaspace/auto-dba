@@ -13,6 +13,7 @@ import (
 
 	"auto-dba/internal/cdc"
 	"auto-dba/internal/dbmig"
+	"auto-dba/internal/middleware"
 	"auto-dba/internal/store"
 )
 
@@ -32,7 +33,7 @@ func (h *CDCHandler) PreviewTargetSQL(c *gin.Context) {
 	}
 	t := hydrateCDCFromMap(raw)
 	if id := firstNonEmpty(t.ID, jsonAnyString(raw["id"])); id != "" {
-		if exist, _ := h.Store.GetCDC(id); exist != nil {
+		if exist, _ := h.Store.GetCDCInTenant(id, effectiveListTenantID(h.Store, c)); exist != nil {
 			t = *exist
 		}
 	}
@@ -47,7 +48,7 @@ func (h *CDCHandler) PreviewTargetSQL(c *gin.Context) {
 }
 
 func (h *CDCHandler) Status(c *gin.Context) {
-	t, err := h.Store.GetCDC(c.Param("id"))
+	t, err := h.Store.GetCDCInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || t == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "任务不存在"})
 		return
@@ -59,7 +60,7 @@ func (h *CDCHandler) Status(c *gin.Context) {
 }
 
 func (h *CDCHandler) Tables(c *gin.Context) {
-	t, err := h.Store.GetCDC(c.Param("id"))
+	t, err := h.Store.GetCDCInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || t == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "任务不存在"})
 		return
@@ -72,7 +73,7 @@ func (h *CDCHandler) Tables(c *gin.Context) {
 	var driftBy map[string]cdc.SchemaAlertItem
 	if includeDrift {
 		initID := t.ID
-		if init, err := h.resolveInitTask(t.ID); err == nil && init != nil {
+		if init, err := h.resolveInitTask(t.ID, middleware.TenantID(c)); err == nil && init != nil {
 			initID = init.ID
 		}
 		if cached := cdc.GetSchemaDriftCache(initID); cached != nil {
@@ -89,7 +90,7 @@ func (h *CDCHandler) Tables(c *gin.Context) {
 	rlByTable := map[string]cdc.PipelineRoutineLoad{}
 	if t.TargetID != "" && t.TargetDB != "" {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 6*time.Second)
-		if inst, err := h.Store.GetInstance(t.TargetID); err == nil && inst != nil {
+		if inst, err := resolveInstanceInTenant(h.Store, c, t.TargetID); err == nil && inst != nil {
 			if db, err := dbmig.OpenInstance(ctx, inst, h.Secret, t.TargetDB); err == nil {
 				targets := make([]string, 0, len(maps)+len(tables))
 				if len(maps) > 0 {
@@ -177,7 +178,7 @@ func firstOf(ss []string) string {
 }
 
 func (h *CDCHandler) MappingDDL(c *gin.Context) {
-	t, err := h.Store.GetCDC(c.Param("id"))
+	t, err := h.Store.GetCDCInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || t == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "任务不存在"})
 		return
@@ -232,7 +233,7 @@ func (h *CDCHandler) MappingDDL(c *gin.Context) {
 }
 
 func (h *CDCHandler) Logs(c *gin.Context) {
-	t, err := h.Store.GetCDC(c.Param("id"))
+	t, err := h.Store.GetCDCInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || t == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "任务不存在"})
 		return
@@ -276,7 +277,7 @@ func (h *CDCHandler) Logs(c *gin.Context) {
 }
 
 func (h *CDCHandler) Connector(c *gin.Context) {
-	t, err := h.Store.GetCDC(c.Param("id"))
+	t, err := h.Store.GetCDCInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || t == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "任务不存在"})
 		return
@@ -364,7 +365,7 @@ func (h *CDCHandler) rejectIfConnectorMissing(c *gin.Context, ctx context.Contex
 }
 
 func (h *CDCHandler) ConnectorRuntimeStatus(c *gin.Context) {
-	t, err := h.Store.GetCDC(c.Param("id"))
+	t, err := h.Store.GetCDCInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || t == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "任务不存在"})
 		return
@@ -422,7 +423,7 @@ func cdcExtraMap(desc string) map[string]string {
 
 func (h *CDCHandler) TableColumns(c *gin.Context) {
 	dbName := c.Param("db")
-	inst, err := h.Store.GetInstance(c.Param("id"))
+	inst, err := resolveInstanceInTenant(h.Store, c, c.Param("id"))
 	if err != nil || inst == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "实例不存在"})
 		return
@@ -445,7 +446,7 @@ func (h *CDCHandler) TableColumns(c *gin.Context) {
 }
 
 func (h *CDCHandler) BatchColumns(c *gin.Context) {
-	inst, err := h.Store.GetInstance(c.Param("id"))
+	inst, err := resolveInstanceInTenant(h.Store, c, c.Param("id"))
 	if err != nil || inst == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "实例不存在"})
 		return
@@ -504,7 +505,7 @@ func (h *CDCHandler) DiscoverTables(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "参数无效"})
 		return
 	}
-	inst, err := h.Store.GetInstance(req.InstanceID)
+	inst, err := resolveInstanceInTenant(h.Store, c, req.InstanceID)
 	if err != nil || inst == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "实例不存在"})
 		return
@@ -558,7 +559,7 @@ func (h *CDCHandler) DiscoverDatabases(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "参数无效"})
 		return
 	}
-	inst, err := h.Store.GetInstance(req.InstanceID)
+	inst, err := resolveInstanceInTenant(h.Store, c, req.InstanceID)
 	if err != nil || inst == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "实例不存在"})
 		return
@@ -608,7 +609,7 @@ func (h *CDCHandler) ListSchemaAlerts(c *gin.Context) {
 }
 
 func (h *CDCHandler) ScanAllSchemaAlerts(c *gin.Context) {
-	list, err := h.Store.ListCDC("", "init")
+	list, err := h.Store.ListCDCInTenant(effectiveListTenantID(h.Store, c), "", "init")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -635,7 +636,7 @@ func (h *CDCHandler) ScanAllSchemaAlerts(c *gin.Context) {
 }
 
 func (h *CDCHandler) respondSchemaAlerts(c *gin.Context, id string, refresh bool) {
-	init, err := h.resolveInitTask(id)
+	init, err := h.resolveInitTask(id, middleware.TenantID(c))
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": err.Error()})
 		return

@@ -32,7 +32,7 @@ type SrClusterTicketPayload struct {
 
 func validSrClusterTicketAction(a string) bool {
 	switch strings.ToLower(strings.TrimSpace(a)) {
-	case "add_node", "cluster_reinit", "upgrade", "remove_node":
+	case "add_node", "cluster_reinit", "upgrade", "remove_node", "restore_node":
 		return true
 	default:
 		return false
@@ -49,6 +49,8 @@ func srClusterActionLabel(a string) string {
 		return "升级"
 	case "remove_node":
 		return "下线节点"
+	case "restore_node":
+		return "恢复节点"
 	default:
 		return a
 	}
@@ -73,7 +75,7 @@ func (h *SrClusterHandler) CreateTicket(c *gin.Context) {
 		return
 	}
 	clusterID := strings.TrimSpace(req.ClusterID)
-	cl, err := h.Store.GetSrCluster(clusterID)
+	cl, err := h.Store.GetSrClusterInTenant(clusterID, effectiveListTenantID(h.Store, c))
 	if err != nil || cl == nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "集群不存在"})
 		return
@@ -143,9 +145,9 @@ func (h *SrClusterHandler) CreateTicket(c *gin.Context) {
 		tp.ReleaseID = rid
 		preJSON, _ := json.Marshal(pre)
 		// NeedRollback 存预检结果（与 HA 类似）
-		assigned := h.srTicketApprover(req.AssignedTo)
-		if assigned == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"message": "请选择审批人"})
+		assigned, aerr := resolveTenantAssignee(h.Store, middleware.TenantID(c), req.AssignedTo)
+		if aerr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"message": aerr.Error()})
 			return
 		}
 		desc := strings.TrimSpace(req.Description)
@@ -165,6 +167,9 @@ func (h *SrClusterHandler) CreateTicket(c *gin.Context) {
 			AssignedTo:   assigned,
 			NeedRollback: string(preJSON),
 		}
+		stampTenantID(c, func(tid string) {
+			if issue != nil { issue.TenantID = tid }
+		})
 		if err := h.Store.CreateIssue(issue); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 			return
@@ -190,13 +195,25 @@ func (h *SrClusterHandler) CreateTicket(c *gin.Context) {
 		} else if s, ok := body["force_drop"].(string); ok {
 			tp.ForceDrop = s == "1" || strings.EqualFold(s, "true")
 		}
+	case "restore_node":
+		nodeID, _ := body["node_id"].(string)
+		nodeID = strings.TrimSpace(nodeID)
+		if nodeID == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "node_id 必填"})
+			return
+		}
+		if err := h.eng().CheckRecommissionBE(c.Request.Context(), cl.ID, nodeID); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+			return
+		}
+		tp.NodeID = nodeID
 	case "cluster_reinit":
 		// no extra fields
 	}
 
-	assigned := h.srTicketApprover(req.AssignedTo)
-	if assigned == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "请选择审批人"})
+	assigned, aerr := resolveTenantAssignee(h.Store, middleware.TenantID(c), req.AssignedTo)
+	if aerr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": aerr.Error()})
 		return
 	}
 	desc := strings.TrimSpace(req.Description)
@@ -215,6 +232,9 @@ func (h *SrClusterHandler) CreateTicket(c *gin.Context) {
 		Submitter:   middleware.Username(c),
 		AssignedTo:  assigned,
 	}
+	stampTenantID(c, func(tid string) {
+		if issue != nil { issue.TenantID = tid }
+	})
 	if err := h.Store.CreateIssue(issue); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -368,6 +388,13 @@ func (h *SrClusterHandler) ExecuteSrClusterTicket(ctx context.Context, it *store
 			return res, nil
 		}
 		changeID, err = eng.StartRemoveNode(tp.ClusterID, tp.NodeID, who, tp.ForceDrop)
+	case "restore_node":
+		if strings.TrimSpace(tp.NodeID) == "" {
+			res.Success = false
+			res.Message = "缺少 node_id"
+			return res, nil
+		}
+		changeID, err = eng.StartRecommissionBE(tp.ClusterID, tp.NodeID, who)
 	default:
 		res.Success = false
 		res.Message = "未知操作: " + tp.Action
