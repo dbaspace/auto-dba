@@ -6,17 +6,29 @@
 
 前端为 **React 18 + Ant Design 5 + Redux Toolkit + ahooks + react-router-dom v6 + Tailwind 3**（目录 `frontend/`）。本地为**前后端分离**：改前端不必动后端，改后端不必重新构建前端。
 
-## 能力概览（近期重点）
+## 能力概览
+
+核心业务能力：
 
 | 能力 | 说明 | 文档 |
 |------|------|------|
-| **多租户** | 元库行级 `tenant_id` 隔离；登录选租户；成员角色驱动菜单；私有库 ACL 仅本租成员；跨租用 grant 只读；平台管理员可审计并划拨实例/库/集群 | [docs/tenancy.md](docs/tenancy.md) |
-| **Nacos 配置** | 生产可将 `db.dsn` / `jwt_secret` / SSH 私钥放到 Nacos；本地只留引导；支持 ListenConfig 热更。Namespace = 平台部署，≠ 业务「环境管理」 | [docs/nacos-config.md](docs/nacos-config.md) |
-| **告警管理** | 自建 Ruler + Prometheus：规则、静默、抑制、路由、值班；Webhook / 企微 / 电话 / 邮件 | [docs/alerts.md](docs/alerts.md) |
-| **认证** | 本地 / LDAP / SSO（授权码或密码）；LDAP·SSO 首次登录自动建 developer 并挂默认租户 | [docs/features.md](docs/features.md#登录与账号) |
-| **集群与 HA** | StarRocks / MySQL·PG·Redis 部署工作台；接入层代理；高可用维护 | [docs/sr-cluster.md](docs/sr-cluster.md)、[docs/db-cluster.md](docs/db-cluster.md)、[docs/ha.md](docs/ha.md) |
+| **工单** | DDL / DML / DQL / 建库 / 权限申请 / Kafka·Redis 变更；审批、影响说明、后台执行与结果收敛 | [docs/features.md](docs/features.md#工单) |
+| **数据查询** | 已登记库只读 SQL、Kafka Topic 抽样、Redis 命令探查；写入查询审计 | [docs/features.md](docs/features.md#数据查询) |
+| **监控与诊断** | SQL 洞察 / AWR / 表空间；会话与锁；告警 Ruler（规则、静默、路由、值班） | [docs/features.md](docs/features.md#诊断)、[docs/alerts.md](docs/alerts.md) |
+| **同步与迁移** | CDC（PG→Kafka→SR）、数据迁移、表结构对比、复制槽 | [docs/features.md](docs/features.md#同步与迁移)、[docs/cdc-reinit.md](docs/cdc-reinit.md) |
+| **数据安全** | 备份（逻辑/物理 Agent）、PG 闪回、归档与脱敏 | [docs/backup.md](docs/backup.md)、[docs/features.md](docs/features.md#数据安全) |
+| **集群与 HA** | StarRocks / MySQL·PG·Redis 部署工作台；接入层代理；高可用维护与切换 | [docs/sr-cluster.md](docs/sr-cluster.md)、[docs/db-cluster.md](docs/db-cluster.md)、[docs/ha.md](docs/ha.md) |
+| **配置与 CMDB** | 实例 / 已登记库 / 账号；区域环境；资产目录、拓扑、发现登记 | [docs/features.md](docs/features.md#数据库配置)、[docs/cmdb.md](docs/cmdb.md) |
 
-完整侧栏功能目录仍以 [docs/features.md](docs/features.md) 为准。
+平台与治理：
+
+| 能力 | 说明 | 文档 |
+|------|------|------|
+| **多租户** | 行级 `tenant_id` 隔离；登录选租户；成员角色驱动菜单；私有 ACL；跨租 grant；审计划拨（含库批量指定租户） | [docs/tenancy.md](docs/tenancy.md) |
+| **认证与权限** | 本地 / LDAP / SSO；菜单与操作 URN；LDAP·SSO 首次登录默认 developer + 默认租户 | [docs/features.md](docs/features.md#登录与账号)、[docs/rbac-permissions.md](docs/rbac-permissions.md) |
+| **Nacos 配置** | 生产可将 `db.dsn` / `jwt_secret` / SSH 私钥放到 Nacos；本地只留引导；支持热更。Namespace = 平台部署，≠ 业务「环境管理」 | [docs/nacos-config.md](docs/nacos-config.md) |
+
+完整侧栏逐页说明见 [docs/features.md](docs/features.md)。
 
 ## 运行方式：手动维护
 
