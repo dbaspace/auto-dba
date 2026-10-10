@@ -8,7 +8,7 @@
 
 > **命名说明**：产品 / 界面称 **KeePlus**；本仓库、Go 模块、二进制与部分路径仍为工程名 **`auto-dba`**（如 `./bin/auto-dba`、`cmd/auto-dba`、Nacos DataId `auto-dba.yaml`）。文档中二者并存时：对人读的产品能力用 KeePlus，对命令与配置键用 `auto-dba`。Logo 资源：[docs/assets/keeplus-logo.svg](docs/assets/keeplus-logo.svg)（与前端 `favicon.svg` / 侧栏图标一致）。
 
-功能按侧栏逐项说明见 [docs/features.md](docs/features.md)。模块关系总览见 [docs/architecture.html](docs/architecture.html)。集群部署（StarRocks）方案见 [docs/sr-cluster.md](docs/sr-cluster.md)。
+**日常操作**（多租户、登记、工单、审计划拨等）见 [docs/ops-manual.md](docs/ops-manual.md)。功能按侧栏逐项说明见 [docs/features.md](docs/features.md)。模块关系总览见 [docs/architecture.html](docs/architecture.html)。集群部署（StarRocks）方案见 [docs/sr-cluster.md](docs/sr-cluster.md)。
 
 前端为 **React 18 + Ant Design 5 + Redux Toolkit + ahooks + react-router-dom v6 + Tailwind 3**（目录 `frontend/`）。本地为**前后端分离**：改前端不必动后端，改后端不必重新构建前端。
 
@@ -117,6 +117,7 @@ PG 闪回生产约定：默认不改 `REPLICA IDENTITY`；DEFAULT 表靠 FPW/堆
 
 | 文档 | 内容 |
 |------|------|
+| [docs/ops-manual.md](docs/ops-manual.md) | **操作手册**：登录选租户、多租户、登记、工单、划拨、FAQ |
 | [docs/assets/keeplus-logo.svg](docs/assets/keeplus-logo.svg) | 产品 Logo（方标）；[lockup](docs/assets/keeplus-lockup.svg) 为图标+字标 |
 | [docs/features.md](docs/features.md) | 侧栏功能目录与页面说明（含多租户、登录、告警入口） |
 | [docs/tenancy.md](docs/tenancy.md) | 多租户模型、ACL、划拨、grant、API、防串租清单 |

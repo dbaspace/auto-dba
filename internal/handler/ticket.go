@@ -156,6 +156,23 @@ func (h *TicketHandler) resolveApprovers(instanceID, dbName string) []string {
 	return nil
 }
 
+// resolveApproversForIssue 优先用工单已绑定的 database_id 取审批人，避免仅按提交时 instance_id+库名重查错绑。
+func (h *TicketHandler) resolveApproversForIssue(it *store.Issue) []string {
+	if it == nil {
+		return nil
+	}
+	if dbID := strings.TrimSpace(it.DatabaseID); dbID != "" {
+		dbEnt, _ := h.Store.GetDatabase(dbID)
+		if dbEnt != nil {
+			if len(dbEnt.Approvers) > 0 {
+				return store.ExpandApproverNames(dbEnt.Approvers)
+			}
+			return h.resolveApprovers(dbEnt.InstanceID, dbEnt.DBName)
+		}
+	}
+	return h.resolveApprovers(it.InstanceID, it.DBName)
+}
+
 func (h *TicketHandler) ListDBTypes(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": []string{"mysql", "postgres", "tidb", "starrocks", "clickhouse"}})
 }
@@ -760,13 +777,13 @@ func (h *TicketHandler) validateTransferAssignee(it *store.Issue, newAssignee st
 		if !h.migrationApproverAllowed(newAssignee) {
 			return "审核人不在迁移审批人列表"
 		}
-		approvers := h.resolveApprovers(it.InstanceID, it.DBName)
+		approvers := h.resolveApproversForIssue(it)
 		if len(approvers) > 0 && !usernameInList(newAssignee, approvers) {
 			return "审核人不在审批人列表"
 		}
 		return ""
 	default:
-		approvers := h.resolveApprovers(it.InstanceID, it.DBName)
+		approvers := h.resolveApproversForIssue(it)
 		if len(approvers) > 0 && !usernameInList(newAssignee, approvers) {
 			return "审核人不在审批人列表"
 		}

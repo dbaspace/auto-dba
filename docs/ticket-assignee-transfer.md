@@ -9,6 +9,7 @@
 | 入口 | 工单详情 → 待审批 →「更换审核人」 |
 | API | `PUT /api/v1/tickets/:id/assignee`，body `{ "assigned_to": "<username>" }` |
 | 候选人 | 与建单同源：`GET /tickets/target-approvers` 或 `GET /create-db/approvers`；前端排除当前审核人与提交人本人 |
+| 后端校验 | 优先用工单已绑定的 `database_id` 取审批人；无 ID 或库已删时再按 `instance_id`+库名回退。避免仅按提交时实例重查导致错绑/漏校验 |
 | 迁移工单 | `target-approvers?issue_type=migration` 在 `migration_approver_user_ids` 已配置时与之取交集；转移时同时校验白名单与源实例/库审批人 |
 | 审计 | `assignee_transfer_history` 追加 `旧->新 by=提交者 at=RFC3339` |
 | 通知 | 仅通知新人（邮件，依赖通知配置中的工单创建开关） |

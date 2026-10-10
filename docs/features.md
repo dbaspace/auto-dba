@@ -8,7 +8,7 @@
 
 侧栏按下面的目录组织。目录本身不可进入，子项才是页面。模块关系总览见 [architecture.html](architecture.html)。集群部署（StarRocks 等工作台）方案见 [sr-cluster.md](sr-cluster.md)。
 
-**部署与配置**：元数据为 PostgreSQL。本地可只用 `config/config.yaml`；生产推荐敏感项进 **Nacos**（本地仅引导），见 [nacos-config.md](nacos-config.md)。**多租户**模型、划拨、跨租授权与 ACL 见 [tenancy.md](tenancy.md)。
+**部署与配置**：元数据为 PostgreSQL。本地可只用 `config/config.yaml`；生产推荐敏感项进 **Nacos**（本地仅引导），见 [nacos-config.md](nacos-config.md)。**多租户**模型、划拨、跨租授权与 ACL 见 [tenancy.md](tenancy.md)。日常怎么用见 [ops-manual.md](ops-manual.md)。
 
 ## 角色
 
