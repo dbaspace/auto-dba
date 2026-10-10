@@ -1,8 +1,12 @@
+<p align="center">
+  <img src="docs/assets/keeplus-lockup.svg" alt="KeePlus" width="280" />
+</p>
+
 # KeePlus
 
 **KeePlus** 是面向 DBA 与开发的数据库运维自助工作台（界面品牌名）。覆盖工单、查询、监控诊断、CDC、迁移、闪回、归档、集群部署、告警、多租户与权限治理。业务对象登记在平台内，支持本地登录（可接 LDAP / SSO）。
 
-> **命名说明**：产品 / 界面称 **KeePlus**；本仓库、Go 模块、二进制与部分路径仍为工程名 **`auto-dba`**（如 `./bin/auto-dba`、`cmd/auto-dba`、Nacos DataId `auto-dba.yaml`）。文档中二者并存时：对人读的产品能力用 KeePlus，对命令与配置键用 `auto-dba`。
+> **命名说明**：产品 / 界面称 **KeePlus**；本仓库、Go 模块、二进制与部分路径仍为工程名 **`auto-dba`**（如 `./bin/auto-dba`、`cmd/auto-dba`、Nacos DataId `auto-dba.yaml`）。文档中二者并存时：对人读的产品能力用 KeePlus，对命令与配置键用 `auto-dba`。Logo 资源：[docs/assets/keeplus-logo.svg](docs/assets/keeplus-logo.svg)（与前端 `favicon.svg` / 侧栏图标一致）。
 
 功能按侧栏逐项说明见 [docs/features.md](docs/features.md)。模块关系总览见 [docs/architecture.html](docs/architecture.html)。集群部署（StarRocks）方案见 [docs/sr-cluster.md](docs/sr-cluster.md)。
 
@@ -113,6 +117,7 @@ PG 闪回生产约定：默认不改 `REPLICA IDENTITY`；DEFAULT 表靠 FPW/堆
 
 | 文档 | 内容 |
 |------|------|
+| [docs/assets/keeplus-logo.svg](docs/assets/keeplus-logo.svg) | 产品 Logo（方标）；[lockup](docs/assets/keeplus-lockup.svg) 为图标+字标 |
 | [docs/features.md](docs/features.md) | 侧栏功能目录与页面说明（含多租户、登录、告警入口） |
 | [docs/tenancy.md](docs/tenancy.md) | 多租户模型、ACL、划拨、grant、API、防串租清单 |
 | [docs/nacos-config.md](docs/nacos-config.md) | Nacos 部署、Namespace、热更、与业务环境区分 |
