@@ -57,7 +57,7 @@
 
 ```mermaid
 flowchart LR
-  subgraph plat [auto-dba控制面]
+  subgraph plat [KeePlus控制面]
     Reg[集群与节点]
     Job[变更单]
     Cfg[配置下发]
@@ -109,7 +109,7 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-  Ctrl[auto-dba控制面]
+  Ctrl[KeePlus控制面]
   AgA[NodeAgent_主机A]
   AgB[NodeAgent_主机B]
   FE[FE_MySQL_9030]

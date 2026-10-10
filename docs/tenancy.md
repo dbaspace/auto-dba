@@ -1,6 +1,6 @@
 # 多租户（行级隔离）
 
-共享部署 + 元库行级 `tenant_id`。默认严格隔离；跨租户仅成员加入、资源授权（grant）或平台审计（impersonate）。
+KeePlus 采用共享部署 + 元库行级 `tenant_id`。默认严格隔离；跨租户仅成员加入、资源授权（grant）或平台审计（impersonate）。
 
 侧栏功能入口与页面说明见 [features.md](features.md#多租户)。生产配置拉取见 [nacos-config.md](nacos-config.md)（与租户无关：Nacos Namespace 是平台部署，不是业务租户）。
 

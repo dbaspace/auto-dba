@@ -2,7 +2,7 @@
 
 平台自建规则评估：规则与告警生命周期由 KeePlus 管理，指标查询复用全局 Prometheus（`awr_prometheus_base_url`）。外发复用「用户权限 → 认证配置 → 通知」渠道，并可按路由/值班覆盖。
 
-设计对齐 Alertmanager 思路（规则评估、静默、抑制、路由分组），但控制面与 UI 在本平台内闭环。
+设计对齐 Alertmanager 思路（规则评估、静默、抑制、路由分组），但控制面与 UI 在 KeePlus 内闭环。
 
 ## 分期总览
 

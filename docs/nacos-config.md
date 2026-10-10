@@ -1,7 +1,7 @@
 # Nacos 核心配置
 
-平台启动时可选从 Nacos 拉取业务配置（元库 DSN、`jwt_secret`、SSH 私钥等），本地文件只保留**如何连接** Nacos。  
-`auto-dba` 与 `db-monitor` 共用 `config.Load`，同一 DataId。
+KeePlus 启动时可选从 Nacos 拉取业务配置（元库 DSN、`jwt_secret`、SSH 私钥等），本地文件只保留**如何连接** Nacos。  
+后端进程 `auto-dba` 与 `db-monitor` 共用 `config.Load`，同一 DataId（工程约定名 `auto-dba.yaml`，与产品品牌 KeePlus 无关）。
 
 引导示例：[`config/bootstrap.example.yaml`](../config/bootstrap.example.yaml)、[`config/config.example.yaml`](../config/config.example.yaml)。仓库总览入口见 [README](../README.md#能力概览)。
 
