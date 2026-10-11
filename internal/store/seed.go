@@ -90,6 +90,8 @@ func (d *DB) seed() error {
 		{Key: "pg_space_retention_days", Value: "90", Description: "表空间快照保留天数"},
 		{Key: "sql_insight_analysis_cron_enabled", Value: "false", Description: "智能分析定时开关"},
 		{Key: "sql_insight_analysis_cron", Value: "0 0 3 * * *", Description: "智能分析每日 Cron（6 段含秒）"},
+		{Key: "cmdb_sync_auto_apply", Value: "false", Description: "CMDB 外部同步是否自动入库（默认关，仅产出候选）"},
+		{Key: "cmdb_webhook_url", Value: "", Description: "CMDB CI/关系变更 Webhook URL（空则关闭）"},
 	}
 	for _, a := range defaults {
 		var exists int

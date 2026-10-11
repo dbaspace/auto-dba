@@ -12,30 +12,37 @@ import (
 
 // CIType 配置项类型。
 const (
-	TypeInstance      = "instance"
-	TypeDatabase      = "database"
-	TypeRegion        = "region"
-	TypeEnvironment   = "environment"
-	TypeConnector     = "connector"
-	TypeMonitorJob    = "monitor_job"
-	TypeMonitorGroup  = "monitor_group"
-	TypeHACluster     = "ha_cluster"
-	TypeBackupPolicy  = "backup_policy"
-	TypeHost          = "host"
+	TypeInstance         = "instance"
+	TypeDatabase         = "database"
+	TypeRegion           = "region"
+	TypeEnvironment      = "environment"
+	TypeConnector        = "connector"
+	TypeMonitorJob       = "monitor_job"
+	TypeMonitorGroup     = "monitor_group"
+	TypeHACluster        = "ha_cluster"
+	TypeBackupPolicy     = "backup_policy"
+	TypeHost             = "host"
+	TypeSrCluster        = "sr_cluster"
+	TypeDbDeployCluster  = "db_deploy_cluster"
+	TypeProxyService     = "proxy_service"
+	TypeDBAccount        = "db_account"
+	TypeCDCTask          = "cdc_task"
 )
 
 // CI 统一目录条目。
 type CI struct {
-	ID        string         `json:"id"`
-	Type      string         `json:"type"`
-	Name      string         `json:"name"`
-	Status    string         `json:"status,omitempty"`
-	EnvID     string         `json:"env_id,omitempty"`
-	RegionID  string         `json:"region_id,omitempty"`
-	Tags      []string       `json:"tags,omitempty"`
-	Attrs     map[string]any `json:"attrs,omitempty"`
-	UpdatedAt string         `json:"updated_at,omitempty"`
-	EditPath  string         `json:"edit_path,omitempty"`
+	ID           string         `json:"id"`
+	Type         string         `json:"type"`
+	Name         string         `json:"name"`
+	Status       string         `json:"status,omitempty"`
+	EnvID        string         `json:"env_id,omitempty"`
+	RegionID     string         `json:"region_id,omitempty"`
+	Tags         []string       `json:"tags,omitempty"`
+	Attrs        map[string]any `json:"attrs,omitempty"`
+	UpdatedAt    string         `json:"updated_at,omitempty"`
+	EditPath     string         `json:"edit_path,omitempty"`
+	HealthBadges []string       `json:"health_badges,omitempty"` // 计算型质量徽章
+	AppTags      []string       `json:"app_tags,omitempty"`      // app=/biz= 业务标签
 }
 
 // Edge 关系边。
@@ -110,6 +117,16 @@ func (s *Service) ListCIs(opts ListOpts) ([]CI, error) {
 		all, err = s.listBackupPolicies(opts)
 	case TypeHost:
 		all, err = s.listHosts(opts)
+	case TypeSrCluster:
+		all, err = s.listSrClusters(opts)
+	case TypeDbDeployCluster:
+		all, err = s.listDbDeployClusters(opts)
+	case TypeProxyService:
+		all, err = s.listProxyServices(opts)
+	case TypeDBAccount:
+		all, err = s.listDBAccounts(opts)
+	case TypeCDCTask:
+		all, err = s.listCDCTasks(opts)
 	default:
 		return []CI{}, nil
 	}
@@ -117,6 +134,10 @@ func (s *Service) ListCIs(opts ListOpts) ([]CI, error) {
 		return nil, err
 	}
 	all = filterCIs(all, opts)
+	s.annotateAppTags(all)
+	if opts.Type == TypeInstance || opts.Type == TypeDatabase || opts.Type == "" {
+		s.annotateHealth(all, opts.TenantID)
+	}
 	if opts.Offset > len(all) {
 		return []CI{}, nil
 	}
@@ -205,9 +226,10 @@ func (s *Service) listInstances(opts ListOpts) ([]CI, error) {
 			ID: it.ID, Type: TypeInstance, Name: firstNonEmpty(it.Name, it.DomainName, it.Host),
 			Status: "active", EnvID: it.EnvID, RegionID: it.RegionID, Tags: it.Tags,
 			Attrs: map[string]any{
-				"db_type": it.DBType, "host": it.Host, "port": it.Port,
+				"tenant_id": it.TenantID, "db_type": it.DBType, "host": it.Host, "port": it.Port,
 				"domain_name": it.DomainName, "domains": it.Domains, "idc": it.IDC,
 				"cloud_vendor": it.CloudVendor, "cloud_instance_id": it.CloudInstanceID,
+				"visibility": it.Visibility,
 			},
 			UpdatedAt: it.UpdatedAt, EditPath: "/config/instances?db_type=" + it.DBType,
 		})
@@ -226,7 +248,8 @@ func (s *Service) listDatabases(opts ListOpts) ([]CI, error) {
 			ID: db.ID, Type: TypeDatabase, Name: db.DBName, Status: "registered",
 			Tags: db.Tags,
 			Attrs: map[string]any{
-				"instance_id": db.InstanceID, "db_name": db.DBName, "domains": db.Domains,
+				"tenant_id": db.TenantID, "instance_id": db.InstanceID, "db_name": db.DBName,
+				"domains": db.Domains, "visibility": db.Visibility, "approvers": db.Approvers,
 			},
 			UpdatedAt: db.UpdatedAt, EditPath: "/config/databases",
 		})
@@ -403,6 +426,104 @@ func (s *Service) listHosts(opts ListOpts) ([]CI, error) {
 		c := hostMeta[k]
 		c.Attrs["instance_ids"] = byHost[k]
 		out = append(out, c)
+	}
+	return out, nil
+}
+
+func (s *Service) listSrClusters(opts ListOpts) ([]CI, error) {
+	list, err := s.Store.ListSrClustersInTenant(opts.TenantID, opts.EnvID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]CI, 0, len(list))
+	for _, c := range list {
+		out = append(out, CI{
+			ID: c.ID, Type: TypeSrCluster, Name: firstNonEmpty(c.Name, c.ID), Status: c.Status,
+			EnvID: c.Environment,
+			Attrs: map[string]any{
+				"tenant_id": c.TenantID, "version": c.Version, "fe_host": c.FeHost,
+				"fe_query_port": c.FeQueryPort, "environment": c.Environment,
+			},
+			UpdatedAt: c.UpdatedAt, EditPath: "/ops/cluster-deploy/starrocks",
+		})
+	}
+	return out, nil
+}
+
+func (s *Service) listDbDeployClusters(opts ListOpts) ([]CI, error) {
+	list, err := s.Store.ListDbDeployClustersInTenant(opts.TenantID, "")
+	if err != nil {
+		return nil, err
+	}
+	out := make([]CI, 0, len(list))
+	for _, c := range list {
+		out = append(out, CI{
+			ID: c.ID, Type: TypeDbDeployCluster, Name: firstNonEmpty(c.Name, c.ID), Status: c.Status,
+			EnvID: c.Environment,
+			Attrs: map[string]any{
+				"tenant_id": c.TenantID, "engine": c.Engine, "topology": c.Topology,
+				"version": c.Version, "linked_instance_id": c.LinkedInstanceID, "ha_vip": c.HaVIP,
+				"ha_cluster_id": c.HaClusterID,
+			},
+			UpdatedAt: c.UpdatedAt, EditPath: "/ops/cluster-deploy",
+		})
+	}
+	return out, nil
+}
+
+func (s *Service) listProxyServices(opts ListOpts) ([]CI, error) {
+	list, err := s.Store.ListProxyServicesInTenant(opts.TenantID, "", opts.EnvID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]CI, 0, len(list))
+	for _, p := range list {
+		out = append(out, CI{
+			ID: p.ID, Type: TypeProxyService, Name: firstNonEmpty(p.Name, p.ID), Status: p.Status,
+			EnvID: p.EnvID,
+			Attrs: map[string]any{
+				"tenant_id": p.TenantID, "kind": p.Kind, "vip": p.VIP, "listen_port": p.ListenPort,
+			},
+			UpdatedAt: p.UpdatedAt, EditPath: "/ops/cluster-deploy",
+		})
+	}
+	return out, nil
+}
+
+func (s *Service) listDBAccounts(opts ListOpts) ([]CI, error) {
+	list, err := s.Store.ListAccountsInTenant(opts.TenantID, "", "", "", opts.Q)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]CI, 0, len(list))
+	for _, a := range list {
+		out = append(out, CI{
+			ID: a.ID, Type: TypeDBAccount, Name: firstNonEmpty(a.Username, a.ID), Status: "active",
+			Attrs: map[string]any{
+				"tenant_id": a.TenantID, "instance_id": a.InstanceID, "database_id": a.DatabaseID,
+				"db_name": a.DBName, "username": a.Username, "permissions": a.Permissions,
+			},
+			UpdatedAt: a.UpdatedAt, EditPath: "/config/accounts",
+		})
+	}
+	return out, nil
+}
+
+func (s *Service) listCDCTasks(opts ListOpts) ([]CI, error) {
+	list, err := s.Store.ListCDCInTenant(opts.TenantID, "", "")
+	if err != nil {
+		return nil, err
+	}
+	out := make([]CI, 0, len(list))
+	for _, t := range list {
+		out = append(out, CI{
+			ID: t.ID, Type: TypeCDCTask, Name: firstNonEmpty(t.Name, t.ID), Status: t.Status,
+			Attrs: map[string]any{
+				"tenant_id": t.TenantID, "source_instance_id": t.SourceID, "target_instance_id": t.TargetID,
+				"source_db": t.SourceDB, "target_db": t.TargetDB, "task_type": t.TaskType,
+			},
+			UpdatedAt: t.UpdatedAt, EditPath: "/ops/cdc",
+		})
 	}
 	return out, nil
 }

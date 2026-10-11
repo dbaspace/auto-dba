@@ -247,6 +247,9 @@ func (d *DB) UpdateDatabase(it *Database) error {
 		`UPDATE tbl_databases SET db_name=?, approvers=?, visibility=?, access_users=?, role_ids=?, tags=?, domains=?, updated_at=? WHERE id=?`,
 		it.DBName, encodeJSON(it.Approvers), it.Visibility, encodeJSON(it.AccessUsers), encodeJSON(it.RoleIDs), encodeJSON(it.Tags), encodeJSON(it.Domains), it.UpdatedAt, it.ID,
 	)
+	if err == nil {
+		d.MaybeSnapshotDatabase(it, "")
+	}
 	return err
 }
 

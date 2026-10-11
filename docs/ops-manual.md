@@ -106,6 +106,23 @@
 
 ---
 
+## 4.1 CMDB 日常操作
+
+路径：顶栏 **CMDB**。写入真相源仍是实例/库等业务表；CMDB 是统一目录与关系门面。详见 [cmdb.md](cmdb.md)。
+
+| 操作 | 入口 | 说明 |
+|------|------|------|
+| 查资产 | 资产目录 | 按类型筛选；可看健康徽章（无库登记 / 无审批人）；`app=` / `biz=` 业务标签聚合 |
+| 看拓扑 | 关系拓扑 | 填 CI ID，深度 1–3，可按关系类型过滤；展示租户 |
+| 影响分析 | 拓扑页 / 资产详情 | 「下游影响」回答改实例/库会波及谁；告警详情也可「查 CMDB 影响」 |
+| 发现补登 | 发现登记 | 监控候选、集群/HA 候选、Live 库登记；查看质量概览与配置漂移 |
+| 快照基线 | 资产详情 | 对实例/库拍快照或设基线；更新业务数据时自动追加快照 |
+| 标签 / 同步 | 标签管理、同步任务 | 外部同步默认只出候选（`cmdb_sync_auto_apply=false`） |
+
+业务映射约定：实例/库标签写 `app=业务名` 或 `biz=业务名`，资产页用「业务标签」框查询；也可手工建 `belongs_to_app` 关系。
+
+---
+
 ## 5. 工单操作
 
 1. 在目标租户下，从侧栏进入 DDL / DML / DQL / 建库等申请页。
@@ -195,6 +212,7 @@
 | [ticket-assignee-transfer.md](ticket-assignee-transfer.md) | 更换审核人与超级白名单 |
 | [nacos-config.md](nacos-config.md) | Nacos 部署与热更 |
 | [alerts.md](alerts.md) | 告警 |
+| [cmdb.md](cmdb.md) | CMDB 目录、拓扑、影响分析、快照漂移 |
 | [rbac-permissions.md](rbac-permissions.md) | 新菜单/操作权限登记 |
 | [architecture.html](architecture.html) | 模块关系图 |
 | [README](../README.md) | 工程启动与能力概览 |

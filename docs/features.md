@@ -215,17 +215,17 @@ Client Secret（及 LDAP Bind 密码）用 `jwt_secret` 加密落库。通过 Na
 
 ## CMDB
 
-DBA 域配置管理门面：统一查看已登记资产、关系拓扑、标签、发现与导入导出、变更审计及外部同步候选。实例/库等仍在「数据库配置 / 配置中心」维护，CMDB 不改写工单上的 `instance_id`。详见 [CMDB 模块](cmdb.md)。
+DBA 域配置管理门面：统一目录（含 SR/部署/代理/账号/CDC）、关系拓扑（depth≤3）、影响分析、健康徽章、快照漂移、业务标签聚合与可选 Webhook。实例/库等仍在「数据库配置 / 配置中心」维护，CMDB 不改写工单上的 `instance_id`。详见 [CMDB 模块](cmdb.md)、[操作手册 · CMDB](ops-manual.md#41-cmdb-日常操作)。
 
 | 页面 | 路径 | 说明 |
 |------|------|------|
-| 资产目录 | `/cmdb/assets` | 按类型浏览实例、库、监控目标、HA、备份等 |
-| 关系拓扑 | `/cmdb/topology` | 推导/手工关系图 |
+| 资产目录 | `/cmdb/assets` | 按类型浏览；健康徽章、业务标签、影响分析与快照 |
+| 关系拓扑 | `/cmdb/topology` | 推导/手工关系；深度 1–3；影响分析 |
 | 标签管理 | `/cmdb/tags` | 统一标签字典（原 `/config/tags` 跳转至此） |
-| 发现登记 | `/cmdb/discover` | 监控候选与 Live 库批量登记 |
+| 发现登记 | `/cmdb/discover` | 监控/集群/Agent 候选、Live 库登记、质量概览与漂移 |
 | 导入导出 | `/cmdb/import-export` | 实例 CSV/JSON |
 | 变更审计 | `/cmdb/audit` | 实例/库等变更 before/after |
-| 同步任务 | `/cmdb/sync` | Prometheus / 云标注 / HTTP 企业 CMDB 适配器 |
+| 同步任务 | `/cmdb/sync` | Prometheus / 云标注 / HTTP 企业 CMDB 适配器（默认仅候选） |
 
 ## 数据库配置
 

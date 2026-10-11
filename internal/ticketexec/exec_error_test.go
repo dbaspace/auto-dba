@@ -78,6 +78,39 @@ func TestMarkRolledBack(t *testing.T) {
 	}
 }
 
+// Commit 失败路径：先记 success，再 appendFailure("(COMMIT)") + markRolledBack，不得残留 success 明细。
+func TestCommitFailureMarksRecordsRolledBack(t *testing.T) {
+	tg := Target{Host: "h", DBName: "d"}
+	r := &Result{}
+	r.appendSuccess(tg, "update t set a=1", time.Now(), time.Now(), 1)
+	r.appendSuccess(tg, "update t set a=2", time.Now(), time.Now(), 2)
+	r.appendFailure(tg, "(COMMIT)", time.Now(), errors.New("commit denied"))
+	n := r.markRolledBack()
+	r.Summary = fmt.Sprintf("提交事务失败，事务已回滚，%d 条 SQL 均未生效", n)
+	if n != 2 || !r.RolledBack || r.SuccessCount != 0 {
+		t.Fatalf("n=%d rolled=%v success=%d", n, r.RolledBack, r.SuccessCount)
+	}
+	var success, rb, commitFail int
+	for _, rec := range r.Records {
+		switch rec.Status {
+		case "success":
+			success++
+		case "rolled_back":
+			rb++
+		case "failed":
+			if rec.SQL == "(COMMIT)" {
+				commitFail++
+			}
+		}
+	}
+	if success != 0 || rb != 2 || commitFail != 1 {
+		t.Fatalf("success=%d rb=%d commitFail=%d records=%+v", success, rb, commitFail, r.Records)
+	}
+	if !strings.Contains(r.Summary, "提交事务失败") {
+		t.Fatalf("summary %q", r.Summary)
+	}
+}
+
 func TestRolledBackSummaryKeptWhenCompacted(t *testing.T) {
 	r := &Result{Compacted: true, RolledBack: true, Summary: "第 3 条 SQL 失败，事务已回滚，此前已执行的 2 条均未生效", FailCount: 1}
 	Compact(r)

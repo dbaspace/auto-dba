@@ -10,6 +10,7 @@ import ResponsiveTable from '../../components/ResponsiveTable'
 import {
   AlertEvent, AlertItem, AlertStats, HANDLE_LABEL, SEV_COLOR, durationText,
 } from './types'
+import { getImpact, type CmdbImpact } from '../cmdb/services/cmdbApi'
 
 const rowBorder: Record<string, string> = {
   P0: '#dc2626', P1: '#ea580c', P2: '#2563eb', P3: '#94a3b8',
@@ -24,6 +25,8 @@ export default function ActiveAlerts() {
   const [stats, setStats] = useState<AlertStats | null>(null)
   const [loading, setLoading] = useState(false)
   const [detail, setDetail] = useState<{ alert: AlertItem; events: AlertEvent[] } | null>(null)
+  const [cmdbImpact, setCmdbImpact] = useState<CmdbImpact | null>(null)
+  const [cmdbLoading, setCmdbLoading] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -44,6 +47,28 @@ export default function ActiveAlerts() {
   const openDetail = async (id: string) => {
     const res = await api.get(`/alerts/${id}`)
     setDetail(res.data?.data || null)
+    setCmdbImpact(null)
+  }
+
+  const loadCmdbImpact = async () => {
+    const a = detail?.alert
+    if (!a) return
+    const labels = a.labels || {}
+    const instanceID = labels.instance_id || labels.instanceId || ''
+    const ciType = labels.ci_type || (instanceID ? 'instance' : '')
+    const ciID = instanceID || labels.ci_id || ''
+    if (!ciType || !ciID) {
+      message.warning('告警标签中无 instance_id / ci_id，无法查 CMDB 影响')
+      return
+    }
+    setCmdbLoading(true)
+    try {
+      setCmdbImpact(await getImpact(ciType, ciID, 'down', 2))
+    } catch (e: any) {
+      message.error(e?.response?.data?.message || 'CMDB 影响分析失败')
+    } finally {
+      setCmdbLoading(false)
+    }
   }
 
   const act = async (path: string, ok: string, body?: object) => {
@@ -208,6 +233,27 @@ export default function ActiveAlerts() {
               <Descriptions.Item label="开始时间">{detail.alert.started_at ? dayjs(detail.alert.started_at).format('YYYY-MM-DD HH:mm:ss') : '—'}</Descriptions.Item>
               <Descriptions.Item label="持续">{durationText(detail.alert.started_at)}</Descriptions.Item>
             </Descriptions>
+            <Typography.Title level={5} style={{ marginTop: 24 }}>CMDB 影响</Typography.Title>
+            <Space style={{ marginBottom: 8 }}>
+              <Button size="small" loading={cmdbLoading} onClick={() => void loadCmdbImpact()}>
+                查 CMDB 影响
+              </Button>
+              {cmdbImpact && (
+                <Typography.Text type="secondary">
+                  下游 {cmdbImpact.summary.downstream} · 上游 {cmdbImpact.summary.upstream}
+                </Typography.Text>
+              )}
+            </Space>
+            {cmdbImpact && (
+              <Space wrap style={{ marginBottom: 16 }}>
+                {Object.entries(cmdbImpact.summary.by_type || {}).map(([k, v]) => (
+                  <Tag key={k}>{k}:{v}</Tag>
+                ))}
+                {(cmdbImpact.summary.app_tags || []).map((t) => (
+                  <Tag key={t} color="purple">{t}</Tag>
+                ))}
+              </Space>
+            )}
             <Typography.Title level={5} style={{ marginTop: 24 }}>处理时间线</Typography.Title>
             <Timeline
               items={(detail.events || []).map((e) => ({

@@ -343,6 +343,9 @@ func (d *DB) UpdateInstance(it *Instance) error {
 		it.CloudVendor, it.CloudInstanceID, it.CloudRegion, it.Visibility, encodeJSON(it.AccessUsers), encodeJSON(it.RoleIDs),
 		it.ID, it.TenantID, it.TenantID,
 	)
+	if err == nil {
+		d.MaybeSnapshotInstance(it, "")
+	}
 	return err
 }
 

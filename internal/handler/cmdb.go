@@ -78,6 +78,16 @@ func (h *CmdbHandler) Graph(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": g})
 }
 
+func (h *CmdbHandler) Impact(c *gin.Context) {
+	depth, _ := strconv.Atoi(c.DefaultQuery("depth", "2"))
+	rep, err := h.svc().ImpactInTenant(c.Param("type"), c.Param("id"), middleware.TenantID(c), c.DefaultQuery("direction", "down"), depth)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": rep})
+}
+
 func (h *CmdbHandler) ListRelations(c *gin.Context) {
 	list, err := h.Store.ListCmdbRelationsInTenant(effectiveListTenantID(h.Store, c), c.Query("src_type"), c.Query("src_id"), c.Query("dst_type"), c.Query("dst_id"))
 	if err != nil {
@@ -100,6 +110,7 @@ func (h *CmdbHandler) CreateRelation(c *gin.Context) {
 		return
 	}
 	_ = h.Store.AppendCmdbAudit(actorOf(c), "create", "relation", r.ID, "api", nil, r)
+	h.svc().EmitWebhook("relation.create", r.SrcType, r.SrcID, actorOf(c), r)
 	c.JSON(http.StatusOK, gin.H{"data": r})
 }
 
@@ -212,6 +223,7 @@ func (h *CmdbHandler) SetCITags(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
+	h.svc().EmitWebhook("ci.tags_update", c.Param("type"), c.Param("id"), actorOf(c), body.Tags)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
@@ -227,12 +239,117 @@ func (h *CmdbHandler) ListAudit(c *gin.Context) {
 }
 
 func (h *CmdbHandler) DiscoverFromMonitor(c *gin.Context) {
-	list, err := h.svc().DiscoverFromMonitor()
+	list, err := h.svc().DiscoverFromMonitorInTenant(middleware.TenantID(c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": list})
+}
+
+func (h *CmdbHandler) DiscoverFromClusters(c *gin.Context) {
+	list, err := h.svc().DiscoverFromClusters(middleware.TenantID(c))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": list})
+}
+
+func (h *CmdbHandler) HealthOverview(c *gin.Context) {
+	ov, err := h.svc().HealthOverview(middleware.TenantID(c))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": ov})
+}
+
+func (h *CmdbHandler) ListSnapshots(c *gin.Context) {
+	if !h.ciInTenant(c) {
+		return
+	}
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	list, err := h.Store.ListCmdbCISnapshots(c.Param("type"), c.Param("id"), limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": list})
+}
+
+func (h *CmdbHandler) CreateSnapshot(c *gin.Context) {
+	if !h.ciInTenant(c) {
+		return
+	}
+	ciType, ciID := c.Param("type"), c.Param("id")
+	var payload any
+	var asBaseline bool
+	switch ciType {
+	case cmdb.TypeInstance:
+		it, err := h.Store.GetInstance(ciID)
+		if err != nil || it == nil {
+			c.JSON(http.StatusNotFound, gin.H{"message": "实例不存在"})
+			return
+		}
+		payload = store.SnapshotInstanceMeta(it)
+	case cmdb.TypeDatabase:
+		db, err := h.Store.GetDatabase(ciID)
+		if err != nil || db == nil {
+			c.JSON(http.StatusNotFound, gin.H{"message": "库不存在"})
+			return
+		}
+		payload = store.SnapshotDatabaseMeta(db)
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"message": "仅支持 instance/database 快照"})
+		return
+	}
+	if c.Query("baseline") == "1" || c.Query("baseline") == "true" {
+		asBaseline = true
+	}
+	snap, err := h.Store.AppendCmdbCISnapshot(ciType, ciID, actorOf(c), payload, asBaseline)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	h.svc().EmitWebhook("ci.snapshot", ciType, ciID, actorOf(c), snap)
+	c.JSON(http.StatusOK, gin.H{"data": snap})
+}
+
+func (h *CmdbHandler) ListDrifts(c *gin.Context) {
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "200"))
+	list, err := h.Store.ListCmdbDrifts(middleware.TenantID(c), limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": list})
+}
+
+func (h *CmdbHandler) ListByApp(c *gin.Context) {
+	tag := strings.TrimSpace(c.Query("tag"))
+	if tag == "" {
+		tag = strings.TrimSpace(c.Query("app"))
+		if tag != "" && !strings.Contains(tag, "=") {
+			tag = "app=" + tag
+		}
+	}
+	if tag == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "tag 或 app 必填，如 app=foo"})
+		return
+	}
+	var out []cmdb.CI
+	for _, t := range []string{cmdb.TypeInstance, cmdb.TypeDatabase} {
+		list, err := h.svc().ListCIs(cmdb.ListOpts{
+			Type: t, TenantID: middleware.TenantID(c), Tag: tag, Limit: 500,
+		})
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+			return
+		}
+		out = append(out, list...)
+	}
+	c.JSON(http.StatusOK, gin.H{"data": out, "tag": tag})
 }
 
 func (h *CmdbHandler) DiscoverDatabases(c *gin.Context) {

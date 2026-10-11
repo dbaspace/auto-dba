@@ -267,9 +267,16 @@ export default function TicketDetail() {
     [execObj],
   )
   const execFailed = item?.status === 'failed'
+  const execSuccess = execObj?.success === true ? true : execObj?.success === false ? false : undefined
+  const isExecRunning = item?.status === 'running'
   const execRecords = useMemo(
     () => (Array.isArray(execObj?.records) ? execObj.records : []),
     [execObj],
+  )
+  // running 时隐藏上轮明细，避免「后台执行中」与旧失败/成功结果并读
+  const displayExecRecords = useMemo(
+    () => (isExecRunning ? [] : execRecords),
+    [isExecRunning, execRecords],
   )
 
   // SR / 通用 DB 集群变更：工单等待变更结束，步骤写在 exec.records
@@ -1024,14 +1031,17 @@ export default function TicketDetail() {
                 <div className="sec-title mt">执行SQL影响</div>
                 <div className="impact-card">
                   <DdlExecImpact
-                    records={execRecords}
+                    records={displayExecRecords}
                     env={dbEnv}
                     envByInstanceId={envByInstanceId}
                     fallbackDb={item?.db_name}
                     fallbackHost={inst?.host}
-                    execMessage={execErrorText}
-                    execFailed={execFailed}
-                    rollbackSummary={execObj?.rolled_back ? String(execObj?.summary || '') : ''}
+                    execMessage={isExecRunning ? '' : execErrorText}
+                    execSuccess={isExecRunning ? undefined : execSuccess}
+                    execFailed={isExecRunning ? false : execFailed}
+                    rollbackSummary={
+                      isExecRunning || !execObj?.rolled_back ? '' : String(execObj?.summary || '')
+                    }
                     emptyText={execEmptyText}
                   />
                 </div>

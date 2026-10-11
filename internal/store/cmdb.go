@@ -169,6 +169,9 @@ func (d *DB) ensureCmdbTables() error {
 			return err
 		}
 	}
+	if err := d.ensureCmdbSnapshotTable(); err != nil {
+		return err
+	}
 	return nil
 }
 
