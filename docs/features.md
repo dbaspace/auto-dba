@@ -84,7 +84,7 @@ Client Secret（及 LDAP Bind 密码）用 `jwt_secret` 加密落库。通过 Na
 |------|------|------|
 | 工单列表 | `/ops/tickets` | 全部工单的查询、审批与执行记录 |
 | DDL 工单 | `/ops/ddl` | 结构变更。提交前按审核规则做 SQL 检查，可看执行影响 |
-| DML 工单 | `/ops/dml` | 数据变更，同样走审核与审批 |
+| DML 工单 | `/ops/dml` | 数据变更，同样走审核与审批。PostgreSQL DML 由平台包事务执行，脚本中的 `BEGIN`/`COMMIT`/`ROLLBACK` 会被忽略（避免与外层事务双重提交） |
 | DQL 工单 | `/ops/dql` | 数据导出。左侧填环境、库、审批人和事由，右侧写查询 SQL |
 | Kafka 工单 | `/ops/kafka` | 创建或调整 Topic（分区、副本、保留策略等） |
 | Redis 工单 | `/ops/redis` | 按 Redis 命令规则提交变更，规则在审核规则中维护 |
@@ -158,11 +158,13 @@ Client Secret（及 LDAP Bind 密码）用 `jwt_secret` 加密落库。通过 Na
 
 ## 告警管理
 
-平台自建 Ruler，查询全局 Prometheus，管理规则 / 活跃与历史告警 / 静默；支持多档阈值、频控续报、Webhook·企微·电话·邮件外发、抑制、通知路由与值班排班。设计与 API 见 [告警管理](alerts.md)。
+平台自建 Ruler，查询全局 Prometheus，管理规则 / 活跃与历史告警 / 静默；支持多档阈值、频控续报、Webhook·企微·电话·邮件外发、抑制、通知路由与值班排班。设计与 API 见 [告警管理](alerts.md)。AIOps 见 [AIOps](aiops.md)。
 
 | 页面 | 路径 | 说明 |
 |------|------|------|
-| 活跃告警 | `/ops/alerts` | 认领、转派、处理中、恢复、误报、静默、转待办 |
+| 活跃告警 | `/ops/alerts` | 认领、转派、处理中、恢复、误报、静默、转待办；详情含诊断摘要 / Runbook / 助手 |
+| AIOps 知识库 | `/ops/aiops/knowledge` | 内置与库内案例（PostgreSQL/MySQL/Redis/StarRocks）、alertname 试算、DBA Copilot |
+| AIOps 关联 | `/ops/aiops/incidents` | 按实例时间窗聚合活跃告警 |
 | 历史告警 | `/ops/alerts/history` | 已恢复列表与复盘 Markdown |
 | 规则管理 | `/ops/alerts/rules` | PromQL 模板、作用域、多档、频控、试跑 |
 | 静默管理 | `/ops/alerts/silences` | 按 labels 静默 |

@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"strings"
 	"time"
@@ -21,6 +22,10 @@ type UserInfo struct {
 	Email       string
 }
 
+// 登录探测超时（search + user bind）；改密等管理操作仍用 defaultLDAPTimeout。
+const loginLDAPTimeout = 5 * time.Second
+const defaultLDAPTimeout = 15 * time.Second
+
 func Verify(cfg *store.LdapConfig, username, password string) (*UserInfo, error) {
 	endpoint, err := resolveEndpoint(cfg)
 	if err != nil {
@@ -29,23 +34,26 @@ func Verify(cfg *store.LdapConfig, username, password string) (*UserInfo, error)
 	if username == "" || password == "" {
 		return nil, fmt.Errorf("username and password required")
 	}
-	entry, err := lookupUserEntry(cfg, endpoint, username)
+	start := time.Now()
+	// 同一连接：Bind DN 搜用户后改为用户 Bind，避免第二次 dial
+	conn, entry, lookupMS, err := openAndLookupUser(cfg, endpoint, username, loginLDAPTimeout)
 	if err != nil {
+		log.Printf("ldap verify username=%s lookup_err after %dms: %v", username, time.Since(start).Milliseconds(), err)
 		return nil, err
 	}
+	defer conn.Close()
 	info := &UserInfo{
 		DisplayName: displayNameFromEntry(cfg, entry, username),
 		Email:       emailFromEntry(entry),
 	}
-	conn, err := dialLDAP(endpoint.addr, endpoint.host, endpoint.useTLS, endpoint.port)
-	if err != nil {
-		return nil, fmt.Errorf("连接 LDAP 失败: %w", err)
-	}
-	defer conn.Close()
-	conn.SetTimeout(15 * time.Second)
+	bindStart := time.Now()
 	if err := conn.Bind(entry.DN, password); err != nil {
+		log.Printf("ldap verify username=%s lookup_ms=%d user_bind_ms=%d total_ms=%d bind_err",
+			username, lookupMS, time.Since(bindStart).Milliseconds(), time.Since(start).Milliseconds())
 		return nil, fmt.Errorf("invalid password")
 	}
+	log.Printf("ldap verify username=%s lookup_ms=%d user_bind_ms=%d total_ms=%d ok",
+		username, lookupMS, time.Since(bindStart).Milliseconds(), time.Since(start).Milliseconds())
 	return info, nil
 }
 
@@ -236,7 +244,7 @@ func withAdminBind(endpoint *ldapEndpoint, bindDN, bindPassword string, fn func(
 		return fmt.Errorf("连接 LDAP 失败: %w", err)
 	}
 	defer conn.Close()
-	conn.SetTimeout(15 * time.Second)
+	conn.SetTimeout(defaultLDAPTimeout)
 	if err := conn.Bind(bindDN, bindPassword); err != nil {
 		return fmt.Errorf("Bind DN 认证失败: %w", err)
 	}
@@ -252,7 +260,7 @@ func withUserBind(endpoint *ldapEndpoint, userDN, password string, fn func(*ldap
 		return fmt.Errorf("连接 LDAP 失败: %w", err)
 	}
 	defer conn.Close()
-	conn.SetTimeout(15 * time.Second)
+	conn.SetTimeout(defaultLDAPTimeout)
 	if err := conn.Bind(userDN, password); err != nil {
 		return err
 	}
@@ -327,42 +335,67 @@ func resolveEndpoint(cfg *store.LdapConfig) (*ldapEndpoint, error) {
 }
 
 func lookupUserEntry(cfg *store.LdapConfig, endpoint *ldapEndpoint, username string) (*ldap.Entry, error) {
-	conn, err := dialLDAP(endpoint.addr, endpoint.host, endpoint.useTLS, endpoint.port)
+	conn, entry, _, err := openAndLookupUser(cfg, endpoint, username, defaultLDAPTimeout)
 	if err != nil {
-		return nil, fmt.Errorf("连接 LDAP 失败: %w", err)
+		return nil, err
 	}
-	defer conn.Close()
-	conn.SetTimeout(15 * time.Second)
+	conn.Close()
+	return entry, nil
+}
+
+func openAndLookupUser(cfg *store.LdapConfig, endpoint *ldapEndpoint, username string, timeout time.Duration) (*ldap.Conn, *ldap.Entry, int64, error) {
+	start := time.Now()
+	conn, err := dialLDAP(endpoint.addr, endpoint.host, endpoint.useTLS, endpoint.port)
+	dialMS := time.Since(start).Milliseconds()
+	if err != nil {
+		return nil, nil, dialMS, fmt.Errorf("连接 LDAP 失败: %w", err)
+	}
+	if timeout <= 0 {
+		timeout = defaultLDAPTimeout
+	}
+	conn.SetTimeout(timeout)
+	bindStart := time.Now()
 	if strings.TrimSpace(cfg.BindDN) != "" {
 		if strings.TrimSpace(cfg.BindPassword) == "" {
-			return nil, fmt.Errorf("ldap bind password not set")
+			conn.Close()
+			return nil, nil, time.Since(start).Milliseconds(), fmt.Errorf("ldap bind password not set")
 		}
 		if err := conn.Bind(cfg.BindDN, cfg.BindPassword); err != nil {
-			return nil, fmt.Errorf("Bind DN 认证失败: %w", err)
+			conn.Close()
+			return nil, nil, time.Since(start).Milliseconds(), fmt.Errorf("Bind DN 认证失败: %w", err)
 		}
 	}
+	bindMS := time.Since(bindStart).Milliseconds()
 	filter := BuildUserFilter(cfg.UserFilter, username)
 	attrs := []string{"dn", "cn", "displayName", "name", "sn", "givenName", "sAMAccountName", "uid", "mail", "email", "userPrincipalName"}
 	if a := strings.TrimSpace(cfg.DisplayNameAttr); a != "" {
 		attrs = append(attrs, a)
 	}
+	searchStart := time.Now()
 	result, err := searchUser(conn, cfg.BaseDN, filter, attrs)
 	if err != nil {
-		return nil, fmt.Errorf("搜索用户失败: %w", err)
+		conn.Close()
+		return nil, nil, time.Since(start).Milliseconds(), fmt.Errorf("搜索用户失败: %w", err)
 	}
 	if len(result.Entries) == 0 && !isBroadFilter(filter) {
 		result, err = searchUser(conn, cfg.BaseDN, BroadUserFilter(username), attrs)
 		if err != nil {
-			return nil, fmt.Errorf("搜索用户失败: %w", err)
+			conn.Close()
+			return nil, nil, time.Since(start).Milliseconds(), fmt.Errorf("搜索用户失败: %w", err)
 		}
 	}
+	searchMS := time.Since(searchStart).Milliseconds()
 	if len(result.Entries) == 0 {
-		return nil, fmt.Errorf("user not found")
+		conn.Close()
+		return nil, nil, time.Since(start).Milliseconds(), fmt.Errorf("user not found")
 	}
 	if len(result.Entries) > 1 {
-		return nil, fmt.Errorf("multiple users found")
+		conn.Close()
+		return nil, nil, time.Since(start).Milliseconds(), fmt.Errorf("multiple users found")
 	}
-	return result.Entries[0], nil
+	total := time.Since(start).Milliseconds()
+	log.Printf("ldap lookup username=%s dial_ms=%d bind_dn_ms=%d search_ms=%d total_ms=%d", username, dialMS, bindMS, searchMS, total)
+	return conn, result.Entries[0], total, nil
 }
 
 // displayNameFromEntry 取中文/真实姓名：优先配置属性，再 displayName / name / 姓名组合 / cn。
@@ -463,10 +496,12 @@ func mapChangePasswordError(err error) error {
 
 func dialLDAP(addr, serverName string, useTLS bool, port int) (*ldap.Conn, error) {
 	tlsConfig := &tls.Config{ServerName: serverName, InsecureSkipVerify: true}
+	dialer := &net.Dialer{Timeout: 2 * time.Second}
+	// ldaps 直连 / ldap + 可选 StartTLS
 	if useTLS && port != 389 {
-		return ldap.DialTLS("tcp", addr, tlsConfig)
+		return ldap.DialURL("ldaps://"+addr, ldap.DialWithTLSDialer(tlsConfig, dialer))
 	}
-	conn, err := ldap.Dial("tcp", addr)
+	conn, err := ldap.DialURL("ldap://"+addr, ldap.DialWithDialer(dialer))
 	if err != nil {
 		return nil, err
 	}

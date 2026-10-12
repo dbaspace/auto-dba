@@ -212,6 +212,7 @@ export default function AppLayout() {
         /* ignore */
       }
     }
+    // 始终拉一次 /auth/me，避免 seed 新增菜单后仍沿用 localStorage 旧 menus
     refreshMe()
     const handler = () => refreshMe()
     window.addEventListener('menus-changed', handler)

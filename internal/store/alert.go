@@ -583,6 +583,34 @@ func (d *DB) GetOpenAlertByFingerprint(fp string) (*Alert, error) {
 	return a, err
 }
 
+// ListAlertsByFingerprint 同指纹历史（含已恢复），按开始时间倒序。
+func (d *DB) ListAlertsByFingerprint(fp string, limit int) ([]Alert, error) {
+	fp = strings.TrimSpace(fp)
+	if fp == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 8
+	}
+	rows, err := d.Query(
+		`SELECT `+alertCols+` FROM tbl_alerts WHERE fingerprint=? ORDER BY started_at DESC LIMIT ?`,
+		fp, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Alert
+	for rows.Next() {
+		a, err := scanAlert(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *a)
+	}
+	return out, rows.Err()
+}
+
 func (d *DB) ListAlerts(f AlertFilter) ([]Alert, error) {
 	q := `SELECT ` + alertCols + ` FROM tbl_alerts WHERE 1=1`
 	args := []any{}

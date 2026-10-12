@@ -36,6 +36,27 @@ type AlertPayload struct {
 	GroupKey    string            `json:"group_key,omitempty"`
 	GroupSize   int               `json:"group_size,omitempty"`
 	At          string            `json:"at"`
+	// AIOps Phase0：上下文摘要（可选）
+	InstanceID    string              `json:"instance_id,omitempty"`
+	ImpactSummary string              `json:"impact_summary,omitempty"`
+	ContextSummary string             `json:"context_summary,omitempty"`
+	CaseHints     []AlertCaseHint     `json:"case_hints,omitempty"`
+}
+
+// AlertCaseHint Webhook 中的案例提示（与 aiops.CaseHint 字段对齐，避免 notify↔aiops 循环依赖）。
+type AlertCaseHint struct {
+	Fingerprint string `json:"fingerprint"`
+	MetricKey   string `json:"metric_key"`
+	Title       string `json:"title"`
+	MatchReason string `json:"match_reason,omitempty"`
+}
+
+// AlertContextOpts 外发时附加的 AIOps 上下文。
+type AlertContextOpts struct {
+	InstanceID     string
+	ImpactSummary  string
+	ContextSummary string
+	CaseHints      []AlertCaseHint
 }
 
 // AlertDispatchOpts 外发选项（路由 / 值班覆盖默认渠道）。
@@ -47,7 +68,7 @@ type AlertDispatchOpts struct {
 }
 
 // AlertFired 告警触发/续报外发（异步调用方应 go AlertFired）。
-func AlertFired(db *store.DB, encKey string, a *store.Alert, rule *store.AlertRule, reason string, opts *AlertDispatchOpts) {
+func AlertFired(db *store.DB, encKey string, a *store.Alert, rule *store.AlertRule, reason string, opts *AlertDispatchOpts, ctxOpts *AlertContextOpts) {
 	if db == nil || a == nil {
 		return
 	}
@@ -71,11 +92,12 @@ func AlertFired(db *store.DB, encKey string, a *store.Alert, rule *store.AlertRu
 		p.GroupKey = opts.GroupKey
 		p.GroupSize = opts.GroupSize
 	}
+	applyAlertContext(&p, ctxOpts)
 	dispatchAlert(db, encKey, p, opts)
 }
 
 // AlertResolved 告警恢复外发。
-func AlertResolved(db *store.DB, encKey string, a *store.Alert, ruleName string, opts *AlertDispatchOpts) {
+func AlertResolved(db *store.DB, encKey string, a *store.Alert, ruleName string, opts *AlertDispatchOpts, ctxOpts *AlertContextOpts) {
 	if db == nil || a == nil {
 		return
 	}
@@ -91,7 +113,18 @@ func AlertResolved(db *store.DB, encKey string, a *store.Alert, ruleName string,
 		p.GroupKey = opts.GroupKey
 		p.GroupSize = opts.GroupSize
 	}
+	applyAlertContext(&p, ctxOpts)
 	dispatchAlert(db, encKey, p, opts)
+}
+
+func applyAlertContext(p *AlertPayload, ctxOpts *AlertContextOpts) {
+	if p == nil || ctxOpts == nil {
+		return
+	}
+	p.InstanceID = ctxOpts.InstanceID
+	p.ImpactSummary = ctxOpts.ImpactSummary
+	p.ContextSummary = ctxOpts.ContextSummary
+	p.CaseHints = ctxOpts.CaseHints
 }
 
 func dispatchAlert(db *store.DB, encKey string, p AlertPayload, opts *AlertDispatchOpts) {
@@ -285,8 +318,14 @@ func FormatAlertText(p AlertPayload) string {
 	if p.GroupSize > 1 {
 		extra = fmt.Sprintf(" group=%d", p.GroupSize)
 	}
-	return fmt.Sprintf("[%s] %s %s value=%s thr=%s handle=%s%s",
-		p.Severity, p.Event, p.Title, p.CurValue, p.Threshold, p.Handle, extra)
+	ctx := ""
+	if s := strings.TrimSpace(p.ContextSummary); s != "" {
+		ctx = " | " + s
+	} else if s := strings.TrimSpace(p.ImpactSummary); s != "" {
+		ctx = " | " + s
+	}
+	return fmt.Sprintf("[%s] %s %s value=%s thr=%s handle=%s%s%s",
+		p.Severity, p.Event, p.Title, p.CurValue, p.Threshold, p.Handle, extra, ctx)
 }
 
 // FormatAlertMarkdown 企微 markdown。
@@ -302,9 +341,15 @@ func FormatAlertMarkdown(p AlertPayload) string {
 	if p.GroupSize > 1 {
 		group = fmt.Sprintf("\n> 聚合: <font color=\"comment\">%d</font>", p.GroupSize)
 	}
-	return fmt.Sprintf("## [%s] %s\n> 事件: <font color=\"%s\">%s</font>\n> 服务: %s · 集群: %s\n> 当前值: %s / 阈值: %s\n> 处理: %s%s",
+	ctxLine := ""
+	if s := strings.TrimSpace(p.ContextSummary); s != "" {
+		ctxLine = fmt.Sprintf("\n> 诊断: <font color=\"comment\">%s</font>", s)
+	} else if s := strings.TrimSpace(p.ImpactSummary); s != "" {
+		ctxLine = fmt.Sprintf("\n> 影响: <font color=\"comment\">%s</font>", s)
+	}
+	return fmt.Sprintf("## [%s] %s\n> 事件: <font color=\"%s\">%s</font>\n> 服务: %s · 集群: %s\n> 当前值: %s / 阈值: %s\n> 处理: %s%s%s",
 		p.Severity, p.Title, color, p.Event, nz(p.Service, "-"), nz(p.Cluster, "-"),
-		nz(p.CurValue, "-"), nz(p.Threshold, "-"), nz(p.Handle, "-"), group)
+		nz(p.CurValue, "-"), nz(p.Threshold, "-"), nz(p.Handle, "-"), group, ctxLine)
 }
 
 func nz(s, d string) string {

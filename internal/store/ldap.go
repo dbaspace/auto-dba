@@ -4,9 +4,22 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
+	"time"
 
 	"auto-dba/internal/secret"
 )
+
+type ldapConfigCache struct {
+	mu     sync.Mutex
+	cfg    *LdapConfig
+	encKey string
+	at     time.Time
+}
+
+var ldapCfgMem = &ldapConfigCache{}
+
+const ldapConfigMemTTL = 60 * time.Second
 
 const (
 	KeyLdapConfig         = "ldap_config"
@@ -34,6 +47,14 @@ func DefaultLdapConfig() *LdapConfig {
 }
 
 func (d *DB) GetLdapConfig(encKey string) (*LdapConfig, error) {
+	ldapCfgMem.mu.Lock()
+	if ldapCfgMem.cfg != nil && ldapCfgMem.encKey == encKey && time.Since(ldapCfgMem.at) < ldapConfigMemTTL {
+		cp := *ldapCfgMem.cfg
+		ldapCfgMem.mu.Unlock()
+		return &cp, nil
+	}
+	ldapCfgMem.mu.Unlock()
+
 	v, err := d.GetGlobalArg(KeyLdapConfig)
 	if err != nil {
 		return nil, err
@@ -63,10 +84,20 @@ func (d *DB) GetLdapConfig(encKey string) (*LdapConfig, error) {
 	} else {
 		c.BindPassword = c.BindPasswordEnc
 	}
+	ldapCfgMem.mu.Lock()
+	cp := c
+	ldapCfgMem.cfg = &cp
+	ldapCfgMem.encKey = encKey
+	ldapCfgMem.at = time.Now()
+	ldapCfgMem.mu.Unlock()
 	return &c, nil
 }
 
 func (d *DB) SetLdapConfig(encKey string, c *LdapConfig) error {
+	ldapCfgMem.mu.Lock()
+	ldapCfgMem.cfg = nil
+	ldapCfgMem.at = time.Time{}
+	ldapCfgMem.mu.Unlock()
 	if c == nil {
 		return d.SetGlobalArg(KeyLdapConfig, "", "LDAP 登录配置")
 	}

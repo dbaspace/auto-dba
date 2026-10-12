@@ -92,6 +92,11 @@ const (
 	URNAlertRuleEdit   = "um.action.alert.rule.edit"
 	URNAlertRuleDelete = "um.action.alert.rule.delete"
 
+	URNCopilotChat     = "um.action.copilot.chat"
+	URNRunbookExecute  = "um.action.runbook.execute"
+	URNSidebarAIOpsKB        = "um.sidebar.ops-aiops-knowledge"
+	URNSidebarAIOpsIncidents = "um.sidebar.ops-aiops-incidents"
+
 	URNTenantsCreate      = "um.action.tenants.create"
 	URNTenantsEdit        = "um.action.tenants.edit"
 	URNTenantsDisable     = "um.action.tenants.disable"

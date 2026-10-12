@@ -23,6 +23,7 @@ type ReloadDiff struct {
 	External  bool
 	Terminal  bool
 	Services  bool
+	Copilot   bool
 
 	// 派生：供 Reloader 做副作用（换密钥/换库/重启等）
 	JWTSecret   bool
@@ -41,7 +42,7 @@ type ReloadDiff struct {
 // Any 任一业务段有变更即为 true。
 func (d ReloadDiff) Any() bool {
 	return d.App || d.HTTP || d.Frontend || d.Log || d.DB || d.CDC ||
-		d.Migration || d.Flashback || d.Backup || d.External || d.Terminal || d.Services
+		d.Migration || d.Flashback || d.Backup || d.External || d.Terminal || d.Services || d.Copilot
 }
 
 // Sections 返回有变更的段名（日志用）。
@@ -64,6 +65,7 @@ func (d ReloadDiff) Sections() []string {
 	add("external", d.External)
 	add("terminal", d.Terminal)
 	add("services", d.Services)
+	add("copilot", d.Copilot)
 	return out
 }
 
@@ -124,6 +126,7 @@ func DiffConfig(old, next *Config) ReloadDiff {
 	d.External = old.External != next.External
 	d.Terminal = old.Terminal != next.Terminal
 	d.Services = old.Services != next.Services
+	d.Copilot = old.Copilot != next.Copilot
 
 	d.JWTSecret = old.App.JWTSecret != next.App.JWTSecret
 	d.DBDSN = old.DB.DSN != next.DB.DSN || old.DB.Driver != next.DB.Driver

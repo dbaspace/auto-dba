@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"auto-dba/internal/aiops"
 	"auto-dba/internal/store"
 )
 
@@ -111,41 +112,36 @@ func (s *Service) FindingFeedback(ctx context.Context, id string, req *FeedbackR
 	return nil
 }
 
-// SeedSystemCases 幂等写入系统案例。
+// SeedSystemCases 幂等写入/刷新系统案例（含 PostgreSQL 知识库，见 aiops.PostgresKnowledgeCases）。
 func (s *Service) SeedSystemCases(ctx context.Context) error {
-	seeds := []struct {
-		fp, key, sev, dir, title, cause, action string
-	}{
-		{"cache_hit_ratio|warning|below", "cache_hit_ratio", "warning", "below", "缓存命中率偏低",
-			"缓存命中率 {value} 偏低，可能存在全表扫描或 shared_buffers 不足", "检查热点 SQL 与 shared_buffers"},
-		{"cache_hit_ratio|critical|below", "cache_hit_ratio", "critical", "below", "缓存命中率严重偏低",
-			"缓存命中率 {value} 严重偏低", "立即排查全表扫描与缓冲配置"},
-		{"conn_usage_ratio|warning|above", "conn_usage_ratio", "warning", "above", "连接使用率偏高",
-			"连接使用率 {value} 偏高", "检查连接池与空闲连接"},
-		{"conn_usage_ratio|critical|above", "conn_usage_ratio", "critical", "above", "连接接近打满",
-			"连接使用率 {value} 接近上限", "扩容 max_connections 或限流应用连接"},
-		{"max_xact_duration|warning|above", "max_xact_duration", "warning", "above", "存在长事务",
-			"最长事务时长 {value}s", "定位并处理长事务会话"},
-		{"max_xact_duration|critical|above", "max_xact_duration", "critical", "above", "存在超长事务",
-			"最长事务时长 {value}s，可能阻塞复制/VACUUM", "尽快终止或提交异常长事务"},
-		{"tps|warning|drop", "tps", "warning", "drop", "TPS 环比下跌",
-			"TPS 相对基线下跌", "确认业务流量与主库可用性"},
-		{"deadlocks_ps|warning|above", "deadlocks_ps", "warning", "above", "死锁增多",
-			"死锁速率 {value}", "排查交叉更新与锁顺序"},
-	}
 	now := time.Now().UTC()
-	for _, seed := range seeds {
-		existing, _ := s.Store.GetSqlInsightCaseByFingerprint(ctx, seed.fp)
+	var firstErr error
+	for _, kc := range aiops.AllKnowledgeCases() {
+		alertNames := aiops.JoinAlertNames(kc.AlertNames)
+		if alertNames == "" {
+			alertNames = aiops.SuggestedAlertNamesForMetric(kc.MetricKey)
+		}
+		row := &store.SqlInsightCaseRow{
+			ID: "seed-" + kc.Fingerprint, Fingerprint: kc.Fingerprint,
+			MetricKey: kc.MetricKey, Severity: kc.Severity, Direction: kc.Direction,
+			Title: kc.Title, RootCauseTemplate: kc.RootCauseTemplate, ActionTemplate: kc.ActionTemplate,
+			AlertNames: alertNames, HitCount: 0, System: true, LastSeenAt: &now,
+		}
+		existing, err := s.Store.GetSqlInsightCaseByFingerprint(ctx, kc.Fingerprint)
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
 		if existing != nil {
+			if err := s.Store.PatchSqlInsightSystemCase(ctx, row); err != nil && firstErr == nil {
+				firstErr = err
+			}
 			continue
 		}
-		_ = s.Store.UpsertSqlInsightCase(ctx, &store.SqlInsightCaseRow{
-			ID: "seed-" + seed.fp, Fingerprint: seed.fp, MetricKey: seed.key, Severity: seed.sev, Direction: seed.dir,
-			Title: seed.title, RootCauseTemplate: seed.cause, ActionTemplate: seed.action,
-			HitCount: 0, System: true, LastSeenAt: &now,
-		})
+		if err := s.Store.UpsertSqlInsightCase(ctx, row); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
-	return nil
+	return firstErr
 }
 
 // SeedSystemRules 幂等写入系统规则。

@@ -7,8 +7,21 @@ import (
 
 func TestDefaultAlertRulesValid(t *testing.T) {
 	rules := DefaultAlertRules()
-	if len(rules) != 6 {
-		t.Fatalf("want 6 seed rules, got %d", len(rules))
+	if len(rules) != 9 {
+		t.Fatalf("want 9 seed rules, got %d", len(rules))
+	}
+	wantPG := map[string]bool{"PGConnHigh": false, "PGStorage": false, "PGCacheHitLow": false, "PGReplicationLag": false, "PGDeadlocks": false}
+	for _, r := range rules {
+		if an := r.Labels["alertname"]; wantPG[an] == false {
+			if _, ok := wantPG[an]; ok {
+				wantPG[an] = true
+			}
+		}
+	}
+	for an, ok := range wantPG {
+		if !ok {
+			t.Fatalf("missing PG seed alertname=%s", an)
+		}
 	}
 	for _, id := range obsoleteAlertSeedIDs {
 		for _, r := range rules {

@@ -78,6 +78,8 @@ import TodoFollowUp from '../views/todo/TodoFollowUp'
 import ActiveAlerts from '../views/alerts/ActiveAlerts'
 import AlertHistory from '../views/alerts/AlertHistory'
 import AlertRules from '../views/alerts/AlertRules'
+import AIOpsKnowledge from '../views/aiops/Knowledge'
+import AIOpsIncidents from '../views/aiops/Incidents'
 import AlertRoutes from '../views/alerts/AlertRoutes'
 import AlertInhibitions from '../views/alerts/AlertInhibitions'
 import AlertOncall from '../views/alerts/AlertOncall'
@@ -266,6 +268,8 @@ export function TabPagePanel({ pathname, search }: { pathname: string; search?: 
       <Route path="/ops/alerts/routes" element={<AlertRoutes />} />
       <Route path="/ops/alerts/inhibitions" element={<AlertInhibitions />} />
       <Route path="/ops/alerts/oncall" element={<AlertOncall />} />
+      <Route path="/ops/aiops/knowledge" element={<AIOpsKnowledge />} />
+      <Route path="/ops/aiops/incidents" element={<AIOpsIncidents />} />
 
       <Route path="*" element={<MenuPagePlaceholder pathname={pathname} />} />
     </Routes>

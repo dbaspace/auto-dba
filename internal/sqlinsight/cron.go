@@ -20,8 +20,12 @@ func StartDailyCron(ctx context.Context, svc *Service) {
 		return
 	}
 	cronOnce.Do(func() {
-		_ = svc.SeedSystemCases(context.Background())
-		_ = svc.SeedSystemRules(context.Background())
+		if err := svc.SeedSystemCases(context.Background()); err != nil {
+			log.Printf("sqlinsight: SeedSystemCases: %v", err)
+		}
+		if err := svc.SeedSystemRules(context.Background()); err != nil {
+			log.Printf("sqlinsight: SeedSystemRules: %v", err)
+		}
 		go svc.dailyCronWatcher(ctx)
 	})
 }

@@ -4,6 +4,7 @@ import { Button, Card, Input, Select, Space, message } from 'antd'
 import api from '../api/request'
 import { useAppDispatch } from '../store'
 import { setUser } from '../store/authSlice'
+import { HOME_PATH } from '../store/tabsSlice'
 import loginBg from '../assets/login-bg.jpg'
 import BrandMark, { BrandWordmark } from '../components/BrandMark'
 
@@ -75,10 +76,20 @@ export default function Login() {
       return
     }
     message.success('登录成功')
+    const redirect = params.get('redirect')
+    if (redirect) {
+      navigate(redirect, { replace: true })
+      return
+    }
     const first = (data.user?.menus || []).flatMap(function walk(n: any): string[] {
       return n.path ? [n.path] : (n.children || []).flatMap(walk)
     })[0]
-    navigate(params.get('redirect') || first || '/403', { replace: true })
+    // 菜单延后由 /auth/me 加载时 menus 为空，勿落到 /403；进工作台等侧栏刷新
+    if (first) {
+      navigate(first, { replace: true })
+      return
+    }
+    navigate(HOME_PATH, { replace: true })
   }
 
   useEffect(() => {

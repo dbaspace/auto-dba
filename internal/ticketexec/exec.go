@@ -442,6 +442,12 @@ func runPostgresDML(ctx context.Context, t Target, stmts []string, collect *Resu
 		collect.appendFailure(t, "(连接)", time.Now(), err)
 		return fmt.Errorf("连接失败 %s/%s: %w", t.Host, t.DBName, err)
 	}
+	// 平台已包事务：剥离脚本内 BEGIN/COMMIT/ROLLBACK，避免双重提交导致 idle
+	stmts = filterDMLTxnControlStatements(stmts)
+	if len(stmts) == 0 {
+		collect.appendFailure(t, "(过滤)", time.Now(), fmt.Errorf("仅含事务控制语句，无实际 DML"))
+		return fmt.Errorf("仅含事务控制语句，无实际 DML")
+	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		collect.appendFailure(t, "(BEGIN)", time.Now(), err)

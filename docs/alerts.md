@@ -12,7 +12,7 @@
 | **二期** | 已完成 | Webhook / 企微应用 / 电话网关 / 邮件外发；历史复盘 Markdown |
 | **三期** | 已完成 | 抑制规则、通知路由（渠道 + 分组）、值班排班 |
 
-后续可选：通知模板编辑器、多 Prometheus 数据源、值班日历 UI、抑制预览试算。
+后续可选：通知模板编辑器、多 Prometheus 数据源、值班日历 UI、抑制预览试算。AIOps（Context Bundle / Copilot）见 [aiops.md](aiops.md)。
 
 ## 数据流
 
@@ -154,7 +154,8 @@ Ruler **每规则只查 1 次** Prom，不做按实例 N+1。
 
 | 组 | 方法 |
 |----|------|
-| 告警 | `GET /alerts`、`/alerts/stats`、`POST /alerts/postmortem`、`GET /alerts/:id`、`GET /alerts/:id/events` |
+| 告警 | `GET /alerts`、`/alerts/stats`、`POST /alerts/postmortem`、`GET /alerts/:id`、`GET /alerts/:id/events`、`GET /alerts/:id/context-bundle`（AIOps 诊断上下文，见 [aiops.md](aiops.md)） |
+| AIOps | `GET /aiops/knowledge`、`/knowledge/db`、`/knowledge/match`、`/incidents`；`POST /aiops/rag/search`；`POST /copilot/chat`；`POST /runbook/preview\|execute`（见 [aiops.md](aiops.md)） |
 | 生命周期 | `POST /alerts/:id/claim\|handover\|processing\|resolve\|false-positive\|silence\|todo` |
 | 静默 | `GET\|POST /alert-silences`，`POST /alert-silences/:id/cancel` |
 | 规则 | `GET\|POST\|PUT\|DELETE /alert-rules`；`GET /alert-rules/templates`；`POST .../test`、`/compile-preview`（body 支持 `metric_expr` / `tiers` / `notify_policy` / `scope`） |

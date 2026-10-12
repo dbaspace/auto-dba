@@ -1586,11 +1586,15 @@ func (d *DB) ensureAlertMenus(now string) error {
 		{"m-alert-routes", "m-alert", "通知路由", "/ops/alerts/routes", "um.sidebar.ops-alerts-routes", "查看通知路由", "share", 5},
 		{"m-alert-inhibitions", "m-alert", "抑制规则", "/ops/alerts/inhibitions", "um.sidebar.ops-alerts-inhibitions", "查看抑制规则", "stop", 6},
 		{"m-alert-oncall", "m-alert", "值班排班", "/ops/alerts/oncall", "um.sidebar.ops-alerts-oncall", "查看值班排班", "team", 7},
+		{"m-alert-aiops-kb", "m-alert", "AIOps 知识库", "/ops/aiops/knowledge", URNSidebarAIOpsKB, "查看 AIOps 知识库", "book", 8},
+		{"m-alert-aiops-incidents", "m-alert", "AIOps 关联", "/ops/aiops/incidents", URNSidebarAIOpsIncidents, "查看告警关联事故", "cluster", 9},
 		{"m-act-alert-claim", "m-alert-active", "认领告警", "", URNAlertClaim, "认领 / 转派 / 处理中", "user", 90},
 		{"m-act-alert-resolve", "m-alert-active", "关闭告警", "", URNAlertResolve, "恢复 / 误报关闭", "check", 91},
 		{"m-act-alert-silence", "m-alert-active", "静默告警", "", URNAlertSilence, "新建 / 取消静默", "pause", 92},
 		{"m-act-alert-rule-edit", "m-alert-rules", "编辑规则", "", URNAlertRuleEdit, "新建 / 编辑 / 启停规则", "edit", 90},
 		{"m-act-alert-rule-del", "m-alert-rules", "删除规则", "", URNAlertRuleDelete, "删除告警规则", "delete", 91},
+		{"m-act-copilot-chat", "m-alert-aiops-kb", "Copilot 对话", "", URNCopilotChat, "使用 DBA Copilot", "robot", 90},
+		{"m-act-runbook-exec", "m-alert-active", "执行 Runbook", "", URNRunbookExecute, "执行受控 Runbook 动作", "thunderbolt", 93},
 	}
 	// 若已有「告警管理」目录（含手工空目录），子页面挂到其下，避免出现两个同名目录。
 	parentID := "m-alert"

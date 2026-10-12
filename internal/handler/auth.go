@@ -195,6 +195,7 @@ func (h *AuthHandler) guardExternalAttempt(c *gin.Context, req *loginReq) bool {
 }
 
 func (h *AuthHandler) Login(c *gin.Context) {
+	start := time.Now()
 	var req loginReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "username and password required"})
@@ -237,10 +238,20 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		}
 	}
 
-	ssoCfg, ssoCfgErr := h.Store.GetSsoConfig(h.encKey())
+	// 平台账号/admin 不读 SSO/LDAP 配置（避免两次全局参数 + 解密）
+	var ssoCfg *store.SsoConfig
+	var ldapCfg *store.LdapConfig
+	var ssoCfgErr, ldapCfgErr error
+	needSSO := !isAdmin && !forcePlatform && !forceLDAP && (autoTry || forceSSO)
+	needLDAP := !isAdmin && !forcePlatform && (autoTry || forceLDAP)
+	if needSSO || forceSSO {
+		ssoCfg, ssoCfgErr = h.Store.GetSsoConfig(h.encKey())
+	}
+	if needLDAP || forceLDAP {
+		ldapCfg, ldapCfgErr = h.Store.GetLdapConfig(h.encKey())
+	}
 	ssoOn := ssoCfg != nil && ssoCfg.Enabled
-	ssoPassword := ssoOn && (ssoCfg == nil || ssoCfg.UsePasswordGrant())
-	ldapCfg, ldapCfgErr := h.Store.GetLdapConfig(h.encKey())
+	ssoPassword := ssoOn && ssoCfg.UsePasswordGrant()
 	ldapOn := ldapCfg != nil && ldapCfg.Enabled
 
 	willExternal := !isAdmin && !forcePlatform && ((ssoPassword && (autoTry || forceSSO)) || (ldapOn && (autoTry || forceLDAP)))
@@ -288,6 +299,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 
 	// 外部链路实际校验失败（不含「仅授权码」跳过）；最终失败时按外部规则计数
 	externalFailed := false
+	var externalMS int64
 
 	// 1) SSO（密码模式；IdP 若仅支持授权码会返回 unsupported_grant_type）
 	if !isAdmin && !forceLDAP && !forcePlatform && ssoPassword && (autoTry || forceSSO) {
@@ -299,13 +311,16 @@ func (h *AuthHandler) Login(c *gin.Context) {
 			}
 			log.Printf("login sso config username=%s reason=%v", req.Username, ssoCfgErr)
 		} else {
-			u, created, serr := h.trySSOLogin(req.Username, req.Password)
+			extStart := time.Now()
+			u, created, serr := h.trySSOLogin(ssoCfg, req.Username, req.Password)
+			externalMS += time.Since(extStart).Milliseconds()
 			if serr == nil && u != nil {
 				msg := "SSO 登录成功"
 				if created {
 					msg = "SSO 登录成功（已自动创建本地账号）"
 				}
 				h.respondLoginWithTenant(c, u, msg, req.TenantID)
+				log.Printf("login timing username=%s mode=sso external_ms=%d total_ms=%d", req.Username, externalMS, time.Since(start).Milliseconds())
 				return
 			}
 			if serr != nil {
@@ -327,6 +342,11 @@ func (h *AuthHandler) Login(c *gin.Context) {
 						h.failExternal(c, req.Username, idOrEmpty(exist), nameOrEmpty(exist), msg, count)
 						return
 					}
+					// auto：凭证类错误不再双探 LDAP，避免叠加超时
+					if count {
+						h.failExternal(c, req.Username, idOrEmpty(exist), nameOrEmpty(exist), msg, true)
+						return
+					}
 				}
 			}
 		}
@@ -346,13 +366,16 @@ func (h *AuthHandler) Login(c *gin.Context) {
 			}
 			log.Printf("login ldap config username=%s reason=%v", req.Username, ldapCfgErr)
 		} else {
-			u, created, lerr := h.tryLDAPLogin(req.Username, req.Password)
+			extStart := time.Now()
+			u, created, lerr := h.tryLDAPLogin(ldapCfg, req.Username, req.Password)
+			externalMS += time.Since(extStart).Milliseconds()
 			if lerr == nil && u != nil {
 				msg := "LDAP 登录成功"
 				if created {
 					msg = "LDAP 登录成功（已自动创建本地账号）"
 				}
 				h.respondLoginWithTenant(c, u, msg, req.TenantID)
+				log.Printf("login timing username=%s mode=ldap external_ms=%d total_ms=%d", req.Username, externalMS, time.Since(start).Milliseconds())
 				return
 			}
 			if lerr != nil {
@@ -381,6 +404,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	}
 
 	// 3) 平台本地（含 SSO 仅支持授权码时的回退）
+	authStart := time.Now()
 	u, err := h.Store.GetUserByUsername(req.Username)
 	if err != nil || u == nil {
 		if willExternal {
@@ -419,7 +443,9 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		failAuth(u.Username, u.ID, u.DisplayName, "用户名或密码错误", true)
 		return
 	}
+	authMS := time.Since(authStart).Milliseconds()
 	h.respondLoginWithTenant(c, u, "登录成功", req.TenantID)
+	log.Printf("login timing username=%s mode=platform auth_ms=%d external_ms=%d total_ms=%d", req.Username, authMS, externalMS, time.Since(start).Milliseconds())
 }
 
 func idOrEmpty(u *store.User) string {
@@ -443,10 +469,9 @@ func (h *AuthHandler) encKey() string {
 	return h.Cfg.App.JWTSecret
 }
 
-func (h *AuthHandler) tryLDAPLogin(username, password string) (*store.User, bool, error) {
-	cfg, err := h.Store.GetLdapConfig(h.encKey())
-	if err != nil || cfg == nil || !cfg.Enabled {
-		return nil, false, err
+func (h *AuthHandler) tryLDAPLogin(cfg *store.LdapConfig, username, password string) (*store.User, bool, error) {
+	if cfg == nil || !cfg.Enabled {
+		return nil, false, errors.New("ldap not configured")
 	}
 	if strings.TrimSpace(cfg.BindDN) != "" && strings.TrimSpace(cfg.BindPassword) == "" {
 		return nil, false, errors.New("ldap bind password not set")
@@ -499,10 +524,9 @@ func (h *AuthHandler) tryLDAPLogin(username, password string) (*store.User, bool
 	return u, created, nil
 }
 
-func (h *AuthHandler) trySSOLogin(username, password string) (*store.User, bool, error) {
-	cfg, err := h.Store.GetSsoConfig(h.encKey())
-	if err != nil || cfg == nil || !cfg.Enabled {
-		return nil, false, err
+func (h *AuthHandler) trySSOLogin(cfg *store.SsoConfig, username, password string) (*store.User, bool, error) {
+	if cfg == nil || !cfg.Enabled {
+		return nil, false, errors.New("sso not configured")
 	}
 	if strings.TrimSpace(cfg.ClientID) == "" || cfg.TokenURL() == "" {
 		return nil, false, errors.New("sso base_url / client_id not set")
@@ -710,19 +734,16 @@ func (h *AuthHandler) finishSSOCodeExchange(c *gin.Context, cfg *store.SsoConfig
 	}
 	h.recordLogin(c, u.Username, u.ID, u.DisplayName, true, msg)
 	middleware.TouchIdle(u.ID)
-	menus, _ := h.menusForUserInTenant(u, tid)
-	out := h.userPublicJSON(u, menus)
+	out := h.userPublicJSON(u, nil)
+	out["menus"] = []store.MenuNode{}
+	out["permissions"] = []string{}
+	out["platform_permissions"] = []string{}
 	if tid != "" {
 		if t, _ := h.Store.GetTenant(tid); t != nil {
 			out["current_tenant"] = t
 		}
-		if perms, err := h.Store.ListUserURNsInTenant(u.ID, tid); err == nil {
-			out["permissions"] = perms
-		}
 	}
-	if plat, err := h.Store.ListPlatformURNs(u.ID); err == nil {
-		out["platform_permissions"] = plat
-	}
+	log.Printf("login timing username=%s mode=sso_code menus_ms=0(deferred)", u.Username)
 	userBlob, _ := json.Marshal(out)
 	ticket = ssoauth.PutTicket(tok, userBlob)
 	return ticket, frontend, redirectPath, "", http.StatusOK
@@ -834,13 +855,24 @@ func (h *AuthHandler) respondLogin(c *gin.Context, u *store.User, logMsg string)
 }
 
 func (h *AuthHandler) respondLoginWithTenant(c *gin.Context, u *store.User, logMsg, preferredTenant string) {
-	_ = h.Store.ClearLoginFailures(u.ID)
-	_, _ = h.Store.ClearExternalLoginFailure(u.Username)
+	// 成功路径异步清失败计数，不挡响应
+	uid, uname := u.ID, u.Username
+	storeDB := h.Store
+	go func() {
+		defer func() { _ = recover() }()
+		if storeDB == nil {
+			return
+		}
+		_ = storeDB.ClearLoginFailures(uid)
+		_, _ = storeDB.ClearExternalLoginFailure(uname)
+	}()
 	preferred := strings.TrimSpace(preferredTenant)
 	if preferred == "" {
 		preferred = strings.TrimSpace(c.Query("tenant_id"))
 	}
+	tenantStart := time.Now()
 	t, tenants, err := h.Store.PickLoginTenant(u.ID, preferred)
+	tenantMS := time.Since(tenantStart).Milliseconds()
 	ttl := time.Duration(h.Cfg.App.JWTTTLHours) * time.Hour
 	if err != nil {
 		c.JSON(http.StatusForbidden, gin.H{"message": err.Error(), "tenants": tenants})
@@ -876,22 +908,37 @@ func (h *AuthHandler) respondLoginWithTenant(c *gin.Context, u *store.User, logM
 	}
 	h.recordLogin(c, u.Username, u.ID, u.DisplayName, true, logMsg)
 	middleware.TouchIdle(u.ID)
-	menus, _ := h.Store.MenusForUserInTenant(u.ID, tid, true)
-	out := h.userPublicJSON(u, menus)
+	// 登录响应不装配菜单/权限（省数百 ms～1s）；前端进布局后 /auth/me 拉取。
+	// 避免 LDAP 已耗数秒时再叠加 RBAC，按钮转圈明显变长。
+	out := h.userPublicJSON(u, nil)
 	out["current_tenant"] = t
 	out["tenants"] = tenants
-	if tid != "" {
-		if perms, err := h.Store.ListUserURNsInTenant(u.ID, tid); err == nil {
-			out["permissions"] = perms
-		}
-	}
-	if plat, err := h.Store.ListPlatformURNs(u.ID); err == nil {
-		out["platform_permissions"] = plat
-	}
+	out["menus"] = []store.MenuNode{}
+	out["permissions"] = []string{}
+	out["platform_permissions"] = []string{}
+	log.Printf("login timing username=%s tenant_ms=%d menus_ms=0(deferred)", u.Username, tenantMS)
 	c.JSON(http.StatusOK, gin.H{
-		"token": tok,
-		"user":  out,
+		"token":         tok,
+		"user":          out,
+		"menus_pending": true,
 	})
+}
+
+// applyUserAccess 一次 ListMenus 写入 menus / permissions / platform_permissions。
+func (h *AuthHandler) applyUserAccess(out gin.H, u *store.User, tenantID string, impersonate bool) {
+	if out == nil || h == nil || h.Store == nil || u == nil {
+		return
+	}
+	acc, err := h.Store.BootstrapUserAccessFromUser(u, u.ID, tenantID, true, impersonate)
+	if err != nil || acc == nil {
+		if err != nil {
+			log.Printf("bootstrap user access user=%s tenant=%s: %v", u.ID, tenantID, err)
+		}
+		return
+	}
+	out["menus"] = acc.Menus
+	out["permissions"] = acc.Permissions
+	out["platform_permissions"] = acc.PlatformPermissions
 }
 
 func (h *AuthHandler) Info(c *gin.Context) {
@@ -927,17 +974,29 @@ func (h *AuthHandler) recordLogin(c *gin.Context, username, userID, displayName 
 	if h == nil || h.Store == nil {
 		return
 	}
-	if err := h.Store.CreateLoginLog(&store.LoginLog{
-		UserID:      userID,
-		Username:    username,
-		DisplayName: displayName,
-		Success:     ok,
-		Message:     msg,
-		IP:          clientLoginIP(c),
-		UserAgent:   c.Request.UserAgent(),
-	}); err != nil {
-		log.Printf("login log: %v", err)
+	ip := clientLoginIP(c)
+	ua := ""
+	if c != nil && c.Request != nil {
+		ua = c.Request.UserAgent()
 	}
+	storeDB := h.Store
+	go func() {
+		defer func() { _ = recover() }()
+		if storeDB == nil {
+			return
+		}
+		if err := storeDB.CreateLoginLog(&store.LoginLog{
+			UserID:      userID,
+			Username:    username,
+			DisplayName: displayName,
+			Success:     ok,
+			Message:     msg,
+			IP:          ip,
+			UserAgent:   ua,
+		}); err != nil {
+			log.Printf("login log: %v", err)
+		}
+	}()
 }
 
 func clientLoginIP(c *gin.Context) string {
@@ -1102,18 +1161,8 @@ func (h *AuthHandler) ListQueryAudits(c *gin.Context) {
 }
 
 // menusForUserInTenant 按租户成员角色出菜单；tenantID 空则空树（不再回退平台全量角色菜单）。
-func (h *AuthHandler) menusForUserInTenant(u *store.User, tenantID string) ([]store.MenuNode, error) {
-	if u == nil || u.ID == "" {
-		return []store.MenuNode{}, nil
-	}
-	tenantID = strings.TrimSpace(tenantID)
-	if tenantID == "" {
-		return []store.MenuNode{}, nil
-	}
-	return h.Store.MenusForUserInTenant(u.ID, tenantID, true)
-}
-
 func (h *AuthHandler) Me(c *gin.Context) {
+	start := time.Now()
 	u, err := h.Store.GetUserByUsername(middleware.Username(c))
 	if err != nil || u == nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"message": "unauthorized"})
@@ -1121,14 +1170,10 @@ func (h *AuthHandler) Me(c *gin.Context) {
 	}
 	tid := middleware.TenantID(c)
 	imp := middleware.IsImpersonating(c)
-	var menus []store.MenuNode
-	// 平台审计进入：admin 未必是目标租户成员，仍应保留完整菜单以便代配资源
-	if imp {
-		menus, _ = h.Store.MenuTree(true)
-	} else {
-		menus, _ = h.Store.MenusForUserInTenant(u.ID, tid, true)
-	}
-	out := h.userPublicJSON(u, menus)
+	out := h.userPublicJSON(u, nil)
+	menusStart := time.Now()
+	h.applyUserAccess(out, u, tid, imp)
+	menusMS := time.Since(menusStart).Milliseconds()
 	tenants, _ := h.Store.ListUserTenants(u.ID)
 	if imp {
 		// 审计会话：顶栏列出全部活跃租户，避免只剩 UUID
@@ -1148,18 +1193,9 @@ func (h *AuthHandler) Me(c *gin.Context) {
 		if t, _ := h.Store.GetTenant(tid); t != nil {
 			out["current_tenant"] = t
 		}
-		if imp {
-			if perms, err := h.Store.ListUserURNs(u.ID); err == nil {
-				out["permissions"] = perms
-			}
-		} else if perms, err := h.Store.ListUserURNsInTenant(u.ID, tid); err == nil {
-			out["permissions"] = perms
-		}
-	}
-	if plat, err := h.Store.ListPlatformURNs(u.ID); err == nil {
-		out["platform_permissions"] = plat
 	}
 	out["impersonating"] = imp
+	log.Printf("me timing username=%s menus_ms=%d total_ms=%d", u.Username, menusMS, time.Since(start).Milliseconds())
 	c.JSON(http.StatusOK, gin.H{"data": out})
 }
 
@@ -1192,16 +1228,10 @@ func (h *AuthHandler) SelectTenant(c *gin.Context) {
 		return
 	}
 	_ = h.Store.AppendTenantAudit(t.ID, u.ID, "tenant.select", t.Code)
-	menus, _ := h.Store.MenusForUserInTenant(u.ID, t.ID, true)
-	out := h.userPublicJSON(u, menus)
+	out := h.userPublicJSON(u, nil)
+	h.applyUserAccess(out, u, t.ID, false)
 	out["current_tenant"] = t
 	out["tenants"] = tenants
-	if perms, err := h.Store.ListUserURNsInTenant(u.ID, t.ID); err == nil {
-		out["permissions"] = perms
-	}
-	if plat, err := h.Store.ListPlatformURNs(u.ID); err == nil {
-		out["platform_permissions"] = plat
-	}
 	c.JSON(http.StatusOK, gin.H{"token": tok, "user": out})
 }
 
@@ -1290,16 +1320,8 @@ func (h *AuthHandler) UpdateProfile(c *gin.Context) {
 		latest.DisplayName = req.DisplayName
 	}
 	tid := middleware.TenantID(c)
-	menus, _ := h.menusForUserInTenant(latest, tid)
-	out := h.userPublicJSON(latest, menus)
-	if tid != "" {
-		if perms, err := h.Store.ListUserURNsInTenant(latest.ID, tid); err == nil {
-			out["permissions"] = perms
-		}
-	}
-	if plat, err := h.Store.ListPlatformURNs(latest.ID); err == nil {
-		out["platform_permissions"] = plat
-	}
+	out := h.userPublicJSON(latest, nil)
+	h.applyUserAccess(out, latest, tid, false)
 	c.JSON(http.StatusOK, gin.H{"ok": true, "data": out})
 }
 

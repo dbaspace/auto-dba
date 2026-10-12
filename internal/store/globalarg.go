@@ -8,6 +8,22 @@ import (
 	"time"
 )
 
+func (d *DB) invalidateArgCache(key string) {
+	if d == nil {
+		return
+	}
+	d.argCacheMu.Lock()
+	defer d.argCacheMu.Unlock()
+	if d.argCache == nil {
+		return
+	}
+	if key == "" {
+		d.argCache = nil
+		return
+	}
+	delete(d.argCache, key)
+}
+
 const ArgLoginIdleTimeoutMin = "login_idle_timeout_min"
 const ArgUserWatermarkEnabled = "user_watermark_enabled"
 const ArgIssueGlobalApproverWhitelist = "issue_global_approver_whitelist"
@@ -36,12 +52,39 @@ func (d *DB) ListGlobalArgs() ([]GlobalArg, error) {
 }
 
 func (d *DB) GetGlobalArg(key string) (string, error) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return "", nil
+	}
+	if d != nil {
+		d.argCacheMu.Lock()
+		if d.argCache != nil {
+			if e, ok := d.argCache[key]; ok && time.Since(e.at) < argCacheTTL {
+				v := e.value
+				d.argCacheMu.Unlock()
+				return v, nil
+			}
+		}
+		d.argCacheMu.Unlock()
+	}
 	var v string
 	err := d.QueryRow(`SELECT value FROM tbl_global_args WHERE key=?`, key).Scan(&v)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
+		v = ""
+		err = nil
 	}
-	return v, err
+	if err != nil {
+		return "", err
+	}
+	if d != nil {
+		d.argCacheMu.Lock()
+		if d.argCache == nil {
+			d.argCache = map[string]argCacheEntry{}
+		}
+		d.argCache[key] = argCacheEntry{value: v, at: time.Now()}
+		d.argCacheMu.Unlock()
+	}
+	return v, nil
 }
 
 func (d *DB) CreateGlobalArg(key, value, desc string) error {
@@ -56,6 +99,9 @@ func (d *DB) CreateGlobalArg(key, value, desc string) error {
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := d.Exec(`INSERT INTO tbl_global_args(key, value, description, updated_at) VALUES(?,?,?,?)`, key, value, desc, now)
+	if err == nil {
+		d.invalidateArgCache(key)
+	}
 	return err
 }
 
@@ -63,11 +109,15 @@ func (d *DB) SetGlobalArg(key, value, desc string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	var exists int
 	_ = d.QueryRow(`SELECT COUNT(1) FROM tbl_global_args WHERE key=?`, key).Scan(&exists)
+	var err error
 	if exists > 0 {
-		_, err := d.Exec(`UPDATE tbl_global_args SET value=?, description=?, updated_at=? WHERE key=?`, value, desc, now, key)
-		return err
+		_, err = d.Exec(`UPDATE tbl_global_args SET value=?, description=?, updated_at=? WHERE key=?`, value, desc, now, key)
+	} else {
+		_, err = d.Exec(`INSERT INTO tbl_global_args(key, value, description, updated_at) VALUES(?,?,?,?)`, key, value, desc, now)
 	}
-	_, err := d.Exec(`INSERT INTO tbl_global_args(key, value, description, updated_at) VALUES(?,?,?,?)`, key, value, desc, now)
+	if err == nil {
+		d.invalidateArgCache(key)
+	}
 	return err
 }
 
@@ -80,6 +130,7 @@ func (d *DB) DeleteGlobalArg(key string) error {
 	if n == 0 {
 		return errors.New("参数不存在")
 	}
+	d.invalidateArgCache(key)
 	return nil
 }
 

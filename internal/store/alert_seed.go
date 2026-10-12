@@ -84,6 +84,44 @@ func DefaultAlertRules() []AlertRule {
 			NotifyPolicy: notify,
 			Enabled:      true, CreatedBy: "system",
 		},
+		{
+			ID: "rule-seed-pg-cache-hit", Name: "PostgreSQL 缓存命中率过低", Severity: AlertSeverityP2, ForDuration: "10m",
+			MetricExpr: `min by (instance) (sum by (instance) (rate(pg_stat_database_blks_hit{__SCOPE__,datname!~"template.*|postgres"}[5m])) / clamp_min(sum by (instance) (rate(pg_stat_database_blks_hit{__SCOPE__,datname!~"template.*|postgres"}[5m]) + rate(pg_stat_database_blks_read{__SCOPE__,datname!~"template.*|postgres"}[5m])), 1e-9))`,
+			Expr:      `min by (instance) (sum by (instance) (rate(pg_stat_database_blks_hit{__SCOPE__,datname!~"template.*|postgres"}[5m])) / clamp_min(sum by (instance) (rate(pg_stat_database_blks_hit{__SCOPE__,datname!~"template.*|postgres"}[5m]) + rate(pg_stat_database_blks_read{__SCOPE__,datname!~"template.*|postgres"}[5m])), 1e-9))`,
+			Tiers: []AlertTier{
+				{Op: "<=", Value: 0.95, Severity: AlertSeverityP2, For: "10m"},
+				{Op: "<=", Value: 0.90, Severity: AlertSeverityP1, For: "5m"},
+			},
+			Labels: map[string]string{"team": "DBA", "service": "postgres", "alertname": "PGCacheHitLow", "metric_key": "cache_hit_ratio"},
+			Annotations: map[string]string{
+				"summary": "PostgreSQL 缓冲命中率过低", "threshold": "≤95% P2 / ≤90% P1", "si_metric": "cache_hit_ratio",
+			},
+			Scope: global, NotifyPolicy: notify, Enabled: true, CreatedBy: "system",
+		},
+		{
+			ID: "rule-seed-pg-repl-lag", Name: "PostgreSQL 复制延迟过高", Severity: AlertSeverityP1, ForDuration: "5m",
+			// postgres_exporter 常见指标；现场无此 series 时规则不触发，可按 exporter 改写。
+			MetricExpr: `max by (instance) (pg_replication_lag{__SCOPE__})`,
+			Expr:      `max by (instance) (pg_replication_lag{__SCOPE__})`,
+			Tiers: []AlertTier{
+				{Op: ">=", Value: 30, Severity: AlertSeverityP1, For: "5m"},
+				{Op: ">=", Value: 300, Severity: AlertSeverityP0, For: "3m"},
+			},
+			Labels: map[string]string{"team": "DBA", "service": "postgres", "alertname": "PGReplicationLag", "metric_key": "replication_lag"},
+			Annotations: map[string]string{
+				"summary": "PostgreSQL 主从复制延迟过高", "threshold": "≥30s P1 / ≥300s P0", "si_metric": "replication_lag",
+			},
+			Scope: global, NotifyPolicy: notify, Enabled: true, CreatedBy: "system",
+		},
+		{
+			ID: "rule-seed-pg-deadlocks", Name: "PostgreSQL 死锁速率过高", Severity: AlertSeverityP2, ForDuration: "5m",
+			Expr: `sum by (instance) (rate(pg_stat_database_deadlocks{__SCOPE__}[5m])) >= 0.01`,
+			Labels: map[string]string{"team": "DBA", "service": "postgres", "alertname": "PGDeadlocks", "metric_key": "deadlocks_ps"},
+			Annotations: map[string]string{
+				"summary": "PostgreSQL 死锁速率 ≥ 0.01/s", "threshold": "≥ 0.01/s", "si_metric": "deadlocks_ps",
+			},
+			Scope: global, NotifyPolicy: notify, Enabled: true, CreatedBy: "system",
+		},
 	}
 }
 
@@ -149,6 +187,9 @@ func (d *DB) EnsureDefaultAlertRules() error {
 		}
 		if exist == nil {
 			r := base
+			if strings.TrimSpace(r.TenantID) == "" {
+				r.TenantID = DefaultTenantID
+			}
 			if err := d.CreateAlertRule(&r); err != nil {
 				return err
 			}

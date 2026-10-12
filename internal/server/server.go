@@ -20,6 +20,7 @@ import (
 	"auto-dba/internal/backup"
 	"auto-dba/internal/cdc"
 	"auto-dba/internal/config"
+	"auto-dba/internal/copilot"
 	"auto-dba/internal/dbdeploy"
 	"auto-dba/internal/dbmig"
 	"auto-dba/internal/dbmonitor"
@@ -30,6 +31,7 @@ import (
 	"auto-dba/internal/pgspace"
 	"auto-dba/internal/redisrdb"
 	"auto-dba/internal/router"
+	"auto-dba/internal/runbook"
 	"auto-dba/internal/sqlinsight"
 	"auto-dba/internal/srcluster"
 	"auto-dba/internal/sshx"
@@ -158,6 +160,8 @@ func Run(cfg *config.Config, configPath string) {
 		Cmdb:               &handler.CmdbHandler{Store: db, Secret: cfg.App.JWTSecret},
 		Todo:               &handler.TodoHandler{Store: db},
 		Alert:              &handler.AlertHandler{Store: db, Secret: cfg.App.JWTSecret},
+		Copilot:            &handler.CopilotHandler{Svc: copilot.New(db)},
+		Runbook:            &handler.RunbookHandler{Svc: runbook.New(db)},
 		DCL:                &handler.DCLHandler{Store: db, Secret: cfg.App.JWTSecret},
 		RBAC:               &handler.RBACHandler{Store: db, Secret: cfg.App.JWTSecret},
 		Tenant: &handler.TenantHandler{

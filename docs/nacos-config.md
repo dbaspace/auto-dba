@@ -145,9 +145,25 @@ terminal:
     ...完整 PEM...
     -----END OPENSSH PRIVATE KEY-----
   ssh_host_key_policy: accept-new
+
+# DBA Copilot（核心密钥；仅从此段读取，不回退库表全局参数）
+# Cursor 与 OpenAI 兼容网关不要混用同一段 base_url（通义/qwen 须走 openai 网关，勿挂 api.cursor.com）
+copilot:
+  base_url: "https://api.cursor.com"
+  api_key: "crsr_…"                 # Dashboard → User API Keys；401 Invalid User API Key 时重新生成
+  model: "auto"
+  provider: "cursor"
+  # —— 若要用「通义」等兼容模型，整段改成下面（勿与 Cursor 混用）——
+  # base_url: "https://你的兼容网关/v1"   # 勿带 /chat/completions
+  # api_key: "sk-…"
+  # model: '[{"value":"qwen-plus","label":"通义"},{"value":"gpt-4o-mini","label":"轻量"}]'
+  # provider: "openai"
+  # JSON 列表请用单引号或 | 块，勿用 "[{"value":...}]"（内层双引号会弄断 YAML）
 ```
 
 不要在 DataId 里再写 `nacos:` 段。
+
+**Copilot 401 排查**：`Invalid User API Key` 表示上游拒绝密钥——检查 Nacos `copilot.api_key` 是否为有效 Cursor User API Key（`crsr_…`），或改用 OpenAI 兼容网关的 `sk-…`；前端选「通义」时必须配置 `provider: openai` 与对应 `base_url`，不能仍指向 `api.cursor.com`。
 
 ### 服务端口从 Nacos 绑定
 
@@ -208,6 +224,7 @@ DataId 内全部业务顶层段参与 diff。段内任意字段都会写入内�
 | 变更 | 真实行为 |
 |------|----------|
 | `jwt_secret` | atomic + 各 engine/handler 密钥拷贝；**旧 JWT 立即失效**；元库中用其加密的 **SSO Client Secret / LDAP Bind 密码**也会解不开，须到「认证配置」重新填写并保存（见 [功能说明 · SSO](features.md#sso)） |
+| `copilot.*` | 写入 cfg；下次 `LoadConfig` 即生效（Chat/Models 每次现读 Live）；**不读**库表 `copilot_*` |
 | `db` 池参数 | `ApplyPool` |
 | `db.dsn` | **先** `Reopen`（migrate/seed），成功后再提交配置；失败则**整次热更中止**，内存 DSN 保持旧值 |
 | `terminal.*`（含 `max_lifetime_sec`、SSH） | 写入 cfg；同步 backup / srcluster / dbdeploy SSH；新终端会话用新 lifetime |
@@ -256,7 +273,7 @@ go build -o bin/db-monitor ./cmd/db-monitor
 
 联调清单：
 
-- [ ] 控制台对应 Namespace 下已发布 `auto-dba.yaml`（含 `jwt_secret`、`db.dsn`；SSH 用则含 `ssh_private_key`）
+- [ ] 控制台对应 Namespace 下已发布 `auto-dba.yaml`（含 `jwt_secret`、`db.dsn`；SSH 用则含 `ssh_private_key`；Copilot 用则含 `copilot.*`）
 - [ ] 本地 `nacos.enabled: true`，`namespace` 为**平台部署** Namespace ID（非业务环境 code）
 - [ ] 启动日志有「已从 Nacos 加载配置」与 `nacos watch: listening ... debounce=`
 - [ ] 若配置了私钥：存在 `config/terminal/.runtime_id_ed25519`（0600）

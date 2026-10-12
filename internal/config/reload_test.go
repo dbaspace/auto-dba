@@ -17,6 +17,7 @@ func TestDiffConfigAllSections(t *testing.T) {
 		Terminal: TerminalConfig{MaxLifetimeSec: 1800, Enabled: true},
 		External: ExternalConfig{StarRocksFEURL: ""},
 		Backup:   BackupConfig{WorkDir: "/tmp/a"},
+		Copilot:  CopilotConfig{BaseURL: "https://api.cursor.com", APIKey: "old"},
 	}
 	next := &Config{
 		App:      AppConfig{JWTSecret: "b", Name: "x"},
@@ -28,13 +29,14 @@ func TestDiffConfigAllSections(t *testing.T) {
 		Terminal: TerminalConfig{MaxLifetimeSec: 28000, Enabled: true},
 		External: ExternalConfig{StarRocksFEURL: "http://fe"},
 		Backup:   BackupConfig{WorkDir: "/tmp/b"},
+		Copilot:  CopilotConfig{BaseURL: "https://api.cursor.com", APIKey: "new"},
 	}
 	d := DiffConfig(old, next)
 	if !d.Any() {
 		t.Fatal("expected Any")
 	}
 	if !d.App || !d.JWTSecret || !d.HTTP || !d.ListenAddr || !d.Frontend || !d.FrontendDev ||
-		!d.Log || !d.DB || !d.DBPool || !d.CDC || !d.Terminal || !d.External || !d.Backup {
+		!d.Log || !d.DB || !d.DBPool || !d.CDC || !d.Terminal || !d.External || !d.Backup || !d.Copilot {
 		t.Fatalf("diff=%+v sections=%v", d, d.Sections())
 	}
 	// 仅改 http.read_timeout，也应命中 http 段（整段比较）

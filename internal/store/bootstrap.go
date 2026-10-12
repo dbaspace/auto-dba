@@ -11,8 +11,8 @@ import (
 
 // 启动引导版本：修改 migrate.go / seed.go 后请递增对应常量，否则已初始化库会跳过重跑。
 const (
-	SchemaVersion = "2026-10-10.tenancy-v3.alert-ops"
-	SeedVersion   = "2026-10-10.alert-ops-v3"
+	SchemaVersion = "2026-10-12.copilot-session-title"
+	SeedVersion   = "2026-10-12.kb-learn-align"
 )
 
 const (
@@ -65,8 +65,14 @@ func (d *DB) migrateFast() error {
 			return err
 		}
 		if cur == SchemaVersion {
-			// 轻量幂等：租户内唯一约束迁移不依赖升版本，避免 skip 路径漏跑。
+			// 轻量幂等：租户内唯一约束 / AIOps 案例列 / Copilot title 不依赖升版本，避免 skip 路径漏跑。
 			if err := d.ensureTenantScopedUniques(); err != nil {
+				return err
+			}
+			if err := d.ensureSqlInsightCaseColumns(); err != nil {
+				return err
+			}
+			if err := d.ensureCopilotSessionColumns(); err != nil {
 				return err
 			}
 			log.Printf("migrate: skip (schema_version=%s) in %s", SchemaVersion, time.Since(t0).Round(time.Millisecond))
@@ -97,6 +103,10 @@ func (d *DB) seedFast() error {
 		}
 		if cur == SeedVersion {
 			if err := d.EnsureDefaultAlertRules(); err != nil {
+				return err
+			}
+			now := time.Now().UTC().Format(time.RFC3339)
+			if err := d.ensureAlertMenus(now); err != nil {
 				return err
 			}
 			if err := d.SyncDefaultTenantMemberships(); err != nil {

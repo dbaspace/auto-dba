@@ -599,6 +599,9 @@ func (d *DB) ensureLoginLogsTable() error {
 	if err := d.ensureCmdbTables(); err != nil {
 		return err
 	}
+	if err := d.ensureCopilotTables(); err != nil {
+		return err
+	}
 	return d.ensureTenancy()
 }
 
@@ -921,12 +924,14 @@ func (d *DB) ensureSqlInsightTables() error {
 			title                VARCHAR(512)  NOT NULL DEFAULT '',
 			root_cause_template  TEXT          NOT NULL DEFAULT '',
 			action_template      TEXT          NOT NULL DEFAULT '',
+			alert_names          TEXT          NOT NULL DEFAULT '',
 			hit_count            INTEGER       NOT NULL DEFAULT 0,
 			confirm_count        INTEGER       NOT NULL DEFAULT 0,
 			dismiss_count        INTEGER       NOT NULL DEFAULT 0,
 			system               BOOLEAN       NOT NULL DEFAULT FALSE,
 			last_seen_at         TIMESTAMPTZ,
-			created_at           TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+			created_at           TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+			updated_at           TIMESTAMPTZ
 		)`,
 	}
 	for _, s := range stmts {
@@ -947,7 +952,35 @@ func (d *DB) ensureSqlInsightTables() error {
 			return err
 		}
 	}
+	return d.ensureSqlInsightCaseColumns()
+}
+
+// ensureSqlInsightCaseColumns AIOps：案例表补齐 alert_names / updated_at（幂等，含旧库）。
+func (d *DB) ensureSqlInsightCaseColumns() error {
+	type col struct {
+		withIF   string
+		fallback string
+	}
+	for _, c := range []col{
+		{
+			`ALTER TABLE tbl_sql_insight_cases ADD COLUMN IF NOT EXISTS alert_names TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE tbl_sql_insight_cases ADD COLUMN alert_names TEXT NOT NULL DEFAULT ''`,
+		},
+		{
+			`ALTER TABLE tbl_sql_insight_cases ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ`,
+			`ALTER TABLE tbl_sql_insight_cases ADD COLUMN updated_at TIMESTAMPTZ`,
+		},
+	} {
+		if _, err := d.db.Exec(c.withIF); err != nil {
+			_, _ = d.db.Exec(c.fallback)
+		}
+	}
 	return nil
+}
+
+// ensureSqlInsightCaseAlertNamesColumn 兼容旧调用名。
+func (d *DB) ensureSqlInsightCaseAlertNamesColumn() error {
+	return d.ensureSqlInsightCaseColumns()
 }
 
 func (d *DB) ensurePGSpaceTables() error {

@@ -61,6 +61,8 @@ type Deps struct {
 	Cmdb               *handler.CmdbHandler
 	Todo               *handler.TodoHandler
 	Alert              *handler.AlertHandler
+	Copilot            *handler.CopilotHandler
+	Runbook            *handler.RunbookHandler
 	DCL                *handler.DCLHandler
 	RBAC               *handler.RBACHandler
 	Tenant             *handler.TenantHandler
@@ -278,12 +280,37 @@ func Init(e *gin.Engine, d Deps) {
 	}
 
 	if d.Alert != nil {
+		aik := secured.Group("/aiops")
+		aik.GET("/knowledge", d.Alert.ListKnowledge)
+		aik.GET("/knowledge/db", d.Alert.ListKnowledgeDB)
+		aik.POST("/knowledge/learn", d.Alert.LearnKnowledge)
+		aik.DELETE("/knowledge/db", d.Alert.DeleteKnowledgeDB)
+		aik.GET("/knowledge/match", d.Alert.MatchKnowledgePreview)
+		aik.GET("/incidents", d.Alert.ListIncidents)
+		aik.POST("/rag/search", d.Alert.RAGSearch)
+
+		if d.Copilot != nil {
+			cp := secured.Group("/copilot")
+			cp.GET("/models", requireURN(store.URNCopilotChat), d.Copilot.Models)
+			cp.POST("/chat", requireURN(store.URNCopilotChat), d.Copilot.Chat)
+			cp.GET("/sessions", requireURN(store.URNCopilotChat), d.Copilot.ListSessions)
+			cp.GET("/sessions/:id/turns", requireURN(store.URNCopilotChat), d.Copilot.GetSessionTurns)
+		}
+		if d.Runbook != nil {
+			rb := secured.Group("/runbook")
+			rb.POST("/preview", d.Runbook.Preview)
+			rb.POST("/execute", requireURN(store.URNRunbookExecute), d.Runbook.Execute)
+		}
+
 		al := secured.Group("/alerts")
 		al.GET("", d.Alert.List)
 		al.GET("/stats", d.Alert.Stats)
 		al.POST("/postmortem", d.Alert.Postmortem)
 		al.GET("/:id", d.Alert.Get)
 		al.GET("/:id/events", d.Alert.Events)
+		al.GET("/:id/context-bundle", d.Alert.ContextBundle)
+		al.GET("/:id/runbook", d.Alert.RunbookPreview)
+		al.POST("/:id/copilot", requireURN(store.URNCopilotChat), d.Alert.CopilotChat)
 		al.POST("/:id/claim", requireURN(store.URNAlertClaim), d.Alert.Claim)
 		al.POST("/:id/handover", requireURN(store.URNAlertClaim), d.Alert.Handover)
 		al.POST("/:id/processing", requireURN(store.URNAlertClaim), d.Alert.Processing)

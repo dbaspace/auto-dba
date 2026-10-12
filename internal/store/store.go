@@ -16,7 +16,25 @@ type DB struct {
 	mu     sync.RWMutex
 	db     *sql.DB
 	driver string
+
+	// 进程内短缓存：降低远程库 RTT 下登录/Me 的重复全表菜单与全局参数查询
+	menuCacheMu sync.RWMutex
+	menuCache   []Menu
+	menuCacheAt time.Time
+
+	argCacheMu sync.Mutex
+	argCache   map[string]argCacheEntry
 }
+
+type argCacheEntry struct {
+	value string
+	at    time.Time
+}
+
+const (
+	menuCacheTTL = 30 * time.Second
+	argCacheTTL  = 15 * time.Second
+)
 
 // PoolSettings 元库连接池参数；零值字段在 Open 时使用默认。
 type PoolSettings struct {

@@ -734,6 +734,7 @@ type SqlInsightCaseRow struct {
 	Title              string
 	RootCauseTemplate  string
 	ActionTemplate     string
+	AlertNames         string // 逗号分隔 alertname，与平台告警 labels.alertname 对齐
 	HitCount           int
 	ConfirmCount       int
 	DismissCount       int
@@ -746,13 +747,15 @@ type SqlInsightCaseRow struct {
 func (d *DB) UpsertSqlInsightCase(ctx context.Context, c *SqlInsightCaseRow) error {
 	_, err := d.db.ExecContext(ctx, d.rewrite(`
 INSERT INTO tbl_sql_insight_cases (
-  id, fingerprint, metric_key, severity, direction, title, root_cause_template, action_template,
+  id, fingerprint, metric_key, severity, direction, title, root_cause_template, action_template, alert_names,
   hit_count, confirm_count, dismiss_count, system, last_seen_at, created_at
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())
 ON CONFLICT (fingerprint) DO UPDATE SET
   title=EXCLUDED.title, root_cause_template=EXCLUDED.root_cause_template, action_template=EXCLUDED.action_template,
+  alert_names=CASE WHEN EXCLUDED.alert_names <> '' THEN EXCLUDED.alert_names ELSE tbl_sql_insight_cases.alert_names END,
+  system=EXCLUDED.system, direction=EXCLUDED.direction,
   hit_count=tbl_sql_insight_cases.hit_count + 1, last_seen_at=EXCLUDED.last_seen_at, updated_at=NOW()`),
-		c.ID, c.Fingerprint, c.MetricKey, c.Severity, c.Direction, c.Title, c.RootCauseTemplate, c.ActionTemplate,
+		c.ID, c.Fingerprint, c.MetricKey, c.Severity, c.Direction, c.Title, c.RootCauseTemplate, c.ActionTemplate, c.AlertNames,
 		c.HitCount, c.ConfirmCount, c.DismissCount, c.System, c.LastSeenAt)
 	return err
 }
@@ -761,10 +764,10 @@ func (d *DB) GetSqlInsightCaseByFingerprint(ctx context.Context, fp string) (*Sq
 	c := &SqlInsightCaseRow{}
 	var last, updated sql.NullTime
 	err := d.db.QueryRowContext(ctx, d.rewrite(`
-SELECT id, fingerprint, metric_key, severity, direction, title, root_cause_template, action_template,
+SELECT id, fingerprint, metric_key, severity, direction, title, root_cause_template, action_template, COALESCE(alert_names,''),
   hit_count, confirm_count, dismiss_count, system, last_seen_at, created_at, updated_at
 FROM tbl_sql_insight_cases WHERE fingerprint=?`), fp).Scan(
-		&c.ID, &c.Fingerprint, &c.MetricKey, &c.Severity, &c.Direction, &c.Title, &c.RootCauseTemplate, &c.ActionTemplate,
+		&c.ID, &c.Fingerprint, &c.MetricKey, &c.Severity, &c.Direction, &c.Title, &c.RootCauseTemplate, &c.ActionTemplate, &c.AlertNames,
 		&c.HitCount, &c.ConfirmCount, &c.DismissCount, &c.System, &last, &c.CreatedAt, &updated)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -802,7 +805,7 @@ func (d *DB) ListSqlInsightCases(ctx context.Context, offset, limit int) ([]*Sql
 		limit = 50
 	}
 	rows, err := d.db.QueryContext(ctx, d.rewrite(`
-SELECT id, fingerprint, metric_key, severity, direction, title, root_cause_template, action_template,
+SELECT id, fingerprint, metric_key, severity, direction, title, root_cause_template, action_template, COALESCE(alert_names,''),
   hit_count, confirm_count, dismiss_count, system, last_seen_at, created_at, updated_at
 FROM tbl_sql_insight_cases ORDER BY confirm_count DESC, hit_count DESC LIMIT ? OFFSET ?`), limit, offset)
 	if err != nil {
@@ -814,7 +817,7 @@ FROM tbl_sql_insight_cases ORDER BY confirm_count DESC, hit_count DESC LIMIT ? O
 		c := &SqlInsightCaseRow{}
 		var last, updated sql.NullTime
 		if err := rows.Scan(
-			&c.ID, &c.Fingerprint, &c.MetricKey, &c.Severity, &c.Direction, &c.Title, &c.RootCauseTemplate, &c.ActionTemplate,
+			&c.ID, &c.Fingerprint, &c.MetricKey, &c.Severity, &c.Direction, &c.Title, &c.RootCauseTemplate, &c.ActionTemplate, &c.AlertNames,
 			&c.HitCount, &c.ConfirmCount, &c.DismissCount, &c.System, &last, &c.CreatedAt, &updated); err != nil {
 			return nil, 0, err
 		}
@@ -829,6 +832,108 @@ FROM tbl_sql_insight_cases ORDER BY confirm_count DESC, hit_count DESC LIMIT ? O
 		out = append(out, c)
 	}
 	return out, total, rows.Err()
+}
+
+// PatchSqlInsightCaseAlertNames 仅更新 alert_names（不增加 hit_count）。
+func (d *DB) PatchSqlInsightCaseAlertNames(ctx context.Context, fingerprint, alertNames string) error {
+	_, err := d.db.ExecContext(ctx, d.rewrite(`
+UPDATE tbl_sql_insight_cases SET alert_names=?, updated_at=NOW() WHERE fingerprint=?`),
+		alertNames, fingerprint)
+	return err
+}
+
+// DeleteSqlInsightCase 删除案例（用于清理错挂的学习补充；系统案例也可按指纹删，慎用）。
+func (d *DB) DeleteSqlInsightCase(ctx context.Context, fingerprint string) error {
+	fingerprint = strings.TrimSpace(fingerprint)
+	if fingerprint == "" {
+		return nil
+	}
+	_, err := d.db.ExecContext(ctx, d.rewrite(`DELETE FROM tbl_sql_insight_cases WHERE fingerprint=?`), fingerprint)
+	return err
+}
+
+// PatchSqlInsightSystemCase 更新系统案例文案与 alert_names（不增加 hit_count）。
+func (d *DB) PatchSqlInsightSystemCase(ctx context.Context, c *SqlInsightCaseRow) error {
+	if c == nil || strings.TrimSpace(c.Fingerprint) == "" {
+		return nil
+	}
+	_, err := d.db.ExecContext(ctx, d.rewrite(`
+UPDATE tbl_sql_insight_cases SET
+  metric_key=?, severity=?, direction=?, title=?, root_cause_template=?, action_template=?,
+  alert_names=?, system=TRUE, updated_at=NOW()
+WHERE fingerprint=?`),
+		c.MetricKey, c.Severity, c.Direction, c.Title, c.RootCauseTemplate, c.ActionTemplate,
+		c.AlertNames, c.Fingerprint)
+	return err
+}
+
+// ListRecentSqlInsightFindings 按实例或 host:port 取近期 finding。
+func (d *DB) ListRecentSqlInsightFindings(ctx context.Context, instanceID, host string, port, limit int) ([]*SqlInsightFindingRow, error) {
+	if limit <= 0 {
+		limit = 8
+	}
+	var conds []string
+	var args []any
+	if id := strings.TrimSpace(instanceID); id != "" {
+		conds = append(conds, "instance_id=?")
+		args = append(args, id)
+	} else if h := strings.TrimSpace(host); h != "" {
+		conds = append(conds, "host=?")
+		args = append(args, h)
+		if port > 0 {
+			conds = append(conds, "port=?")
+			args = append(args, port)
+		}
+	} else {
+		return nil, nil
+	}
+	where := "WHERE " + strings.Join(conds, " AND ")
+	q := fmt.Sprintf(`SELECT id, run_id, analysis_date, host, port, instance_id, instance_name, metric_key, rule_id, rule_kind,
+  severity, title, message, value, threshold, baseline_value, unit, evidence, suggestion, fingerprint,
+  feedback, feedback_note, feedback_by, feedback_at, created_at
+FROM tbl_sql_insight_findings %s
+ORDER BY created_at DESC LIMIT ?`, where)
+	args = append(args, limit)
+	rows, err := d.db.QueryContext(ctx, d.rewrite(q), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*SqlInsightFindingRow
+	for rows.Next() {
+		r := &SqlInsightFindingRow{}
+		var val, th, bl sql.NullFloat64
+		var fbAt sql.NullTime
+		var ev []byte
+		if err := rows.Scan(
+			&r.ID, &r.RunID, &r.AnalysisDate, &r.Host, &r.Port, &r.InstanceID, &r.InstanceName, &r.MetricKey, &r.RuleID, &r.RuleKind,
+			&r.Severity, &r.Title, &r.Message, &val, &th, &bl, &r.Unit, &ev, &r.Suggestion, &r.Fingerprint,
+			&r.Feedback, &r.FeedbackNote, &r.FeedbackBy, &fbAt, &r.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		if val.Valid {
+			v := val.Float64
+			r.Value = &v
+		}
+		if th.Valid {
+			v := th.Float64
+			r.Threshold = &v
+		}
+		if bl.Valid {
+			v := bl.Float64
+			r.BaselineValue = &v
+		}
+		if len(ev) > 0 {
+			r.Evidence = json.RawMessage(ev)
+		}
+		if fbAt.Valid {
+			t := fbAt.Time
+			r.FeedbackAt = &t
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 // PGActivityDayMaxXact 某日某实例最长事务时长（秒）。

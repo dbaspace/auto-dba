@@ -24,6 +24,15 @@ type Config struct {
 	External  ExternalConfig  `yaml:"external"`
 	Terminal  TerminalConfig  `yaml:"terminal"`
 	Services  ServicesConfig  `yaml:"services"`
+	Copilot   CopilotConfig   `yaml:"copilot"` // DBA Copilot；密钥放 Nacos，不读库表全局参数
+}
+
+// CopilotConfig DBA Copilot 上游（Cursor / OpenAI 兼容）。仅来自 YAML/Nacos。
+type CopilotConfig struct {
+	BaseURL  string `yaml:"base_url"`
+	APIKey   string `yaml:"api_key"`
+	Model    string `yaml:"model"`    // 单值 / 逗号列表 / JSON[{value,label}]，语义同 ParseModels
+	Provider string `yaml:"provider"` // cursor | openai；空则按 base_url 识别
 }
 
 // FrontendConfig 前端开发服务（Vite）；生产静态资源不由此端口提供。
@@ -207,7 +216,8 @@ func applyDefaults(cfg *Config, path string) {
 		cfg.HTTP.ReadTimeout = 30
 	}
 	if cfg.HTTP.WriteTimeout <= 0 {
-		cfg.HTTP.WriteTimeout = 120
+		// Copilot Cursor Agent 轮询最长约 180s，默认写超时需覆盖
+		cfg.HTTP.WriteTimeout = 200
 	}
 	if cfg.App.JWTTTLHours <= 0 {
 		cfg.App.JWTTTLHours = 24

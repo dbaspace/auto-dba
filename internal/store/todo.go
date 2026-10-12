@@ -568,6 +568,35 @@ func scanTodo(sc interface{ Scan(dest ...any) error }) (*Todo, error) {
 	return &t, nil
 }
 
+// ListTodosBySource 按来源与引用 ID 取待办（如告警转待办）。
+func (d *DB) ListTodosBySource(source, sourceRef string, limit int) ([]Todo, error) {
+	source = strings.TrimSpace(source)
+	sourceRef = strings.TrimSpace(sourceRef)
+	if source == "" || sourceRef == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 5
+	}
+	rows, err := d.Query(
+		`SELECT `+todoCols+` FROM tbl_todos WHERE source=? AND source_ref=? ORDER BY updated_at DESC LIMIT ?`,
+		source, sourceRef, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Todo{}
+	for rows.Next() {
+		t, err := scanTodo(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *t)
+	}
+	return out, rows.Err()
+}
+
 func (d *DB) ListTodos() ([]Todo, error) {
 	return d.ListTodosInTenant("")
 }

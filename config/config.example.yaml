@@ -104,6 +104,16 @@ terminal:
   static_dir: ""
   max_lifetime_sec: 1800
 
+# DBA Copilot（密钥放 Nacos；勿把真实 api_key 提交仓库；不读库表全局参数）
+# Cursor 与 OpenAI 兼容网关勿混用同一段 base_url；通义/qwen 须 provider: openai
+# copilot:
+#   base_url: "https://api.cursor.com"
+#   api_key: "crsr_…"   # 401 Invalid User API Key 时到 Dashboard 重新生成
+#   model: "auto"
+#   provider: "cursor"
+#   # 通义示例：base_url 改为兼容网关 /v1，api_key=sk-…，provider: openai
+#   # model: '[{"value":"qwen-plus","label":"通义"}]'
+
 # 可拆分微服务（K8s Pod 互通）
 # mode: embed|remote|off；remote 时填 url
 services:

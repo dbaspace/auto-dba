@@ -18,6 +18,9 @@ import (
 
 var httpClient = &http.Client{Timeout: 15 * time.Second}
 
+// 密码登录探测用更短超时，避免 auto 模式下长时间挂起。
+var loginHTTPClient = &http.Client{Timeout: 5 * time.Second}
+
 var (
 	ErrUnsupportedGrant = errors.New("unsupported_grant_type")
 )
@@ -243,7 +246,7 @@ func Verify(cfg *store.SsoConfig, username, password string) (*UserInfo, error) 
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := httpClient.Do(req)
+	resp, err := loginHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("sso token request failed: %w", err)
 	}
@@ -260,10 +263,17 @@ func Verify(cfg *store.SsoConfig, username, password string) (*UserInfo, error) 
 	if strings.TrimSpace(accessToken) == "" {
 		return nil, errors.New("sso token response missing access_token")
 	}
-	return fetchUserInfo(cfg, accessToken, tokenResp, username)
+	return fetchUserInfoClient(cfg, accessToken, tokenResp, username, loginHTTPClient)
 }
 
 func fetchUserInfo(cfg *store.SsoConfig, accessToken string, tokenResp map[string]any, fallbackUser string) (*UserInfo, error) {
+	return fetchUserInfoClient(cfg, accessToken, tokenResp, fallbackUser, httpClient)
+}
+
+func fetchUserInfoClient(cfg *store.SsoConfig, accessToken string, tokenResp map[string]any, fallbackUser string, client *http.Client) (*UserInfo, error) {
+	if client == nil {
+		client = httpClient
+	}
 	// 优先：配置了 jwks_uri 时用 id_token（或 JWT 形态的 access_token）取用户信息
 	if cfg.JWKSURL() != "" {
 		candidates := []string{}
@@ -296,7 +306,7 @@ func fetchUserInfo(cfg *store.SsoConfig, accessToken string, tokenResp map[strin
 	}
 	infoReq.Header.Set("Authorization", "Bearer "+accessToken)
 	infoReq.Header.Set("Accept", "application/json")
-	infoResp, err := httpClient.Do(infoReq)
+	infoResp, err := client.Do(infoReq)
 	if err != nil {
 		return nil, fmt.Errorf("sso userinfo request failed: %w", err)
 	}

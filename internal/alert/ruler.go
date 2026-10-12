@@ -344,7 +344,8 @@ func (r *Ruler) maybeNotify(rule *store.AlertRule, a *store.Alert, justFired boo
 	})
 	cp := cloneAlert(a)
 	ruleCp := *rule
-	go notify.AlertFired(r.Store, r.Secret, cp, &ruleCp, d.Reason, opts)
+	ctxOpts := buildAlertNotifyContext(r.Store, cp, &ruleCp)
+	go notify.AlertFired(r.Store, r.Secret, cp, &ruleCp, d.Reason, opts, ctxOpts)
 }
 
 func (r *Ruler) buildDispatchOpts(a *store.Alert, active []store.Alert) *notify.AlertDispatchOpts {
@@ -404,7 +405,12 @@ func (r *Ruler) resolveMissing(seen map[string]bool, now time.Time) {
 		})
 		cp := a
 		opts := r.buildDispatchOpts(&cp, list)
-		go notify.AlertResolved(r.Store, r.Secret, &cp, "", opts)
+		var rule *store.AlertRule
+		if cp.RuleID != "" {
+			rule, _ = r.Store.GetAlertRule(cp.RuleID)
+		}
+		ctxOpts := buildAlertNotifyContext(r.Store, &cp, rule)
+		go notify.AlertResolved(r.Store, r.Secret, &cp, "", opts, ctxOpts)
 	}
 }
 

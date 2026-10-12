@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"auto-dba/internal/aiops"
 	"auto-dba/internal/alert"
 	"auto-dba/internal/middleware"
 	"auto-dba/internal/promclient"
@@ -17,6 +18,15 @@ import (
 type AlertHandler struct {
 	Store  *store.DB
 	Secret string
+	AIOps  *aiops.Service
+}
+
+func (h *AlertHandler) aiopsSvc() *aiops.Service {
+	if h.AIOps != nil {
+		return h.AIOps
+	}
+	h.AIOps = aiops.New(h.Store)
+	return h.AIOps
 }
 
 func (h *AlertHandler) List(c *gin.Context) {
@@ -65,6 +75,24 @@ func (h *AlertHandler) Events(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": events})
+}
+
+// ContextBundle AIOps Phase0：告警诊断上下文包（CMDB / 案例 / 历史 / 漂移等）。
+func (h *AlertHandler) ContextBundle(c *gin.Context) {
+	a := h.loadAlert(c)
+	if a == nil {
+		return
+	}
+	bundle, err := h.aiopsSvc().BuildAlertContextBundle(c.Request.Context(), a.ID, effectiveListTenantID(h.Store, c))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	if bundle == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "告警不存在"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": bundle})
 }
 
 func (h *AlertHandler) loadAlert(c *gin.Context) *store.Alert {

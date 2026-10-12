@@ -173,6 +173,15 @@ func (d *DB) ListRoleUsers(roleID string) ([]User, error) {
 const menuCols = `id, parent_id, title, urn, path, permission_desc, icon, sort_order, enabled, created_at, updated_at`
 
 func (d *DB) ListMenus() ([]Menu, error) {
+	if d != nil {
+		d.menuCacheMu.RLock()
+		if d.menuCache != nil && time.Since(d.menuCacheAt) < menuCacheTTL {
+			out := append([]Menu(nil), d.menuCache...)
+			d.menuCacheMu.RUnlock()
+			return out, nil
+		}
+		d.menuCacheMu.RUnlock()
+	}
 	rows, err := d.Query(`SELECT ` + menuCols + ` FROM tbl_menus ORDER BY sort_order, title`)
 	if err != nil {
 		return nil, err
@@ -186,7 +195,26 @@ func (d *DB) ListMenus() ([]Menu, error) {
 		}
 		out = append(out, *m)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if d != nil {
+		d.menuCacheMu.Lock()
+		d.menuCache = append([]Menu(nil), out...)
+		d.menuCacheAt = time.Now()
+		d.menuCacheMu.Unlock()
+	}
+	return out, nil
+}
+
+func (d *DB) invalidateMenuCache() {
+	if d == nil {
+		return
+	}
+	d.menuCacheMu.Lock()
+	d.menuCache = nil
+	d.menuCacheAt = time.Time{}
+	d.menuCacheMu.Unlock()
 }
 
 func scanMenu(sc interface{ Scan(dest ...any) error }) (*Menu, error) {
@@ -336,6 +364,9 @@ func (d *DB) CreateMenu(m *Menu) error {
 		`INSERT INTO tbl_menus(id, parent_id, title, urn, path, permission_desc, icon, sort_order, enabled, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
 		m.ID, parent, m.Title, nullable(m.URN), nullable(m.Path), nullable(m.PermissionDesc), nullable(m.Icon), m.SortOrder, en, m.CreatedAt, m.UpdatedAt,
 	)
+	if err == nil {
+		d.invalidateMenuCache()
+	}
 	return err
 }
 
@@ -366,6 +397,9 @@ func (d *DB) UpdateMenu(m *Menu) error {
 		`UPDATE tbl_menus SET parent_id=?, title=?, urn=?, path=?, permission_desc=?, icon=?, sort_order=?, enabled=?, updated_at=? WHERE id=?`,
 		nullable(m.ParentID), m.Title, nullable(m.URN), nullable(m.Path), nullable(m.PermissionDesc), nullable(m.Icon), m.SortOrder, en, m.UpdatedAt, m.ID,
 	)
+	if err == nil {
+		d.invalidateMenuCache()
+	}
 	return err
 }
 
@@ -426,6 +460,7 @@ func (d *DB) DeleteMenu(id string) error {
 			return err
 		}
 	}
+	d.invalidateMenuCache()
 	return nil
 }
 

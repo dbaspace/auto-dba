@@ -149,7 +149,7 @@
 | SQL 洞察 / 会话 | 诊断 | 活动、AWR、表空间、杀会话等 |
 | 告警 | 告警管理 | 规则、活跃/历史、静默、路由、值班；外发见认证配置 → 通知 |
 
-告警设计见 [alerts.md](alerts.md)。告警数据按租户隔离。
+告警设计见 [alerts.md](alerts.md)；AIOps（知识库 / Copilot / 关联 / Runbook）见 [aiops.md](aiops.md)。告警数据按租户隔离。
 
 ---
 

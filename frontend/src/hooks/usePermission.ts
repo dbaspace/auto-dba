@@ -118,6 +118,12 @@ export const Perm = {
     ruleEdit: 'um.action.alert.rule.edit',
     ruleDelete: 'um.action.alert.rule.delete',
   },
+  copilot: {
+    chat: 'um.action.copilot.chat',
+  },
+  runbook: {
+    execute: 'um.action.runbook.execute',
+  },
   tenants: {
     create: 'um.action.tenants.create',
     edit: 'um.action.tenants.edit',
