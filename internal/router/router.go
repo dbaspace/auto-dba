@@ -3,6 +3,7 @@ package router
 import (
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -987,19 +988,73 @@ func Init(e *gin.Engine, d Deps) {
 	}
 }
 
+// spaAssetExt：带这些扩展名的请求在文件缺失时返回 404，禁止回落 index.html
+//（否则浏览器会把 HTML 当 JS/CSS 解析，表现为白屏）。
+var spaAssetExt = map[string]struct{}{
+	".js": {}, ".mjs": {}, ".css": {}, ".map": {},
+	".svg": {}, ".png": {}, ".jpg": {}, ".jpeg": {}, ".gif": {}, ".webp": {}, ".ico": {},
+	".woff": {}, ".woff2": {}, ".ttf": {}, ".eot": {},
+	".json": {}, ".wasm": {}, ".txt": {},
+}
+
+func isSPAAssetPath(urlPath string) bool {
+	ext := strings.ToLower(path.Ext(urlPath))
+	_, ok := spaAssetExt[ext]
+	return ok
+}
+
+// safeSPAJoin 将 URL 路径解析到 root 下的本地文件；拒绝跳出 root。
+// rel 为空表示请求根路径（应回落 index）。
+func safeSPAJoin(root, urlPath string) (full string, ok bool) {
+	cleaned := path.Clean("/" + strings.TrimPrefix(urlPath, "/"))
+	rel := strings.TrimPrefix(cleaned, "/")
+	if rel == ".." || strings.HasPrefix(rel, "../") {
+		return "", false
+	}
+	rootClean := filepath.Clean(root)
+	if rel == "" || rel == "." {
+		return rootClean, true
+	}
+	full = filepath.Join(rootClean, filepath.FromSlash(rel))
+	fullClean := filepath.Clean(full)
+	sep := string(os.PathSeparator)
+	if fullClean != rootClean && !strings.HasPrefix(fullClean, rootClean+sep) {
+		return "", false
+	}
+	return fullClean, true
+}
+
 func serveSPA(e *gin.Engine, root string) {
+	root = filepath.Clean(root)
+	index := filepath.Join(root, "index.html")
 	e.NoRoute(func(c *gin.Context) {
-		if strings.HasPrefix(c.Request.URL.Path, "/api/") {
+		urlPath := c.Request.URL.Path
+		if strings.HasPrefix(urlPath, "/api/") {
 			c.JSON(http.StatusNotFound, gin.H{"message": "not found"})
 			return
 		}
-		p := filepath.Join(root, filepath.Clean(c.Request.URL.Path))
-		if info, err := os.Stat(p); err == nil && !info.IsDir() {
-			c.File(p)
+		full, ok := safeSPAJoin(root, urlPath)
+		if !ok {
+			c.Status(http.StatusNotFound)
 			return
 		}
-		index := filepath.Join(root, "index.html")
+		if full != root {
+			if info, err := os.Stat(full); err == nil && !info.IsDir() {
+				if strings.HasPrefix(urlPath, "/assets/") {
+					c.Header("Cache-Control", "public, max-age=31536000, immutable")
+				} else if strings.EqualFold(filepath.Base(full), "index.html") {
+					c.Header("Cache-Control", "no-cache")
+				}
+				c.File(full)
+				return
+			}
+			if isSPAAssetPath(urlPath) {
+				c.Status(http.StatusNotFound)
+				return
+			}
+		}
 		if _, err := os.Stat(index); err == nil {
+			c.Header("Cache-Control", "no-cache")
 			c.File(index)
 			return
 		}

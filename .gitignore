@@ -13,3 +13,4 @@ node_modules/
 /config/config.yaml
 # 终端私钥与公钥均不入库
 /config/terminal/
+/dist/

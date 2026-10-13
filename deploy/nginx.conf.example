@@ -1,0 +1,32 @@
+# KeePlus 前端 Nginx 示例（frontend 包或一体包中的静态资源）
+# 页面由 Nginx 提供；API 反代到本机 auto-dba :8800
+# 后端配置：http.serve_static: false
+
+server {
+    listen 80;
+    server_name _;
+
+    # 指向解压后的前端 dist 目录，例如：
+    #   /opt/auto-dba-frontend/dist
+    # 或一体包内：
+    #   /opt/auto-dba/frontend/dist
+    root /opt/auto-dba/frontend/dist;
+    index index.html;
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:8800;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 200s;
+        proxy_send_timeout 200s;
+        client_max_body_size 64m;
+    }
+
+    # SPA：前端路由回退到 index.html
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}

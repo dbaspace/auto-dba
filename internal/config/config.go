@@ -187,7 +187,7 @@ func Load(path string) (*Config, error) {
 		}
 		// 远程 DataId 不应嵌套 nacos 引导；始终保留本地/环境变量引导
 		cfg.Nacos = boot
-		preserveHTTPFromLocal(&cfg.HTTP, localHTTP)
+		preserveHTTPFromLocal(&cfg.HTTP, localHTTP, content)
 		preserveFrontendFromLocal(&cfg.Frontend, localFE)
 	}
 	applyDefaults(cfg, path)

@@ -14,6 +14,7 @@ import (
 	"github.com/nacos-group/nacos-sdk-go/v2/clients/config_client"
 	"github.com/nacos-group/nacos-sdk-go/v2/common/constant"
 	"github.com/nacos-group/nacos-sdk-go/v2/vo"
+	"gopkg.in/yaml.v3"
 )
 
 // fetchNacosConfig 可在测试中替换。
@@ -280,7 +281,7 @@ func StartNacosWatchOpts(live *Config, configPath string, opts WatchOptions) err
 	return nil
 }
 
-func preserveHTTPFromLocal(dst *HTTPConfig, local HTTPConfig) {
+func preserveHTTPFromLocal(dst *HTTPConfig, local HTTPConfig, remoteYAML string) {
 	if dst.Host == "" {
 		dst.Host = local.Host
 	}
@@ -296,6 +297,41 @@ func preserveHTTPFromLocal(dst *HTTPConfig, local HTTPConfig) {
 	if dst.PidFile == "" {
 		dst.PidFile = local.PidFile
 	}
+	// bool 零值是 false：远端 http 段未写 serve_static 时 Unmarshal 会冲掉本地 true
+	if !remoteYAMLHasHTTPKey(remoteYAML, "serve_static") {
+		dst.ServeStatic = local.ServeStatic
+	}
+}
+
+// remoteYAMLHasHTTPKey 判断远端 YAML 的 http: 映射中是否出现指定键（含显式 false）。
+func remoteYAMLHasHTTPKey(remoteYAML, key string) bool {
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(remoteYAML), &doc); err != nil {
+		return false
+	}
+	root := &doc
+	if doc.Kind == yaml.DocumentNode && len(doc.Content) > 0 {
+		root = doc.Content[0]
+	}
+	if root.Kind != yaml.MappingNode {
+		return false
+	}
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value != "http" {
+			continue
+		}
+		httpNode := root.Content[i+1]
+		if httpNode.Kind != yaml.MappingNode {
+			return false
+		}
+		for j := 0; j+1 < len(httpNode.Content); j += 2 {
+			if httpNode.Content[j].Value == key {
+				return true
+			}
+		}
+		return false
+	}
+	return false
 }
 
 func materializeSSHPrivateKey(cfg *Config, configPath string) error {

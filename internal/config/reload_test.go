@@ -118,3 +118,76 @@ terminal:
 		t.Fatalf("boot lost: %+v", next.Nacos)
 	}
 }
+
+func TestMergeRemoteYAMLPreservesServeStatic(t *testing.T) {
+	dir := t.TempDir()
+	local := filepath.Join(dir, "config.yaml")
+	content := []byte(`
+nacos:
+  enabled: true
+  server_addr: "127.0.0.1:8848"
+http:
+  host: "0.0.0.0"
+  port: 8800
+  serve_static: true
+app:
+  name: t
+  jwt_secret: "local-secret-at-least-32-chars!!!!"
+  jwt_ttl_hours: 1
+db:
+  driver: postgres
+  dsn: "postgres://u:p@127.0.0.1:5432/db?sslmode=disable"
+`)
+	if err := os.WriteFile(local, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// 远端只改 port，未写 serve_static —— 不得冲掉本地 true
+	remote := `
+http:
+  port: 8809
+app:
+  jwt_secret: "remote-secret-at-least-32-chars!!"
+db:
+  dsn: "postgres://u:p@127.0.0.1:5432/db?sslmode=disable"
+`
+	next, err := MergeRemoteYAML(local, remote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.HTTP.Port != 8809 {
+		t.Fatalf("port=%d", next.HTTP.Port)
+	}
+	if !next.HTTP.ServeStatic {
+		t.Fatal("serve_static should stay true when remote omits the key")
+	}
+
+	// 远端显式 false 时应以远端为准
+	remoteOff := `
+http:
+  port: 8809
+  serve_static: false
+app:
+  jwt_secret: "remote-secret-at-least-32-chars!!"
+db:
+  dsn: "postgres://u:p@127.0.0.1:5432/db?sslmode=disable"
+`
+	nextOff, err := MergeRemoteYAML(local, remoteOff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nextOff.HTTP.ServeStatic {
+		t.Fatal("serve_static should follow explicit remote false")
+	}
+}
+
+func TestRemoteYAMLHasHTTPKey(t *testing.T) {
+	if remoteYAMLHasHTTPKey("http:\n  port: 1\n", "serve_static") {
+		t.Fatal("absent key")
+	}
+	if !remoteYAMLHasHTTPKey("http:\n  serve_static: false\n", "serve_static") {
+		t.Fatal("explicit false still counts as present")
+	}
+	if remoteYAMLHasHTTPKey("app:\n  name: x\n", "serve_static") {
+		t.Fatal("no http section")
+	}
+}

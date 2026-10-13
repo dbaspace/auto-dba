@@ -75,6 +75,12 @@ func Run(cfg *config.Config, configPath string) {
 		if abs, err := filepath.Abs(staticRoot); err == nil {
 			staticRoot = abs
 		}
+		indexPath := filepath.Join(staticRoot, "index.html")
+		if _, err := os.Stat(indexPath); err == nil {
+			log.Printf("boot: serve_static root=%s index=ok", staticRoot)
+		} else {
+			log.Printf("boot: WARN serve_static root=%s index.html missing (check cwd / package layout): %v", staticRoot, err)
+		}
 	}
 
 	engine := gin.New()

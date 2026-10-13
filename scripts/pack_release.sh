@@ -1,0 +1,191 @@
+#!/usr/bin/env bash
+# 多种发布打包方式（构建机执行，勿在 CentOS 7 上 pnpm build）。
+#
+# 用法（仓库根目录）：
+#   ./scripts/pack_release.sh              # 默认 all：后端 + 前端（serve_static 一体）
+#   ./scripts/pack_release.sh all
+#   ./scripts/pack_release.sh backend      # 仅 linux 二进制（API）
+#   ./scripts/pack_release.sh frontend     # 仅静态资源（给 Nginx）
+#   ./scripts/pack_release.sh docker       # 构建 Docker 镜像（含前端）
+#
+# 环境变量：GOOS GOARCH STAMP IMAGE_TAG SKIP_PNPM_INSTALL=1
+#   STAMP 默认时间戳；发版可设 STAMP=v1.0.0
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+
+MODE="${1:-all}"
+GOOS="${GOOS:-linux}"
+GOARCH="${GOARCH:-amd64}"
+STAMP="${STAMP:-$(date +%Y%m%d%H%M%S)}"
+IMAGE_TAG="${IMAGE_TAG:-auto-dba:${STAMP}}"
+
+need_cmd() {
+  command -v "$1" >/dev/null 2>&1 || {
+    echo "缺少命令: $1" >&2
+    exit 1
+  }
+}
+
+usage() {
+  cat <<'EOF'
+多种发布打包方式（构建机执行，勿在 CentOS 7 上 pnpm build）。
+
+用法（仓库根目录）：
+  ./scripts/pack_release.sh              # 默认 all：后端 + 前端（serve_static 一体）
+  ./scripts/pack_release.sh all
+  ./scripts/pack_release.sh backend      # 仅 linux 二进制（API）
+  ./scripts/pack_release.sh frontend     # 仅静态资源（给 Nginx）
+  ./scripts/pack_release.sh docker       # 构建 Docker 镜像（含前端）
+
+环境变量：GOOS GOARCH STAMP IMAGE_TAG SKIP_PNPM_INSTALL=1
+  STAMP 默认时间戳；发版示例：STAMP=v1.0.0 ./scripts/pack_release.sh all
+EOF
+  exit "${1:-0}"
+}
+
+case "$MODE" in
+  -h|--help|help) usage 0 ;;
+  all|backend|frontend|docker) ;;
+  *)
+    echo "未知模式: $MODE" >&2
+    usage 1
+    ;;
+esac
+
+build_frontend() {
+  need_cmd pnpm
+  if [[ "${SKIP_PNPM_INSTALL:-0}" != "1" ]]; then
+    echo "[pack] frontend: pnpm install"
+    (cd frontend && pnpm install)
+  fi
+  echo "[pack] frontend: pnpm build"
+  (cd frontend && pnpm build)
+  if [[ ! -f frontend/dist/index.html ]]; then
+    echo "frontend/dist/index.html 不存在" >&2
+    exit 1
+  fi
+}
+
+build_backend() {
+  need_cmd go
+  echo "[pack] go build GOOS=${GOOS} GOARCH=${GOARCH}"
+  mkdir -p bin
+  CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" go build -o "bin/auto-dba" ./cmd/auto-dba
+}
+
+copy_config_examples() {
+  local dest="$1"
+  mkdir -p "$dest"
+  [[ -f config/config.example.yaml ]] && cp -a config/config.example.yaml "$dest/"
+  [[ -f config/bootstrap.example.yaml ]] && cp -a config/bootstrap.example.yaml "$dest/"
+}
+
+pack_tgz() {
+  local name="$1"
+  local stage="${ROOT}/dist/${name}"
+  local tgz="${ROOT}/dist/${name}.tgz"
+  echo "[pack] tar → ${tgz}"
+  tar -C "${ROOT}/dist" -czf "$tgz" "$name"
+  echo "[pack] 完成: $tgz"
+  echo "[pack] 目录: $stage"
+}
+
+# ── docker ─────────────────────────────────────────────
+if [[ "$MODE" == "docker" ]]; then
+  need_cmd docker
+  echo "[pack] docker build -f deploy/Dockerfile -t ${IMAGE_TAG}"
+  docker build -f deploy/Dockerfile -t "$IMAGE_TAG" .
+  echo "[pack] 镜像: $IMAGE_TAG"
+  echo "[pack] 运行示例: docker run --rm -p 8800:8800 -v \$PWD/config:/app/config $IMAGE_TAG"
+  echo "        需在挂载的 config 中设 http.serve_static: true（镜像内已含 frontend/dist）"
+  exit 0
+fi
+
+mkdir -p "${ROOT}/dist"
+
+# ── frontend only ──────────────────────────────────────
+if [[ "$MODE" == "frontend" ]]; then
+  OUT_NAME="auto-dba-frontend-${STAMP}"
+  STAGE="${ROOT}/dist/${OUT_NAME}"
+  rm -rf "$STAGE"
+  mkdir -p "$STAGE"
+  build_frontend
+  cp -a frontend/dist "$STAGE/dist"
+  if [[ -f deploy/nginx.conf.example ]]; then
+    cp -a deploy/nginx.conf.example "$STAGE/"
+  fi
+  cat >"$STAGE/README-RELEASE.txt" <<EOF
+KeePlus 前端静态包（给 Nginx / CDN）
+====================================
+目录 dist/ 为 Vite 构建产物。
+
+Nginx 示例见 nginx.conf.example：
+  - root 指向本包 dist/
+  - /api/ 反代到后端 :8800
+  - 后端 http.serve_static: false
+
+说明：docs/deploy.md
+EOF
+  pack_tgz "$OUT_NAME"
+  exit 0
+fi
+
+# ── backend only ───────────────────────────────────────
+if [[ "$MODE" == "backend" ]]; then
+  OUT_NAME="auto-dba-backend-${GOOS}-${GOARCH}-${STAMP}"
+  STAGE="${ROOT}/dist/${OUT_NAME}"
+  rm -rf "$STAGE"
+  mkdir -p "$STAGE/bin"
+  build_backend
+  cp -a bin/auto-dba "$STAGE/bin/auto-dba"
+  copy_config_examples "$STAGE/config"
+  cat >"$STAGE/README-RELEASE.txt" <<EOF
+KeePlus 后端 API 包
+==================
+仅含二进制，无前端。开发联调或 Nginx 托管前端时使用。
+
+1. 配置 Nacos / config/config.yaml
+2. http.serve_static: false（页面由 Vite:5174 或 Nginx 提供）
+3. cd 本目录后：./bin/auto-dba -config config/config.yaml
+4. API：http://服务器:8800/api/v1/...
+
+说明：docs/deploy.md
+EOF
+  pack_tgz "$OUT_NAME"
+  exit 0
+fi
+
+# ── all（一体：后端 + 前端）────────────────────────────
+OUT_NAME="auto-dba-release-${GOOS}-${GOARCH}-${STAMP}"
+STAGE="${ROOT}/dist/${OUT_NAME}"
+rm -rf "$STAGE"
+mkdir -p "$STAGE/bin" "$STAGE/frontend" "$STAGE/config"
+
+build_frontend
+build_backend
+cp -a frontend/dist "$STAGE/frontend/dist"
+cp -a bin/auto-dba "$STAGE/bin/auto-dba"
+copy_config_examples "$STAGE/config"
+if [[ -f deploy/nginx.conf.example ]]; then
+  cp -a deploy/nginx.conf.example "$STAGE/config/"
+fi
+
+cat >"$STAGE/README-RELEASE.txt" <<EOF
+KeePlus 一体发布包（推荐 CentOS 手工部署）
+========================================
+工作目录必须为本包根（含 frontend/dist）。
+
+1. 配置 Nacos 或 config/config.yaml
+2. 开启静态托管（页面与 API 同端口，无需 5174）：
+     http:
+       serve_static: true
+       port: 8800
+3. 启动：./bin/auto-dba
+4. 浏览器：http://服务器:8800/
+
+运行机无需 Node/pnpm。说明：docs/deploy.md
+EOF
+
+pack_tgz "$OUT_NAME"

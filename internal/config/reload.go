@@ -90,7 +90,7 @@ func MergeRemoteYAML(configPath, remoteContent string) (*Config, error) {
 		return nil, fmt.Errorf("parse remote yaml: %w", err)
 	}
 	next.Nacos = boot
-	preserveHTTPFromLocal(&next.HTTP, localHTTP)
+	preserveHTTPFromLocal(&next.HTTP, localHTTP, remoteContent)
 	preserveFrontendFromLocal(&next.Frontend, localFE)
 	applyDefaults(next, configPath)
 	if err := materializeSSHPrivateKey(next, configPath); err != nil {

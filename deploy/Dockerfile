@@ -1,6 +1,19 @@
 # syntax=docker/dockerfile:1
+# 一体镜像：Go API + 前端静态资源（http.serve_static: true）
+# 构建：docker build -f deploy/Dockerfile -t auto-dba:latest .
+# 或：./scripts/pack_release.sh docker
 
-FROM golang:1.24-alpine AS build
+# ── 前端 ───────────────────────────────────────────────
+FROM node:20-alpine AS frontend
+WORKDIR /src/frontend
+RUN corepack enable && corepack prepare pnpm@10.32.0 --activate
+COPY frontend/package.json frontend/pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
+COPY frontend/ ./
+RUN pnpm build
+
+# ── 后端 ───────────────────────────────────────────────
+FROM golang:1.24-alpine AS backend
 WORKDIR /src
 RUN apk add --no-cache git ca-certificates
 COPY go.mod go.sum ./
@@ -9,15 +22,15 @@ COPY . .
 ARG APP=auto-dba
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/${APP} ./cmd/${APP}
 
+# ── 运行 ───────────────────────────────────────────────
 FROM alpine:3.20
-# SSH 下发 Backup Agent 使用 Go 内置 ssh/sftp（internal/sshx），无需 openssh-client
 RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /app
 ARG APP=auto-dba
-COPY --from=build /out/${APP} /app/bin
-COPY config/config.example.yaml /app/config/config.yaml
-# 可选：将预构建的 linux Agent 制品打进镜像，供 backup.agent_artifact 使用
-# COPY deploy/backup-agent/bin/backup-agent /app/deploy/backup-agent/bin/backup-agent
+COPY --from=backend /out/${APP} /app/bin/auto-dba
+COPY --from=frontend /src/frontend/dist /app/frontend/dist
+# 默认 serve_static: true；生产请挂载真实 config 或走 Nacos
+COPY deploy/config.docker.example.yaml /app/config/config.yaml
 EXPOSE 8800 8801
-ENTRYPOINT ["/app/bin"]
-CMD ["start"]
+ENTRYPOINT ["/app/bin/auto-dba"]
+CMD ["-config", "config/config.yaml", "start"]
