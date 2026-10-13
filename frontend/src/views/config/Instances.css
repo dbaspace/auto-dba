@@ -1,6 +1,34 @@
 .inst-tabs {
   flex-shrink: 0;
 }
+
+/* 表格占满剩余高度，表体内部滚动，分页条始终可见 */
+.ops-page .ops-table .ant-table-wrapper,
+.ops-page .ops-table .ant-spin-nested-loading,
+.ops-page .ops-table .ant-spin-container,
+.ops-page .ops-table .ant-table,
+.ops-page .ops-table .ant-table-container {
+  height: 100%;
+}
+
+.ops-page .ops-table .ant-table-body {
+  overflow-y: auto !important;
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding-top: 12px;
+  flex-shrink: 0;
+}
+
+.pager-total {
+  color: #6b7280;
+  font-size: 13px;
+}
+
 .tab-label {
   display: inline-flex;
   align-items: center;

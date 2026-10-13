@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Button, Input, InputNumber, Modal, Radio, Select, Tag, Tooltip, message } from 'antd'
+import { Button, Input, InputNumber, Modal, Pagination, Radio, Select, Tag, Tooltip, message } from 'antd'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import { useLocation, useNavigate } from 'react-router-dom'
 import api from '../../api/request'
@@ -91,6 +91,28 @@ function domainList(row?: InstanceRow): string[] {
   return row?.domain_name ? [row.domain_name] : []
 }
 
+function cmpStr(a: string, b: string) {
+  const aa = String(a || '').trim()
+  const bb = String(b || '').trim()
+  if (!aa && !bb) return 0
+  if (!aa) return 1
+  if (!bb) return -1
+  return aa.localeCompare(bb, 'zh-CN', { numeric: true, sensitivity: 'base' })
+}
+
+type SortKey =
+  | 'name'
+  | 'tenant'
+  | 'region'
+  | 'env'
+  | 'host'
+  | 'domains'
+  | 'tags'
+  | 'cloud_vendor'
+  | 'cloud_instance_id'
+  | 'cloud_region'
+  | 'approvers'
+
 /** 列表域名/标签：只展示前 max 个，其余 +N Tooltip */
 function renderCollapsedTags(list: string[], max = 2, tagColor?: string) {
   if (!list.length) return <span className="muted">—</span>
@@ -175,6 +197,10 @@ export default function Instances() {
   const [activeType, setActiveType] = useState('')
   const [userOptions, setUserOptions] = useState<string[]>(['admin'])
   const [roles, setRoles] = useState<MetaRow[]>([])
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(10)
+  const [sortKey, setSortKey] = useState<SortKey | ''>('')
+  const [sortOrder, setSortOrder] = useState<'ascend' | 'descend' | null>(null)
 
   const dbTypeKey = typeKey(form.db_type)
   const hostType = isHostType(form.db_type)
@@ -232,6 +258,61 @@ export default function Instances() {
     if (!activeType) return rows
     return rows.filter((r) => typeKey(r.db_type) === typeKey(activeType) || r.db_type === activeType)
   }, [rows, activeType, knownTypes])
+
+  function sortValue(row: InstanceRow, key: SortKey): string {
+    switch (key) {
+      case 'name':
+        return row.name || ''
+      case 'tenant':
+        return row.tenant_name || row.tenant_id || ''
+      case 'region':
+        return regionName(row.region_id)
+      case 'env':
+        return envName(row.env_id)
+      case 'host':
+        return `${row.host || ''}:${row.port ?? ''}`
+      case 'domains':
+        return domainList(row).join(',')
+      case 'tags':
+        return (row.tags || []).join(',')
+      case 'cloud_vendor':
+        return cloudVendorText(row.cloud_vendor)
+      case 'cloud_instance_id':
+        return row.cloud_instance_id || ''
+      case 'cloud_region':
+        return row.cloud_region || ''
+      case 'approvers':
+        return (row.approvers || []).join(',')
+      default:
+        return ''
+    }
+  }
+
+  const sortedRows = useMemo(() => {
+    if (!sortKey || !sortOrder) return filteredRows
+    const list = [...filteredRows]
+    list.sort((a, b) => {
+      const cmp = cmpStr(sortValue(a, sortKey), sortValue(b, sortKey))
+      return sortOrder === 'ascend' ? cmp : -cmp
+    })
+    return list
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filteredRows, sortKey, sortOrder, regions, allEnvs])
+
+  const pagedRows = useMemo(() => {
+    const start = (page - 1) * pageSize
+    return sortedRows.slice(start, start + pageSize)
+  }, [sortedRows, page, pageSize])
+
+  useEffect(() => {
+    setPage(1)
+  }, [activeType])
+
+  useEffect(() => {
+    const maxPage = Math.max(1, Math.ceil(sortedRows.length / pageSize) || 1)
+    if (page > maxPage) setPage(maxPage)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sortedRows, pageSize])
 
   const usedTags = useMemo(() => {
     const set = new Set<string>()
@@ -309,6 +390,7 @@ export default function Instances() {
   async function load() {
     const { data } = await api.get('/instances', { params: { q } })
     setRows(data.data || [])
+    setPage(1)
   }
 
   function open(row?: InstanceRow) {
@@ -561,23 +643,46 @@ export default function Instances() {
       <div className="ops-table">
         <ResponsiveTable
           rowKey={(r) => r.id || r.name || ''}
-          dataSource={filteredRows}
+          dataSource={pagedRows}
           bordered
           pagination={false}
-          scroll={{ y: '100%' }}
+          scroll={{ y: 'calc(100% - 47px)' }}
           style={{ height: '100%' }}
+          onChange={(_pag, _filters, sorter) => {
+            const s = (Array.isArray(sorter) ? sorter[0] : sorter) as {
+              columnKey?: React.Key
+              order?: 'ascend' | 'descend'
+            }
+            const key = String(s?.columnKey || '') as SortKey | ''
+            if (s?.order && key) {
+              setSortKey(key)
+              setSortOrder(s.order)
+            } else {
+              setSortKey('')
+              setSortOrder(null)
+            }
+          }}
           locale={{
             emptyText: impersonating
               ? '暂无实例。可在其它类型 Tab 查看，或先在默认租户建好后于本页划拨。'
               : '暂无数据',
           }}
           columns={[
-            { title: '名称', dataIndex: 'name' },
+            {
+              title: '名称',
+              dataIndex: 'name',
+              key: 'name',
+              sorter: true,
+              sortOrder: sortKey === 'name' ? sortOrder : null,
+            },
             ...(impersonating
               ? [
                   {
                     title: '所属租户',
+                    key: 'tenant',
                     width: 120,
+                    sorter: true,
+                    sortOrder: (sortKey === 'tenant' ? sortOrder : null) as 'ascend' | 'descend' | null,
                     render: (_: unknown, row: InstanceRow) => {
                       const same = row.tenant_id && currentTenantId && row.tenant_id === currentTenantId
                       const label = row.tenant_name || row.tenant_id || '—'
@@ -590,39 +695,87 @@ export default function Instances() {
                   },
                 ]
               : []),
-            { title: '区域', width: 120, render: (_, row) => regionName(row.region_id) },
-            { title: '环境', width: 120, render: (_, row) => envName(row.env_id) },
-            { title: '连接主机', width: 160, render: (_, row) => `${row.host}:${row.port}` },
+            {
+              title: '区域',
+              key: 'region',
+              width: 120,
+              sorter: true,
+              sortOrder: sortKey === 'region' ? sortOrder : null,
+              render: (_: unknown, row: InstanceRow) => regionName(row.region_id),
+            },
+            {
+              title: '环境',
+              key: 'env',
+              width: 120,
+              sorter: true,
+              sortOrder: sortKey === 'env' ? sortOrder : null,
+              render: (_: unknown, row: InstanceRow) => envName(row.env_id),
+            },
+            {
+              title: '连接主机',
+              key: 'host',
+              width: 160,
+              sorter: true,
+              sortOrder: sortKey === 'host' ? sortOrder : null,
+              render: (_: unknown, row: InstanceRow) => `${row.host}:${row.port}`,
+            },
             {
               title: '域名',
+              key: 'domains',
               width: 200,
-              render: (_, row) => renderCollapsedTags(domainList(row), 2),
+              sorter: true,
+              sortOrder: sortKey === 'domains' ? sortOrder : null,
+              render: (_: unknown, row: InstanceRow) => renderCollapsedTags(domainList(row), 2),
             },
             {
               title: '标签',
+              key: 'tags',
               width: 180,
-              render: (_, row) => renderCollapsedTags(row.tags || [], 2, 'default'),
+              sorter: true,
+              sortOrder: sortKey === 'tags' ? sortOrder : null,
+              render: (_: unknown, row: InstanceRow) => renderCollapsedTags(row.tags || [], 2, 'default'),
             },
-            { title: '云厂商', width: 100, render: (_, row) => cloudVendorText(row.cloud_vendor) },
+            {
+              title: '云厂商',
+              key: 'cloud_vendor',
+              width: 100,
+              sorter: true,
+              sortOrder: sortKey === 'cloud_vendor' ? sortOrder : null,
+              render: (_: unknown, row: InstanceRow) => cloudVendorText(row.cloud_vendor),
+            },
             {
               title: '云实例 ID',
               dataIndex: 'cloud_instance_id',
+              key: 'cloud_instance_id',
               width: 140,
               ellipsis: true,
-              render: (_, row) => row.cloud_instance_id || '—',
+              sorter: true,
+              sortOrder: sortKey === 'cloud_instance_id' ? sortOrder : null,
+              render: (_: unknown, row: InstanceRow) => row.cloud_instance_id || '—',
             },
             {
               title: '云 Region',
               dataIndex: 'cloud_region',
+              key: 'cloud_region',
               width: 130,
-              render: (_, row) => row.cloud_region || '—',
+              sorter: true,
+              sortOrder: sortKey === 'cloud_region' ? sortOrder : null,
+              render: (_: unknown, row: InstanceRow) => row.cloud_region || '—',
             },
-            { title: '审批人', dataIndex: 'approvers', width: 120, render: (_, row) => (row.approvers || []).join(',') || '—' },
+            {
+              title: '审批人',
+              dataIndex: 'approvers',
+              key: 'approvers',
+              width: 120,
+              sorter: true,
+              sortOrder: sortKey === 'approvers' ? sortOrder : null,
+              render: (_: unknown, row: InstanceRow) => (row.approvers || []).join(',') || '—',
+            },
             {
               title: '操作',
               width: impersonating ? 300 : 220,
               fixed: 'right' as const,
-              render: (_, row) => (
+              render: (_: unknown, row: InstanceRow) => (
                 <>
                   {impersonating && row.tenant_id && row.tenant_id !== currentTenantId ? (
                     <Auth urn={Perm.tenants.impersonate}>
@@ -666,6 +819,20 @@ export default function Instances() {
               ),
             },
           ]}
+        />
+      </div>
+      <div className="pager">
+        <span className="pager-total">共 {sortedRows.length} 条</span>
+        <Pagination
+          current={page}
+          pageSize={pageSize}
+          total={sortedRows.length}
+          showSizeChanger
+          pageSizeOptions={['10', '20', '50']}
+          onChange={(p, ps) => {
+            setPage(p)
+            if (ps && ps !== pageSize) setPageSize(ps)
+          }}
         />
       </div>
       <Modal

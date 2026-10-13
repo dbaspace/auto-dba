@@ -25,13 +25,13 @@ KeePlus（进程 `auto-dba`）支持多种打包方式。**构建在有 Node 18+
 | **仅前端** | `./scripts/pack_release.sh frontend` | `dist/auto-dba-frontend-*.tgz` | Nginx/CDN 托管静态资源 |
 | **Docker** | `./scripts/pack_release.sh docker` | 镜像 `auto-dba:<时间戳>`（可用 `IMAGE_TAG=` 覆盖） | 容器环境 |
 
-可选环境变量：`GOOS` `GOARCH`（默认 `linux`/`amd64`）、`STAMP`（默认时间戳；发版用 `STAMP=v1.9.0`）、`IMAGE_TAG`、`SKIP_PNPM_INSTALL=1`（已有 `node_modules` 时）。
+可选环境变量：`GOOS` `GOARCH`（默认 `linux`/`amd64`）、`STAMP`（默认时间戳；发版用 `STAMP=v1.10.0`）、`IMAGE_TAG`、`SKIP_PNPM_INSTALL=1`（已有 `node_modules` 时）。
 
 ```bash
-STAMP=v1.9.0 ./scripts/pack_release.sh all
-STAMP=v1.9.0 ./scripts/pack_release.sh backend
-STAMP=v1.9.0 ./scripts/pack_release.sh frontend
-IMAGE_TAG=auto-dba:v1.9.0 ./scripts/pack_release.sh docker
+STAMP=v1.10.0 ./scripts/pack_release.sh all
+STAMP=v1.10.0 ./scripts/pack_release.sh backend
+STAMP=v1.10.0 ./scripts/pack_release.sh frontend
+IMAGE_TAG=auto-dba:v1.10.0 ./scripts/pack_release.sh docker
 ```
 
 ### 已发布版本（摘要）
@@ -47,6 +47,7 @@ IMAGE_TAG=auto-dba:v1.9.0 ./scripts/pack_release.sh docker
 | [v1.7.0](https://github.com/dbaspace/auto-dba/releases/tag/v1.7.0) | 实例管理按 `db_type` 多 Tab 并存；列表域名列折叠为前 2 个 +N Tooltip |
 | [v1.8.0](https://github.com/dbaspace/auto-dba/releases/tag/v1.8.0) | 实例列表标签列同样折叠；域名支持多行粘贴拆条并按规范化键去重 |
 | [v1.9.0](https://github.com/dbaspace/auto-dba/releases/tag/v1.9.0) | 工单数据源按实例域名展开选择；库列表按域名过滤；提交/执行携带域名作连接 Host；`tbl_issues.domain` 迁移幂等补齐 |
+| [v1.10.0](https://github.com/dbaspace/auto-dba/releases/tag/v1.10.0) | 实例管理列表支持列排序与底部分页（对齐已登记库交互） |
 
 ## 方式 A：一体包（推荐 CentOS 手工）
 
