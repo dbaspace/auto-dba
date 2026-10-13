@@ -111,6 +111,7 @@ export default function Instances() {
   const currentTenantId = String(currentTenant?.id || '')
   const currentTenantLabel = currentTenant?.name || currentTenant?.code || '当前租户'
   const [typeOptions, setTypeOptions] = useState<TypeOption[]>([])
+  const [typesReady, setTypesReady] = useState(false)
   const [regions, setRegions] = useState<MetaRow[]>([])
   const [regionEnvs, setRegionEnvs] = useState<MetaRow[]>([])
   const [allEnvs, setAllEnvs] = useState<MetaRow[]>([])
@@ -163,11 +164,11 @@ export default function Instances() {
     ? '密码入库加密存储，接口不回传明文'
     : '可选。Kafka / Redis 等无 SASL 或无密码时可留空'
 
-  const knownTypes = useMemo(() => new Set(typeOptions.map((t) => t.value)), [typeOptions])
+  const knownTypes = useMemo(() => new Set(typeOptions.map((t) => typeKey(t.value))), [typeOptions])
 
   const tabs = useMemo(() => {
     const list = typeOptions.map((t) => ({ value: t.value, label: t.label }))
-    if (rows.some((r) => r.db_type && !knownTypes.has(r.db_type))) {
+    if (rows.some((r) => r.db_type && !knownTypes.has(typeKey(r.db_type)))) {
       list.push({ value: OTHER, label: '其他' })
     }
     return list
@@ -175,7 +176,7 @@ export default function Instances() {
 
   const filteredRows = useMemo(() => {
     if (activeType === OTHER) {
-      return rows.filter((r) => r.db_type && !knownTypes.has(r.db_type) && !knownTypes.has(typeKey(r.db_type)))
+      return rows.filter((r) => r.db_type && !knownTypes.has(typeKey(r.db_type)))
     }
     if (!activeType) return rows
     return rows.filter((r) => typeKey(r.db_type) === typeKey(activeType) || r.db_type === activeType)
@@ -192,10 +193,11 @@ export default function Instances() {
     return [...set].sort()
   }, [rows])
 
-  function ensureActiveTab(list: { value: string }[], cur: string) {
-    const names = list.map((t) => t.value)
-    if (!names.includes(cur)) return names[0] || ''
-    return cur
+  /** 用 typeKey 匹配；cur 非空但不在 list 时返回空串，禁止回退到 names[0] */
+  function resolveActiveTab(list: { value: string }[], cur: string) {
+    if (!cur) return ''
+    const hit = list.find((t) => t.value === cur || typeKey(t.value) === typeKey(cur))
+    return hit?.value || ''
   }
 
   function applyTypeToTab(typeValue: string, typeLabel: string) {
@@ -211,11 +213,15 @@ export default function Instances() {
   }
 
   async function loadTypes() {
-    const args = (await api.get('/global-args')).data.data || []
-    const raw = args.find((a: any) => a.key === 'ticket_instance_types')?.value || ''
-    const opts = parseInstanceTypes(raw)
-    setTypeOptions(opts)
-    return opts
+    try {
+      const args = (await api.get('/global-args')).data.data || []
+      const raw = args.find((a: any) => a.key === 'ticket_instance_types')?.value || ''
+      const opts = parseInstanceTypes(raw)
+      setTypeOptions(opts)
+      return opts
+    } finally {
+      setTypesReady(true)
+    }
   }
 
   async function loadAclOptions(tenantId?: string) {
@@ -453,9 +459,17 @@ export default function Instances() {
   }, [])
 
   useEffect(() => {
+    // 类型未就绪时禁止回退/改 URL，避免 postgres 被误判后落到 mysql
+    if (!typesReady) return
     if (!tabs.length) return
     const fromQuery = dbTypeFromSearch(location.search)
-    const next = ensureActiveTab(tabs, fromQuery || activeType)
+    const matched = resolveActiveTab(tabs, fromQuery || activeType)
+    if (fromQuery && !matched) {
+      // URL 指定了类型但暂不在 tabs（或别名未入表）：保留 query，勿 fallback
+      if (fromQuery !== activeType) setActiveType(fromQuery)
+      return
+    }
+    const next = matched || tabs[0]?.value || ''
     if (next && next !== activeType) setActiveType(next)
     if (!next) return
     const label = tabs.find((t) => t.value === next)?.label || next
@@ -468,7 +482,7 @@ export default function Instances() {
     const curKey = tabKey(location.pathname, curSearch)
     dispatch(updateTabMeta({ key: curKey, title: label }))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tabs, location.search])
+  }, [tabs, location.search, typesReady])
 
   return (
     <div className="ops-page">
