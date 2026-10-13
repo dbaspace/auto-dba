@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Button, Input, InputNumber, Modal, Radio, Select, Tag, message } from 'antd'
+import { Button, Input, InputNumber, Modal, Radio, Select, Tag, Tooltip, message } from 'antd'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import { useLocation, useNavigate } from 'react-router-dom'
 import api from '../../api/request'
@@ -548,11 +548,31 @@ export default function Instances() {
               render: (_, row) => {
                 const list = domainList(row)
                 if (!list.length) return <span className="muted">—</span>
-                return list.map((d) => (
-                  <Tag key={d} className="domain-tag">
-                    {d}
-                  </Tag>
-                ))
+                const MAX = 2
+                const shown = list.slice(0, MAX)
+                const rest = list.length - shown.length
+                return (
+                  <span className="domain-tag-list">
+                    {shown.map((d) => (
+                      <Tag key={d} className="domain-tag" title={d}>
+                        {d}
+                      </Tag>
+                    ))}
+                    {rest > 0 ? (
+                      <Tooltip
+                        title={
+                          <div className="domain-tag-tip">
+                            {list.map((d) => (
+                              <div key={d}>{d}</div>
+                            ))}
+                          </div>
+                        }
+                      >
+                        <Tag className="domain-tag domain-tag-more">+{rest}</Tag>
+                      </Tooltip>
+                    ) : null}
+                  </span>
+                )
               },
             },
             {

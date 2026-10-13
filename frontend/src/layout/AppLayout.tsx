@@ -17,10 +17,8 @@ import {
   reorderTabs,
   tabKey,
   titleForPath,
-  updateTabMeta,
 } from '../store/tabsSlice'
 import { collectPaths, pathAllowed } from '../constants/routes'
-import { isInstancesPath } from '../utils/instanceTypes'
 import UserAccountMenu from './UserAccountMenu'
 import TenantSwitcher from '../components/TenantSwitcher'
 import UserWatermark from '../components/UserWatermark'
@@ -165,27 +163,7 @@ export default function AppLayout() {
       const nextSearch = opts?.search || ''
       const normalizedSearch =
         nextSearch && !nextSearch.startsWith('?') && nextSearch !== '' ? `?${nextSearch}` : nextSearch
-      // 实例页：同 path 只保留一个 Tab，就地改 search/title，避免双面板互抢回跳 mysql
-      if (isInstancesPath(toPath)) {
-        const existing = tabs.find((t) => isInstancesPath(t.path))
-        if (existing) {
-          dispatch(
-            updateTabMeta({
-              key: existing.key,
-              search: normalizedSearch,
-              title: title || existing.title,
-            }),
-          )
-          const nextKey = tabKey(toPath, normalizedSearch)
-          dispatch(activateTab(nextKey))
-          const to = toPath + (normalizedSearch || '')
-          if (toPath !== path || (normalizedSearch || '') !== (search || '')) {
-            navigate(to, { replace: opts?.replace ?? true })
-          }
-          closeFlyout()
-          return
-        }
-      }
+      // 实例页按 search(db_type) 区分 Tab：openTab 已有同 key 则激活，否则新建
       dispatch(openTab({ path: toPath, search: normalizedSearch, title, menus }))
       const to = toPath + (normalizedSearch || '')
       if (toPath !== path || (normalizedSearch || '') !== (search || '')) {
@@ -193,7 +171,7 @@ export default function AppLayout() {
       }
       closeFlyout()
     },
-    [closeFlyout, dispatch, menus, navigate, path, search, tabs],
+    [closeFlyout, dispatch, menus, navigate, path, search],
   )
 
   useEffect(() => {
@@ -209,15 +187,6 @@ export default function AppLayout() {
     if (exists) {
       if (activeKey !== key) dispatch(activateTab(key))
       return
-    }
-    // 实例页单 Tab：URL db_type 变化时就地改 meta，勿再 openTab 出一个 MySQL 面板
-    if (isInstancesPath(path)) {
-      const existing = tabs.find((t) => isInstancesPath(t.path))
-      if (existing) {
-        dispatch(updateTabMeta({ key: existing.key, search }))
-        dispatch(activateTab(key))
-        return
-      }
     }
     dispatch(
       openTab({

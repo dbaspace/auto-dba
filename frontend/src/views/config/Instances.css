@@ -6,8 +6,27 @@
   align-items: center;
   gap: 6px;
 }
+.domain-tag-list {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  max-width: 100%;
+  gap: 0;
+}
 .domain-tag {
   margin: 0 4px 4px 0;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+}
+.domain-tag-more {
+  max-width: none;
+  cursor: default;
+}
+.domain-tag-tip {
+  max-width: 360px;
+  word-break: break-all;
 }
 .muted {
   color: #9ca3af;
