@@ -1,4 +1,4 @@
-# KeePlus / auto-dba v2.1.1
+# KeePlus / auto-dba v2.2.0
 
 相对 [v2.0.0](https://github.com/dbaspace/auto-dba/releases/tag/v2.0.0) 的更新点。
 
