@@ -40,7 +40,7 @@ IMAGE_TAG=auto-dba:v1.3.0 ./scripts/pack_release.sh docker
 |------|------|
 | [v1.1.0](https://github.com/dbaspace/auto-dba/releases/tag/v1.1.0) | 一体/分服务打包；SPA `serve_static` 白屏硬化；部署文档 |
 | [v1.2.0](https://github.com/dbaspace/auto-dba/releases/tag/v1.2.0) | 租户删除（无成员且无绑定资源）；租户管理列表一屏布局；`um.action.tenants.delete` |
-| **v1.3.0** | 平台管理员创建/切换业务租户时保留默认租户成员；顶栏稳定显示租户「名称」；删除当前会话租户后自动切回可用租户 |
+| [v1.3.0](https://github.com/dbaspace/auto-dba/releases/tag/v1.3.0) | 平台管理员创建/切换业务租户时保留默认租户成员；顶栏稳定显示租户「名称」；删除当前会话租户后自动切回可用租户 |
 
 ## 方式 A：一体包（推荐 CentOS 手工）
 
