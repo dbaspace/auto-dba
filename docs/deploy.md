@@ -44,7 +44,7 @@ IMAGE_TAG=auto-dba:v1.7.0 ./scripts/pack_release.sh docker
 | [v1.4.0](https://github.com/dbaspace/auto-dba/releases/tag/v1.4.0) | KeePlus favicon.ico/apple-touch；db-deploy 同名集群可划拨；删除集群工单预填审批人并在审批结束后刷新列表 |
 | [v1.5.0](https://github.com/dbaspace/auto-dba/releases/tag/v1.5.0) | 一体/后端包打入 `scripts/terminal` 与 `assets/terminal`；StarRocks 启停失败不污染集群 status（`failed` 仅表示初始化/重建失败） |
 | [v1.6.0](https://github.com/dbaspace/auto-dba/releases/tag/v1.6.0) | 资源配置实例管理：切换 PostgreSQL 等库类型不再回跳 MySQL（类型未就绪时保留 URL `db_type`） |
-| **v1.7.0** | 实例管理按 `db_type` 多 Tab 并存；列表域名列折叠为前 2 个 +N Tooltip |
+| [v1.7.0](https://github.com/dbaspace/auto-dba/releases/tag/v1.7.0) | 实例管理按 `db_type` 多 Tab 并存；列表域名列折叠为前 2 个 +N Tooltip |
 
 ## 方式 A：一体包（推荐 CentOS 手工）
 
