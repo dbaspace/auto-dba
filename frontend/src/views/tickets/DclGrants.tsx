@@ -4,6 +4,15 @@ import { AutoComplete, Button, Checkbox, Form, Input, Select, Space, message } f
 import api from '../../api/request'
 import DatabasePicker from '../../components/DatabasePicker'
 import { dbLabel } from '../../utils/db'
+import {
+  expandDomainSources,
+  filterDbsByDomain,
+  parseSourceKey,
+  sourceKey,
+  sourcePrimaryLabel,
+  sourceSecondaryLabel,
+  type DomainSource,
+} from '../../utils/instanceSource'
 import { useWorkOrderDraft } from '../../hooks/useWorkOrderDraft'
 import './DclGrants.css'
 
@@ -14,17 +23,13 @@ function emptyForm() {
     env: '',
     db_type: '',
     instance_id: '',
+    domain: '',
     db_ids: [] as string[],
     username: '',
     permissions: [] as string[],
     assigned_to: '',
     description: '',
   }
-}
-
-function instLabel(i: any) {
-  const addr = i.host ? `${i.host}:${i.port}` : i.domain_name || ''
-  return i.name ? `${i.name} — ${addr}` : addr
 }
 
 export default function DclGrants() {
@@ -52,10 +57,12 @@ export default function DclGrants() {
     return [...set]
   }, [instances])
 
-  const sourceOptions = useMemo(() => {
+  const sourceOptions = useMemo((): DomainSource[] => {
     if (!form.env || !form.db_type) return []
-    return instances.filter(
-      (i) => i.db_type === form.db_type && (!i.idc || i.idc === form.env || i.idc === 'default'),
+    return expandDomainSources(
+      instances.filter(
+        (i) => i.db_type === form.db_type && (!i.idc || i.idc === form.env || i.idc === 'default'),
+      ),
     )
   }, [instances, form.env, form.db_type])
 
@@ -64,13 +71,14 @@ export default function DclGrants() {
     [instances, form.instance_id],
   )
 
-  const dbOptions = useMemo(
-    () =>
-      databases
-        .filter((d) => d.instance_id === form.instance_id)
-        .map((d) => ({ value: d.id, label: dbLabel(d) })),
-    [databases, form.instance_id],
-  )
+  const sourceSelectValue =
+    form.instance_id && form.domain ? sourceKey(form.instance_id, form.domain) : undefined
+
+  const dbOptions = useMemo(() => {
+    let list = databases.filter((d) => d.instance_id === form.instance_id)
+    if (form.domain) list = filterDbsByDomain(list, form.domain)
+    return list.map((d) => ({ value: d.id, label: dbLabel(d) }))
+  }, [databases, form.instance_id, form.domain])
 
   const accountOptions = useMemo(() => {
     const names: string[] = []
@@ -93,7 +101,7 @@ export default function DclGrants() {
     ? '请先选择环境'
     : !form.db_type
       ? '请先选择数据库类型'
-      : '选择数据源(别名) 或搜索...'
+      : '选择数据源(域名) 或搜索...'
   const accountPlaceholder = !form.instance_id
     ? '请先选择数据源(别名)'
     : !form.db_type
@@ -106,7 +114,7 @@ export default function DclGrants() {
       : '暂无审批人，请配置 sync_default_approver'
 
   function onEnvOrTypeChange(patch: Partial<ReturnType<typeof emptyForm>>) {
-    patchForm({ ...patch, instance_id: '', db_ids: [], username: '' })
+    patchForm({ ...patch, instance_id: '', domain: '', db_ids: [], username: '' })
   }
 
   async function loadDbs(instanceId: string) {
@@ -123,9 +131,17 @@ export default function DclGrants() {
     }
   }
 
-  async function onSourceChange(instanceId: string) {
+  async function onSourceChange(key: string) {
+    const parsed = parseSourceKey(key)
+    const instanceId = parsed?.instance_id || ''
+    const domain = parsed?.domain || ''
     const inst = instances.find((i) => i.id === instanceId)
-    patchForm({ instance_id: instanceId || '', db_ids: [], username: inst?.username || '' })
+    patchForm({
+      instance_id: instanceId,
+      domain,
+      db_ids: [],
+      username: inst?.username || '',
+    })
     await loadDbs(instanceId)
     const f = formRef.current
     const opts = new Set<string>()
@@ -148,7 +164,10 @@ export default function DclGrants() {
         permissions: Array.isArray(d.permissions) ? d.permissions : [],
       }
       setForm(next)
-      antdForm.setFieldsValue(next)
+      antdForm.setFieldsValue({
+        ...next,
+        instance_id: next.instance_id && next.domain ? sourceKey(next.instance_id, next.domain) : undefined,
+      })
     },
     enabled: true,
   })
@@ -184,6 +203,10 @@ export default function DclGrants() {
       message.warning('自定义账号须以 _user 结尾')
       return
     }
+    if (!form.domain) {
+      message.warning('请选择带域名的数据源')
+      return
+    }
     const dbName = (form.db_ids || [])
       .map((id) => databases.find((d) => d.id === id)?.db_name)
       .filter(Boolean)
@@ -192,6 +215,7 @@ export default function DclGrants() {
     try {
       await api.post('/dcl-grants', {
         instance_id: form.instance_id,
+        domain: form.domain,
         db_name: dbName,
         assigned_to: form.assigned_to,
         description: form.description,
@@ -232,8 +256,11 @@ export default function DclGrants() {
   }, [])
 
   useEffect(() => {
-    antdForm.setFieldsValue(form)
-  }, [form, antdForm])
+    antdForm.setFieldsValue({
+      ...form,
+      instance_id: sourceSelectValue,
+    })
+  }, [form, antdForm, sourceSelectValue])
 
   return (
     <div className="dcl-page order-page">
@@ -277,10 +304,22 @@ export default function DclGrants() {
               allowClear
               disabled={!form.env || !form.db_type}
               placeholder={sourcePlaceholder}
-              value={form.instance_id || undefined}
+              value={sourceSelectValue}
               onChange={(v) => onSourceChange(v || '')}
               optionFilterProp="label"
-              options={sourceOptions.map((i) => ({ value: i.id, label: instLabel(i) }))}
+              options={sourceOptions.map((s) => ({
+                value: s.key,
+                label: sourcePrimaryLabel(s),
+                secondary: sourceSecondaryLabel(s),
+              }))}
+              optionRender={(opt) => (
+                <div className="ds-opt">
+                  <span>{(opt.data as any).label}</span>
+                  {(opt.data as any).secondary ? (
+                    <span className="muted">{(opt.data as any).secondary}</span>
+                  ) : null}
+                </div>
+              )}
             />
           </Form.Item>
           <Form.Item

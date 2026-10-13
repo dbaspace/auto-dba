@@ -484,7 +484,27 @@ func (d *DB) ensureIssueExecResultColumn() error {
 	if err := d.ensureIssueAssigneeTransferHistoryColumn(); err != nil {
 		return err
 	}
+	if err := d.ensureIssueDomainColumn(); err != nil {
+		return err
+	}
 	return d.ensureLoginLogsTable()
+}
+
+func (d *DB) ensureIssueDomainColumn() error {
+	var n int
+	err := d.db.QueryRow(`
+		SELECT COUNT(1) FROM information_schema.columns
+		WHERE table_name = 'tbl_issues' AND column_name = 'domain'
+	`).Scan(&n)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		if _, err := d.db.Exec(`ALTER TABLE tbl_issues ADD COLUMN domain TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (d *DB) ensureIssueAssigneeTransferHistoryColumn() error {

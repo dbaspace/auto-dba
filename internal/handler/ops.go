@@ -1088,9 +1088,39 @@ func (h *DCLHandler) Submit(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": aerr.Error()})
 		return
 	}
+	domain := strings.TrimSpace(req.Domain)
+	if domain != "" && strings.TrimSpace(req.InstanceID) != "" {
+		inst, ierr := h.Store.GetInstance(req.InstanceID)
+		if ierr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": ierr.Error()})
+			return
+		}
+		if inst == nil || !instanceContainsDomain(inst, domain) {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "数据源域名不属于所选实例登记的域名"})
+			return
+		}
+		if strings.TrimSpace(req.DBName) != "" {
+			for _, name := range strings.Split(req.DBName, ",") {
+				name = strings.TrimSpace(name)
+				if name == "" {
+					continue
+				}
+				dbEnt, derr := h.Store.FindDatabase(req.InstanceID, name)
+				if derr != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"message": derr.Error()})
+					return
+				}
+				if dbEnt != nil && len(dbEnt.Domains) > 0 && !databaseContainsDomain(dbEnt, domain) {
+					c.JSON(http.StatusBadRequest, gin.H{"message": "所选数据库未绑定该域名: " + name})
+					return
+				}
+			}
+		}
+	}
 	issue := &store.Issue{
-		IssueType: store.IssueTypeDCL, InstanceID: req.InstanceID, DBName: req.DBName,
-		SQLContent: req.SQLContent, Description: req.Description, Submitter: username, AssignedTo: reviewer,
+		IssueType: store.IssueTypeDCL, InstanceID: req.InstanceID, Domain: domain, DBName: req.DBName,
+		SQLContent: req.SQLContent, Description: req.Description, Status: store.StatusPending,
+		Submitter: username, AssignedTo: reviewer,
 	}
 	stampTenantID(c, func(tid string) {
 		if issue != nil { issue.TenantID = tid }

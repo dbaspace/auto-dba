@@ -131,7 +131,51 @@ func execOKOrExists(res *ticketexec.Result) error {
 	return fmt.Errorf("执行失败")
 }
 
-func (h *TicketHandler) execTarget(inst *store.Instance, dbName string) (ticketexec.Target, error) {
+func normalizeDomainKey(s string) string {
+	return strings.ToLower(strings.Trim(strings.TrimSpace(s), "."))
+}
+
+func instanceContainsDomain(inst *store.Instance, domain string) bool {
+	want := normalizeDomainKey(domain)
+	if want == "" || inst == nil {
+		return false
+	}
+	for _, d := range inst.Domains {
+		if normalizeDomainKey(d) == want {
+			return true
+		}
+	}
+	return normalizeDomainKey(inst.DomainName) == want
+}
+
+func databaseContainsDomain(db *store.Database, domain string) bool {
+	want := normalizeDomainKey(domain)
+	if want == "" || db == nil {
+		return false
+	}
+	for _, d := range db.Domains {
+		if normalizeDomainKey(d) == want {
+			return true
+		}
+	}
+	return false
+}
+
+func resolveInstanceHost(inst *store.Instance, preferredDomain string) string {
+	if d := strings.TrimSpace(preferredDomain); d != "" {
+		return d
+	}
+	if inst == nil {
+		return ""
+	}
+	host := strings.TrimSpace(inst.Host)
+	if host == "" {
+		host = strings.TrimSpace(inst.DomainName)
+	}
+	return host
+}
+
+func (h *TicketHandler) execTarget(inst *store.Instance, dbName, preferredDomain string) (ticketexec.Target, error) {
 	var t ticketexec.Target
 	if inst == nil {
 		return t, fmt.Errorf("工单实例不存在")
@@ -140,9 +184,9 @@ func (h *TicketHandler) execTarget(inst *store.Instance, dbName string) (tickete
 	if err != nil {
 		return t, fmt.Errorf("解密实例密码失败: %w", err)
 	}
-	host := strings.TrimSpace(inst.Host)
+	host := resolveInstanceHost(inst, preferredDomain)
 	if host == "" {
-		host = strings.TrimSpace(inst.DomainName)
+		return t, fmt.Errorf("实例未配置连接地址或域名")
 	}
 	t = ticketexec.Target{
 		Host:     host,
@@ -234,7 +278,8 @@ func (h *TicketHandler) executeCreateDBTicket(ctx context.Context, it *store.Iss
 		if !check.OK {
 			return h.persistExec(it, reviewGateResult(check))
 		}
-		t, err := h.execTarget(inst, it.DBName)
+		domain := ddlDomainForInstance(it.NeedRollback, id, it.Domain)
+		t, err := h.execTarget(inst, it.DBName, domain)
 		if err != nil {
 			merged.Success = false
 			merged.Message = err.Error()
@@ -334,7 +379,8 @@ func provisionCreateDBAccounts(ctx context.Context, h *TicketHandler, it *store.
 			warns = append(warns, "解密账号密码失败")
 			continue
 		}
-		admin, err := h.execTarget(inst, acc.DBName)
+		domain := ddlDomainForInstance(it.NeedRollback, acc.InstanceID, it.Domain)
+		admin, err := h.execTarget(inst, acc.DBName, domain)
 		if err != nil {
 			warns = append(warns, err.Error())
 			continue

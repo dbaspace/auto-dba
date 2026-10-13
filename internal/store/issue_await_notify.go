@@ -14,7 +14,7 @@ const awaitStuckAtKey = "await_exec_stuck_at"
 func (d *DB) ListStaleApprovedIssues(before time.Time) ([]Issue, error) {
 	cutoff := before.UTC().Format(time.RFC3339)
 	rows, err := d.Query(
-		`SELECT id, ticket_no, issue_type, instance_id, database_id, db_name, sql_content, description, status, submitter, assigned_to, reject_reason, need_rollback, scheduled_at, execute_result, created_at, updated_at
+		`SELECT id, ticket_no, issue_type, instance_id, COALESCE(domain,''), database_id, db_name, sql_content, description, status, submitter, assigned_to, reject_reason, need_rollback, scheduled_at, execute_result, created_at, updated_at
 		 FROM tbl_issues WHERE status=? AND updated_at<? ORDER BY updated_at ASC`,
 		StatusApproved, cutoff,
 	)
@@ -27,7 +27,7 @@ func (d *DB) ListStaleApprovedIssues(before time.Time) ([]Issue, error) {
 		var it Issue
 		var exec sql.NullString
 		if err := rows.Scan(
-			&it.ID, &it.TicketNo, &it.IssueType, &it.InstanceID, &it.DatabaseID, &it.DBName, &it.SQLContent, &it.Description,
+			&it.ID, &it.TicketNo, &it.IssueType, &it.InstanceID, &it.Domain, &it.DatabaseID, &it.DBName, &it.SQLContent, &it.Description,
 			&it.Status, &it.Submitter, &it.AssignedTo, &it.RejectReason, &it.NeedRollback, &it.ScheduledAt, &exec,
 			&it.CreatedAt, &it.UpdatedAt,
 		); err != nil {

@@ -133,6 +133,11 @@ func (h *CreateDBHandler) Submit(c *gin.Context) {
 		IDCScope    string   `json:"idc_scope"`
 		InstanceID  string   `json:"instance_id"`
 		InstanceIDs []string `json:"instance_ids"`
+		Domain      string   `json:"domain"`
+		DataSources []struct {
+			InstanceID string `json:"instance_id"`
+			Domain     string `json:"domain"`
+		} `json:"data_sources"`
 		Username    string   `json:"username"`
 		Permissions []string `json:"permissions"`
 		AssignedTo  string   `json:"assigned_to"`
@@ -145,9 +150,16 @@ func (h *CreateDBHandler) Submit(c *gin.Context) {
 		return
 	}
 	ids := uniqueIDs(req.InstanceIDs, req.InstanceID)
+	for _, ds := range req.DataSources {
+		ids = uniqueIDs(ids, ds.InstanceID)
+	}
 	if len(ids) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "instance_id 必填"})
 		return
+	}
+	domain := strings.TrimSpace(req.Domain)
+	if domain == "" && len(req.DataSources) > 0 {
+		domain = strings.TrimSpace(req.DataSources[0].Domain)
 	}
 	req.Username = strings.TrimSpace(req.Username)
 	if req.Username == "" {
@@ -188,6 +200,15 @@ func (h *CreateDBHandler) Submit(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": aerr.Error()})
 		return
 	}
+	dataSources := make([]map[string]string, 0, len(req.DataSources))
+	for _, ds := range req.DataSources {
+		iid := strings.TrimSpace(ds.InstanceID)
+		dom := strings.TrimSpace(ds.Domain)
+		if iid == "" || dom == "" {
+			continue
+		}
+		dataSources = append(dataSources, map[string]string{"instance_id": iid, "domain": dom})
+	}
 	for _, id := range ids {
 		inst, _ := resolveInstanceInTenant(h.Store, c, id)
 		if inst == nil {
@@ -196,6 +217,17 @@ func (h *CreateDBHandler) Submit(c *gin.Context) {
 		}
 		if req.DBType != "" && !strings.EqualFold(inst.DBType, req.DBType) {
 			c.JSON(http.StatusBadRequest, gin.H{"message": "实例类型与 db_type 不一致"})
+			return
+		}
+		dom := domain
+		for _, ds := range dataSources {
+			if ds["instance_id"] == id {
+				dom = ds["domain"]
+				break
+			}
+		}
+		if dom != "" && !instanceContainsDomain(inst, dom) {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "数据源域名不属于所选实例登记的域名"})
 			return
 		}
 		for _, name := range names {
@@ -210,6 +242,8 @@ func (h *CreateDBHandler) Submit(c *gin.Context) {
 		"username":     req.Username,
 		"permissions":  req.Permissions,
 		"instance_ids": ids,
+		"data_sources": dataSources,
+		"domain":       domain,
 		"env":          req.IDCScope,
 		"db_type":      req.DBType,
 	})
@@ -217,6 +251,7 @@ func (h *CreateDBHandler) Submit(c *gin.Context) {
 		IssueType:    store.IssueTypeCreateDB,
 		Type:         store.IssueTypeCreateDB,
 		InstanceID:   ids[0],
+		Domain:       domain,
 		DBName:       strings.Join(names, ","),
 		SQLContent:   req.SQLContent,
 		Description:  strings.TrimSpace(req.Description),
@@ -377,7 +412,11 @@ func materializeCreateDBAccounts(st *store.DB, secretKey string, it *store.Issue
 			if rec, _ := st.FindDatabase(instanceID, dbName); rec != nil {
 				dbID = rec.ID
 			} else {
+				dom := ddlDomainForInstance(it.NeedRollback, instanceID, it.Domain)
 				rec := &store.Database{InstanceID: instanceID, DBName: dbName, Visibility: "global"}
+				if dom != "" {
+					rec.Domains = []string{dom}
+				}
 				if err := st.CreateDatabase(rec); err == nil {
 					dbID = rec.ID
 				}

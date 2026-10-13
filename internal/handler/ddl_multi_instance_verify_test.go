@@ -287,7 +287,7 @@ func TestDDLMultiInstanceSubmitVerify(t *testing.T) {
 			// Review gate may block; still prove落点 by running the same single-target path as executeTicket.
 			inst, gerr := db.GetInstance(primary)
 			if gerr == nil && inst != nil {
-				if tgt, terr := h.execTarget(inst, multiDDLVerifyDB); terr == nil {
+				if tgt, terr := h.execTarget(inst, multiDDLVerifyDB, ""); terr == nil {
 					res := ticketexec.Run(context.Background(), store.IssueTypeDDL, sqlDDL, tgt)
 					if res != nil && res.Success {
 						execOK = true

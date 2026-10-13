@@ -23,6 +23,14 @@ import dayjs, { Dayjs } from 'dayjs'
 import api from '../../api/request'
 import { dbLabel } from '../../utils/db'
 import { buildEnvOptions, EnvOption } from '../../utils/env'
+import {
+  expandDomainSources,
+  filterDbsByDomain,
+  parseSourceKey,
+  sourcePrimaryLabel,
+  sourceSecondaryLabel,
+  type DomainSource,
+} from '../../utils/instanceSource'
 import DbTypeIcon from '../../components/DbTypeIcon'
 import { useWorkOrderDraft } from '../../hooks/useWorkOrderDraft'
 import './DdlOrder.css'
@@ -80,17 +88,6 @@ function emptyForm(): FormState {
     is_debug: 'yes',
     sql_content: '',
   }
-}
-
-function instAddress(i: any): string {
-  if (i?.host) return `${i.host}:${i.port || ''}`
-  const d = (i?.domains || [])[0] || i?.domain_name || ''
-  return d
-}
-
-function instLabel(i: any): string {
-  const addr = instAddress(i)
-  return i?.name ? (addr ? `${i.name} (${addr})` : i.name) : addr
 }
 
 function longestCommonPrefixLen(a: string, b: string): number {
@@ -163,25 +160,42 @@ export default function DdlOrder() {
 
   const isStarRocks = form.instance_type === 'starrocks'
 
-  const dataSourceOptions = useMemo(() => {
-    return instances.filter((i) => {
+  const dataSourceOptions = useMemo((): DomainSource[] => {
+    const filtered = instances.filter((i) => {
       if (form.env && (i.idc || '') !== form.env) return false
       if (form.instance_type && String(i.db_type || '').toLowerCase() !== form.instance_type) return false
       return true
     })
+    return expandDomainSources(filtered)
   }, [instances, form.env, form.instance_type])
 
+  const selectedDomainSources = useMemo(
+    () =>
+      form.data_source_ids
+        .map((k) => parseSourceKey(k))
+        .filter((p): p is { instance_id: string; domain: string } => Boolean(p)),
+    [form.data_source_ids],
+  )
+
   const dbNameOptions = useMemo(() => {
+    const domainsByInst = new Map<string, string[]>()
+    for (const p of selectedDomainSources) {
+      const list = domainsByInst.get(p.instance_id) || []
+      list.push(p.domain)
+      domainsByInst.set(p.instance_id, list)
+    }
     const seen = new Set<string>()
     const out: { value: string; label: string }[] = []
     for (const d of dbRecords) {
       const name = d.db_name || ''
       if (!name || seen.has(name)) continue
+      const domains = domainsByInst.get(d.instance_id) || []
+      if (domains.length && !domains.some((dom) => filterDbsByDomain([d], dom).length)) continue
       seen.add(name)
       out.push({ value: name, label: dbLabel(d) })
     }
     return out
-  }, [dbRecords])
+  }, [dbRecords, selectedDomainSources])
 
   const shardDbPrefixHint = getShardDbPrefixHint(form.db_name, form.shard_db_prefix)
 
@@ -266,15 +280,17 @@ export default function DdlOrder() {
     await loadApprovers(formRef.current.data_source_ids, v)
   }
 
-  async function loadDatabases(ids: string[]) {
-    if (!ids.length) {
+  async function loadDatabases(keys: string[]) {
+    if (!keys.length) {
       setDbRecords([])
       return
     }
     setDbLoading(true)
     try {
+      const parsed = keys.map((k) => parseSourceKey(k)).filter(Boolean) as { instance_id: string; domain: string }[]
+      const instIds = [...new Set(parsed.map((p) => p.instance_id))]
       const lists = await Promise.all(
-        ids.map(async (id) => {
+        instIds.map(async (id) => {
           const { data } = await api.get(`/tickets/instances/${id}/databases`)
           return (data.data || []).map((d: any) => ({ ...d, instance_id: d.instance_id || id }))
         }),
@@ -298,16 +314,23 @@ export default function DdlOrder() {
     }
   }
 
-  async function loadApprovers(ids: string[], dbNameRaw: string) {
+  async function loadApprovers(keys: string[], dbNameRaw: string) {
     const dbName = String(dbNameRaw || '').trim()
-    if (!ids.length || !dbName) {
+    const instIds = [
+      ...new Set(
+        keys
+          .map((k) => parseSourceKey(k)?.instance_id)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    ]
+    if (!instIds.length || !dbName) {
       setApprovers([])
       return
     }
     setReviewerLoading(true)
     try {
       const lists = await Promise.all(
-        ids.map(async (id) => {
+        instIds.map(async (id) => {
           const { data } = await api.get('/tickets/target-approvers', {
             params: { instance_id: id, db_name: dbName },
           })
@@ -335,14 +358,29 @@ export default function DdlOrder() {
   function pickPrimary() {
     const f = formRef.current
     const dbName = String(f.db_name || '').trim()
+    const sources = selectedDomainSources.length
+      ? selectedDomainSources
+      : f.data_source_ids.map((k) => parseSourceKey(k)).filter(Boolean) as {
+          instance_id: string
+          domain: string
+        }[]
+    const primary = sources[0]
     const hit =
-      dbRecords.find((d) => d.db_name === dbName && f.data_source_ids.includes(d.instance_id)) ||
+      (primary &&
+        dbRecords.find(
+          (d) =>
+            d.db_name === dbName &&
+            d.instance_id === primary.instance_id &&
+            filterDbsByDomain([d], primary.domain).length > 0,
+        )) ||
+      (primary && dbRecords.find((d) => d.db_name === dbName && d.instance_id === primary.instance_id)) ||
       dbRecords.find((d) => d.db_name === dbName)
-    const instanceId = hit?.instance_id || f.data_source_ids[0] || ''
+    const instanceId = hit?.instance_id || primary?.instance_id || ''
     return {
       instance_id: instanceId,
       database_id: hit?.id || '',
       db_name: dbName,
+      domain: primary?.domain || '',
     }
   }
 
@@ -369,11 +407,12 @@ export default function DdlOrder() {
     const fp = checkFp
     setCheckLoading(true)
     try {
+      const primary = pickPrimary()
       const { data } = await api.post('/tickets/check-sql', {
         sql_content: sql,
         type: 'ddl',
         db_type: f.instance_type,
-        instance_id: f.data_source_ids[0] || '',
+        instance_id: primary.instance_id || '',
         db_name: f.db_name,
       })
       setCheckRows(
@@ -483,14 +522,25 @@ export default function DdlOrder() {
       return
     }
     const rec = pickPrimary()
-    if (!rec.instance_id) {
+    if (!rec.instance_id || !rec.domain) {
       message.warning('未解析到有效数据源，请重新选择数据源后再提交')
       return
     }
+    const dataSources = (
+      selectedDomainSources.length
+        ? selectedDomainSources
+        : (f.data_source_ids.map((k) => parseSourceKey(k)).filter(Boolean) as {
+            instance_id: string
+            domain: string
+          }[])
+    ).map((p) => ({ instance_id: p.instance_id, domain: p.domain }))
+    const instanceIds = [...new Set(dataSources.map((d) => d.instance_id))]
     const extra = {
       env: f.env,
       instance_type: f.instance_type,
-      data_source_ids: f.data_source_ids,
+      data_source_ids: instanceIds,
+      data_sources: dataSources,
+      domain: rec.domain,
       shard_db: f.shard_db,
       shard_db_prefix: String(f.shard_db_prefix || '').trim(),
       shard_table: f.shard_table,
@@ -505,6 +555,7 @@ export default function DdlOrder() {
         instance_id: rec.instance_id,
         database_id: rec.database_id,
         db_name: rec.db_name,
+        domain: rec.domain,
         sql_content: sql,
         description: f.description,
         assigned_to: f.assigned_to,
@@ -564,21 +615,21 @@ export default function DdlOrder() {
       restoreDraft()
       await loadMeta()
       const cur = formRef.current
-      const validIds = new Set(
-        instances
-          .filter((i) => {
+      const validKeys = new Set(
+        expandDomainSources(
+          instances.filter((i) => {
             if (cur.env && (i.idc || '') !== cur.env) return false
             if (cur.instance_type && String(i.db_type || '').toLowerCase() !== cur.instance_type) return false
             return true
-          })
-          .map((i) => i.id),
+          }),
+        ).map((s) => s.key),
       )
-      const filtered = (cur.data_source_ids || []).filter((id) => validIds.has(id))
-      if (filtered.length !== (cur.data_source_ids || []).length) {
-        patchForm({ data_source_ids: filtered })
+      const nextKeys = (cur.data_source_ids || []).filter((k) => validKeys.has(k))
+      if (nextKeys.length !== (cur.data_source_ids || []).length) {
+        patchForm({ data_source_ids: nextKeys })
       }
-      await loadDatabases(filtered)
-      await loadApprovers(filtered, formRef.current.db_name)
+      await loadDatabases(nextKeys)
+      await loadApprovers(nextKeys, formRef.current.db_name)
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -660,16 +711,18 @@ export default function DdlOrder() {
                 optionFilterProp="label"
                 value={form.data_source_ids}
                 onChange={(v) => onDataSourcesChange(v as string[])}
-                options={dataSourceOptions.map((i) => ({
-                  value: i.id,
-                  label: instLabel(i),
-                  optlabel: i.name || instAddress(i),
-                  addr: instAddress(i),
+                options={dataSourceOptions.map((s) => ({
+                  value: s.key,
+                  label: sourcePrimaryLabel(s),
+                  optlabel: sourcePrimaryLabel(s),
+                  secondary: sourceSecondaryLabel(s),
                 }))}
                 optionRender={(opt) => (
                   <div className="ds-opt">
                     <span>{(opt.data as any).optlabel}</span>
-                    <span className="muted">{(opt.data as any).addr}</span>
+                    {(opt.data as any).secondary ? (
+                      <span className="muted">{(opt.data as any).secondary}</span>
+                    ) : null}
                   </div>
                 )}
               />

@@ -50,6 +50,7 @@ type ticketCheckReq struct {
 
 type ticketSubmitReq struct {
 	InstanceID    string `json:"instance_id"`
+	Domain        string `json:"domain"`
 	DBName        string `json:"db_name"`
 	DatabaseID    string `json:"database_id"`
 	Type          string `json:"type"`
@@ -370,10 +371,7 @@ func (h *TicketHandler) checkViaGoInception(sqlContent, instanceID, dbName strin
 	if err != nil || inst == nil {
 		return giCheckFail("实例不存在"), true
 	}
-	host := strings.TrimSpace(inst.Host)
-	if host == "" {
-		host = strings.TrimSpace(inst.DomainName)
-	}
+	host := resolveInstanceHost(inst, "")
 	if host == "" {
 		return giCheckFail("实例 host 为空"), true
 	}
@@ -504,10 +502,43 @@ func (h *TicketHandler) Submit(c *gin.Context) {
 		})
 		req.NeedRollback = string(extra)
 	}
+	domain := strings.TrimSpace(req.Domain)
+	if domain == "" {
+		// 兼容 need_rollback 内嵌 domain
+		var extra struct {
+			Domain string `json:"domain"`
+		}
+		if json.Unmarshal([]byte(strings.TrimSpace(req.NeedRollback)), &extra) == nil {
+			domain = strings.TrimSpace(extra.Domain)
+		}
+	}
+	if domain != "" && strings.TrimSpace(req.InstanceID) != "" {
+		inst, ierr := h.Store.GetInstance(req.InstanceID)
+		if ierr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": ierr.Error()})
+			return
+		}
+		if inst == nil || !instanceContainsDomain(inst, domain) {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "数据源域名不属于所选实例登记的域名"})
+			return
+		}
+		if strings.TrimSpace(req.DBName) != "" {
+			dbEnt, derr := h.Store.FindDatabase(req.InstanceID, req.DBName)
+			if derr != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"message": derr.Error()})
+				return
+			}
+			if dbEnt != nil && len(dbEnt.Domains) > 0 && !databaseContainsDomain(dbEnt, domain) {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "所选数据库未绑定该域名"})
+				return
+			}
+		}
+	}
 	issue := &store.Issue{
 		IssueType:    req.Type,
 		Type:         req.Type,
 		InstanceID:   req.InstanceID,
+		Domain:       domain,
 		DatabaseID:   req.DatabaseID,
 		DBName:       req.DBName,
 		SQLContent:   req.SQLContent,
@@ -1183,10 +1214,10 @@ func (h *TicketHandler) executeTicket(ctx context.Context, it *store.Issue) erro
 	if !check.OK {
 		return h.persistExec(it, reviewGateResult(check))
 	}
-	t, err := h.execTarget(inst, it.DBName)
+	t, err := h.execTarget(inst, it.DBName, it.Domain)
 	if err != nil {
 		res := ticketexec.FailBeforeExec(err.Error(), ticketexec.Record{
-			InstanceID: inst.ID, InstanceName: inst.Name, Host: inst.Host, DB: it.DBName, Port: inst.Port,
+			InstanceID: inst.ID, InstanceName: inst.Name, Host: resolveInstanceHost(inst, it.Domain), DB: it.DBName, Port: inst.Port,
 		})
 		return h.persistExec(it, res)
 	}
@@ -1201,9 +1232,16 @@ func ddlDataSourceIDs(needRollback, fallbackInstanceID string) []string {
 	if raw != "" {
 		var extra struct {
 			DataSourceIDs []string `json:"data_source_ids"`
+			DataSources   []struct {
+				InstanceID string `json:"instance_id"`
+				Domain     string `json:"domain"`
+			} `json:"data_sources"`
 		}
 		if json.Unmarshal([]byte(raw), &extra) == nil {
-			ids = extra.DataSourceIDs
+			ids = append(ids, extra.DataSourceIDs...)
+			for _, ds := range extra.DataSources {
+				ids = append(ids, ds.InstanceID)
+			}
 		}
 	}
 	out := uniqueTrimmedIDs(ids)
@@ -1215,6 +1253,32 @@ func ddlDataSourceIDs(needRollback, fallbackInstanceID string) []string {
 		return nil
 	}
 	return out
+}
+
+// ddlDomainForInstance 从 need_rollback.data_sources 取该实例对应域名；无则回退 issue.Domain。
+func ddlDomainForInstance(needRollback, instanceID, fallbackDomain string) string {
+	raw := strings.TrimSpace(needRollback)
+	if raw != "" {
+		var extra struct {
+			Domain      string `json:"domain"`
+			DataSources []struct {
+				InstanceID string `json:"instance_id"`
+				Domain     string `json:"domain"`
+			} `json:"data_sources"`
+		}
+		if json.Unmarshal([]byte(raw), &extra) == nil {
+			id := strings.TrimSpace(instanceID)
+			for _, ds := range extra.DataSources {
+				if strings.TrimSpace(ds.InstanceID) == id && strings.TrimSpace(ds.Domain) != "" {
+					return strings.TrimSpace(ds.Domain)
+				}
+			}
+			if d := strings.TrimSpace(extra.Domain); d != "" {
+				return d
+			}
+		}
+	}
+	return strings.TrimSpace(fallbackDomain)
 }
 
 func uniqueTrimmedIDs(ids []string) []string {
@@ -1308,12 +1372,13 @@ func (h *TicketHandler) executeDDLTicket(ctx context.Context, it *store.Issue) e
 			}
 			break
 		}
-		t, err := h.execTarget(inst, it.DBName)
+		domain := ddlDomainForInstance(it.NeedRollback, id, it.Domain)
+		t, err := h.execTarget(inst, it.DBName, domain)
 		if err != nil {
 			merged.Success = false
 			merged.Message = err.Error()
 			merged.Records = append(merged.Records, ticketexec.Record{
-				InstanceID: id, InstanceName: inst.Name, Host: inst.Host, DB: it.DBName,
+				InstanceID: id, InstanceName: inst.Name, Host: resolveInstanceHost(inst, domain), DB: it.DBName,
 				Status: "failed", ErrorMessage: err.Error(), Order: len(merged.Records) + 1,
 			})
 			break
@@ -1397,10 +1462,7 @@ func (h *TicketHandler) executeRedisTicket(ctx context.Context, it *store.Issue)
 		}
 		password = plain
 	}
-	host := strings.TrimSpace(inst.Host)
-	if host == "" {
-		host = strings.TrimSpace(inst.DomainName)
-	}
+	host := resolveInstanceHost(inst, it.Domain)
 	opt := redisquery.Options{Username: inst.Username, Password: password}
 	started := time.Now().UTC().Format(time.RFC3339)
 	res := &ticketexec.Result{StartedAt: started, Engine: "redis", Success: true}

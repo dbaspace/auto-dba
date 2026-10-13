@@ -17,6 +17,15 @@ import dayjs, { Dayjs } from 'dayjs'
 import api from '../../api/request'
 import { dbLabel } from '../../utils/db'
 import { buildEnvOptions, EnvOption } from '../../utils/env'
+import {
+  expandDomainSources,
+  filterDbsByDomain,
+  parseSourceKey,
+  sourceKey,
+  sourcePrimaryLabel,
+  sourceSecondaryLabel,
+  type DomainSource,
+} from '../../utils/instanceSource'
 import DbTypeIcon from '../../components/DbTypeIcon'
 import { useWorkOrderDraft } from '../../hooks/useWorkOrderDraft'
 import './DmlOrder.css'
@@ -40,6 +49,7 @@ interface FormState {
   env: string
   instance_type: string
   instance_id: string
+  domain: string
   db_name: string
   assigned_to: string
   description: string
@@ -60,23 +70,13 @@ function emptyForm(): FormState {
     env: '',
     instance_type: '',
     instance_id: '',
+    domain: '',
     db_name: '',
     assigned_to: '',
     description: '',
     scheduled_at: '',
     sql_content: '',
   }
-}
-
-function instAddress(i: any): string {
-  if (i?.host) return `${i.host}:${i.port || ''}`
-  const d = (i?.domains || [])[0] || i?.domain_name || ''
-  return d
-}
-
-function instLabel(i: any): string {
-  const addr = instAddress(i)
-  return i?.name ? (addr ? `${i.name} (${addr})` : i.name) : addr
 }
 
 function levelLabel(lv: string): string {
@@ -133,25 +133,33 @@ export default function DmlOrder() {
     setForm((f) => ({ ...f, ...patch }))
   }
 
-  const dataSourceOptions = useMemo(() => {
-    return instances.filter((i) => {
+  const dataSourceOptions = useMemo((): DomainSource[] => {
+    const filtered = instances.filter((i) => {
       if (form.env && (i.idc || '') !== form.env) return false
       if (form.instance_type && String(i.db_type || '').toLowerCase() !== form.instance_type) return false
       return true
     })
+    return expandDomainSources(filtered)
   }, [instances, form.env, form.instance_type])
+
+  const filteredDbRecords = useMemo(
+    () => (form.domain ? filterDbsByDomain(dbRecords, form.domain) : []),
+    [dbRecords, form.domain],
+  )
 
   const dbNameOptions = useMemo(() => {
     const seen = new Set<string>()
     const out: { value: string; label: string }[] = []
-    for (const d of dbRecords) {
+    for (const d of filteredDbRecords) {
       const name = d.db_name || ''
       if (!name || seen.has(name)) continue
       seen.add(name)
-      out.push({ value: name, label: dbLabel(d) })
+      out.push({ value: name, label: dbLabel({ ...d, domains: [form.domain].filter(Boolean) }) })
     }
     return out
-  }, [dbRecords])
+  }, [filteredDbRecords, form.domain])
+
+  const selectedSourceKey = form.instance_id && form.domain ? sourceKey(form.instance_id, form.domain) : undefined
 
   /** 仅环境 / 类型 / 数据源 / 库 / SQL 参与指纹，改审核人/描述/定时不失效 */
   const checkFp = useMemo(
@@ -160,6 +168,7 @@ export default function DmlOrder() {
         env: form.env,
         instance_type: form.instance_type,
         instance_id: form.instance_id,
+        domain: form.domain,
         db_name: form.db_name,
         sql: String(form.sql_content || '').trim(),
       }),
@@ -204,6 +213,7 @@ export default function DmlOrder() {
     patchForm({
       ...patch,
       instance_id: '',
+      domain: '',
       db_name: '',
       assigned_to: '',
     })
@@ -213,10 +223,23 @@ export default function DmlOrder() {
   }
 
   async function onDataSourceChange(v: string) {
-    patchForm({ instance_id: v, db_name: '', assigned_to: '' })
+    const parsed = parseSourceKey(v || '')
+    if (!parsed) {
+      patchForm({ instance_id: '', domain: '', db_name: '', assigned_to: '' })
+      setDbRecords([])
+      setApprovers([])
+      resetCheck()
+      return
+    }
+    patchForm({
+      instance_id: parsed.instance_id,
+      domain: parsed.domain,
+      db_name: '',
+      assigned_to: '',
+    })
     setApprovers([])
     resetCheck()
-    await loadDatabases(v)
+    await loadDatabases(parsed.instance_id)
   }
 
   async function onDatabaseChange(v: string) {
@@ -279,9 +302,11 @@ export default function DmlOrder() {
   function pickPrimary() {
     const f = formRef.current
     const dbName = String(f.db_name || '').trim()
-    const hit = dbRecords.find((d) => d.db_name === dbName)
+    const scoped = f.domain ? filterDbsByDomain(dbRecords, f.domain) : []
+    const hit = scoped.find((d) => d.db_name === dbName) || dbRecords.find((d) => d.db_name === dbName)
     return {
       instance_id: f.instance_id || hit?.instance_id || '',
+      domain: f.domain || '',
       database_id: hit?.id || '',
       db_name: dbName,
     }
@@ -294,8 +319,8 @@ export default function DmlOrder() {
       message.error('请填写 SQL')
       return
     }
-    if (!f.env || !f.instance_type || !f.instance_id || !f.db_name) {
-      message.warning('检测前请先选择环境、实例类型、数据源与数据库')
+    if (!f.env || !f.instance_type || !f.instance_id || !f.domain || !f.db_name) {
+      message.warning('检测前请先选择环境、实例类型、数据源（域名）与数据库')
       return
     }
     const fp = checkFp
@@ -357,10 +382,15 @@ export default function DmlOrder() {
         ...emptyForm(),
         ...d,
         instance_id: d.instance_id || '',
+        domain: d.domain || '',
         sql_content: d.sql_content || d.sql || '',
       } as FormState
       setForm(next)
-      antdForm.setFieldsValue(next)
+      antdForm.setFieldsValue({
+        ...next,
+        instance_id: next.instance_id && next.domain ? sourceKey(next.instance_id, next.domain) : undefined,
+      })
+      if (next.instance_id) void loadDatabases(next.instance_id)
     },
     enabled: true,
   })
@@ -397,6 +427,7 @@ export default function DmlOrder() {
         type: 'dml',
         db_type: f.instance_type,
         instance_id: rec.instance_id,
+        domain: rec.domain,
         database_id: rec.database_id,
         db_name: rec.db_name,
         sql_content: sql,
@@ -406,6 +437,7 @@ export default function DmlOrder() {
         need_rollback: JSON.stringify({
           env: f.env,
           instance_type: f.instance_type,
+          domain: rec.domain,
         }),
       })
       message.success(data.data?.ticket_no ? `提交成功，工单号 ${data.data.ticket_no}` : '提交成功')
@@ -436,10 +468,14 @@ export default function DmlOrder() {
       ...emptyForm(),
       ...src,
       instance_id: src.instance_id || '',
+      domain: src.domain || '',
       sql_content: src.sql_content || src.sql || '',
     } as FormState
     setForm(next)
-    antdForm.setFieldsValue(next)
+    antdForm.setFieldsValue({
+      ...next,
+      instance_id: next.instance_id && next.domain ? sourceKey(next.instance_id, next.domain) : undefined,
+    })
     if (prefill) sessionStorage.removeItem(PREFILL_KEY)
     return true
   }
@@ -498,7 +534,7 @@ export default function DmlOrder() {
           .map((i) => i.id),
       )
       if (cur.instance_id && !valid.has(cur.instance_id)) {
-        patchForm({ instance_id: '', db_name: '', assigned_to: '' })
+        patchForm({ instance_id: '', domain: '', db_name: '', assigned_to: '' })
       }
       await loadDatabases(formRef.current.instance_id)
       await loadApprovers(formRef.current.instance_id, formRef.current.db_name)
@@ -507,7 +543,10 @@ export default function DmlOrder() {
   }, [])
 
   useEffect(() => {
-    antdForm.setFieldsValue(form)
+    antdForm.setFieldsValue({
+      ...form,
+      instance_id: form.instance_id && form.domain ? sourceKey(form.instance_id, form.domain) : undefined,
+    })
   }, [form, antdForm])
 
   const checkColumns: ColumnsType<CheckRow> = [
@@ -564,7 +603,7 @@ export default function DmlOrder() {
               />
             </Form.Item>
 
-            <Form.Item label="数据源" name="instance_id" rules={[{ required: true, message: '请选择数据源' }]}>
+            <Form.Item label="数据源" name="instance_id" rules={[{ required: true, message: '请选择数据源（域名）' }]}>
               <Select
                 showSearch
                 allowClear
@@ -573,18 +612,18 @@ export default function DmlOrder() {
                 placeholder={dsPlaceholder}
                 style={{ width: '100%' }}
                 optionFilterProp="label"
-                value={form.instance_id || undefined}
+                value={selectedSourceKey}
                 onChange={(v) => onDataSourceChange(v || '')}
                 options={dataSourceOptions.map((i) => ({
-                  value: i.id,
-                  label: instLabel(i),
-                  optlabel: i.name || instAddress(i),
-                  addr: instAddress(i),
+                  value: i.key,
+                  label: sourcePrimaryLabel(i),
+                  optlabel: sourcePrimaryLabel(i),
+                  secondary: sourceSecondaryLabel(i),
                 }))}
                 optionRender={(opt) => (
                   <div className="ds-opt">
                     <span>{(opt.data as any).optlabel}</span>
-                    <span className="muted">{(opt.data as any).addr}</span>
+                    <span className="muted">{(opt.data as any).secondary}</span>
                   </div>
                 )}
               />

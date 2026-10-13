@@ -65,7 +65,7 @@ func (d *DB) migrateFast() error {
 			return err
 		}
 		if cur == SchemaVersion {
-			// 轻量幂等：租户内唯一约束 / AIOps 案例列 / Copilot title 不依赖升版本，避免 skip 路径漏跑。
+			// 轻量幂等：租户内唯一约束 / AIOps 案例列 / Copilot title / 工单 domain 不依赖升版本，避免 skip 路径漏跑。
 			if err := d.ensureTenantScopedUniques(); err != nil {
 				return err
 			}
@@ -73,6 +73,9 @@ func (d *DB) migrateFast() error {
 				return err
 			}
 			if err := d.ensureCopilotSessionColumns(); err != nil {
+				return err
+			}
+			if err := d.ensureIssueDomainColumn(); err != nil {
 				return err
 			}
 			log.Printf("migrate: skip (schema_version=%s) in %s", SchemaVersion, time.Since(t0).Round(time.Millisecond))

@@ -5,6 +5,13 @@ import ResponsiveTable from '../../components/ResponsiveTable'
 import dayjs, { Dayjs } from 'dayjs'
 import api from '../../api/request'
 import { buildEnvOptions } from '../../utils/env'
+import {
+  expandDomainSources,
+  parseSourceKey,
+  sourcePrimaryLabel,
+  sourceSecondaryLabel,
+  type DomainSource,
+} from '../../utils/instanceSource'
 import DbTypeIcon from '../../components/DbTypeIcon'
 import { useWorkOrderDraft } from '../../hooks/useWorkOrderDraft'
 import './CreateDb.css'
@@ -50,16 +57,6 @@ function emptyForm() {
   }
 }
 
-function instAddress(i: any) {
-  if (i?.host) return `${i.host}:${i.port || ''}`
-  return (i?.domains || [])[0] || i?.domain_name || ''
-}
-
-function instLabel(i: any) {
-  const addr = instAddress(i)
-  return i?.name ? (addr ? `${i.name} (${addr})` : i.name) : addr
-}
-
 function levelLabel(lv: any) {
   const x = String(lv || '').toUpperCase()
   if (x === 'ERROR') return '错误'
@@ -74,6 +71,12 @@ function levelClass(lv: any) {
   if (x === 'WARN' || x === 'WARNING') return 'lv-warn'
   if (x === 'INFO' || x === 'OK') return 'lv-ok'
   return ''
+}
+
+function parseSelectedSources(keys: string[]) {
+  return keys
+    .map((k) => parseSourceKey(k))
+    .filter((p): p is { instance_id: string; domain: string } => Boolean(p))
 }
 
 export default function CreateDb() {
@@ -97,15 +100,16 @@ export default function CreateDb() {
     setForm((f) => ({ ...f, ...patch }))
   }
 
-  const dataSourceOptions = useMemo(
-    () =>
-      instances.filter((i) => {
-        if (form.env && (i.idc || '') !== form.env) return false
-        if (form.instance_type && String(i.db_type || '').toLowerCase() !== form.instance_type) return false
-        return true
-      }),
-    [instances, form.env, form.instance_type],
-  )
+  const dataSourceOptions = useMemo((): DomainSource[] => {
+    const filtered = instances.filter((i) => {
+      if (form.env && (i.idc || '') !== form.env) return false
+      if (form.instance_type && String(i.db_type || '').toLowerCase() !== form.instance_type) return false
+      return true
+    })
+    return expandDomainSources(filtered)
+  }, [instances, form.env, form.instance_type])
+
+  const selectedSources = useMemo(() => parseSelectedSources(form.instance_ids), [form.instance_ids])
 
   const checkFp = useMemo(
     () =>
@@ -138,7 +142,7 @@ export default function CreateDb() {
       ? '请先选择实例类型'
       : dsLoading
         ? '加载数据源…'
-        : '选择数据源(别名) 或搜索...'
+        : '选择数据源(域名) 或搜索...'
   const reviewerPlaceholder = reviewerLoading ? '加载审批人…' : approvers.length ? '请选择审批人' : '暂无审批人'
 
   function resetCheck() {
@@ -170,21 +174,22 @@ export default function CreateDb() {
     if (
       !form.env ||
       !form.instance_type ||
-      !form.instance_ids.length ||
+      !selectedSources.length ||
       !String(form.username || '').trim() ||
       !form.permissions.length
     ) {
       message.warning('检测前请先选择环境、实例类型、数据源、数据库账号与账号权限')
       return
     }
+    const instanceIds = [...new Set(selectedSources.map((s) => s.instance_id))]
     const fp = checkFp
     setCheckLoading(true)
     try {
       const { data } = await api.post('/create-db/check-sql', {
         db_type: form.instance_type,
         idc_scope: form.env,
-        instance_id: form.instance_ids[0],
-        instance_ids: form.instance_ids,
+        instance_id: instanceIds[0],
+        instance_ids: instanceIds,
         sql_content: sql,
       })
       setCheckRows(
@@ -261,13 +266,21 @@ export default function CreateDb() {
       message.warning(submitDisabledReason)
       return
     }
+    const sources = selectedSources
+    if (!sources.length) {
+      message.warning('未解析到有效数据源，请重新选择数据源后再提交')
+      return
+    }
+    const instanceIds = [...new Set(sources.map((s) => s.instance_id))]
     setSubmitting(true)
     try {
       const { data } = await api.post('/create-db', {
         db_type: form.instance_type,
         idc_scope: form.env,
-        instance_id: form.instance_ids[0],
-        instance_ids: form.instance_ids,
+        instance_id: instanceIds[0],
+        instance_ids: instanceIds,
+        domain: sources[0].domain,
+        data_sources: sources.map((s) => ({ instance_id: s.instance_id, domain: s.domain })),
         username: String(form.username || '').trim(),
         permissions: form.permissions,
         assigned_to: form.assigned_to,
@@ -320,16 +333,15 @@ export default function CreateDb() {
           }
           return f
         })
-        // 过滤无效数据源
         setForm((f) => {
           const valid = new Set(
-            instList
-              .filter((i: any) => {
+            expandDomainSources(
+              instList.filter((i: any) => {
                 if (f.env && (i.idc || '') !== f.env) return false
                 if (f.instance_type && String(i.db_type || '').toLowerCase() !== f.instance_type) return false
                 return true
-              })
-              .map((i: any) => i.id),
+              }),
+            ).map((s) => s.key),
           )
           return { ...f, instance_ids: (f.instance_ids || []).filter((id) => valid.has(id)) }
         })
@@ -407,16 +419,18 @@ export default function CreateDb() {
                   resetCheck()
                 }}
                 optionFilterProp="label"
-                options={dataSourceOptions.map((i) => ({
-                  value: i.id,
-                  label: instLabel(i),
+                options={dataSourceOptions.map((s) => ({
+                  value: s.key,
+                  label: sourcePrimaryLabel(s),
                 }))}
                 optionRender={(opt) => {
-                  const i = dataSourceOptions.find((x) => x.id === opt.value)
+                  const s = dataSourceOptions.find((x) => x.key === opt.value)
                   return (
                     <div className="ds-opt">
-                      <span>{i?.name || instAddress(i)}</span>
-                      <span className="muted">{instAddress(i)}</span>
+                      <span>{s ? sourcePrimaryLabel(s) : opt.label}</span>
+                      {s && sourceSecondaryLabel(s) ? (
+                        <span className="muted">{sourceSecondaryLabel(s)}</span>
+                      ) : null}
                     </div>
                   )
                 }}
@@ -540,7 +554,9 @@ export default function CreateDb() {
               {
                 title: '错误等级',
                 width: 100,
-                render: (_, r) => <span className={levelClass(r.error_level)}>{levelLabel(r.error_level)}</span>,
+                render: (_: any, r: any) => (
+                  <span className={levelClass(r.error_level)}>{levelLabel(r.error_level)}</span>
+                ),
               },
               { title: '错误信息', dataIndex: 'message', ellipsis: true },
               { title: 'SQL语句', dataIndex: 'sql', ellipsis: true },

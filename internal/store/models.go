@@ -142,6 +142,7 @@ type Issue struct {
 	IssueType    string `json:"issue_type"`
 	Type         string `json:"type"`
 	InstanceID   string `json:"instance_id"`
+	Domain       string `json:"domain,omitempty"`
 	DatabaseID   string `json:"database_id,omitempty"`
 	DBName       string `json:"db_name"`
 	SQLContent   string `json:"sql_content"`

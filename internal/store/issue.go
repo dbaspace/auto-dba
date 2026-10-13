@@ -41,9 +41,9 @@ func (d *DB) CreateIssue(it *Issue) error {
 		return errors.New("tenant_id 必填")
 	}
 	_, err := d.Exec(
-		`INSERT INTO tbl_issues(id, ticket_no, issue_type, instance_id, database_id, db_name, sql_content, description, status, submitter, assigned_to, reject_reason, need_rollback, scheduled_at, created_at, updated_at)
-		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		it.ID, it.TicketNo, it.IssueType, it.InstanceID, it.DatabaseID, it.DBName, it.SQLContent, it.Description,
+		`INSERT INTO tbl_issues(id, ticket_no, issue_type, instance_id, domain, database_id, db_name, sql_content, description, status, submitter, assigned_to, reject_reason, need_rollback, scheduled_at, created_at, updated_at)
+		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		it.ID, it.TicketNo, it.IssueType, it.InstanceID, it.Domain, it.DatabaseID, it.DBName, it.SQLContent, it.Description,
 		it.Status, it.Submitter, it.AssignedTo, it.RejectReason, it.NeedRollback, it.ScheduledAt, it.CreatedAt, it.UpdatedAt,
 	)
 	if err != nil {
@@ -57,10 +57,10 @@ func (d *DB) GetIssue(id string) (*Issue, error) {
 	var exec sql.NullString
 	var hist sql.NullString
 	err := d.QueryRow(
-		`SELECT id, ticket_no, issue_type, instance_id, database_id, db_name, sql_content, description, status, submitter, assigned_to, reject_reason, need_rollback, scheduled_at, execute_result, COALESCE(assignee_transfer_history,'[]'), created_at, updated_at
+		`SELECT id, ticket_no, issue_type, instance_id, COALESCE(domain,''), database_id, db_name, sql_content, description, status, submitter, assigned_to, reject_reason, need_rollback, scheduled_at, execute_result, COALESCE(assignee_transfer_history,'[]'), created_at, updated_at
 		 FROM tbl_issues WHERE id=?`, id,
 	).Scan(
-		&it.ID, &it.TicketNo, &it.IssueType, &it.InstanceID, &it.DatabaseID, &it.DBName, &it.SQLContent, &it.Description,
+		&it.ID, &it.TicketNo, &it.IssueType, &it.InstanceID, &it.Domain, &it.DatabaseID, &it.DBName, &it.SQLContent, &it.Description,
 		&it.Status, &it.Submitter, &it.AssignedTo, &it.RejectReason, &it.NeedRollback, &it.ScheduledAt, &exec, &hist, &it.CreatedAt, &it.UpdatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -97,7 +97,7 @@ func (d *DB) ListIssues(issueType, status, q, viewer string, viewAll bool) ([]Is
 }
 
 func (d *DB) ListIssuesInTenant(tenantID, issueType, status, q, viewer string, viewAll bool) ([]Issue, error) {
-	query := `SELECT id, ticket_no, issue_type, instance_id, database_id, db_name, sql_content, description, status, submitter, assigned_to, reject_reason, need_rollback, scheduled_at, created_at, updated_at FROM tbl_issues WHERE 1=1`
+	query := `SELECT id, ticket_no, issue_type, instance_id, COALESCE(domain,''), database_id, db_name, sql_content, description, status, submitter, assigned_to, reject_reason, need_rollback, scheduled_at, created_at, updated_at FROM tbl_issues WHERE 1=1`
 	var args []any
 	if tid := strings.TrimSpace(tenantID); tid != "" {
 		query += ` AND COALESCE(tenant_id,'')=?`
@@ -133,7 +133,7 @@ func (d *DB) ListIssuesInTenant(tenantID, issueType, status, q, viewer string, v
 	for rows.Next() {
 		var it Issue
 		if err := rows.Scan(
-			&it.ID, &it.TicketNo, &it.IssueType, &it.InstanceID, &it.DatabaseID, &it.DBName, &it.SQLContent, &it.Description,
+			&it.ID, &it.TicketNo, &it.IssueType, &it.InstanceID, &it.Domain, &it.DatabaseID, &it.DBName, &it.SQLContent, &it.Description,
 			&it.Status, &it.Submitter, &it.AssignedTo, &it.RejectReason, &it.NeedRollback, &it.ScheduledAt, &it.CreatedAt, &it.UpdatedAt,
 		); err != nil {
 			return nil, err
@@ -154,7 +154,7 @@ func (d *DB) UpdateIssueStatus(id, status, reason string) error {
 func (d *DB) ListStalePendingIssues(before time.Time) ([]Issue, error) {
 	cutoff := before.UTC().Format(time.RFC3339)
 	rows, err := d.Query(
-		`SELECT id, ticket_no, issue_type, instance_id, database_id, db_name, sql_content, description, status, submitter, assigned_to, reject_reason, need_rollback, scheduled_at, created_at, updated_at
+		`SELECT id, ticket_no, issue_type, instance_id, COALESCE(domain,''), database_id, db_name, sql_content, description, status, submitter, assigned_to, reject_reason, need_rollback, scheduled_at, created_at, updated_at
 		 FROM tbl_issues WHERE status=? AND created_at<? ORDER BY created_at ASC`,
 		StatusPending, cutoff,
 	)
@@ -166,7 +166,7 @@ func (d *DB) ListStalePendingIssues(before time.Time) ([]Issue, error) {
 	for rows.Next() {
 		var it Issue
 		if err := rows.Scan(
-			&it.ID, &it.TicketNo, &it.IssueType, &it.InstanceID, &it.DatabaseID, &it.DBName, &it.SQLContent, &it.Description,
+			&it.ID, &it.TicketNo, &it.IssueType, &it.InstanceID, &it.Domain, &it.DatabaseID, &it.DBName, &it.SQLContent, &it.Description,
 			&it.Status, &it.Submitter, &it.AssignedTo, &it.RejectReason, &it.NeedRollback, &it.ScheduledAt, &it.CreatedAt, &it.UpdatedAt,
 		); err != nil {
 			return nil, err
