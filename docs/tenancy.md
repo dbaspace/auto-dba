@@ -79,7 +79,7 @@ PLATFORM 资源（全局共享）：用户/角色/菜单、LDAP/SSO/SMTP、区�
 
 - `POST /auth/login`：可带 `tenant_id`；多租户时返回 `need_tenant_select`
 - `POST /auth/select-tenant` / `POST /tenants/switch`
-- `GET /tenants/mine`、租户 CRUD、成员、授权、审计、impersonate
+- `GET /tenants/mine`、租户 CRUD（含 `DELETE /tenants/:id`：无成员且无绑定资源才可删；否则 409「需要先释放资源」/「请先移除全部成员」）、成员、授权、审计、impersonate
 - `GET /tenants/:id/grant-resources?type=`：跨租户授权弹窗按类型列出资源方租户下的实例/库/集群（需 `um.action.tenants.grants`）
 - `POST /instances/:id/assign-tenant`：平台审计会话下划拨实例归属（需 `um.action.tenants.impersonate`）
 - `POST /databases/:id/assign-tenant`：指定库的单一归属租户（实例可留在原租户）

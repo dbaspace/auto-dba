@@ -149,6 +149,7 @@ func Init(e *gin.Engine, d Deps) {
 		secured.GET("/tenants", requireURN(store.URNSidebarTenants), d.Tenant.List)
 		secured.POST("/tenants", requireURN(store.URNTenantsCreate), d.Tenant.Create)
 		secured.PUT("/tenants/:id", requireURN(store.URNTenantsEdit), d.Tenant.Update)
+		secured.DELETE("/tenants/:id", requireURN(store.URNTenantsDelete), d.Tenant.Delete)
 		secured.GET("/tenants/:id/members", requireURN(store.URNTenantsMembers), d.Tenant.ListMembers)
 		secured.PUT("/tenants/:id/members", requireURN(store.URNTenantsMembers), d.Tenant.UpsertMember)
 		secured.DELETE("/tenants/:id/members/:userId", requireURN(store.URNTenantsMembers), d.Tenant.RemoveMember)

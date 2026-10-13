@@ -1549,9 +1549,10 @@ func (d *DB) ensureTenantMenus(now string) error {
 		{"m-act-tenants-create", "m-cfg-tenants", "新建租户", "", URNTenantsCreate, "创建租户", "plus", 90},
 		{"m-act-tenants-edit", "m-cfg-tenants", "编辑租户", "", URNTenantsEdit, "编辑租户资料与状态", "edit", 91},
 		{"m-act-tenants-disable", "m-cfg-tenants", "停用租户", "", URNTenantsDisable, "停用租户", "stop", 92},
-		{"m-act-tenants-members", "m-cfg-tenants", "管理成员", "", URNTenantsMembers, "增删改租户成员与角色", "team", 93},
-		{"m-act-tenants-grants", "m-cfg-tenants", "资源授权", "", URNTenantsGrants, "跨租户资源授权", "share", 94},
-		{"m-act-tenants-impersonate", "m-cfg-tenants", "进入租户审计", "", URNTenantsImpersonate, "平台管理员进入租户上下文（审计）", "eye", 95},
+		{"m-act-tenants-delete", "m-cfg-tenants", "删除租户", "", URNTenantsDelete, "删除无成员且无绑定资源的租户", "delete", 93},
+		{"m-act-tenants-members", "m-cfg-tenants", "管理成员", "", URNTenantsMembers, "增删改租户成员与角色", "team", 94},
+		{"m-act-tenants-grants", "m-cfg-tenants", "资源授权", "", URNTenantsGrants, "跨租户资源授权", "share", 95},
+		{"m-act-tenants-impersonate", "m-cfg-tenants", "进入租户审计", "", URNTenantsImpersonate, "平台管理员进入租户上下文（审计）", "eye", 96},
 	}
 	admin, _ := d.GetRoleByCode("admin")
 	for _, it := range items {

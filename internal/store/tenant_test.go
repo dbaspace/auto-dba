@@ -2,6 +2,7 @@ package store
 
 import (
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -249,8 +250,134 @@ func TestIsPlatformURN(t *testing.T) {
 	if !IsPlatformURN(URNTenantsCreate) {
 		t.Fatal("tenants create should be platform URN")
 	}
+	if !IsPlatformURN(URNTenantsDelete) {
+		t.Fatal("tenants delete should be platform URN")
+	}
 	if IsPlatformURN(URNInstancesCreate) {
 		t.Fatal("instances create should not be platform URN")
+	}
+}
+
+func testDSN(t *testing.T) string {
+	t.Helper()
+	if dsn := os.Getenv("AUTO_DBA_TEST_DSN"); dsn != "" {
+		return dsn
+	}
+	// 本地自测：引导文件 + Nacos（与进程启动同源，不打印 DSN）
+	cfg, err := loadTestConfig()
+	if err != nil || cfg == nil {
+		return ""
+	}
+	return strings.TrimSpace(cfg.DB.DSN)
+}
+
+func TestDeleteTenantGuards(t *testing.T) {
+	dsn := testDSN(t)
+	if dsn == "" {
+		t.Skip("set AUTO_DBA_TEST_DSN or provide config/config.yaml")
+	}
+	d, err := Open("postgres", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Close() })
+	if err := d.ensureTenancy(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := d.DeleteTenant(DefaultTenantID); err == nil {
+		t.Fatal("default tenant must not be deleted")
+	} else if be, ok := err.(*TenantDeleteBlockedError); !ok || be.Kind != "default" {
+		t.Fatalf("want default blocked, got %T %v", err, err)
+	}
+
+	empty := &Tenant{Code: "del-empty-" + uuid.NewString()[:8], Name: "空租户", Status: TenantStatusActive}
+	if err := d.CreateTenant(empty); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = d.Exec(`DELETE FROM tbl_tenants WHERE id=?`, empty.ID) })
+
+	if err := d.DeleteTenant(empty.ID); err != nil {
+		t.Fatalf("empty tenant should delete: %v", err)
+	}
+	got, err := d.GetTenant(empty.ID)
+	if err != nil || got != nil {
+		t.Fatalf("tenant should be gone: %#v %v", got, err)
+	}
+
+	withMember := &Tenant{Code: "del-mem-" + uuid.NewString()[:8], Name: "有成员", Status: TenantStatusActive}
+	if err := d.CreateTenant(withMember); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = d.Exec(`DELETE FROM tbl_tenant_members WHERE tenant_id=?`, withMember.ID)
+		_, _ = d.Exec(`DELETE FROM tbl_tenants WHERE id=?`, withMember.ID)
+	})
+	adminRole, _ := d.GetRoleByCode("admin")
+	u := &User{Username: "del-u-" + uuid.NewString()[:8], DisplayName: "D", Role: "admin", RoleID: adminRole.ID}
+	if err := d.CreateUser(u, "x"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = d.Exec(`DELETE FROM tbl_user_roles WHERE user_id=?`, u.ID)
+		_, _ = d.Exec(`DELETE FROM tbl_users WHERE id=?`, u.ID)
+	})
+	if err := d.UpsertTenantMember(&TenantMember{
+		TenantID: withMember.ID, UserID: u.ID, RoleIDs: []string{adminRole.ID}, Status: MemberStatusActive,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.DeleteTenant(withMember.ID); err == nil {
+		t.Fatal("tenant with members must not delete")
+	} else if be, ok := err.(*TenantDeleteBlockedError); !ok || be.Kind != "members" {
+		t.Fatalf("want members blocked, got %T %v", err, err)
+	}
+
+	withRes := &Tenant{Code: "del-res-" + uuid.NewString()[:8], Name: "有资源", Status: TenantStatusActive}
+	if err := d.CreateTenant(withRes); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = d.Exec(`DELETE FROM tbl_instances WHERE tenant_id=?`, withRes.ID)
+		_, _ = d.Exec(`DELETE FROM tbl_tenants WHERE id=?`, withRes.ID)
+	})
+	inst := &Instance{
+		TenantID: withRes.ID, Name: "i-" + uuid.NewString()[:6],
+		DomainName: "i-" + uuid.NewString()[:6] + ".local", Port: 3306,
+		DBType: "mysql", Host: "127.0.0.1", IDC: "default",
+	}
+	if err := d.CreateInstance(inst); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.DeleteTenant(withRes.ID); err == nil {
+		t.Fatal("tenant with resources must not delete")
+	} else if be, ok := err.(*TenantDeleteBlockedError); !ok || be.Kind != "resources" || be.Message != "需要先释放资源" {
+		t.Fatalf("want resources blocked, got %T %#v", err, err)
+	}
+	if be, ok := err.(*TenantDeleteBlockedError); ok && be.Resources["tbl_instances"] < 1 {
+		t.Fatalf("resources map missing instances: %#v", be.Resources)
+	}
+
+	// grant 不阻止删除；删除后应清掉
+	withGrant := &Tenant{Code: "del-g-" + uuid.NewString()[:8], Name: "有grant", Status: TenantStatusActive}
+	if err := d.CreateTenant(withGrant); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.CreateTenantGrant(&TenantGrant{
+		FromTenantID: withGrant.ID, ToTenantID: DefaultTenantID,
+		ResourceType: "instance", ResourceID: "dummy-" + uuid.NewString()[:8], Permission: "read", CreatedBy: u.ID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.DeleteTenant(withGrant.ID); err != nil {
+		t.Fatalf("tenant with only grants should delete: %v", err)
+	}
+	var gn int
+	if err := d.QueryRow(`SELECT COUNT(1) FROM tbl_tenant_grants WHERE from_tenant_id=? OR to_tenant_id=?`, withGrant.ID, withGrant.ID).Scan(&gn); err != nil {
+		t.Fatal(err)
+	}
+	if gn != 0 {
+		t.Fatalf("grants should be cleaned, left=%d", gn)
 	}
 }
 

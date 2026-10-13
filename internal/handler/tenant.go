@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -81,6 +82,45 @@ func (h *TenantHandler) Update(c *gin.Context) {
 	}
 	_ = h.Store.AppendTenantAudit(req.ID, middleware.UserID(c), "tenant.update", req.Status)
 	c.JSON(http.StatusOK, gin.H{"data": req})
+}
+
+// Delete DELETE /tenants/:id — 仅无成员且无绑定资源时可删。
+func (h *TenantHandler) Delete(c *gin.Context) {
+	id := c.Param("id")
+	exist, err := h.Store.GetTenant(id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	if exist == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "租户不存在"})
+		return
+	}
+	if err := h.Store.DeleteTenant(id); err != nil {
+		var blocked *store.TenantDeleteBlockedError
+		if errors.As(err, &blocked) {
+			status := http.StatusConflict
+			if blocked.Kind == "default" {
+				status = http.StatusBadRequest
+			}
+			body := gin.H{"message": blocked.Message, "kind": blocked.Kind}
+			if blocked.Members > 0 {
+				body["members"] = blocked.Members
+			}
+			if len(blocked.Resources) > 0 {
+				body["resources"] = blocked.Resources
+			}
+			c.JSON(status, body)
+			return
+		}
+		if strings.Contains(err.Error(), "不存在") {
+			c.JSON(http.StatusNotFound, gin.H{"message": err.Error()})
+			return
+		}
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "ok"})
 }
 
 func (h *TenantHandler) ListMembers(c *gin.Context) {

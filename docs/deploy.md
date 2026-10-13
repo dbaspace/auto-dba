@@ -25,14 +25,21 @@ KeePlus（进程 `auto-dba`）支持多种打包方式。**构建在有 Node 18+
 | **仅前端** | `./scripts/pack_release.sh frontend` | `dist/auto-dba-frontend-*.tgz` | Nginx/CDN 托管静态资源 |
 | **Docker** | `./scripts/pack_release.sh docker` | 镜像 `auto-dba:<时间戳>`（可用 `IMAGE_TAG=` 覆盖） | 容器环境 |
 
-可选环境变量：`GOOS` `GOARCH`（默认 `linux`/`amd64`）、`IMAGE_TAG`、`SKIP_PNPM_INSTALL=1`（已有 `node_modules` 时）。
+可选环境变量：`GOOS` `GOARCH`（默认 `linux`/`amd64`）、`STAMP`（默认时间戳；发版用 `STAMP=v1.2.0`）、`IMAGE_TAG`、`SKIP_PNPM_INSTALL=1`（已有 `node_modules` 时）。
 
 ```bash
-./scripts/pack_release.sh all
-./scripts/pack_release.sh backend
-./scripts/pack_release.sh frontend
-IMAGE_TAG=auto-dba:1.0.0 ./scripts/pack_release.sh docker
+STAMP=v1.2.0 ./scripts/pack_release.sh all
+STAMP=v1.2.0 ./scripts/pack_release.sh backend
+STAMP=v1.2.0 ./scripts/pack_release.sh frontend
+IMAGE_TAG=auto-dba:v1.2.0 ./scripts/pack_release.sh docker
 ```
+
+### 已发布版本（摘要）
+
+| 版本 | 要点 |
+|------|------|
+| [v1.1.0](https://github.com/dbaspace/auto-dba/releases/tag/v1.1.0) | 一体/分服务打包；SPA `serve_static` 白屏硬化；部署文档 |
+| **v1.2.0** | 租户删除（无成员且无绑定资源）；租户管理列表一屏布局；`um.action.tenants.delete` |
 
 ## 方式 A：一体包（推荐 CentOS 手工）
 

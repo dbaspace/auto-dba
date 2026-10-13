@@ -154,6 +154,143 @@ func (d *DB) UpdateTenant(t *Tenant) error {
 	return err
 }
 
+// TenantUsage 删除前占用统计：成员数 + 绑定业务资源（按表）。
+type TenantUsage struct {
+	Members       int64            `json:"members"`
+	Resources     map[string]int64 `json:"resources"` // table -> count，仅 >0
+	ResourceTotal int64            `json:"resource_total"`
+}
+
+// TenantDeleteBlockedError 删除被拒绝（有成员或仍绑定资源）。
+type TenantDeleteBlockedError struct {
+	Kind      string           `json:"kind"` // members | resources | default
+	Message   string           `json:"message"`
+	Members   int64            `json:"members,omitempty"`
+	Resources map[string]int64 `json:"resources,omitempty"`
+}
+
+func (e *TenantDeleteBlockedError) Error() string {
+	if e == nil {
+		return "租户不可删除"
+	}
+	return e.Message
+}
+
+func isDefaultTenant(t *Tenant) bool {
+	if t == nil {
+		return false
+	}
+	if t.ID == DefaultTenantID {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(t.Code), DefaultTenantCode)
+}
+
+func (d *DB) tableExistsPublic(table string) (bool, error) {
+	var n int
+	err := d.db.QueryRow(`
+		SELECT COUNT(1) FROM information_schema.tables
+		WHERE table_schema = 'public' AND table_name = $1
+	`, table).Scan(&n)
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+// CountTenantUsage 统计租户成员与业务资源占用（用于删除前置校验与提示）。
+func (d *DB) CountTenantUsage(tenantID string) (*TenantUsage, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	u := &TenantUsage{Resources: map[string]int64{}}
+	if tenantID == "" {
+		return u, nil
+	}
+	if err := d.QueryRow(`SELECT COUNT(1) FROM tbl_tenant_members WHERE tenant_id=?`, tenantID).Scan(&u.Members); err != nil {
+		return nil, err
+	}
+	for _, table := range tenantScopedTables {
+		ok, err := d.tableExistsPublic(table)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		var c int64
+		// table 来自白名单 tenantScopedTables，非用户输入
+		if err := d.QueryRow(`SELECT COUNT(1) FROM `+table+` WHERE tenant_id=?`, tenantID).Scan(&c); err != nil {
+			return nil, fmt.Errorf("%s: %w", table, err)
+		}
+		if c > 0 {
+			u.Resources[table] = c
+			u.ResourceTotal += c
+		}
+	}
+	return u, nil
+}
+
+// DeleteTenant 硬删空租户：须无成员且无绑定业务资源；自动清理 grant / audit。
+func (d *DB) DeleteTenant(tenantID string) error {
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		return errors.New("tenant id 必填")
+	}
+	t, err := d.GetTenant(tenantID)
+	if err != nil {
+		return err
+	}
+	if t == nil {
+		return errors.New("租户不存在")
+	}
+	if isDefaultTenant(t) {
+		return &TenantDeleteBlockedError{Kind: "default", Message: "默认租户不可删除"}
+	}
+	usage, err := d.CountTenantUsage(tenantID)
+	if err != nil {
+		return err
+	}
+	if usage.Members > 0 {
+		return &TenantDeleteBlockedError{
+			Kind:    "members",
+			Message: "请先移除全部成员",
+			Members: usage.Members,
+		}
+	}
+	if usage.ResourceTotal > 0 {
+		return &TenantDeleteBlockedError{
+			Kind:      "resources",
+			Message:   "需要先释放资源",
+			Resources: usage.Resources,
+		}
+	}
+
+	tx, err := d.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.Exec(d.rewrite(`DELETE FROM tbl_tenant_grants WHERE from_tenant_id=? OR to_tenant_id=?`), tenantID, tenantID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(d.rewrite(`DELETE FROM tbl_tenant_audit_logs WHERE tenant_id=?`), tenantID); err != nil {
+		return err
+	}
+	// 双保险：理论上成员已为 0
+	if _, err := tx.Exec(d.rewrite(`DELETE FROM tbl_tenant_members WHERE tenant_id=?`), tenantID); err != nil {
+		return err
+	}
+	res, err := tx.Exec(d.rewrite(`DELETE FROM tbl_tenants WHERE id=?`), tenantID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return errors.New("租户不存在")
+	}
+	return tx.Commit()
+}
+
 func (d *DB) GetTenant(id string) (*Tenant, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {

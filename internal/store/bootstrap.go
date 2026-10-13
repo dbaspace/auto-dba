@@ -109,6 +109,10 @@ func (d *DB) seedFast() error {
 			if err := d.ensureAlertMenus(now); err != nil {
 				return err
 			}
+			// 租户动作菜单（含新增 delete）须在 skip 路径幂等补齐，否则仅升 SeedVersion 才写入
+			if err := d.ensureTenantMenus(now); err != nil {
+				return err
+			}
 			if err := d.SyncDefaultTenantMemberships(); err != nil {
 				return err
 			}

@@ -100,6 +100,7 @@ const (
 	URNTenantsCreate      = "um.action.tenants.create"
 	URNTenantsEdit        = "um.action.tenants.edit"
 	URNTenantsDisable     = "um.action.tenants.disable"
+	URNTenantsDelete      = "um.action.tenants.delete"
 	URNTenantsMembers     = "um.action.tenants.members"
 	URNTenantsGrants      = "um.action.tenants.grants"
 	URNTenantsImpersonate = "um.action.tenants.impersonate"

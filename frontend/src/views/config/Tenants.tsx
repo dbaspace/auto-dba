@@ -1,8 +1,49 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { AutoComplete, Button, Form, Input, Modal, Select, Space, Table, Tag, message } from 'antd'
+import {
+  AutoComplete,
+  Button,
+  Dropdown,
+  Form,
+  Input,
+  Modal,
+  Select,
+  Space,
+  Table,
+  Tag,
+  Tooltip,
+  message,
+  type MenuProps,
+} from 'antd'
 import api from '../../api/request'
 import Auth from '../../components/Auth'
-import { Perm } from '../../hooks/usePermission'
+import { Perm, usePermission } from '../../hooks/usePermission'
+
+const RESOURCE_LABELS: Record<string, string> = {
+  tbl_instances: '实例',
+  tbl_databases: '已登记库',
+  tbl_db_accounts: '数据库账号',
+  tbl_issues: '工单',
+  tbl_todos: '待办',
+  tbl_cdc_tasks: 'CDC 任务',
+  tbl_sr_clusters: 'SR 集群',
+  tbl_db_deploy_clusters: '部署集群',
+  tbl_proxy_services: '接入层代理',
+  tbl_migration_tasks: '迁移任务',
+  tbl_flashback_tasks: '闪回任务',
+  tbl_archive_tasks: '归档任务',
+  tbl_backup_policies: '备份策略',
+  tbl_ha_clusters: 'HA 集群',
+  tbl_alert_rules: '告警规则',
+  tbl_alerts: '告警',
+}
+
+function formatResourceSummary(resources?: Record<string, number>) {
+  if (!resources) return ''
+  return Object.entries(resources)
+    .filter(([, n]) => n > 0)
+    .map(([k, n]) => `${RESOURCE_LABELS[k] || k} ${n}`)
+    .join('、')
+}
 
 type Tenant = {
   id: string
@@ -11,6 +52,10 @@ type Tenant = {
   status: string
   plan?: string
   description?: string
+}
+
+function isDefaultTenant(t: Tenant) {
+  return t.id === 'tenant-default' || String(t.code || '').toLowerCase() === 'default'
 }
 
 type Member = {
@@ -32,6 +77,7 @@ const GRANT_TYPES = [
 ]
 
 export default function Tenants() {
+  const { hasUrn } = usePermission()
   const [list, setList] = useState<Tenant[]>([])
   const [loading, setLoading] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
@@ -223,8 +269,69 @@ export default function Tenants() {
     location.reload()
   }
 
+  function currentSessionTenantId() {
+    try {
+      const u = JSON.parse(localStorage.getItem('user') || '{}')
+      return String(u?.current_tenant?.id || u?.tenant_id || '')
+    } catch {
+      return ''
+    }
+  }
+
+  function confirmDelete(t: Tenant) {
+    Modal.confirm({
+      title: `删除租户「${t.name}」？`,
+      content: '仅当该租户无成员且未绑定业务资源时可删除。有资源时请先划拨释放。',
+      okText: '删除',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          await api.delete(`/tenants/${t.id}`, { silent: true })
+          message.success('已删除')
+          if (currentSessionTenantId() === t.id) {
+            location.hash = '#/select-tenant'
+            return
+          }
+          await load()
+        } catch (err: any) {
+          const data = err?.response?.data || {}
+          const msg = String(data.message || '删除失败')
+          const summary = formatResourceSummary(data.resources)
+          if (summary) {
+            message.error(`${msg}：${summary}`)
+          } else if (data.members) {
+            message.error(`${msg}（当前 ${data.members} 人）`)
+          } else {
+            message.error(msg)
+          }
+          throw err
+        }
+      },
+    })
+  }
+
+  function moreMenu(r: Tenant): MenuProps {
+    const items: MenuProps['items'] = [
+      { key: 'audit', label: '审计', onClick: () => openAudit(r) },
+    ]
+    if (hasUrn(Perm.tenants.impersonate)) {
+      items.push({ key: 'impersonate', label: '进入审计', onClick: () => impersonate(r) })
+    }
+    if (hasUrn(Perm.tenants.delete) && !isDefaultTenant(r)) {
+      items.push({ type: 'divider' })
+      items.push({
+        key: 'delete',
+        danger: true,
+        label: '删除',
+        onClick: () => confirmDelete(r),
+      })
+    }
+    return { items }
+  }
+
   return (
-    <div style={{ padding: 16 }}>
+    <div style={{ padding: 16, width: '100%', maxWidth: '100%', overflow: 'hidden' }}>
       <Space style={{ marginBottom: 16 }}>
         <Auth urn={Perm.tenants.create}>
           <Button type="primary" onClick={() => setCreateOpen(true)}>
@@ -237,12 +344,16 @@ export default function Tenants() {
         rowKey="id"
         loading={loading}
         dataSource={list}
+        tableLayout="fixed"
+        style={{ width: '100%' }}
+        pagination={{ pageSize: 10, showSizeChanger: true }}
         columns={[
-          { title: '编码', dataIndex: 'code' },
-          { title: '名称', dataIndex: 'name' },
+          { title: '编码', dataIndex: 'code', width: 120, ellipsis: true },
+          { title: '名称', dataIndex: 'name', width: 140, ellipsis: true },
           {
             title: '状态',
             dataIndex: 'status',
+            width: 90,
             render: (s: string) => (
               <Tag color={s === 'active' ? 'green' : 'default'}>{s}</Tag>
             ),
@@ -250,36 +361,48 @@ export default function Tenants() {
           {
             title: '套餐',
             dataIndex: 'plan',
+            width: 90,
+            ellipsis: true,
             render: (v: string) => planLabel(v),
           },
-          { title: '说明', dataIndex: 'description', ellipsis: true },
+          {
+            title: '说明',
+            dataIndex: 'description',
+            ellipsis: { showTitle: false },
+            render: (v: string) =>
+              v ? (
+                <Tooltip title={v} placement="topLeft">
+                  <span>{v}</span>
+                </Tooltip>
+              ) : (
+                '-'
+              ),
+          },
           {
             title: '操作',
+            width: 240,
             render: (_: unknown, r: Tenant) => (
-              <Space>
+              <Space size={4} wrap={false}>
                 <Auth urn={Perm.tenants.edit}>
-                  <Button type="link" onClick={() => openEdit(r)}>
+                  <Button type="link" size="small" style={{ paddingInline: 4 }} onClick={() => openEdit(r)}>
                     编辑
                   </Button>
                 </Auth>
                 <Auth urn={Perm.tenants.members}>
-                  <Button type="link" onClick={() => openMembers(r)}>
+                  <Button type="link" size="small" style={{ paddingInline: 4 }} onClick={() => openMembers(r)}>
                     成员
                   </Button>
                 </Auth>
                 <Auth urn={Perm.tenants.grants}>
-                  <Button type="link" onClick={() => openGrants(r)}>
+                  <Button type="link" size="small" style={{ paddingInline: 4 }} onClick={() => openGrants(r)}>
                     授权
                   </Button>
                 </Auth>
-                <Button type="link" onClick={() => openAudit(r)}>
-                  审计
-                </Button>
-                <Auth urn={Perm.tenants.impersonate}>
-                  <Button type="link" onClick={() => impersonate(r)}>
-                    进入审计
+                <Dropdown menu={moreMenu(r)} trigger={['click']}>
+                  <Button type="link" size="small" style={{ paddingInline: 4 }}>
+                    更多
                   </Button>
-                </Auth>
+                </Dropdown>
               </Space>
             ),
           },

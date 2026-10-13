@@ -128,6 +128,7 @@ export const Perm = {
     create: 'um.action.tenants.create',
     edit: 'um.action.tenants.edit',
     disable: 'um.action.tenants.disable',
+    delete: 'um.action.tenants.delete',
     members: 'um.action.tenants.members',
     grants: 'um.action.tenants.grants',
     impersonate: 'um.action.tenants.impersonate',
