@@ -122,6 +122,7 @@ PG 闪回生产约定：默认不改 `REPLICA IDENTITY`；DEFAULT 表靠 FPW/堆
 | [docs/features.md](docs/features.md) | 侧栏功能目录与页面说明（含多租户、登录、告警入口） |
 | [docs/tenancy.md](docs/tenancy.md) | 多租户模型、ACL、划拨、grant、API、防串租清单 |
 | [docs/deploy.md](docs/deploy.md) | **打包部署**：一体 / 仅后端 / 仅前端 / Docker；生产端口与 5174 区别 |
+| [docs/faq-spa-white-screen.md](docs/faq-spa-white-screen.md) | **FAQ**：生产白屏 / 304 / APISIX `404 Route Not Found` / `serve_static` |
 | [docs/nacos-config.md](docs/nacos-config.md) | Nacos 部署、Namespace、热更、与业务环境区分 |
 | [docs/alerts.md](docs/alerts.md) | 告警 Ruler / 规则 / 静默 / 路由 / 值班 |
 | [docs/rbac-permissions.md](docs/rbac-permissions.md) | 新菜单与操作权限登记（前后端 URN） |

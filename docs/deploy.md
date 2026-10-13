@@ -110,27 +110,22 @@ docker run --rm -p 8800:8800 \
 
 ## 一体部署白屏排查
 
-现象：打开 `:8800` 白屏；访问日志里多为 `GET /` → **304**，而 `/assets/index-*.js` 可能异常。
+完整 FAQ（含 APISIX `404 Route Not Found`、304 缓存、`serve_static` / cwd）：**[faq-spa-white-screen.md](faq-spa-white-screen.md)**。
 
-常见原因：浏览器缓存了旧的 `index.html`，其中引用的 Vite hash 资源已随重新打包失效；旧版静态托管还会把缺失的 `.js` 回落成 `index.html`，浏览器按模块解析失败 → 白屏。
+摘要：
 
-处理：
-
-1. **立即缓解**：浏览器强制刷新（Ctrl/Cmd+Shift+R）或清除该站点缓存后再打开。
-2. 确认在**发布包根目录**启动（能解析到 `frontend/dist/index.html`）；启动日志应有 `boot: serve_static root=... index=ok`，若出现 `index.html missing` 说明 cwd/包布局不对。
-3. Nacos / 本地配置均需 `http.serve_static: true`。远端 DataId 若只写了 `http.port` 等字段、未写 `serve_static`，本地 `true` 会被保留；若远端显式 `serve_static: false` 则以远端为准。
-4. 自检响应头：
+1. 强刷 / 清缓存；包根启动；`serve_static: true`；看 `boot: serve_static ... index=ok`。
+2. 经域名访问时，若 `/assets/*.js` 响应为 `{"error_msg":"404 Route Not Found"}` → **改网关路由**，把 `/assets/*`（及 `/`）转到后端 8800。
+3. 自检：
 
 ```bash
-curl -sI http://host:8800/ | grep -i cache-control
-# 期望含 no-cache，避免再 304 到陈旧入口
-
-curl -sI http://host:8800/assets/不存在的旧hash.js
-# 期望 HTTP/1.1 404（不应再回落成 HTML）
+curl -sI http://host:8800/ | grep -i cache-control   # 期望 no-cache
+curl -sI http://host:8800/assets/不存在的旧hash.js   # 期望 404，非 HTML
 ```
 
 ## 配置与文档
 
+- 白屏 FAQ：[faq-spa-white-screen.md](faq-spa-white-screen.md)
 - Nacos / 热更：[nacos-config.md](nacos-config.md)
 - 前端构建与运行分离背景：[frontend-deploy.md](frontend-deploy.md)（细节已并入本文，该文保留为短链）
 - 开发启动：[README](../README.md)

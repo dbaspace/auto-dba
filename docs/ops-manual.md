@@ -200,6 +200,7 @@
 | 审计划拨后测连密码错 | 到实例页重填密码（密钥不一致）；划拨不改密文 |
 | SSO 换票 Secret 解密失败 | 认证配置中重新保存 Client Secret |
 | 跨租 Get 404 | 预期；用 grant 或审计，不要猜 ID |
+| 生产域名白屏、`/assets` 404 或 `404 Route Not Found` | 见 [faq-spa-white-screen.md](faq-spa-white-screen.md)（网关路由 / 缓存 / `serve_static`） |
 
 ---
 
@@ -210,6 +211,8 @@
 | [features.md](features.md) | 侧栏功能说明 |
 | [tenancy.md](tenancy.md) | 多租户模型、划拨、grant、防串租清单 |
 | [ticket-assignee-transfer.md](ticket-assignee-transfer.md) | 更换审核人与超级白名单 |
+| [faq-spa-white-screen.md](faq-spa-white-screen.md) | 生产白屏 / APISIX 404 / serve_static FAQ |
+| [deploy.md](deploy.md) | 一体 / 分服务打包部署 |
 | [nacos-config.md](nacos-config.md) | Nacos 部署与热更 |
 | [alerts.md](alerts.md) | 告警 |
 | [cmdb.md](cmdb.md) | CMDB 目录、拓扑、影响分析、快照漂移 |
