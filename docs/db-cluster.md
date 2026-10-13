@@ -145,7 +145,7 @@
 | `duplicate` | 集群内无相同 `role@host` 节点 |
 | `role_rule` | 角色属于该引擎允许的角色；端口 1–65535；同一主机（跨所有集群）没有节点占用相同端口。端口留空时按角色默认（与编排 `nodePort` 一致，如 sentinel 26379、codis_proxy 19000） |
 | `agent:*` / `agent_precheck` | Agent 端预检（`{engine, role, port}`） |
-| `approver` | 审批人非空（含 `sync_default_approver` 兜底） |
+| `approver` | 审批人非空（含 `sync_default_approver` 兜底）；删除/部署工单弹窗按节点主机加载审批人并预填第一项，无主机时回退全局默认 |
 
 建单（`action=add_node`）时后端再校验 `agent_match` / `duplicate` / `role_rule`（以及传了 `host_instance_id` 时的 `host_instance`），失败返回 400。
 

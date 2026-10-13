@@ -10,7 +10,7 @@ import { Perm } from '../../hooks/usePermission'
 import { useAppSelector } from '../../store'
 import { activeDeployHostIds, isAgentDeployActive, useAgentDeployTracker } from './agentDeployTracker'
 import {
-  NodePrecheckPanel, agentMatchesHost, agentMismatchMessage, hostPrimaryAddr, useHostApprovers,
+  NodePrecheckPanel, agentMatchesHost, agentMismatchMessage, hostPrimaryAddr, resolveNodeHostInstanceId, useHostApprovers,
   type NodePrecheckResult,
 } from './node-precheck/nodePrecheck'
 import {
@@ -60,6 +60,7 @@ type Node = {
   port?: number
   status: string
   agent_id?: string
+  host_instance_id?: string
   systemd_unit?: string
 }
 
@@ -348,6 +349,8 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
   const [nodePrecheckBusy, setNodePrecheckBusy] = useState(false)
   const [nodeSubmitBusy, setNodeSubmitBusy] = useState(false)
   const nodeApprovers = useHostApprovers()
+  const ticketApprovers = useHostApprovers()
+  const [watchTicketIds, setWatchTicketIds] = useState<string[]>([])
   const [agentOpen, setAgentOpen] = useState(false)
   const [deployModal, setDeployModal] = useState(false)
   const [deployBusy, setDeployBusy] = useState(false)
@@ -432,6 +435,7 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
     const no = issue?.ticket_no || issue?.id || ''
     message.success(no ? `已提交审批工单 ${no}` : '已提交审批工单')
     if (issue?.id) {
+      setWatchTicketIds((prev) => (prev.includes(issue.id) ? prev : [...prev, issue.id]))
       Modal.confirm({
         title: '工单已创建',
         content: `工单 ${no} 待审批通过后自动执行。是否打开工单详情？`,
@@ -443,9 +447,34 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
     return issue
   }
 
-  const openTicketDraft = (draft: NonNullable<typeof ticketDraft>) => {
+  const loadTicketApprovers = async (
+    draft: NonNullable<typeof ticketDraft>,
+    nodeList: Node[],
+  ) => {
+    const ids = nodeList
+      .map((n) => resolveNodeHostInstanceId(n, agents, hosts))
+      .filter(Boolean)
+    // 无主机（如纯云登记）时传 [] → 全局 sync_default_approver / 租户成员兜底
+    const list = await ticketApprovers.load(ids)
+    if (list.length > 0 && !ticketForm.getFieldValue('assigned_to')) {
+      ticketForm.setFieldsValue({ assigned_to: list[0] })
+    }
+  }
+
+  const openTicketDraft = async (draft: NonNullable<typeof ticketDraft>) => {
     ticketForm.resetFields()
     setTicketDraft(draft)
+    let nodeList = nodes
+    if (draft.clusterId && (!selected || selected.id !== draft.clusterId || nodes.length === 0)) {
+      try {
+        const res = await api.get(`/db-deploy/clusters/${draft.clusterId}`)
+        nodeList = res.data?.nodes || []
+        if (selected?.id === draft.clusterId) setNodes(nodeList)
+      } catch {
+        nodeList = []
+      }
+    }
+    await loadTicketApprovers(draft, nodeList)
   }
 
   function assignClusterToCurrentTenant(row: Cluster, e?: React.MouseEvent) {
@@ -486,6 +515,12 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
       list = list.filter((x) => x.engine === engine)
     }
     setClusters(list)
+    setSelected((prev) => {
+      if (!prev) return null
+      const next = list.find((x) => x.id === prev.id) || null
+      if (!next) setNodes([])
+      return next
+    })
     setHaControllers((haCtrl.data?.data || []) as HAController[])
     setMhaEnvOk(false)
     let rels: Release[] = r.data?.data || []
@@ -504,6 +539,53 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
   }, [engine, ossForm])
 
   useEffect(() => { load().catch((e) => message.error(String(e))) }, [load])
+
+  // 回到本页时刷新，便于审批通过后看到删除结果
+  useEffect(() => {
+    const onVis = () => {
+      if (document.visibilityState === 'visible') void load().catch(() => {})
+    }
+    document.addEventListener('visibilitychange', onVis)
+    window.addEventListener('focus', onVis)
+    return () => {
+      document.removeEventListener('visibilitychange', onVis)
+      window.removeEventListener('focus', onVis)
+    }
+  }, [load])
+
+  // 轮询本页提交的工单，终态后刷新集群列表（删除集群审批通过后无需手动 F5）
+  useEffect(() => {
+    if (watchTicketIds.length === 0) return
+    let cancelled = false
+    const done = new Set(['executed', 'rejected', 'canceled', 'cancelled', 'failed'])
+    const tick = async () => {
+      const still: string[] = []
+      let finished = false
+      await Promise.all(watchTicketIds.map(async (id) => {
+        try {
+          const { data } = await api.get(`/tickets/${id}`, { silent: true } as any)
+          const st = String(data?.data?.status || data?.status || '')
+          if (done.has(st)) finished = true
+          else still.push(id)
+        } catch {
+          still.push(id)
+        }
+      }))
+      if (cancelled) return
+      if (finished) {
+        message.success('关联工单已结束，已刷新集群列表')
+        await load().catch(() => {})
+      }
+      setWatchTicketIds((prev) => {
+        const next = still.filter((id) => prev.includes(id))
+        return next.length === prev.length && next.every((id, i) => id === prev[i]) ? prev : next
+      })
+    }
+    void tick()
+    const timer = setInterval(() => { void tick() }, 4000)
+    return () => { cancelled = true; clearInterval(timer) }
+  }, [watchTicketIds, load])
+
   const linkedLookupTried = useRef(new Set<string>())
   useEffect(() => {
     const linked = selected?.linked_instance_id
@@ -2095,7 +2177,11 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
         confirmLoading={ticketBusy}
         okText="提交工单"
         okButtonProps={{ danger: ticketDraft?.action === 'delete_cluster' }}
-        onCancel={() => { setTicketDraft(null); ticketForm.resetFields() }}
+        onCancel={() => {
+          setTicketDraft(null)
+          ticketForm.resetFields()
+          void ticketApprovers.load(undefined)
+        }}
         onOk={async () => {
           if (!ticketDraft) return
           const v = await ticketForm.validateFields()
@@ -2111,6 +2197,7 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
             )
             setTicketDraft(null)
             ticketForm.resetFields()
+            void ticketApprovers.load(undefined)
             await load()
           } catch (e: any) {
             message.error(e?.response?.data?.message || String(e))
@@ -2122,8 +2209,25 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
       >
         <Alert type="warning" showIcon style={{ marginBottom: 12 }} message={ticketDraft?.summary || ''} />
         <Form form={ticketForm} layout="vertical">
-          <Form.Item name="assigned_to" label="审批人" extra="留空则使用全局 sync_default_approver">
-            <Input placeholder="默认取全局同步审批人" />
+          <Form.Item
+            name="assigned_to"
+            label="审批人"
+            rules={[{ required: true, message: '请选择审批人' }]}
+            extra={
+              ticketApprovers.loading
+                ? '正在加载审批人…'
+                : ticketApprovers.approvers.length === 0
+                  ? '未加载到审批人：请配置全局 sync_default_approver，或确保本租户有成员'
+                  : '按集群节点主机审批人加载；无主机时回退全局 sync_default_approver'
+            }
+          >
+            <Select
+              showSearch
+              allowClear
+              loading={ticketApprovers.loading}
+              placeholder="选择审批人"
+              options={ticketApprovers.approvers.map((a) => ({ value: a, label: a }))}
+            />
           </Form.Item>
           <Form.Item name="description" label="事由"><Input.TextArea rows={2} /></Form.Item>
         </Form>

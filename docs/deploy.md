@@ -25,13 +25,13 @@ KeePlus（进程 `auto-dba`）支持多种打包方式。**构建在有 Node 18+
 | **仅前端** | `./scripts/pack_release.sh frontend` | `dist/auto-dba-frontend-*.tgz` | Nginx/CDN 托管静态资源 |
 | **Docker** | `./scripts/pack_release.sh docker` | 镜像 `auto-dba:<时间戳>`（可用 `IMAGE_TAG=` 覆盖） | 容器环境 |
 
-可选环境变量：`GOOS` `GOARCH`（默认 `linux`/`amd64`）、`STAMP`（默认时间戳；发版用 `STAMP=v1.3.0`）、`IMAGE_TAG`、`SKIP_PNPM_INSTALL=1`（已有 `node_modules` 时）。
+可选环境变量：`GOOS` `GOARCH`（默认 `linux`/`amd64`）、`STAMP`（默认时间戳；发版用 `STAMP=v1.4.0`）、`IMAGE_TAG`、`SKIP_PNPM_INSTALL=1`（已有 `node_modules` 时）。
 
 ```bash
-STAMP=v1.3.0 ./scripts/pack_release.sh all
-STAMP=v1.3.0 ./scripts/pack_release.sh backend
-STAMP=v1.3.0 ./scripts/pack_release.sh frontend
-IMAGE_TAG=auto-dba:v1.3.0 ./scripts/pack_release.sh docker
+STAMP=v1.4.0 ./scripts/pack_release.sh all
+STAMP=v1.4.0 ./scripts/pack_release.sh backend
+STAMP=v1.4.0 ./scripts/pack_release.sh frontend
+IMAGE_TAG=auto-dba:v1.4.0 ./scripts/pack_release.sh docker
 ```
 
 ### 已发布版本（摘要）
@@ -41,6 +41,7 @@ IMAGE_TAG=auto-dba:v1.3.0 ./scripts/pack_release.sh docker
 | [v1.1.0](https://github.com/dbaspace/auto-dba/releases/tag/v1.1.0) | 一体/分服务打包；SPA `serve_static` 白屏硬化；部署文档 |
 | [v1.2.0](https://github.com/dbaspace/auto-dba/releases/tag/v1.2.0) | 租户删除（无成员且无绑定资源）；租户管理列表一屏布局；`um.action.tenants.delete` |
 | [v1.3.0](https://github.com/dbaspace/auto-dba/releases/tag/v1.3.0) | 平台管理员创建/切换业务租户时保留默认租户成员；顶栏稳定显示租户「名称」；删除当前会话租户后自动切回可用租户 |
+| **v1.4.0** | KeePlus favicon.ico/apple-touch；db-deploy 同名集群可划拨；删除集群工单预填审批人并在审批结束后刷新列表 |
 
 ## 方式 A：一体包（推荐 CentOS 手工）
 
@@ -70,11 +71,19 @@ cd /opt/auto-dba   # 必须在包根，才能解析 frontend/dist
 # 浏览器 → http://服务器:8800/
 ```
 
+冒烟（静态与标签图标）：
+
+```bash
+curl -sI http://127.0.0.1:8800/favicon.svg   # 期望 200
+curl -sI http://127.0.0.1:8800/favicon.ico   # 期望 200
+# 经域名若非 200：按 docs/faq-spa-white-screen.md 查 APISIX 是否转发 /favicon.*
+```
+
 包内结构：
 
 ```text
 bin/auto-dba
-frontend/dist/
+frontend/dist/   # 含 favicon.svg / favicon.ico / apple-touch-icon.png
 config/          # 示例 YAML
 README-RELEASE.txt
 ```

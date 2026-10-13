@@ -171,7 +171,35 @@ func (d *DB) instancesLinkedToDbDeploy(cl *DbDeployCluster) ([]Instance, error) 
 	return out, nil
 }
 
+// requireDbDeployEndpointFreeInTenant 云库 endpoint 在目标租户内不可与其它集群撞车（同引擎+host+port）。
+func (d *DB) requireDbDeployEndpointFreeInTenant(cl *DbDeployCluster, toTenantID string) error {
+	if cl == nil {
+		return nil
+	}
+	host := strings.TrimSpace(cl.EndpointHost)
+	if host == "" {
+		return nil
+	}
+	port := cl.EndpointPort
+	if port <= 0 {
+		port = defaultDbDeployEndpointPort(cl.Engine)
+	}
+	var n int
+	err := d.QueryRow(`SELECT COUNT(1) FROM tbl_db_deploy_clusters
+		WHERE COALESCE(tenant_id,'')=? AND engine=? AND id<>?
+		  AND LOWER(TRIM(endpoint_host))=LOWER(TRIM(?)) AND COALESCE(endpoint_port,0)=?`,
+		toTenantID, cl.Engine, cl.ID, host, port).Scan(&n)
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		return fmt.Errorf("目标租户已存在相同入口的集群（%s:%d）", host, port)
+	}
+	return nil
+}
+
 // AssignDbDeployClusterTenant 将 db-deploy 集群划拨到目标租户，并带走关联实例。
+// 允许目标租户内已有同引擎同展示名集群（与 Upsert 一致）；冲突仅拦截云 endpoint / 关联实例 domain+port。
 func (d *DB) AssignDbDeployClusterTenant(id, toTenantID string) error {
 	id = strings.TrimSpace(id)
 	toTenantID = strings.TrimSpace(toTenantID)
@@ -188,16 +216,9 @@ func (d *DB) AssignDbDeployClusterTenant(id, toTenantID string) error {
 	if cl == nil {
 		return fmt.Errorf("集群不存在")
 	}
-	if strings.TrimSpace(cl.Name) != "" && strings.TrimSpace(cl.Engine) != "" {
-		var n int
-		err = d.QueryRow(`SELECT COUNT(1) FROM tbl_db_deploy_clusters WHERE COALESCE(tenant_id,'')=? AND engine=? AND name=? AND id<>?`,
-			toTenantID, cl.Engine, cl.Name, id).Scan(&n)
-		if err != nil {
-			return err
-		}
-		if n > 0 {
-			return fmt.Errorf("目标租户已存在同引擎同名集群 %s", cl.Name)
-		}
+	// 展示名允许同租户重复（创建路径亦未强制唯一）；真实冲突看云 endpoint / 关联实例 domain:port
+	if err := d.requireDbDeployEndpointFreeInTenant(cl, toTenantID); err != nil {
+		return err
 	}
 	linked, err := d.instancesLinkedToDbDeploy(cl)
 	if err != nil {

@@ -46,7 +46,7 @@ JWT `imp=true` 且用户为平台管理员时：
 - 可 **划拨已登记库**：`POST /api/v1/databases/:id/assign-tenant`（body `tenant_id` 指定单一目标租户）。只改库与该库账号归属，**不改实例**。一库不能多租户共编；其它租户用 `tbl_tenant_grants`（`resource_type=database`，只读）。审计页可勾选多库一次划拨：`POST /api/v1/databases/assign-tenant`（body `tenant_id` + `ids`），部分失败返回 `failed` 明细。
 - 可 **划拨集群**：`POST /api/v1/sr-cluster/clusters/:id/assign-tenant`、`POST /api/v1/db-deploy/clusters/:id/assign-tenant`（同样仅审计会话）；带走 tagged / linked 实例、库账号，以及 description 含 `sr-cluster=<id>` 的监控任务。Node Agent 不迁。
 - 可 **划拨接入层代理**：`POST /api/v1/proxy/services/:id/assign-tenant`（HAProxy/Nginx/LVS）；目标租户内同 kind+name 或同 VIP 冲突则拒绝。
-- 划拨前校验目标租户内 `UNIQUE(tenant_id, domain_name, port)`（实例）或同名/同 FE 入口（集群），冲突返回明确错误。
+- 划拨前校验目标租户内：实例 `UNIQUE(tenant_id, domain_name, port)`；SR 同名或同 FE 入口；db-deploy **展示名可重复**，冲突看云 `endpoint_host:port` 与关联实例 domain+port；代理同 kind+name 或同 VIP。冲突返回明确错误。
 - 普通成员仍严格按本租户过滤；跨租只读继续用 grant。
 
 ### 集群部署登记实例

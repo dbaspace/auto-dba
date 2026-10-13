@@ -25,6 +25,11 @@ server {
         client_max_body_size 64m;
     }
 
+    # 标签页图标（勿与侧栏 logo 混淆；缺失时浏览器会用同域缓存的错误图标）
+    location = /favicon.ico { try_files $uri =404; }
+    location = /favicon.svg { try_files $uri =404; }
+    location = /apple-touch-icon.png { try_files $uri =404; }
+
     # SPA：前端路由回退到 index.html
     location / {
         try_files $uri $uri/ /index.html;
