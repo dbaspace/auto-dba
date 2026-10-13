@@ -43,7 +43,7 @@ IMAGE_TAG=auto-dba:v1.6.0 ./scripts/pack_release.sh docker
 | [v1.3.0](https://github.com/dbaspace/auto-dba/releases/tag/v1.3.0) | 平台管理员创建/切换业务租户时保留默认租户成员；顶栏稳定显示租户「名称」；删除当前会话租户后自动切回可用租户 |
 | [v1.4.0](https://github.com/dbaspace/auto-dba/releases/tag/v1.4.0) | KeePlus favicon.ico/apple-touch；db-deploy 同名集群可划拨；删除集群工单预填审批人并在审批结束后刷新列表 |
 | [v1.5.0](https://github.com/dbaspace/auto-dba/releases/tag/v1.5.0) | 一体/后端包打入 `scripts/terminal` 与 `assets/terminal`；StarRocks 启停失败不污染集群 status（`failed` 仅表示初始化/重建失败） |
-| **v1.6.0** | 资源配置实例管理：切换 PostgreSQL 等库类型不再回跳 MySQL；同 path 单 Tab 就地切换 `db_type` |
+| [v1.6.0](https://github.com/dbaspace/auto-dba/releases/tag/v1.6.0) | 资源配置实例管理：切换 PostgreSQL 等库类型不再回跳 MySQL；同 path 单 Tab 就地切换 `db_type` |
 
 ## 方式 A：一体包（推荐 CentOS 手工）
 
