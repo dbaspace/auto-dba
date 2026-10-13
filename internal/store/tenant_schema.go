@@ -338,7 +338,7 @@ func (d *DB) bootstrapDefaultTenant() error {
 	return d.RealignDeployInstanceTenants()
 }
 
-// SyncDefaultTenantMemberships 将尚未入组的用户加入默认租户（幂等）。
+// SyncDefaultTenantMemberships 将尚未入组的用户加入默认租户；平台管理员即使已有其它租户成员也确保在默认租户内（幂等）。
 func (d *DB) SyncDefaultTenantMemberships() error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	rows, err := d.Query(`SELECT id, role_id, role FROM tbl_users`)
@@ -363,6 +363,16 @@ func (d *DB) SyncDefaultTenantMemberships() error {
 		return err
 	}
 	for _, u := range users {
+		isAdmin, err := d.UserIsPlatformAdmin(u.id)
+		if err != nil {
+			return err
+		}
+		if isAdmin {
+			if err := d.EnsurePlatformAdminDefaultMembership(u.id); err != nil {
+				return err
+			}
+			continue
+		}
 		n, err := d.CountActiveMemberships(u.id)
 		if err != nil {
 			return err

@@ -45,6 +45,15 @@ export default function TenantSwitcher() {
     }
   }
 
+  function tenantLabel(t: Tenant | undefined | null) {
+    if (!t) return ''
+    const name = String(t.name || '').trim()
+    const code = String(t.code || '').trim()
+    // 顶栏只展示「名称」；编码放进 title 便于核对
+    if (name) return name
+    return code || t.id
+  }
+
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginRight: 12 }}>
       {impersonating ? <Tag color="orange">审计中</Tag> : null}
@@ -53,11 +62,27 @@ export default function TenantSwitcher() {
         loading={switching}
         value={current?.id}
         placeholder="选择租户"
+        title={current ? `编码：${current.code || '-'}` : undefined}
         options={tenants.map((t) => ({
           value: t.id,
-          label: t.name || t.code || t.id,
+          // 选中态与下拉均优先名称；下拉附带编码以免重名难辨
+          label: t.name?.trim() ? t.name : t.code || t.id,
+          title: t.code ? `${t.name || ''}（${t.code}）` : t.name || t.code || t.id,
         }))}
         optionLabelProp="label"
+        optionRender={(opt) => {
+          const t = tenants.find((x) => x.id === opt.value)
+          const name = tenantLabel(t)
+          const code = t?.code
+          return (
+            <span>
+              {name}
+              {code && name !== code ? (
+                <span style={{ marginLeft: 8, opacity: 0.55, fontSize: 12 }}>{code}</span>
+              ) : null}
+            </span>
+          )
+        }}
         onChange={onChange}
         size="small"
       />

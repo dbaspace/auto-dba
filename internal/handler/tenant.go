@@ -161,7 +161,11 @@ func (h *TenantHandler) RemoveMember(c *gin.Context) {
 	tid := c.Param("id")
 	uid := c.Param("userId")
 	if err := h.Store.RemoveTenantMember(tid, uid); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		status := http.StatusInternalServerError
+		if strings.Contains(err.Error(), "不可移出") {
+			status = http.StatusBadRequest
+		}
+		c.JSON(status, gin.H{"message": err.Error()})
 		return
 	}
 	_ = h.Store.AppendTenantAudit(tid, middleware.UserID(c), "member.remove", uid)

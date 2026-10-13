@@ -17,6 +17,8 @@ import {
 import api from '../../api/request'
 import Auth from '../../components/Auth'
 import { Perm, usePermission } from '../../hooks/usePermission'
+import { useAppDispatch } from '../../store'
+import { setUser } from '../../store/authSlice'
 
 const RESOURCE_LABELS: Record<string, string> = {
   tbl_instances: '实例',
@@ -78,6 +80,7 @@ const GRANT_TYPES = [
 
 export default function Tenants() {
   const { hasUrn } = usePermission()
+  const dispatch = useAppDispatch()
   const [list, setList] = useState<Tenant[]>([])
   const [loading, setLoading] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
@@ -278,6 +281,45 @@ export default function Tenants() {
     }
   }
 
+  /** 删除后同步顶栏租户列表；若当前会话租户被删则自动切到仍可用的租户（优先默认） */
+  async function refreshAuthAfterTenantChange(removedId?: string) {
+    try {
+      const { data } = await api.get('/auth/me', { silent: true })
+      const u = data?.data || data?.user || {}
+      if (!u || typeof u !== 'object') return
+      let tenants: Tenant[] = Array.isArray(u.tenants) ? [...u.tenants] : []
+      if (removedId) {
+        tenants = tenants.filter((t) => t?.id !== removedId)
+        u.tenants = tenants
+      }
+      const curId = String(u.current_tenant?.id || u.tenant_id || '')
+      const currentGone = Boolean(removedId) && (curId === removedId || !u.current_tenant)
+      if (currentGone) {
+        const next =
+          tenants.find((t) => t.id === 'tenant-default' || t.code === 'default') || tenants[0]
+        if (next?.id) {
+          const sw = await api.post('/tenants/switch', { tenant_id: next.id })
+          localStorage.setItem('token', sw.data.token)
+          localStorage.setItem('user', JSON.stringify(sw.data.user))
+          dispatch(setUser(sw.data.user))
+          message.success(`已切换到 ${sw.data.user?.current_tenant?.name || next.name}`)
+          location.hash = '#/'
+          location.reload()
+          return
+        }
+        localStorage.removeItem('token')
+        localStorage.setItem('user', JSON.stringify({ ...u, current_tenant: undefined }))
+        location.hash = '#/select-tenant'
+        location.reload()
+        return
+      }
+      localStorage.setItem('user', JSON.stringify(u))
+      dispatch(setUser(u))
+    } catch {
+      /* ignore */
+    }
+  }
+
   function confirmDelete(t: Tenant) {
     Modal.confirm({
       title: `删除租户「${t.name}」？`,
@@ -290,10 +332,11 @@ export default function Tenants() {
           await api.delete(`/tenants/${t.id}`, { silent: true })
           message.success('已删除')
           if (currentSessionTenantId() === t.id) {
-            location.hash = '#/select-tenant'
+            await refreshAuthAfterTenantChange(t.id)
             return
           }
           await load()
+          await refreshAuthAfterTenantChange(t.id)
         } catch (err: any) {
           const data = err?.response?.data || {}
           const msg = String(data.message || '删除失败')
@@ -313,10 +356,24 @@ export default function Tenants() {
 
   function moreMenu(r: Tenant): MenuProps {
     const items: MenuProps['items'] = [
-      { key: 'audit', label: '审计', onClick: () => openAudit(r) },
+      {
+        key: 'audit',
+        label: '审计',
+        onClick: ({ domEvent }) => {
+          domEvent.stopPropagation()
+          openAudit(r)
+        },
+      },
     ]
     if (hasUrn(Perm.tenants.impersonate)) {
-      items.push({ key: 'impersonate', label: '进入审计', onClick: () => impersonate(r) })
+      items.push({
+        key: 'impersonate',
+        label: '进入审计',
+        onClick: ({ domEvent }) => {
+          domEvent.stopPropagation()
+          impersonate(r)
+        },
+      })
     }
     if (hasUrn(Perm.tenants.delete) && !isDefaultTenant(r)) {
       items.push({ type: 'divider' })
@@ -324,7 +381,10 @@ export default function Tenants() {
         key: 'delete',
         danger: true,
         label: '删除',
-        onClick: () => confirmDelete(r),
+        onClick: ({ domEvent }) => {
+          domEvent.stopPropagation()
+          confirmDelete(r)
+        },
       })
     }
     return { items }

@@ -381,6 +381,62 @@ func TestDeleteTenantGuards(t *testing.T) {
 	}
 }
 
+func TestUpsertTenantMemberKeepsDefaultMembership(t *testing.T) {
+	dsn := testDSN(t)
+	if dsn == "" {
+		t.Skip("set AUTO_DBA_TEST_DSN or provide config/config.yaml")
+	}
+	d, err := Open("postgres", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Close() })
+	if err := d.ensureTenancy(); err != nil {
+		t.Fatal(err)
+	}
+	adminRole, err := d.GetRoleByCode("admin")
+	if err != nil || adminRole == nil {
+		t.Fatal(err)
+	}
+	u := &User{Username: "keep-def-" + uuid.NewString()[:8], DisplayName: "K", Role: "admin", RoleID: adminRole.ID}
+	if err := d.CreateUser(u, "x"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = d.Exec(`DELETE FROM tbl_tenant_members WHERE user_id=?`, u.ID)
+		_, _ = d.Exec(`DELETE FROM tbl_user_roles WHERE user_id=?`, u.ID)
+		_, _ = d.Exec(`DELETE FROM tbl_users WHERE id=?`, u.ID)
+	})
+	if err := d.UpsertTenantMember(&TenantMember{
+		TenantID: DefaultTenantID, UserID: u.ID, RoleIDs: []string{adminRole.ID}, Status: MemberStatusActive,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	other := &Tenant{Code: "keep-" + uuid.NewString()[:8], Name: "其它租户", Status: TenantStatusActive}
+	if err := d.CreateTenant(other); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = d.Exec(`DELETE FROM tbl_tenant_members WHERE tenant_id=?`, other.ID)
+		_, _ = d.Exec(`DELETE FROM tbl_tenants WHERE id=?`, other.ID)
+	})
+	if err := d.UpsertTenantMember(&TenantMember{
+		TenantID: other.ID, UserID: u.ID, RoleIDs: []string{adminRole.ID}, Status: MemberStatusActive,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ok, err := d.IsActiveTenantMember(DefaultTenantID, u.ID)
+	if err != nil || !ok {
+		t.Fatalf("joining another tenant must keep default membership, ok=%v err=%v", ok, err)
+	}
+	if err := d.RemoveTenantMember(DefaultTenantID, u.ID); err == nil {
+		t.Fatal("platform admin must not be removed from default tenant")
+	}
+	if err := d.EnsurePlatformAdminDefaultMembership(u.ID); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestNormalizeTenantPlan(t *testing.T) {
 	got, err := NormalizeTenantPlan("")
 	if err != nil || got != TenantPlanStandard {

@@ -114,7 +114,7 @@ http:
 | **仅后端** `backend` | `auto-dba-backend-*-*.tgz` | Vite 或 Nginx，**不是** 8800 页 | `serve_static: false` |
 | **仅前端** `frontend` | `auto-dba-frontend-*.tgz` | Nginx `root` 指 `dist/` | Nginx 对 `index.html` 禁长缓存；`/api/` 反代后端 |
 
-发版示例：`STAMP=v1.1.0 ./scripts/pack_release.sh all`（及 `backend` / `frontend`）。说明见 [deploy.md](deploy.md)。
+发版示例：`STAMP=v1.3.0 ./scripts/pack_release.sh all`（及 `backend` / `frontend`）。说明见 [deploy.md](deploy.md)。
 
 ---
 

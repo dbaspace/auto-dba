@@ -406,16 +406,74 @@ func (d *DB) UpsertTenantMember(m *TenantMember) error {
 	if err != nil {
 		return err
 	}
+	// 普通用户：加入业务租户后离开默认租户；平台管理员需同时管理多租户，保留默认成员
 	if m.TenantID != DefaultTenantID && m.Status == MemberStatusActive {
-		return d.RemoveTenantMember(DefaultTenantID, m.UserID)
+		isAdmin, err := d.UserIsPlatformAdmin(m.UserID)
+		if err != nil {
+			return err
+		}
+		if !isAdmin {
+			return d.RemoveTenantMember(DefaultTenantID, m.UserID)
+		}
 	}
 	return nil
 }
 
 func (d *DB) RemoveTenantMember(tenantID, userID string) error {
-	_, err := d.Exec(`DELETE FROM tbl_tenant_members WHERE tenant_id=? AND user_id=?`,
-		strings.TrimSpace(tenantID), strings.TrimSpace(userID))
+	tenantID = strings.TrimSpace(tenantID)
+	userID = strings.TrimSpace(userID)
+	// 平台管理员必须保有默认租户，避免创建/切换其它租户后顶栏只剩业务租户名称
+	if tenantID == DefaultTenantID {
+		ok, err := d.UserIsPlatformAdmin(userID)
+		if err != nil {
+			return err
+		}
+		if ok {
+			return errors.New("平台管理员不可移出默认租户")
+		}
+	}
+	_, err := d.Exec(`DELETE FROM tbl_tenant_members WHERE tenant_id=? AND user_id=?`, tenantID, userID)
 	return err
+}
+
+// EnsurePlatformAdminDefaultMembership 平台管理员始终保有默认租户成员资格（幂等，用于登录/自愈）。
+func (d *DB) EnsurePlatformAdminDefaultMembership(userID string) error {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return nil
+	}
+	ok, err := d.UserIsPlatformAdmin(userID)
+	if err != nil || !ok {
+		return err
+	}
+	m, err := d.GetTenantMember(DefaultTenantID, userID)
+	if err != nil {
+		return err
+	}
+	if m != nil && m.Status == MemberStatusActive {
+		return nil
+	}
+	roleIDs, err := d.ListUserRoleIDs(userID)
+	if err != nil {
+		return err
+	}
+	if len(roleIDs) == 0 {
+		if r, _ := d.GetRoleByCode("admin"); r != nil {
+			roleIDs = []string{r.ID}
+		}
+	}
+	if len(roleIDs) == 0 {
+		return errors.New("平台管理员缺少可用角色，无法加入默认租户")
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	return d.UpsertTenantMember(&TenantMember{
+		TenantID:  DefaultTenantID,
+		UserID:    userID,
+		RoleIDs:   roleIDs,
+		Status:    MemberStatusActive,
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
 }
 
 func (d *DB) GetTenantMember(tenantID, userID string) (*TenantMember, error) {
@@ -690,14 +748,42 @@ func (d *DB) EnsureDefaultMembership(userID string, roleIDs []string) error {
 	})
 }
 
-// CleanupDefaultMembershipsForBusinessMembers 已加入业务租户的用户不再保留 default 成员。
+// CleanupDefaultMembershipsForBusinessMembers 已加入业务租户的普通用户不再保留 default 成员；平台管理员除外。
 func (d *DB) CleanupDefaultMembershipsForBusinessMembers() error {
-	_, err := d.Exec(`DELETE FROM tbl_tenant_members d
+	rows, err := d.Query(`SELECT d.user_id FROM tbl_tenant_members d
 		WHERE d.tenant_id=? AND EXISTS (
 			SELECT 1 FROM tbl_tenant_members o
 			WHERE o.user_id=d.user_id AND o.tenant_id<>? AND o.status=?
 		)`, DefaultTenantID, DefaultTenantID, MemberStatusActive)
-	return err
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var userIDs []string
+	for rows.Next() {
+		var uid string
+		if err := rows.Scan(&uid); err != nil {
+			return err
+		}
+		userIDs = append(userIDs, uid)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, uid := range userIDs {
+		isAdmin, err := d.UserIsPlatformAdmin(uid)
+		if err != nil {
+			return err
+		}
+		if isAdmin {
+			continue
+		}
+		if _, err := d.Exec(`DELETE FROM tbl_tenant_members WHERE tenant_id=? AND user_id=?`,
+			DefaultTenantID, uid); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // CleanupOrphanTenantMemberships 清理用户已删除后残留的成员行与按用户授权。

@@ -870,6 +870,8 @@ func (h *AuthHandler) respondLoginWithTenant(c *gin.Context, u *store.User, logM
 	if preferred == "" {
 		preferred = strings.TrimSpace(c.Query("tenant_id"))
 	}
+	// 自愈：历史「加入其它租户即踢出默认租户」曾导致 admin 顶栏只剩业务租户名称
+	_ = h.Store.EnsurePlatformAdminDefaultMembership(u.ID)
 	tenantStart := time.Now()
 	t, tenants, err := h.Store.PickLoginTenant(u.ID, preferred)
 	tenantMS := time.Since(tenantStart).Milliseconds()
@@ -1171,6 +1173,7 @@ func (h *AuthHandler) Me(c *gin.Context) {
 	tid := middleware.TenantID(c)
 	imp := middleware.IsImpersonating(c)
 	out := h.userPublicJSON(u, nil)
+	_ = h.Store.EnsurePlatformAdminDefaultMembership(u.ID)
 	menusStart := time.Now()
 	h.applyUserAccess(out, u, tid, imp)
 	menusMS := time.Since(menusStart).Milliseconds()
