@@ -235,7 +235,7 @@ DBA 域配置管理门面：统一目录（含 SR/部署/代理/账号/CDC）、
 
 | 页面 | 路径 | 说明 |
 |------|------|------|
-| 实例管理 | `/config/instances?db_type=…` | 登记 PostgreSQL、MySQL 族、Kafka、Redis、主机等连接；资源配置弹层按类型各开 Tab（同类型复用）；可见范围（全局/私有）；审计下可划拨到目标租户 |
+| 实例管理 | `/config/instances?db_type=…` | 登记 PostgreSQL、MySQL 族、Kafka、Redis、主机等连接；按类型各开 Tab；域名/标签列表折叠；域名可多行粘贴并去重；可见范围（全局/私有）；审计下可划拨到目标租户 |
 | 已登记库 | `/config/databases` | 登记业务库、审批人与可见范围；审计下可单条或**批量指定归属租户**（不迁实例） |
 | 账号管理 | `/config/accounts` | 登记供权限申请和执行使用的数据库账号（随库租户） |
 | 审核规则 | `/config/review-rules` | DDL / DML 的 SQL 审核规则，以及 Redis 命令规则。PostgreSQL 时间字段等多值规则见 [review-rules.md](review-rules.md) |

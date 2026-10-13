@@ -91,6 +91,35 @@ function domainList(row?: InstanceRow): string[] {
   return row?.domain_name ? [row.domain_name] : []
 }
 
+/** 列表域名/标签：只展示前 max 个，其余 +N Tooltip */
+function renderCollapsedTags(list: string[], max = 2, tagColor?: string) {
+  if (!list.length) return <span className="muted">—</span>
+  const shown = list.slice(0, max)
+  const rest = list.length - shown.length
+  return (
+    <span className="domain-tag-list">
+      {shown.map((t) => (
+        <Tag key={t} color={tagColor} className="domain-tag" title={t}>
+          {t}
+        </Tag>
+      ))}
+      {rest > 0 ? (
+        <Tooltip
+          title={(
+            <div className="domain-tag-tip">
+              {list.map((t) => (
+                <div key={t}>{t}</div>
+              ))}
+            </div>
+          )}
+        >
+          <Tag className="domain-tag domain-tag-more">+{rest}</Tag>
+        </Tooltip>
+      ) : null}
+    </span>
+  )
+}
+
 /** 多节点主机：统一为英文逗号分隔 */
 function normalizeHost(raw?: string) {
   return String(raw || '')
@@ -98,6 +127,28 @@ function normalizeHost(raw?: string) {
     .replace(/，/g, ',')
     .replace(/,+/g, ',')
     .replace(/^,|,$/g, '')
+}
+
+/** 域名规范化键：去首尾空白与末尾点，小写（DNS 大小写不敏感） */
+function domainKey(s: string) {
+  return String(s || '').trim().replace(/\.+$/, '').toLowerCase()
+}
+
+/** 域名标签：粘贴多行/逗号分隔时拆成多条，按规范化键去重保序 */
+function splitDomainTokens(values: string[]): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const raw of values || []) {
+    for (const part of String(raw).split(/[\s,;，；]+/)) {
+      let s = part.trim().replace(/\.+$/, '')
+      if (!s) continue
+      const key = domainKey(s)
+      if (!key || seen.has(key)) continue
+      seen.add(key)
+      out.push(s)
+    }
+  }
+  return out
 }
 
 export default function Instances() {
@@ -310,7 +361,7 @@ export default function Instances() {
 
   async function save() {
     const host = normalizeHost(form.host)
-    let domains = (form.domains || []).map((s) => String(s).trim()).filter(Boolean)
+    let domains = splitDomainTokens(form.domains || [])
     if (isHostType(form.db_type) && !domains.length && host) {
       domains = [host]
     }
@@ -545,48 +596,12 @@ export default function Instances() {
             {
               title: '域名',
               width: 200,
-              render: (_, row) => {
-                const list = domainList(row)
-                if (!list.length) return <span className="muted">—</span>
-                const MAX = 2
-                const shown = list.slice(0, MAX)
-                const rest = list.length - shown.length
-                return (
-                  <span className="domain-tag-list">
-                    {shown.map((d) => (
-                      <Tag key={d} className="domain-tag" title={d}>
-                        {d}
-                      </Tag>
-                    ))}
-                    {rest > 0 ? (
-                      <Tooltip
-                        title={
-                          <div className="domain-tag-tip">
-                            {list.map((d) => (
-                              <div key={d}>{d}</div>
-                            ))}
-                          </div>
-                        }
-                      >
-                        <Tag className="domain-tag domain-tag-more">+{rest}</Tag>
-                      </Tooltip>
-                    ) : null}
-                  </span>
-                )
-              },
+              render: (_, row) => renderCollapsedTags(domainList(row), 2),
             },
             {
               title: '标签',
               width: 180,
-              render: (_, row) => {
-                const list = row.tags || []
-                if (!list.length) return <span className="muted">—</span>
-                return list.map((t) => (
-                  <Tag key={t} color="default" className="domain-tag">
-                    {t}
-                  </Tag>
-                ))
-              },
+              render: (_, row) => renderCollapsedTags(row.tags || [], 2, 'default'),
             },
             { title: '云厂商', width: 100, render: (_, row) => cloudVendorText(row.cloud_vendor) },
             {
@@ -738,13 +753,15 @@ export default function Instances() {
               <Select
                 mode="tags"
                 value={form.domains || []}
-                placeholder={hostType ? '可选；留空则用连接主机作为标识' : '回车添加，一个主机可绑多个域名'}
+                placeholder={hostType ? '可选；留空则用连接主机作为标识' : '回车或粘贴多行/逗号分隔域名'}
                 style={{ width: '100%' }}
-                tokenSeparators={[',']}
-                onChange={(v) => setForm((f) => ({ ...f, domains: v }))}
+                tokenSeparators={[',', ';', '，', '；', '\n', '\r', ' ', '\t']}
+                onChange={(v) => setForm((f) => ({ ...f, domains: splitDomainTokens(v) }))}
               />
               <div className="type-hint">
-                {hostType ? '主机类型可省略域名，保存时自动用连接主机填充' : '同一连接主机可绑定多个域名，输入后回车生成标签'}
+                {hostType
+                  ? '主机类型可省略域名，保存时自动用连接主机填充'
+                  : '同一连接主机可绑多个域名；可一次粘贴多行文本，自动拆条并去重'}
               </div>
             </div>
           </div>
