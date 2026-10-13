@@ -25,13 +25,13 @@ KeePlus（进程 `auto-dba`）支持多种打包方式。**构建在有 Node 18+
 | **仅前端** | `./scripts/pack_release.sh frontend` | `dist/auto-dba-frontend-*.tgz` | Nginx/CDN 托管静态资源 |
 | **Docker** | `./scripts/pack_release.sh docker` | 镜像 `auto-dba:<时间戳>`（可用 `IMAGE_TAG=` 覆盖） | 容器环境 |
 
-可选环境变量：`GOOS` `GOARCH`（默认 `linux`/`amd64`）、`STAMP`（默认时间戳；发版用 `STAMP=v1.4.0`）、`IMAGE_TAG`、`SKIP_PNPM_INSTALL=1`（已有 `node_modules` 时）。
+可选环境变量：`GOOS` `GOARCH`（默认 `linux`/`amd64`）、`STAMP`（默认时间戳；发版用 `STAMP=v1.5.0`）、`IMAGE_TAG`、`SKIP_PNPM_INSTALL=1`（已有 `node_modules` 时）。
 
 ```bash
-STAMP=v1.4.0 ./scripts/pack_release.sh all
-STAMP=v1.4.0 ./scripts/pack_release.sh backend
-STAMP=v1.4.0 ./scripts/pack_release.sh frontend
-IMAGE_TAG=auto-dba:v1.4.0 ./scripts/pack_release.sh docker
+STAMP=v1.5.0 ./scripts/pack_release.sh all
+STAMP=v1.5.0 ./scripts/pack_release.sh backend
+STAMP=v1.5.0 ./scripts/pack_release.sh frontend
+IMAGE_TAG=auto-dba:v1.5.0 ./scripts/pack_release.sh docker
 ```
 
 ### 已发布版本（摘要）
@@ -42,6 +42,7 @@ IMAGE_TAG=auto-dba:v1.4.0 ./scripts/pack_release.sh docker
 | [v1.2.0](https://github.com/dbaspace/auto-dba/releases/tag/v1.2.0) | 租户删除（无成员且无绑定资源）；租户管理列表一屏布局；`um.action.tenants.delete` |
 | [v1.3.0](https://github.com/dbaspace/auto-dba/releases/tag/v1.3.0) | 平台管理员创建/切换业务租户时保留默认租户成员；顶栏稳定显示租户「名称」；删除当前会话租户后自动切回可用租户 |
 | [v1.4.0](https://github.com/dbaspace/auto-dba/releases/tag/v1.4.0) | KeePlus favicon.ico/apple-touch；db-deploy 同名集群可划拨；删除集群工单预填审批人并在审批结束后刷新列表 |
+| **v1.5.0** | 一体/后端包打入 `scripts/terminal` 与 `assets/terminal`；StarRocks 启停失败不污染集群 status（`failed` 仅表示初始化/重建失败） |
 
 ## 方式 A：一体包（推荐 CentOS 手工）
 
@@ -83,10 +84,14 @@ curl -sI http://127.0.0.1:8800/favicon.ico   # 期望 200
 
 ```text
 bin/auto-dba
-frontend/dist/   # 含 favicon.svg / favicon.ico / apple-touch-icon.png
-config/          # 示例 YAML
+frontend/dist/          # 含 favicon.svg / favicon.ico / apple-touch-icon.png
+scripts/terminal/       # 主机 Web 终端 SSH 脚本（node-terminal.sh）
+assets/terminal/        # 终端页静态资源
+config/                 # 示例 YAML
 README-RELEASE.txt
 ```
+
+> 须在**包根**启动。缺 `scripts/terminal/node-terminal.sh` 时打开主机终端会报「终端脚本不存在」；见 [terminal.md](terminal.md)。
 
 ## 方式 B：仅后端
 

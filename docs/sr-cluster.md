@@ -303,7 +303,18 @@ agents_health
 
 前置校验（`StartClusterInit`，拼步骤前失败则不开单）：每节点已绑 `agent_id`；FE 奇数；唯一 `is_primary_fe`；环境允许所选 `release_id`。
 
-长任务 Agent 回 `job_id`，控制面轮询 `/v1/sr/jobs/:id`；短任务同步 HTTP。初始化「完成」以变更单 **success** 且 FE/BE `SHOW PROC` 核验通过为准；任一步失败 → 变更单 `failed`，集群 `failed`，可 `RetryChange`。
+长任务 Agent 回 `job_id`，控制面轮询 `/v1/sr/jobs/:id`；短任务同步 HTTP。初始化「完成」以变更单 **success** 且 FE/BE `SHOW PROC` 核验通过为准；init/reinit 任一步失败 → 变更单 `failed`，集群 `failed`（UI 显示「初始化失败」），可 `RetryChange`。
+
+**集群 `status` 语义**（纳管生命周期，与节点运行态分离）：
+
+| 取值 | 含义 |
+|------|------|
+| `draft` | 草稿，尚未成功初始化 |
+| `initializing` | 正在执行 `cluster_init` / `cluster_reinit` |
+| `ready` | 已纳管，可做启停/扩缩/升级等运维 |
+| `failed` | **仅**初始化或重建失败；不是启停/扩缩/升级失败 |
+
+`stop_node` / `start_node` / `restart_node` 以及扩缩、升级等运维变更失败时，**只**更新变更单与步骤日志（及成功时的节点 status），**不**改写集群 `status`。错误详情在变更 Tab；例如 `cipher: message authentication failed` 表示 Node Agent 密码与平台 `secret` 不匹配，需在 Agent 页重设密码后重试。
 
 ---
 
@@ -719,7 +730,7 @@ log4j / 一致性巡检为后续项。
 
 **步骤日志**：`upgrade_node_*` 按阶段逐行追加并实时落库（停服 → 下载替换 `[replaced]` → 启动 → 已启动），变更页 2 秒轮询可看到进度。启动失败时引擎先 `reset-failed` 再启动，失败后调 Agent `/v1/sr/diag` 采集 `systemctl status`、`journalctl`、`systemctl cat <unit>`（核对 Type / PIDFile / Environment）与 `fe.out`/`be.out` 末尾附在步骤日志中；旧 Agent（无 diag）退回 `systemctl status`。步骤失败时错误**追加**到已有日志末尾（`失败: …`），不再覆盖前面的阶段日志。
 
-**启停超时**：Agent 同步执行 `systemctl start/stop/restart`，会等 systemd job 结束（例如 unit 卡在 `activating` 直到 `TimeoutStartSec`）。控制面对这三个动作使用无首包超时的长连接，整体上限 10 分钟，由 systemd 自身超时决定成败并返回真实错误；`status` / `reset-failed` / `enable` 仍走 60 秒短超时。此前 60 秒首包超时会报 `timeout awaiting response headers`，掩盖了真正的失败原因。
+**启停超时**：Agent 同步执行 `systemctl start/stop/restart`，会等 systemd job 结束（例如 unit 卡在 `activating` 直到 `TimeoutStartSec`）。控制面对这三个动作使用无首包超时的长连接，整体上限 10 分钟，由 systemd 自身超时决定成败并返回真实错误；`status` / `reset-failed` / `enable` 仍走 60 秒短超时。此前 60 秒首包超时会报 `timeout awaiting response headers`，掩盖了真正的失败原因。启停失败只标变更单 `failed`，**不**把集群标成「初始化失败」。
 
 **重试**：对失败的升级变更点「重试」：
 

@@ -82,6 +82,23 @@ copy_config_examples() {
   [[ -f config/bootstrap.example.yaml ]] && cp -a config/bootstrap.example.yaml "$dest/"
 }
 
+# 主机 Web 终端运行期依赖（相对包根：scripts/terminal、assets/terminal）
+copy_terminal_runtime() {
+  local stage="$1"
+  if [[ ! -f scripts/terminal/node-terminal.sh ]]; then
+    echo "缺少 scripts/terminal/node-terminal.sh" >&2
+    exit 1
+  fi
+  if [[ ! -d assets/terminal ]]; then
+    echo "缺少 assets/terminal/" >&2
+    exit 1
+  fi
+  mkdir -p "$stage/scripts" "$stage/assets"
+  cp -a scripts/terminal "$stage/scripts/"
+  chmod a+x "$stage/scripts/terminal/"*.sh 2>/dev/null || true
+  cp -a assets/terminal "$stage/assets/"
+}
+
 pack_tgz() {
   local name="$1"
   local stage="${ROOT}/dist/${name}"
@@ -141,17 +158,19 @@ if [[ "$MODE" == "backend" ]]; then
   build_backend
   cp -a bin/auto-dba "$STAGE/bin/auto-dba"
   copy_config_examples "$STAGE/config"
+  copy_terminal_runtime "$STAGE"
   cat >"$STAGE/README-RELEASE.txt" <<EOF
 KeePlus 后端 API 包
 ==================
-仅含二进制，无前端。开发联调或 Nginx 托管前端时使用。
+含二进制与主机终端运行文件（scripts/terminal、assets/terminal），无前端。
 
 1. 配置 Nacos / config/config.yaml
 2. http.serve_static: false（页面由 Vite:5174 或 Nginx 提供）
 3. cd 本目录后：./bin/auto-dba -config config/config.yaml
 4. API：http://服务器:8800/api/v1/...
+5. 主机终端需本包根下 scripts/terminal/node-terminal.sh，并配置 terminal.ssh_identity_file
 
-说明：docs/deploy.md
+说明：docs/deploy.md、docs/terminal.md
 EOF
   pack_tgz "$OUT_NAME"
   exit 0
@@ -168,6 +187,7 @@ build_backend
 cp -a frontend/dist "$STAGE/frontend/dist"
 cp -a bin/auto-dba "$STAGE/bin/auto-dba"
 copy_config_examples "$STAGE/config"
+copy_terminal_runtime "$STAGE"
 if [[ -f deploy/nginx.conf.example ]]; then
   cp -a deploy/nginx.conf.example "$STAGE/config/"
 fi
@@ -175,7 +195,7 @@ fi
 cat >"$STAGE/README-RELEASE.txt" <<EOF
 KeePlus 一体发布包（推荐 CentOS 手工部署）
 ========================================
-工作目录必须为本包根（含 frontend/dist）。
+工作目录必须为本包根（含 frontend/dist、scripts/terminal、assets/terminal）。
 
 1. 配置 Nacos 或 config/config.yaml
 2. 开启静态托管（页面与 API 同端口，无需 5174）：
@@ -184,8 +204,9 @@ KeePlus 一体发布包（推荐 CentOS 手工部署）
        port: 8800
 3. 启动：./bin/auto-dba
 4. 浏览器：http://服务器:8800/
+5. 主机 Web 终端依赖 scripts/terminal/node-terminal.sh（已打入本包）与 terminal.ssh_identity_file
 
-运行机无需 Node/pnpm。说明：docs/deploy.md
+运行机无需 Node/pnpm。说明：docs/deploy.md、docs/terminal.md
 EOF
 
 pack_tgz "$OUT_NAME"

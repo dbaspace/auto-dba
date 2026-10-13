@@ -221,6 +221,19 @@ const statusColor: Record<string, string> = {
   pending: 'default', running: 'processing', success: 'success', cancelled: 'warning',
 }
 
+/** 集群纳管生命周期态展示（failed = 初始化/重建失败，非启停运维失败） */
+const clusterStatusLabel: Record<string, string> = {
+  draft: '草稿',
+  initializing: '初始化中',
+  ready: '就绪',
+  failed: '初始化失败',
+}
+
+function renderClusterStatus(s?: string) {
+  const key = s || ''
+  return <Tag color={statusColor[key]}>{clusterStatusLabel[key] || key || '-'}</Tag>
+}
+
 type FailureHint = {
   summary: string
   howto: string[]
@@ -316,6 +329,18 @@ function changeFailureHint(raw: string): FailureHint {
       ],
       actionTab: 'settings',
       actionLabel: '前往设置检查 OSS',
+    }
+  }
+  if (/cipher:\s*message authentication|message authentication failed/i.test(text)) {
+    return {
+      summary: 'Node Agent 密码解密失败（平台密钥或登记密码不匹配）',
+      howto: [
+        '打开「Node Agent」页，对该节点重新设置/保存 Agent 密码（与目标机 Agent 实际密码一致）',
+        '确认平台配置的 secret 密钥未更换；若曾轮换密钥，需重新登记各 Agent 密码',
+        '修好后回到变更页对该失败变更点「重试」',
+      ],
+      actionTab: 'agents',
+      actionLabel: '前往 Node Agent',
     }
   }
   if (/node\s*agent|探活|agent.*unreachable|连接.*8091|timeout/i.test(text)) {
@@ -1314,7 +1339,7 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                       : []),
                     { title: '环境', dataIndex: 'environment' },
                     { title: '版本', dataIndex: 'version' },
-                    { title: '状态', dataIndex: 'status', render: (s: string) => <Tag color={statusColor[s]}>{s}</Tag> },
+                    { title: '状态', dataIndex: 'status', render: (s: string) => renderClusterStatus(s) },
                     { title: 'FE', dataIndex: 'fe_host' },
                     ...(impersonating
                       ? [{
@@ -1384,7 +1409,7 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                   >
                     <Descriptions size="small" column={2}>
                       <Descriptions.Item label="版本">{selected.version} ({selected.release_id || '-'})</Descriptions.Item>
-                      <Descriptions.Item label="状态"><Tag color={statusColor[selected.status || '']}>{selected.status}</Tag></Descriptions.Item>
+                      <Descriptions.Item label="状态">{renderClusterStatus(selected.status)}</Descriptions.Item>
                       <Descriptions.Item label="环境">{selected.environment}</Descriptions.Item>
                       <Descriptions.Item label="software_base">{selected.software_base}</Descriptions.Item>
                       <Descriptions.Item label="资源实例">

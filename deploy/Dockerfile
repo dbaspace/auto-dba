@@ -29,6 +29,10 @@ WORKDIR /app
 ARG APP=auto-dba
 COPY --from=backend /out/${APP} /app/bin/auto-dba
 COPY --from=frontend /src/frontend/dist /app/frontend/dist
+# 主机 Web 终端：默认 scripts_dir / static_dir 相对 /app
+COPY scripts/terminal /app/scripts/terminal
+COPY assets/terminal /app/assets/terminal
+RUN chmod a+x /app/scripts/terminal/*.sh
 # 默认 serve_static: true；生产请挂载真实 config 或走 Nacos
 COPY deploy/config.docker.example.yaml /app/config/config.yaml
 EXPOSE 8800 8801

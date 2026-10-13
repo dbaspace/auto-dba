@@ -144,6 +144,7 @@ Platform Agent（:8090）、Node Agent（:8091）、DB Agent（:8092）的 SSH �
 | `仅支持主机类型实例` | 实例 `db_type` 不是 host | 改类型或另建 host 实例 |
 | `未授权访问该主机终端` | 可见性/授权不足 | 调 visibility 或授权 |
 | `终端功能未启用` | `terminal.enabled: false` | 改为 `true` 并重启 |
+| `终端脚本不存在: .../scripts/terminal/node-terminal.sh` | 一体/后端包未带脚本，或未在包根启动 | 换含 `scripts/terminal/` 的新包；或把仓库该目录拷到发布根；确认 cwd 为包根 |
 | OpenSSH 提示 *post-quantum key exchange* | 客户端告警，**不是**登录失败原因 | 可忽略；失败看 `Permission denied` 等实质错误 |
 | known_hosts / Permanently added | 脚本使用 `StrictHostKeyChecking=no` | 正常；不表示鉴权成功 |
 | Agent 下发 `knownhosts: key is unknown` | 旧版本严格校验 `~/.ssh/known_hosts` | 升级后默认 `accept-new` 自动登记；或设 `ssh_host_key_policy: strict` 并先 `ssh-keyscan` |

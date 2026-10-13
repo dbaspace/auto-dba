@@ -384,13 +384,19 @@ func (e *Engine) CancelChange(changeID string) error {
 	return nil
 }
 
+// changeUpdatesClusterLifecycle 仅 init/reinit 改写集群 status（纳管生命周期）。
+// 启停、扩缩、升级等运维失败只落在变更单，不污染集群列表态。
+func changeUpdatesClusterLifecycle(typ string) bool {
+	return typ == store.SrChangeClusterInit || typ == store.SrChangeClusterReinit
+}
+
 // markClusterFailedIfInitChange 取消/中止 init·reinit 后，避免集群卡在 initializing。
 func (e *Engine) markClusterFailedIfInitChange(changeID string) {
 	ch, err := e.Store.GetSrChange(changeID)
 	if err != nil || ch == nil {
 		return
 	}
-	if ch.Type != store.SrChangeClusterInit && ch.Type != store.SrChangeClusterReinit {
+	if !changeUpdatesClusterLifecycle(ch.Type) {
 		return
 	}
 	cl, err := e.Store.GetSrCluster(ch.ClusterID)
@@ -465,8 +471,10 @@ func (e *Engine) runChange(changeID string) {
 	}
 	if err := e.ensureClusterRelease(cl); err != nil {
 		_ = e.Store.UpdateSrChangeStatus(changeID, store.SrChangeFailed, err.Error())
-		cl.Status = store.SrClusterFailed
-		_ = e.Store.UpdateSrCluster(cl)
+		if changeUpdatesClusterLifecycle(ch.Type) {
+			cl.Status = store.SrClusterFailed
+			_ = e.Store.UpdateSrCluster(cl)
+		}
 		return
 	}
 	nodes, _ := e.Store.ListSrNodes(ch.ClusterID)
@@ -500,8 +508,10 @@ func (e *Engine) runChange(changeID string) {
 			step.EndedAt = time.Now().Format(time.RFC3339)
 			_ = e.Store.UpdateSrChangeStep(&step)
 			_ = e.Store.UpdateSrChangeStatus(changeID, store.SrChangeFailed, "步骤失败: "+step.StepKey+": "+firstLine(err.Error()))
-			cl.Status = store.SrClusterFailed
-			_ = e.Store.UpdateSrCluster(cl)
+			if changeUpdatesClusterLifecycle(ch.Type) {
+				cl.Status = store.SrClusterFailed
+				_ = e.Store.UpdateSrCluster(cl)
+			}
 			return
 		}
 		step.Status = store.SrStepSuccess
@@ -511,8 +521,10 @@ func (e *Engine) runChange(changeID string) {
 		step.EndedAt = time.Now().Format(time.RFC3339)
 		_ = e.Store.UpdateSrChangeStep(&step)
 	}
-	cl.Status = store.SrClusterReady
-	_ = e.Store.UpdateSrCluster(cl)
+	if changeUpdatesClusterLifecycle(ch.Type) {
+		cl.Status = store.SrClusterReady
+		_ = e.Store.UpdateSrCluster(cl)
+	}
 	msg := "全部步骤完成"
 	if extra := e.syncRegistryAfterChange(ch, cl); extra != "" {
 		msg += "；" + extra
