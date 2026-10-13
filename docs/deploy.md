@@ -42,7 +42,7 @@ IMAGE_TAG=auto-dba:v1.5.0 ./scripts/pack_release.sh docker
 | [v1.2.0](https://github.com/dbaspace/auto-dba/releases/tag/v1.2.0) | 租户删除（无成员且无绑定资源）；租户管理列表一屏布局；`um.action.tenants.delete` |
 | [v1.3.0](https://github.com/dbaspace/auto-dba/releases/tag/v1.3.0) | 平台管理员创建/切换业务租户时保留默认租户成员；顶栏稳定显示租户「名称」；删除当前会话租户后自动切回可用租户 |
 | [v1.4.0](https://github.com/dbaspace/auto-dba/releases/tag/v1.4.0) | KeePlus favicon.ico/apple-touch；db-deploy 同名集群可划拨；删除集群工单预填审批人并在审批结束后刷新列表 |
-| **v1.5.0** | 一体/后端包打入 `scripts/terminal` 与 `assets/terminal`；StarRocks 启停失败不污染集群 status（`failed` 仅表示初始化/重建失败） |
+| [v1.5.0](https://github.com/dbaspace/auto-dba/releases/tag/v1.5.0) | 一体/后端包打入 `scripts/terminal` 与 `assets/terminal`；StarRocks 启停失败不污染集群 status（`failed` 仅表示初始化/重建失败） |
 
 ## 方式 A：一体包（推荐 CentOS 手工）
 
