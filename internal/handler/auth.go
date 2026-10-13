@@ -466,7 +466,7 @@ func (h *AuthHandler) encKey() string {
 	if h == nil || h.Cfg == nil {
 		return ""
 	}
-	return h.Cfg.App.JWTSecret
+	return h.Cfg.FieldCrypto()
 }
 
 func (h *AuthHandler) tryLDAPLogin(cfg *store.LdapConfig, username, password string) (*store.User, bool, error) {

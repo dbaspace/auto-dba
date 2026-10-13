@@ -8,11 +8,9 @@ nacos:
   server_addr: "10.100.113.151:8848"
   # server_addr: "10.0.0.1:8848,10.0.0.2:8848,10.0.0.3:8848"
   #
-  # namespace = 平台部署用的 Nacos「命名空间 ID」（控制台第二列），不是「环境管理」里的 code：
-  #   public（默认）→ "" 或 public
-  #   autosql       → e4dec2e2-4711-432f-9110-cc9b67d66b81
-  # 勿填 beijing / test 等业务环境编码；说明见 docs/nacos-config.md「业务环境 vs Nacos Namespace」
-  namespace: "e4dec2e2-4711-432f-9110-cc9b67d66b81"
+  # 默认不写 namespace（= public）。DataId 若在其它空间，再加一行或设 NACOS_NAMESPACE：
+  #   namespace: "e4dec2e2-4711-432f-9110-cc9b67d66b81"  # autosql；须与 DataId 所在空间一致
+  # 勿填 beijing / test；见 docs/nacos-config.md「业务环境 vs Nacos Namespace」
   group: DEFAULT_GROUP
   data_id: auto-dba.yaml
   username: nacos

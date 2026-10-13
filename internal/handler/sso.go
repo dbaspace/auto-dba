@@ -21,7 +21,7 @@ func (h *SsoHandler) encKey() string {
 	if h == nil || h.Cfg == nil {
 		return ""
 	}
-	return h.Cfg.App.JWTSecret
+	return h.Cfg.FieldCrypto()
 }
 
 func (h *SsoHandler) requireAdmin(c *gin.Context) bool {

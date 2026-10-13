@@ -43,7 +43,7 @@ func RunDbMonitor(cfg *config.Config, configPath string) {
 	}
 	defer db.Close()
 
-	svc := dbmonitor.New(db, cfg.App.JWTSecret)
+	svc := dbmonitor.New(db, cfg.FieldCrypto())
 	h := &handler.DbMonitorHandler{Svc: svc}
 	hot := &hotReloadTargets{cfg: cfg, db: db, secrets: []*string{&svc.Secret}}
 	if err := config.StartNacosWatchOpts(cfg, configPath, config.WatchOptions{

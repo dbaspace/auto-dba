@@ -241,6 +241,7 @@ func StartNacosWatchOpts(live *Config, configPath string, opts WatchOptions) err
 		}
 		ApplyInPlace(live, next)
 		PublishJWT(live.App.JWTSecret)
+		SyncFieldCrypto(live)
 		log.Printf("nacos watch: applied dataId=%s group=%s sections=%v listen=%v jwt=%v",
 			boot.DataID, boot.Group, diff.Sections(), diff.ListenAddr, diff.JWTSecret)
 		if opts.AfterApply != nil {

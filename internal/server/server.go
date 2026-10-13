@@ -32,6 +32,7 @@ import (
 	"auto-dba/internal/redisrdb"
 	"auto-dba/internal/router"
 	"auto-dba/internal/runbook"
+	"auto-dba/internal/secret"
 	"auto-dba/internal/sqlinsight"
 	"auto-dba/internal/srcluster"
 	"auto-dba/internal/sshx"
@@ -85,9 +86,17 @@ func Run(cfg *config.Config, configPath string) {
 
 	engine := gin.New()
 	engine.Use(gin.Recovery(), gin.Logger())
-	migEngine := dbmig.New(db, cfg.App.JWTSecret)
-	arcEngine := archive.New(db, cfg.App.JWTSecret)
-	bakEngine := backup.New(db, cfg.App.JWTSecret, backup.Config{
+	cryptoLive := cfg.FieldCrypto()
+	fieldCrypto := cryptoLive
+	// 审计：失败与遗留明文必记；成功密文解密默认不刷屏（采集路径很频繁）
+	secret.SetAudit(func(ok bool, format string) {
+		if !ok || format == "plain" {
+			log.Printf("secret_decrypt ok=%v format=%s", ok, format)
+		}
+	})
+	migEngine := dbmig.New(db, fieldCrypto)
+	arcEngine := archive.New(db, fieldCrypto)
+	bakEngine := backup.New(db, fieldCrypto, backup.Config{
 		WorkDir:            cfg.Backup.WorkDir,
 		AllowEmbedded:      cfg.Backup.AllowEmbedded,
 		AgentArtifact:      cfg.Backup.AgentArtifact,
@@ -97,17 +106,17 @@ func Run(cfg *config.Config, configPath string) {
 		SSHIdentityFile:    cfg.Terminal.SSHIdentityFile,
 		SSHInsecureHostKey: cfg.Terminal.SSHInsecureHostKey,
 	})
-	cdcOrch := cdc.NewOrchestrator(db, cfg.App.JWTSecret, cfg.CDC)
-	flashback.SetRuntime(&flashback.Runtime{Store: db, Secret: cfg.App.JWTSecret, Cfg: cfg.Flashback})
+	cdcOrch := cdc.NewOrchestrator(db, fieldCrypto, cfg.CDC)
+	flashback.SetRuntime(&flashback.Runtime{Store: db, Secret: fieldCrypto, Cfg: cfg.Flashback})
 	fbEngine := flashback.New()
-	ticketH := &handler.TicketHandler{Store: db, Secret: cfg.App.JWTSecret, Flashback: fbEngine, Migration: migEngine, Archive: arcEngine, CDC: cdcOrch}
-	pgSpaceSvc := pgspace.New(db, cfg.App.JWTSecret)
-	redisRDBSvc := redisrdb.New(db, cfg.App.JWTSecret, filepath.Join(os.TempDir(), "auto-dba-redis-rdb"))
-	awrSvc := awr.New(db, cfg.App.JWTSecret)
+	ticketH := &handler.TicketHandler{Store: db, Secret: fieldCrypto, Flashback: fbEngine, Migration: migEngine, Archive: arcEngine, CDC: cdcOrch}
+	pgSpaceSvc := pgspace.New(db, fieldCrypto)
+	redisRDBSvc := redisrdb.New(db, fieldCrypto, filepath.Join(os.TempDir(), "auto-dba-redis-rdb"))
+	awrSvc := awr.New(db, fieldCrypto)
 	siSvc := sqlinsight.New(db, sqlinsight.StoreAWRLoader{DB: db})
-	ossUploadEng := ossupload.NewEngine(db, cfg.App.JWTSecret)
-	starRocksWebH := &handler.StarRocksWebHandler{Store: db, Secret: cfg.App.JWTSecret}
-	srEng := srcluster.New(db, cfg.App.JWTSecret, srcluster.Config{
+	ossUploadEng := ossupload.NewEngine(db, fieldCrypto)
+	starRocksWebH := &handler.StarRocksWebHandler{Store: db, Secret: fieldCrypto}
+	srEng := srcluster.New(db, fieldCrypto, srcluster.Config{
 		AgentArtifact:      "deploy/node-agent/bin/node-agent",
 		AgentRemoteDir:     "/home/sysadmin/auto-dba/node-agent",
 		AgentListenPort:    8091,
@@ -115,7 +124,7 @@ func Run(cfg *config.Config, configPath string) {
 		SSHIdentityFile:    cfg.Terminal.SSHIdentityFile,
 		SSHInsecureHostKey: cfg.Terminal.SSHInsecureHostKey,
 	})
-	dbDeployEng := dbdeploy.New(db, cfg.App.JWTSecret, dbdeploy.Config{
+	dbDeployEng := dbdeploy.New(db, fieldCrypto, dbdeploy.Config{
 		AgentArtifact:      "deploy/db-agent/bin/db-agent",
 		AgentRemoteDir:     "/home/sysadmin/auto-dba/db-agent",
 		AgentListenPort:    8092,
@@ -126,25 +135,25 @@ func Run(cfg *config.Config, configPath string) {
 	deps := router.Deps{
 		Cfg:                cfg,
 		Auth:               &handler.AuthHandler{Store: db, Cfg: cfg},
-		Inst:               &handler.InstanceHandler{Store: db, Secret: cfg.App.JWTSecret},
-		DB:                 &handler.DatabaseHandler{Store: db, Secret: cfg.App.JWTSecret},
+		Inst:               &handler.InstanceHandler{Store: db, Secret: fieldCrypto},
+		DB:                 &handler.DatabaseHandler{Store: db, Secret: fieldCrypto},
 		Region:             &handler.RegionHandler{Store: db},
 		Env:                &handler.EnvironmentHandler{Store: db},
 		Connector:          &handler.ConnectorHandler{Store: db},
 		Args:               &handler.GlobalArgHandler{Store: db},
 		Ticket:             ticketH,
-		CreateDB:           &handler.CreateDBHandler{Store: db, Secret: cfg.App.JWTSecret},
-		Account:            &handler.AccountHandler{Store: db, Secret: cfg.App.JWTSecret},
-		Review:             &handler.ReviewRuleHandler{Store: db, Secret: cfg.App.JWTSecret},
-		CDC:                &handler.CDCHandler{Store: db, Cfg: cfg, Secret: cfg.App.JWTSecret},
+		CreateDB:           &handler.CreateDBHandler{Store: db, Secret: fieldCrypto},
+		Account:            &handler.AccountHandler{Store: db, Secret: fieldCrypto},
+		Review:             &handler.ReviewRuleHandler{Store: db, Secret: fieldCrypto},
+		CDC:                &handler.CDCHandler{Store: db, Cfg: cfg, Secret: fieldCrypto},
 		Slot:               &handler.SlotHandler{Store: db},
-		Migration:          &handler.MigrationHandler{Store: db, Cfg: cfg, Secret: cfg.App.JWTSecret, Engine: migEngine},
-		Flashback:          &handler.FlashbackHandler{Store: db, Secret: cfg.App.JWTSecret, Cfg: cfg, Engine: fbEngine},
-		Archive:            &handler.ArchiveHandler{Store: db, Secret: cfg.App.JWTSecret, Engine: arcEngine},
-		Kafka:              &handler.KafkaHandler{Store: db, Secret: cfg.App.JWTSecret},
-		Redis:              &handler.RedisHandler{Store: db, Secret: cfg.App.JWTSecret},
-		Insight:            &handler.InsightHandler{Store: db, Secret: cfg.App.JWTSecret},
-		Session:            &handler.SessionHandler{Store: db, Secret: cfg.App.JWTSecret},
+		Migration:          &handler.MigrationHandler{Store: db, Cfg: cfg, Secret: fieldCrypto, Engine: migEngine},
+		Flashback:          &handler.FlashbackHandler{Store: db, Secret: fieldCrypto, Cfg: cfg, Engine: fbEngine},
+		Archive:            &handler.ArchiveHandler{Store: db, Secret: fieldCrypto, Engine: arcEngine},
+		Kafka:              &handler.KafkaHandler{Store: db, Secret: fieldCrypto},
+		Redis:              &handler.RedisHandler{Store: db, Secret: fieldCrypto},
+		Insight:            &handler.InsightHandler{Store: db, Secret: fieldCrypto},
+		Session:            &handler.SessionHandler{Store: db, Secret: fieldCrypto},
 		PgSpace:            &handler.PgSpaceHandler{Svc: pgSpaceSvc},
 		RedisRDB:           &handler.RedisRDBHandler{Svc: redisRDBSvc},
 		AWR:                &handler.AWRHandler{Svc: awrSvc},
@@ -153,23 +162,23 @@ func Run(cfg *config.Config, configPath string) {
 		External:           &handler.ExternalHandler{Cfg: cfg},
 		MonitorTarget:      &handler.MonitorTargetHandler{Store: db},
 		MonitorTag:         &handler.MonitorLabelTagHandler{Store: db},
-		FeAdmin:            &handler.FeAdminHandler{Store: db, Secret: cfg.App.JWTSecret},
-		DsAdmin:            &handler.DsAdminHandler{Store: db, Secret: cfg.App.JWTSecret},
-		OSSSettings:        &handler.OSSSettingsHandler{Store: db, Secret: cfg.App.JWTSecret},
+		FeAdmin:            &handler.FeAdminHandler{Store: db, Secret: fieldCrypto},
+		DsAdmin:            &handler.DsAdminHandler{Store: db, Secret: fieldCrypto},
+		OSSSettings:        &handler.OSSSettingsHandler{Store: db, Secret: fieldCrypto},
 		OSSUpload:          &handler.OSSUploadHandler{Engine: ossUploadEng},
 		StarRocksWeb:       starRocksWebH,
-		HA:                 &handler.HAHandler{Store: db, Secret: cfg.App.JWTSecret},
-		Proxy:              &handler.ProxyHandler{Store: db, Secret: cfg.App.JWTSecret},
-		Backup:             &handler.BackupHandler{Store: db, Secret: cfg.App.JWTSecret, Engine: bakEngine},
-		SrCluster:          &handler.SrClusterHandler{Store: db, Secret: cfg.App.JWTSecret, Engine: srEng},
-		DbDeploy:           &handler.DbDeployHandler{Store: db, Secret: cfg.App.JWTSecret, Engine: dbDeployEng},
-		Cmdb:               &handler.CmdbHandler{Store: db, Secret: cfg.App.JWTSecret},
+		HA:                 &handler.HAHandler{Store: db, Secret: fieldCrypto},
+		Proxy:              &handler.ProxyHandler{Store: db, Secret: fieldCrypto},
+		Backup:             &handler.BackupHandler{Store: db, Secret: fieldCrypto, Engine: bakEngine},
+		SrCluster:          &handler.SrClusterHandler{Store: db, Secret: fieldCrypto, Engine: srEng},
+		DbDeploy:           &handler.DbDeployHandler{Store: db, Secret: fieldCrypto, Engine: dbDeployEng},
+		Cmdb:               &handler.CmdbHandler{Store: db, Secret: fieldCrypto},
 		Todo:               &handler.TodoHandler{Store: db},
-		Alert:              &handler.AlertHandler{Store: db, Secret: cfg.App.JWTSecret},
+		Alert:              &handler.AlertHandler{Store: db, Secret: fieldCrypto},
 		Copilot:            &handler.CopilotHandler{Svc: copilot.New(db)},
 		Runbook:            &handler.RunbookHandler{Svc: runbook.New(db)},
-		DCL:                &handler.DCLHandler{Store: db, Secret: cfg.App.JWTSecret},
-		RBAC:               &handler.RBACHandler{Store: db, Secret: cfg.App.JWTSecret},
+		DCL:                &handler.DCLHandler{Store: db, Secret: fieldCrypto},
+		RBAC:               &handler.RBACHandler{Store: db, Secret: fieldCrypto},
 		Tenant: &handler.TenantHandler{
 			Store: db,
 			CfgTTL: func() time.Duration {
@@ -181,7 +190,7 @@ func Run(cfg *config.Config, configPath string) {
 		Sso:                &handler.SsoHandler{Store: db, Cfg: cfg},
 		SMTP:               &handler.SMTPHandler{Store: db, Cfg: cfg},
 		Notify:             &handler.NotifyHandler{Store: db, Cfg: cfg},
-		Terminal:           &terminal.Handler{Store: db, Cfg: cfg, Secret: cfg.App.JWTSecret},
+		Terminal:           &terminal.Handler{Store: db, Cfg: cfg, Secret: fieldCrypto},
 		Static:             staticRoot,
 	}
 
@@ -201,7 +210,7 @@ func Run(cfg *config.Config, configPath string) {
 	case "off":
 		fmt.Fprintf(os.Stderr, "db-monitor mode=off\n")
 	default: // embed
-		dbMonSvc := dbmonitor.New(db, cfg.App.JWTSecret)
+		dbMonSvc := dbmonitor.New(db, fieldCrypto)
 		deps.DbMonitor = &handler.DbMonitorHandler{Svc: dbMonSvc}
 		fmt.Fprintf(os.Stderr, "db-monitor mode=embed\n")
 	}
@@ -229,6 +238,7 @@ func Run(cfg *config.Config, configPath string) {
 			&pgSpaceSvc.Secret, &redisRDBSvc.Secret, &awrSvc.Secret,
 			&ossUploadEng.Secret, &starRocksWebH.Secret,
 			&srEng.Secret, &dbDeployEng.Secret,
+			&cryptoLive,
 		},
 	}
 	if deps.DbMonitor != nil && deps.DbMonitor.Svc != nil {
@@ -243,7 +253,7 @@ func Run(cfg *config.Config, configPath string) {
 
 	collectCtx, collectCancel := context.WithCancel(context.Background())
 	defer collectCancel()
-	go pgdiag.StartCollector(collectCtx, db, &cfg.App.JWTSecret)
+	go pgdiag.StartCollector(collectCtx, db, &cryptoLive)
 	pgspace.StartDailyCron(collectCtx, pgSpaceSvc)
 	awr.StartDailyCron(collectCtx, awrSvc)
 	sqlinsight.StartDailyCron(collectCtx, siSvc)
@@ -256,7 +266,7 @@ func Run(cfg *config.Config, configPath string) {
 	}
 	go handler.StartIssueAutoCancel(collectCtx, ticketH)
 	go handler.StartAwaitExecStuckNotify(collectCtx, ticketH)
-	alert.Start(collectCtx, db, alert.DefaultInterval, cfg.App.JWTSecret)
+	alert.Start(collectCtx, db, alert.DefaultInterval, cryptoLive)
 
 	addr := fmt.Sprintf("%s:%d", cfg.HTTP.Host, cfg.HTTP.Port)
 	srv := &http.Server{

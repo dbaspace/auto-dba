@@ -4,11 +4,9 @@ nacos:
   enabled: false
   # 单机一个地址；集群逗号分隔，客户端自动兼容
   server_addr: "10.100.113.151:8848"
-  # namespace = 平台部署用的 Nacos「命名空间 ID」（不是显示名，也不是环境管理里的 code）：
-  #   public（默认）→ "" 或 public
-  #   autosql       → e4dec2e2-4711-432f-9110-cc9b67d66b81
+  # 默认不写 namespace（= public）。DataId 若在其它空间，再加一行或设 NACOS_NAMESPACE：
+  #   namespace: "e4dec2e2-4711-432f-9110-cc9b67d66b81"  # autosql；须与 DataId 所在空间一致
   # 勿填 beijing / test；见 docs/nacos-config.md「业务环境 vs Nacos Namespace」
-  namespace: "e4dec2e2-4711-432f-9110-cc9b67d66b81" # autosql；生产勿用 public
   group: DEFAULT_GROUP
   data_id: auto-dba.yaml
   username: nacos
@@ -20,8 +18,12 @@ app:
   name: auto-dba
   run_mode: debug
   # enabled=true 时由 Nacos 覆盖；本地开发可填
-  jwt_secret: change-me-in-production
+  jwt_secret: change-me-in-production   # 仅签 JWT
   jwt_ttl_hours: 24
+  # 字段加密（实例密码等）主密钥；生产务必单独配置。空则回退 jwt_secret
+  # crypto_secret: "另一段至少32位随机串"
+  # crypto_secret_previous: ""
+  # crypto_key_id: k1
 
 http:
   host: "0.0.0.0"

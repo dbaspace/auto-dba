@@ -34,30 +34,32 @@ docker run -d --name nacos-standalone \
 1. 「命名空间」→ 新建（如名称 `autosql`），复制生成的 **Namespace ID**
 2. 左上角切到该空间 →「配置管理」→「配置列表」→「+」
 3. Data ID=`auto-dba.yaml`，Group=`DEFAULT_GROUP`，格式=YAML，粘贴正文后**发布**
-4. 本地 `nacos.namespace` 填该 ID（不要填显示名）；`public` 填 `""` 或 `public`
+4. **引导默认不写 `namespace`（= public）**。仅当 DataId 建在其它空间时，再写该空间的 **Namespace ID**（不要填显示名），或设环境变量 `NACOS_NAMESPACE`
 
 ## 当前环境（单机）
 
 | 项 | 值 |
 |----|-----|
 | 地址 | `10.100.113.151:8848`（控制台 / HTTP；gRPC 另用 9848） |
-| 命名空间名称 | `autosql`（控制台显示名） |
-| Namespace ID | `e4dec2e2-4711-432f-9110-cc9b67d66b81`（本地 `nacos.namespace` 填这个） |
+| 默认 Namespace | **public**（引导文件省略 `namespace` 即可） |
+| 其它空间示例 | `autosql` → ID `e4dec2e2-4711-432f-9110-cc9b67d66b81`（仅当 DataId 在该空间时才写入引导） |
 | Group | `DEFAULT_GROUP` |
-| Data ID | `auto-dba.yaml` |
+| Data ID | `auto-dba.yaml`（或按部署改 `prod-auto-dba.yaml` 等） |
 
 控制台：`http://10.100.113.151:8848/nacos`
 
 ### `nacos.namespace` 怎么填
 
-客户端只认 **Namespace ID**，与控制台「命名空间」表第二列一致：
+**默认：配置文件里不要写 `namespace` 键**（反序列化为空 = public）。只改 `data_id` 时不会被错误的 Namespace ID 带跑。
 
-| 控制台名称 | 本地 `namespace` 写法 |
-|------------|------------------------|
-| **public**（默认空间） | `""`（空）或字面量 `public`（代码会当成空串） |
-| **autosql**（本项目） | `e4dec2e2-4711-432f-9110-cc9b67d66b81` |
+客户端只认 **Namespace ID**，与控制台「命名空间」表第二列一致；须与 DataId **实际所在空间**一致：
 
-生产密钥应放在 **autosql**，不要放 public。控制台左上角先切到对应空间再编辑 DataId。
+| 控制台名称 | 本地写法 |
+|------------|----------|
+| **public**（默认） | **省略**该键；或 `""` / 字面量 `public`（代码当成空串） |
+| **autosql** 等 | 显式 `namespace: "e4dec2e2-4711-432f-9110-cc9b67d66b81"`，或 `NACOS_NAMESPACE` |
+
+若引导写了 autosql ID、而 DataId 只在 public 发布，启动会 `config data not exist`。控制台左上角先切到对应空间再编辑/核对 DataId。
 
 ## 业务环境 vs Nacos Namespace（方案 A）
 
@@ -72,15 +74,16 @@ docker run -d --name nacos-standalone \
 
 1. 每个**平台部署**（开发 / 预发 / 生产）建一个 Nacos Namespace（显示名如 `auto-dba-dev`、`autosql`），记下 **Namespace ID**。
 2. 各 Namespace 下维护同名 DataId `auto-dba.yaml`（Group `DEFAULT_GROUP`），内容按该部署分别填 DSN、JWT、端口。
-3. 该部署机器上的 `config/config.yaml` 里 `nacos.namespace` 填**该部署的 Namespace ID**，不要填业务环境 `code`。
+3. DataId 在 **public** 时引导**省略** `namespace`；若在独立 Namespace，再写该空间的 **Namespace ID**（或 `NACOS_NAMESPACE`），不要填业务环境 `code`。
 4. 业务环境继续只在「环境管理」维护；与 Nacos、热更、Vite 代理无关。
 
 反例：
 
 - 不要为 `beijing`、`test`、`frankfurt` 等业务 code 各建一个 Nacos Namespace（与「单进程多业务环境」模型冲突，密钥/DSN 也会被错误拆散）。
 - 不要把环境管理里的编码写进 `nacos.namespace`。
+- 不要在引导里写上 Namespace ID，却把 DataId 发在另一个空间（例如写了 autosql ID、配置却在 public）。
 
-当前现网：Nacos 空间 `autosql`（ID `e4dec2e2-…`）对应**这一套平台**的配置；元库里的 `test` / `beijing` 等只是数据标签。
+元库里的 `test` / `beijing` 等只是业务数据标签，与 Nacos Namespace 无关。
 
 ## 本地引导
 
@@ -91,13 +94,15 @@ nacos:
   enabled: true
   server_addr: "10.100.113.151:8848"
   # 集群日后改为: "10.0.0.1:8848,10.0.0.2:8848,10.0.0.3:8848"
-  # autosql；若误发在 public，改成 "" 或 public
-  namespace: "e4dec2e2-4711-432f-9110-cc9b67d66b81"
+  # 默认不写 namespace（= public）。DataId 在其它空间时再加，例如：
+  # namespace: "e4dec2e2-4711-432f-9110-cc9b67d66b81"
   group: DEFAULT_GROUP
   data_id: auto-dba.yaml
   username: nacos
   password: "***"
 ```
+
+字段加密密钥写在 **Nacos DataId**（或本地 `app:`）的 `crypto_secret`，不要写进本引导文件。
 
 `enabled: false` 时行为与改造前一致，只读本地 YAML。
 
@@ -126,8 +131,11 @@ nacos:
 
 ```yaml
 app:
-  jwt_secret: "<至少 32 位随机串>"
+  jwt_secret: "<至少 32 位随机串>"          # 仅签 JWT
   jwt_ttl_hours: 24
+  crypto_secret: "<另一段至少 32 位随机串>" # 实例密码等字段加密；勿与 jwt 共用同一串
+  # crypto_secret_previous: "<旧 crypto_secret>"  # 轮换窗口
+  # crypto_key_id: k1
 db:
   driver: postgres
   dsn: "postgres://USER:PASSWORD@HOST:5432/db_autosql?sslmode=disable"
@@ -223,7 +231,8 @@ DataId 内全部业务顶层段参与 diff。段内任意字段都会写入内�
 
 | 变更 | 真实行为 |
 |------|----------|
-| `jwt_secret` | atomic + 各 engine/handler 密钥拷贝；**旧 JWT 立即失效**；元库中用其加密的 **SSO Client Secret / LDAP Bind 密码**也会解不开，须到「认证配置」重新填写并保存（见 [功能说明 · SSO](features.md#sso)） |
+| `jwt_secret` | 仅签 JWT（atomic）；**旧 token 立即失效**。字段加密请用 `crypto_secret`（见下） |
+| `crypto_secret` / `crypto_secret_previous` / `crypto_key_id` | 实例密码、SSO/LDAP/SMTP 等字段 AES（`enc:v2`）；热更后刷新各 handler Secret。轮换：先把旧值写入 `crypto_secret_previous`，再改 `crypto_secret`。未配置 `crypto_secret` 时回退 `jwt_secret`（兼容旧部署）。换密钥后若 previous 未保留，须到「认证配置」重存 SSO/LDAP Secret（见 [功能说明 · SSO](features.md#sso)） |
 | `copilot.*` | 写入 cfg；下次 `LoadConfig` 即生效（Chat/Models 每次现读 Live）；**不读**库表 `copilot_*` |
 | `db` 池参数 | `ApplyPool` |
 | `db.dsn` | **先** `Reopen`（migrate/seed），成功后再提交配置；失败则**整次热更中止**，内存 DSN 保持旧值 |
@@ -274,7 +283,7 @@ go build -o bin/db-monitor ./cmd/db-monitor
 联调清单：
 
 - [ ] 控制台对应 Namespace 下已发布 `auto-dba.yaml`（含 `jwt_secret`、`db.dsn`；SSH 用则含 `ssh_private_key`；Copilot 用则含 `copilot.*`）
-- [ ] 本地 `nacos.enabled: true`，`namespace` 为**平台部署** Namespace ID（非业务环境 code）
+- [ ] 本地 `nacos.enabled: true`；`namespace` 省略（public）或与 DataId 所在空间 ID 一致（非业务环境 code）
 - [ ] 启动日志有「已从 Nacos 加载配置」与 `nacos watch: listening ... debounce=`
 - [ ] 若配置了私钥：存在 `config/terminal/.runtime_id_ed25519`（0600）
 - [ ] 改 `jwt_secret` / 非端口字段后出现 `nacos watch: applied`；DSN 失败应看到 `before-apply aborted` 且旧库仍可用

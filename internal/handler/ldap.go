@@ -21,7 +21,7 @@ func (h *LdapHandler) encKey() string {
 	if h == nil || h.Cfg == nil {
 		return ""
 	}
-	return h.Cfg.App.JWTSecret
+	return h.Cfg.FieldCrypto()
 }
 
 func (h *LdapHandler) requireAdmin(c *gin.Context) bool {

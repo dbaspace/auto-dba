@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"auto-dba/internal/backup"
@@ -51,13 +52,17 @@ func (t *hotReloadTargets) apply(diff config.ReloadDiff) {
 	// 调用方已持有 config 写锁；live 已 ApplyInPlace。
 
 	if diff.JWTSecret {
-		sec := t.cfg.App.JWTSecret
+		log.Printf("nacos reload: jwt_secret 已更新（旧 token 将失效）")
+	}
+	if diff.CryptoSecret || (diff.JWTSecret && strings.TrimSpace(t.cfg.App.CryptoSecret) == "") {
+		config.SyncFieldCrypto(t.cfg)
+		sec := t.cfg.FieldCrypto()
 		for _, p := range t.secrets {
 			if p != nil {
 				*p = sec
 			}
 		}
-		log.Printf("nacos reload: jwt_secret 已更新（旧 token 将失效）")
+		log.Printf("nacos reload: field crypto 已更新（crypto_secret / previous / key_id）")
 	}
 
 	if diff.DBPool && !diff.DBDSN && t.db != nil {
@@ -77,8 +82,8 @@ func (t *hotReloadTargets) apply(diff config.ReloadDiff) {
 			t.cfg.Terminal.MaxLifetimeSec, t.cfg.Terminal.Enabled, t.cfg.Terminal.SSHIdentityFile)
 	}
 
-	if diff.Flashback || diff.JWTSecret {
-		flashback.ApplyConfig(t.cfg.Flashback, t.cfg.App.JWTSecret)
+	if diff.Flashback || diff.CryptoSecret || (diff.JWTSecret && strings.TrimSpace(t.cfg.App.CryptoSecret) == "") {
+		flashback.ApplyConfig(t.cfg.Flashback, t.cfg.FieldCrypto())
 		if diff.Flashback {
 			log.Printf("nacos reload: flashback 配置已同步")
 		}
@@ -109,10 +114,10 @@ func (t *hotReloadTargets) apply(diff config.ReloadDiff) {
 		log.Printf("nacos reload: dbdeploy SSH 已同步")
 	}
 
-	if (diff.CDC || diff.JWTSecret) && t.cdc != nil {
+	if (diff.CDC || diff.CryptoSecret || (diff.JWTSecret && strings.TrimSpace(t.cfg.App.CryptoSecret) == "")) && t.cdc != nil {
 		t.cdc.Cfg = t.cfg.CDC
-		if diff.JWTSecret {
-			t.cdc.Secret = t.cfg.App.JWTSecret
+		if diff.CryptoSecret || (diff.JWTSecret && strings.TrimSpace(t.cfg.App.CryptoSecret) == "") {
+			t.cdc.Secret = t.cfg.FieldCrypto()
 		}
 		if diff.CDC {
 			log.Printf("nacos reload: cdc 配置已同步 enabled=%v", t.cfg.CDC.Enabled)

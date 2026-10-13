@@ -51,7 +51,7 @@
 
 **与 `jwt_secret` 的关系**
 
-Client Secret（及 LDAP Bind 密码）用 `jwt_secret` 加密落库。通过 Nacos 等方式**更换 `jwt_secret` 后**，旧密文无法解密：登录页仍可能显示 SSO（配置里 `enabled` 仍为 true），但换票会提示需重新保存 Secret。处理：到认证配置 → SSO **重新填写 Client Secret 并保存**（LDAP 同理重存 Bind 密码）。详见 [Nacos 配置](nacos-config.md)。
+Client Secret（及 LDAP Bind 密码）用字段加密密钥落库（优先 `app.crypto_secret`，未配置时回退 `jwt_secret`；密文为 `enc:v2`）。通过 Nacos **更换 `crypto_secret` 且未保留 `crypto_secret_previous`**（或旧部署只换了 `jwt_secret` 且曾用其加密）后，旧密文无法解密：登录页仍可能显示 SSO（`enabled` 仍为 true），但换票会提示需重新保存 Secret。处理：到认证配置 → SSO **重新填写 Client Secret 并保存**（LDAP 同理重存 Bind 密码）；或轮换时先填 `crypto_secret_previous`。详见 [Nacos 配置](nacos-config.md)。
 
 **排障**
 

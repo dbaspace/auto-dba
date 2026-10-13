@@ -22,7 +22,7 @@ func (h *SMTPHandler) encKey() string {
 	if h == nil || h.Cfg == nil {
 		return ""
 	}
-	return h.Cfg.App.JWTSecret
+	return h.Cfg.FieldCrypto()
 }
 
 func (h *SMTPHandler) requireAdmin(c *gin.Context) bool {

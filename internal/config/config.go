@@ -2,12 +2,15 @@ package config
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"auto-dba/internal/secret"
 )
 
 type Config struct {
@@ -87,6 +90,12 @@ type AppConfig struct {
 	RunMode     string `yaml:"run_mode"`
 	JWTSecret   string `yaml:"jwt_secret"`
 	JWTTTLHours int    `yaml:"jwt_ttl_hours"`
+	// CryptoSecret 字段加密主密钥（实例密码等）；空则回退 JWTSecret（兼容旧部署）。
+	CryptoSecret string `yaml:"crypto_secret"`
+	// CryptoSecretPrevious 轮换窗口内的旧主密钥，Decrypt 仍可用。
+	CryptoSecretPrevious string `yaml:"crypto_secret_previous"`
+	// CryptoKeyID 写入 enc:v2 时的 kid，默认 k1。
+	CryptoKeyID string `yaml:"crypto_key_id"`
 }
 
 type HTTPConfig struct {
@@ -196,7 +205,44 @@ func Load(path string) (*Config, error) {
 	}
 	BindLive(cfg)
 	PublishJWT(cfg.App.JWTSecret)
+	SyncFieldCrypto(cfg)
 	return cfg, nil
+}
+
+// FieldCrypto 字段加密用主密钥：优先 crypto_secret，否则 jwt_secret。
+func (c *Config) FieldCrypto() string {
+	if c == nil {
+		return ""
+	}
+	return FieldCryptoFromApp(c.App)
+}
+
+// FieldCryptoFromApp 同 FieldCrypto，便于无 Config 指针处调用。
+func FieldCryptoFromApp(app AppConfig) string {
+	if s := strings.TrimSpace(app.CryptoSecret); s != "" {
+		return s
+	}
+	return strings.TrimSpace(app.JWTSecret)
+}
+
+// SyncFieldCrypto 将 crypto 密钥环同步到 secret 包（启动与 Nacos 热更后调用）。
+func SyncFieldCrypto(cfg *Config) {
+	if cfg == nil {
+		return
+	}
+	kid := strings.TrimSpace(cfg.App.CryptoKeyID)
+	if kid == "" {
+		kid = "k1"
+	}
+	secret.SetDefaultKeyID(kid)
+	var prev []string
+	if p := strings.TrimSpace(cfg.App.CryptoSecretPrevious); p != "" {
+		prev = append(prev, p)
+	}
+	secret.SetPreviousSecrets(prev)
+	if strings.TrimSpace(cfg.App.CryptoSecret) == "" && strings.TrimSpace(cfg.App.JWTSecret) != "" {
+		log.Printf("config: app.crypto_secret 未设置，字段加密回退 jwt_secret；生产建议单独配置")
+	}
 }
 
 func applyDefaults(cfg *Config, path string) {
@@ -224,6 +270,9 @@ func applyDefaults(cfg *Config, path string) {
 	}
 	if cfg.App.JWTSecret == "" {
 		cfg.App.JWTSecret = "auto-dba-dev-secret"
+	}
+	if strings.TrimSpace(cfg.App.CryptoKeyID) == "" {
+		cfg.App.CryptoKeyID = "k1"
 	}
 	if cfg.DB.Driver == "" {
 		cfg.DB.Driver = "postgres"

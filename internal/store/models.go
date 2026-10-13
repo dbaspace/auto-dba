@@ -457,7 +457,7 @@ type ReviewRule struct {
 	UpdatedAt string `json:"updated_at"`
 }
 
-// DBAccount 是「配置 → 账号管理」中的业务库账号，密码以 enc:v1: 密文落库。
+// DBAccount 是「配置 → 账号管理」中的业务库账号，密码以 enc:v1:/enc:v2: 密文落库。
 type DBAccount struct {
 	ID           string   `json:"id"`
 	TenantID     string   `json:"tenant_id,omitempty"`

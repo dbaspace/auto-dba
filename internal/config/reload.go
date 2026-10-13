@@ -26,12 +26,13 @@ type ReloadDiff struct {
 	Copilot   bool
 
 	// 派生：供 Reloader 做副作用（换密钥/换库/重启等）
-	JWTSecret   bool
-	DBDSN       bool
-	DBPool      bool
-	SSHKey      bool // terminal 内 SSH 相关
-	ListenAddr  bool // http.host / http.port
-	FrontendDev bool // frontend.dev_*
+	JWTSecret    bool
+	CryptoSecret bool // crypto_secret / previous / key_id 或回退后的 FieldCrypto 材料变更
+	DBDSN        bool
+	DBPool       bool
+	SSHKey       bool // terminal 内 SSH 相关
+	ListenAddr   bool // http.host / http.port
+	FrontendDev  bool // frontend.dev_*
 
 	OldListen      string
 	NewListen      string
@@ -129,6 +130,9 @@ func DiffConfig(old, next *Config) ReloadDiff {
 	d.Copilot = old.Copilot != next.Copilot
 
 	d.JWTSecret = old.App.JWTSecret != next.App.JWTSecret
+	d.CryptoSecret = FieldCryptoFromApp(old.App) != FieldCryptoFromApp(next.App) ||
+		old.App.CryptoSecretPrevious != next.App.CryptoSecretPrevious ||
+		old.App.CryptoKeyID != next.App.CryptoKeyID
 	d.DBDSN = old.DB.DSN != next.DB.DSN || old.DB.Driver != next.DB.Driver
 	d.DBPool = old.DB.MaxOpenConns != next.DB.MaxOpenConns ||
 		old.DB.MaxIdleConns != next.DB.MaxIdleConns ||
