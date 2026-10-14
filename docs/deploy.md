@@ -25,13 +25,13 @@ KeePlus（进程 `auto-dba`）支持多种打包方式。**构建在有 Node 18+
 | **仅前端** | `./scripts/pack_release.sh frontend` | `dist/auto-dba-frontend-*.tgz` | Nginx/CDN 托管静态资源 |
 | **Docker** | `./scripts/pack_release.sh docker` | 镜像 `auto-dba:<时间戳>`（可用 `IMAGE_TAG=` 覆盖） | 容器环境 |
 
-可选环境变量：`GOOS` `GOARCH`（默认 `linux`/`amd64`）、`STAMP`（默认时间戳；发版用 `STAMP=v2.3.6`）、`IMAGE_TAG`、`SKIP_PNPM_INSTALL=1`（已有 `node_modules` 时）。
+可选环境变量：`GOOS` `GOARCH`（默认 `linux`/`amd64`）、`STAMP`（默认时间戳；发版用 `STAMP=v2.3.7`）、`IMAGE_TAG`、`SKIP_PNPM_INSTALL=1`（已有 `node_modules` 时）。
 
 ```bash
-STAMP=v2.3.6 ./scripts/pack_release.sh all
-STAMP=v2.3.6 ./scripts/pack_release.sh backend
-STAMP=v2.3.6 ./scripts/pack_release.sh frontend
-IMAGE_TAG=auto-dba:v2.3.6 ./scripts/pack_release.sh docker
+STAMP=v2.3.7 ./scripts/pack_release.sh all
+STAMP=v2.3.7 ./scripts/pack_release.sh backend
+STAMP=v2.3.7 ./scripts/pack_release.sh frontend
+IMAGE_TAG=auto-dba:v2.3.7 ./scripts/pack_release.sh docker
 ```
 
 ### 已发布版本（摘要）
@@ -48,6 +48,7 @@ IMAGE_TAG=auto-dba:v2.3.6 ./scripts/pack_release.sh docker
 | [v2.3.4](https://github.com/dbaspace/auto-dba/releases/tag/v2.3.4) | 域名环境过滤与 Kafka 查询走域名；登录多账号/记密与 Tab 登出保留；集群部署 Agent 自动绑定与 FE 角色探测；FE 管理从监控同步多节点；详见 [changelog-v2.3.4.md](changelog-v2.3.4.md) |
 | [v2.3.5](https://github.com/dbaspace/auto-dba/releases/tag/v2.3.5) | 主机从监控同步；SR 登记 FE 凭据/Agent 可选与监控批量下发；Agent 下发不误伤已运行服务；详见 [changelog-v2.3.5.md](changelog-v2.3.5.md) |
 | [v2.3.6](https://github.com/dbaspace/auto-dba/releases/tag/v2.3.6) | Nacos `ssh_private_key` 支持裸 Base64 自动包 PEM、指纹热更与 YAML 缩进排障；详见 [changelog-v2.3.6.md](changelog-v2.3.6.md) |
+| [v2.3.7](https://github.com/dbaspace/auto-dba/releases/tag/v2.3.7) | OpenSSH 私钥 Nacos 热更；SR「标记就绪」；工单提交人无需在审批人名单；详见 [changelog-v2.3.7.md](changelog-v2.3.7.md) |
 
 ## 方式 A：一体包（推荐 CentOS 手工）
 

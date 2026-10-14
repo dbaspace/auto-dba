@@ -324,6 +324,16 @@ agents_health
 
 `stop_node` / `start_node` / `restart_node` 以及扩缩、升级等运维变更失败时，**只**更新变更单与步骤日志（及成功时的节点 status），**不**改写集群 `status`。错误详情在变更 Tab；例如 `cipher: message authentication failed` 表示 Node Agent 密码与平台 `secret` 不匹配，需在 Agent 页重设密码后重试。
 
+**业务已正常但 UI 仍显示「初始化失败」**：多为历史 `cluster_init`/`cluster_reinit` 失败留下的生命周期标签（与某次停止失败无关）。应先补 FE 密码使 `GET .../live` 可读，再：
+
+| API / 入口 | 说明 |
+|------------|------|
+| `POST /api/v1/sr-cluster/clusters/:id/mark-ready` | body 可选 `{ "force": false }`；默认 FE 探活通过后将 `failed`（或已有节点的 `draft`）→ `ready` |
+| 集群详情「标记就绪」 | 同上；探活失败时可二次确认「强制标记」 |
+| `force: true` | 跳过探活（确认业务健康时用）；**不等于**重新初始化，不停服、不装包 |
+
+勿因标签误导去点「重新初始化」（会停服备份重装）。失败的启停变更单在变更 Tab 修 Agent 后「重试」即可。
+
 ---
 
 ## 4. 角色模型
@@ -676,6 +686,7 @@ flowchart TB
 | GET | `/api/v1/sr-cluster/clusters/:id/conf-revisions/:rid` | 单个版本（含正文） |
 | POST | `/api/v1/sr-cluster/clusters/:id/conf-rollback` | body `{ node_id, revision_id, restart? }`（单节点回退到某版本，页面用于「回退到修改前」）或 `{ change_id, restart? }`（整单回退某次下发）→ `change_id`，变更类型 `config_rollback` |
 | GET | `/api/v1/sr-cluster/clusters/:id/live` | 节点实时角色/存活/版本/下线状态（SHOW PROC）；顺带删除已缩容完成的 BE 登记，返回 `removed_nodes` |
+| POST | `/api/v1/sr-cluster/clusters/:id/mark-ready` | 将 `failed`（或已有节点的 `draft`）标为 `ready`；默认 FE 探活，`force=true` 跳过；不等于 reinit |
 | POST | `/api/v1/sr-cluster/clusters/:id/sync-registry` | 同步到配置中心：登记/关联资源实例 + 同步监控目标注册，返回 `{ instance, monitor_job, warnings }` |
 
 ```mermaid

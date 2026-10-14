@@ -102,6 +102,61 @@ func (e *Engine) StartClusterInit(clusterID, operator string) (string, error) {
 	return ch.ID, nil
 }
 
+// MarkClusterReady 将纳管生命周期从 failed（或已有节点的 draft）标为 ready。
+// 默认先 FE 探活（ClusterLive）；force=true 时跳过探活（运维确认业务已正常）。
+// 不等于重新初始化，不启停进程、不装包。
+func (e *Engine) MarkClusterReady(ctx context.Context, clusterID, operator string, force bool) error {
+	if e == nil || e.Store == nil {
+		return fmt.Errorf("engine 未初始化")
+	}
+	cl, err := e.Store.GetSrCluster(clusterID)
+	if err != nil || cl == nil {
+		return fmt.Errorf("集群不存在")
+	}
+	nodes, err := e.Store.ListSrNodes(clusterID)
+	if err != nil {
+		return err
+	}
+	if err := canMarkClusterReady(cl.Status, len(nodes)); err != nil {
+		return err
+	}
+	if err := e.rejectIfActiveChange(clusterID); err != nil {
+		return err
+	}
+	if !force {
+		if _, _, err := e.ClusterLive(ctx, cl); err != nil {
+			return fmt.Errorf("FE 探活失败，请先在实例管理/FE 管理补齐密码后再试；确认业务已正常可传 force=true 强制标记: %w", err)
+		}
+	}
+	prev := cl.Status
+	cl.Status = store.SrClusterReady
+	cl.UpdatedBy = operator
+	if err := e.Store.UpdateSrCluster(cl); err != nil {
+		return err
+	}
+	_ = e.Store.AppendCmdbAudit(operator, "update", "sr_cluster", cl.ID, "mark-ready",
+		map[string]any{"status": prev}, map[string]any{"status": store.SrClusterReady, "force": force})
+	return nil
+}
+
+func canMarkClusterReady(status string, nodeCount int) error {
+	switch strings.TrimSpace(status) {
+	case store.SrClusterFailed:
+		return nil
+	case store.SrClusterDraft:
+		if nodeCount == 0 {
+			return fmt.Errorf("草稿集群无节点，请先登记节点或执行初始化")
+		}
+		return nil
+	case store.SrClusterReady:
+		return fmt.Errorf("集群已是 ready")
+	case store.SrClusterIniting:
+		return fmt.Errorf("集群正在初始化中，请等待完成或取消变更后再标记")
+	default:
+		return fmt.Errorf("仅 status=failed（或已有节点的 draft）可标记就绪，当前为 %s", status)
+	}
+}
+
 // StartClusterReinit 重新初始化：停旧服务 → 备份软件包与数据目录 → 再走完整初始化。
 func (e *Engine) StartClusterReinit(clusterID, operator string) (string, error) {
 	if e == nil || e.Store == nil {

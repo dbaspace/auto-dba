@@ -77,6 +77,82 @@ func TestNormalizeSSHPrivateKeyPEM_ValidPEMPassthrough(t *testing.T) {
 	}
 }
 
+func testOpenSSHMaterial(t *testing.T) (pemText, bareB64 string) {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, err := ssh.MarshalPrivateKey(key, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pemText = string(pem.EncodeToMemory(block))
+	bareB64 = base64.StdEncoding.EncodeToString(block.Bytes)
+	return pemText, bareB64
+}
+
+func TestNormalizeSSHPrivateKeyPEM_OpenSSHPassthrough(t *testing.T) {
+	pemText, _ := testOpenSSHMaterial(t)
+	out, err := normalizeSSHPrivateKeyPEM(pemText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "BEGIN OPENSSH PRIVATE KEY") {
+		t.Fatalf("got %q", out[:min(80, len(out))])
+	}
+	if _, err := ssh.ParsePrivateKey([]byte(out)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNormalizeSSHPrivateKeyPEM_OpenSSHBareBase64(t *testing.T) {
+	_, bare := testOpenSSHMaterial(t)
+	var lines []string
+	for i := 0; i < len(bare); i += 70 {
+		end := i + 70
+		if end > len(bare) {
+			end = len(bare)
+		}
+		lines = append(lines, bare[i:end])
+	}
+	out, err := normalizeSSHPrivateKeyPEM(strings.Join(lines, "\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "BEGIN OPENSSH PRIVATE KEY") {
+		t.Fatalf("want OPENSSH PEM, got %q", out[:min(80, len(out))])
+	}
+	if _, err := ssh.ParsePrivateKey([]byte(out)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNormalizeSSHPrivateKeyPEM_RSAHeaderOnOpenSSHBody(t *testing.T) {
+	_, bare := testOpenSSHMaterial(t)
+	wrong := "-----BEGIN RSA PRIVATE KEY-----\n" + bare + "\n-----END RSA PRIVATE KEY-----\n"
+	out, err := normalizeSSHPrivateKeyPEM(wrong)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "BEGIN OPENSSH PRIVATE KEY") {
+		t.Fatalf("should rewrap to OPENSSH: %q", out[:min(80, len(out))])
+	}
+	if strings.Contains(errString(err), "pkcs8") {
+		t.Fatalf("must not fall through to pkcs8: %v", err)
+	}
+	if _, err := ssh.ParsePrivateKey([]byte(out)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
 func TestYamlSSHPrivateKeyHint(t *testing.T) {
 	body := "terminal:\n  ssh_private_key: |\n    aaa\nbbb\n"
 	parseErr := yaml.Unmarshal([]byte(body), &struct{}{})

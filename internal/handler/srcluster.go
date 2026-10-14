@@ -884,6 +884,30 @@ func (h *SrClusterHandler) StartReinit(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{"change_id": id}})
 }
 
+// MarkReady POST /sr-cluster/clusters/:id/mark-ready — 将 failed（或已有节点的 draft）标为 ready。
+// 默认 FE 探活；body {"force":true} 跳过探活。不等于重新初始化。
+func (h *SrClusterHandler) MarkReady(c *gin.Context) {
+	cl, err := resolveSrClusterInTenant(h.Store, c, c.Param("id"))
+	if err != nil || cl == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "集群不存在"})
+		return
+	}
+	var req struct {
+		Force bool `json:"force"`
+	}
+	_ = c.ShouldBindJSON(&req)
+	if err := h.eng().MarkClusterReady(c.Request.Context(), cl.ID, middleware.Username(c), req.Force); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	updated, _ := h.Store.GetSrCluster(cl.ID)
+	if updated == nil {
+		updated = cl
+		updated.Status = store.SrClusterReady
+	}
+	c.JSON(http.StatusOK, gin.H{"data": updated})
+}
+
 func (h *SrClusterHandler) CancelChange(c *gin.Context) {
 	if err := h.eng().CancelChange(c.Param("id")); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})

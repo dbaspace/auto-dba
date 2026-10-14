@@ -97,7 +97,9 @@ func usernameInList(username string, list []string) bool {
 	return false
 }
 
-func (h *TicketHandler) canActOnTarget(tenantID, instanceID, dbName, username string) (bool, targetActDeny, string, error) {
+// canActOnTarget 校验提交目标：实例/库已登记且归属当前租户。
+// 提交人不必在审批人名单中；所选审核人由 Submit 路径另行校验。
+func (h *TicketHandler) canActOnTarget(tenantID, instanceID, dbName, _ string) (bool, targetActDeny, string, error) {
 	inst, err := h.Store.GetInstance(instanceID)
 	if err != nil {
 		return false, targetActAllow, "", err
@@ -115,12 +117,8 @@ func (h *TicketHandler) canActOnTarget(tenantID, instanceID, dbName, username st
 			return false, targetActDenyInstanceMissing, "实例未登记，请先在「配置 → 实例」中登记", nil
 		}
 	}
-	instApprovers := store.ExpandApproverNames(inst.Approvers)
 	if strings.TrimSpace(dbName) == "" {
-		if len(instApprovers) == 0 || usernameInList(username, instApprovers) {
-			return true, targetActAllow, "", nil
-		}
-		return false, targetActDenyNotApprover, "当前用户不在实例审批人名单中", nil
+		return true, targetActAllow, "", nil
 	}
 	dbEnt, err := h.Store.FindDatabase(instanceID, dbName)
 	if err != nil {
@@ -132,17 +130,7 @@ func (h *TicketHandler) canActOnTarget(tenantID, instanceID, dbName, username st
 	if tid := strings.TrimSpace(tenantID); tid != "" && strings.TrimSpace(dbEnt.TenantID) != tid {
 		return false, targetActDenyDBNotRegistered, "库未登记，请先在「配置 → 已登记库」中登记 " + dbName, nil
 	}
-	dbApprovers := store.ExpandApproverNames(dbEnt.Approvers)
-	if len(dbApprovers) > 0 {
-		if usernameInList(username, dbApprovers) {
-			return true, targetActAllow, "", nil
-		}
-		return false, targetActDenyNotApprover, "当前用户不在库级审批人名单中", nil
-	}
-	if len(instApprovers) == 0 || usernameInList(username, instApprovers) {
-		return true, targetActAllow, "", nil
-	}
-	return false, targetActDenyNotApprover, "当前用户不在实例审批人名单中", nil
+	return true, targetActAllow, "", nil
 }
 
 func (h *TicketHandler) resolveApprovers(instanceID, dbName string) []string {

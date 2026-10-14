@@ -769,6 +769,7 @@ func Init(e *gin.Engine, d Deps) {
 		sg.DELETE("/clusters/:id/nodes/:nodeId", gSrCl, d.SrCluster.DeleteNode)
 		sg.POST("/clusters/:id/init", gSrCl, d.SrCluster.StartInit)
 		sg.POST("/clusters/:id/reinit", gSrCl, d.SrCluster.StartReinit)
+		sg.POST("/clusters/:id/mark-ready", gSrCl, d.SrCluster.MarkReady)
 		sg.POST("/clusters/:id/upgrade", gSrCl, d.SrCluster.StartUpgrade)
 		sg.POST("/clusters/:id/upgrade/precheck", gSrCl, d.SrCluster.PrecheckUpgrade)
 		sg.GET("/clusters/:id/configs", gSrCl, d.SrCluster.GetConfigs)

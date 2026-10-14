@@ -7,6 +7,17 @@ import (
 	"auto-dba/internal/store"
 )
 
+// 审核人仍须在名单中（与 canActOnTarget 放宽提交人无关）。
+func TestReviewerMustBeInApproverList(t *testing.T) {
+	approvers := []string{"admin", "chenjiachi"}
+	if usernameInList("ldap_dev", approvers) {
+		t.Fatal("non-approver reviewer must be rejected")
+	}
+	if !usernameInList("admin", approvers) {
+		t.Fatal("admin should be allowed as reviewer")
+	}
+}
+
 func testStore(t *testing.T) *store.DB {
 	t.Helper()
 	dsn := os.Getenv("AUTO_DBA_TEST_DSN")
@@ -40,9 +51,10 @@ func TestCanActOnTargetConstraints(t *testing.T) {
 		t.Fatalf("missing db: ok=%v deny=%v msg=%s err=%v", ok, deny, msg, err)
 	}
 
+	// 提交人不必在审批人名单；someone_else 对已登记库应通过
 	ok, deny, msg, err = h.canActOnTarget("", id, "appdb", "someone_else")
-	if err != nil || ok || deny != targetActDenyNotApprover {
-		t.Fatalf("non approver: ok=%v deny=%v msg=%s err=%v", ok, deny, msg, err)
+	if err != nil || !ok {
+		t.Fatalf("non-approver submitter should pass: deny=%v msg=%s err=%v", deny, msg, err)
 	}
 
 	ok, deny, msg, err = h.canActOnTarget("", "not-exist", "", "admin")

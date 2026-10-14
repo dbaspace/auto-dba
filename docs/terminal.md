@@ -137,9 +137,20 @@ Platform Agent（:8090）、Node Agent（:8091）、DB Agent（:8092）的 SSH �
 
 ## 排障
 
+### Permission denied (publickey)
+
+平台日志里 `open-terminal` / `/terminal` / `/terminal/ws` 均为 **200**，但 Web 终端内出现 `Permission denied (publickey,…)`（可能先有 `Permanently added … known hosts`）：说明会话与 WebSocket 已建立，**目标机拒绝了当前平台私钥对应的公钥**。
+
+1. 平台机导出公钥：`ssh-keygen -y -f config/terminal/.runtime_id_ed25519`（Nacos 物化路径；或你配置的 `ssh_identity_file`）
+2. 用同一密钥直连复现：`ssh -i <私钥> -p <端口> <用户>@<主机>`
+3. 将第 1 步整行公钥写入目标机登录用户的 `~/.ssh/authorized_keys`（权限 `700` / `600`，属主正确）
+4. Nacos 换钥后须重新分发**新**公钥；用户须与实例 Username / `terminal.ssh_user` 一致
+
+Nacos 热更私钥格式见 [nacos-config.md](nacos-config.md)「SSH 私钥」（支持 OpenSSH / RSA PEM 与裸 Base64）。
+
 | 现象 | 常见原因 | 处理 |
 |------|----------|------|
-| `Permission denied (publickey,…)` | 公钥未进**登录用户**的 `authorized_keys`；或用户/端口不对 | 按上文写入 `sysadmin`（或实例 Username）的 authorized_keys；平台用同私钥 `ssh -i` 自测 |
+| `Permission denied (publickey,…)` | 公钥未进**登录用户**的 `authorized_keys`；或用户/端口不对 | 见上一小节；平台用同私钥 `ssh -i` 自测 |
 | `SSH 私钥不存在` | `ssh_identity_file` 路径错或文件未挂进容器 | 检查路径与权限；容器需挂载 `config/terminal/` |
 | `仅支持主机类型实例` | 实例 `db_type` 不是 host | 改类型或另建 host 实例 |
 | `未授权访问该主机终端` | 可见性/授权不足 | 调 visibility 或授权 |

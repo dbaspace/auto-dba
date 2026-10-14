@@ -216,8 +216,10 @@ curl -u 'nacos:密码' \
 ## SSH 私钥
 
 - Nacos 字段：`terminal.ssh_private_key`（PEM 正文，或**无头尾的裸 Base64**）
+- 支持格式：`BEGIN OPENSSH PRIVATE KEY`、`BEGIN RSA PRIVATE KEY` / `BEGIN PRIVATE KEY`（PKCS#1/8）、以及对应裸 Base64（OpenSSH 正文以 `openssh-key-v1` 识别）
 - 启动 / 热更时归一化为 PEM，写入 `config/terminal/.runtime_id_ed25519`（`0600`），并设置 `ssh_identity_file`
 - 热更用 PEM 内容指纹判断变更；仅改私钥也会 `nacos watch: applied … sections=[terminal]`
+- **带口令的加密私钥暂不支持**热更（请用无口令钥，或 `ssh-keygen -p -N ''` 去口令后再贴）
 - `config/terminal/` 已 gitignore
 
 ### 写法与常见报错
@@ -226,9 +228,21 @@ curl -u 'nacos:密码' \
 |------|------|------|
 | `parse remote yaml: … could not find expected ':'` | 块标量内后续行**顶格**或未写 `\|` | 每一行与首行同缩进；必须有 `ssh_private_key: \|` |
 | 内容推送但业务字段无变化 | 旧版不比较密钥指纹 | 升级后按指纹热更；或重启一次 |
-| 密钥无法登录 / ParsePrivateKey 失败 | 用了 `BEGIN OPENSSH` 却塞入 RSA `MIIE…` 正文 | 改用 `BEGIN RSA PRIVATE KEY`，或只贴裸 Base64 让程序自动包装 |
+| `无法识别私钥 DER … pkcs8`（旧版） | OpenSSH 正文被误当 PKCS#8 | 升级含 OpenSSH 魔数识别的版本；或贴完整 `BEGIN OPENSSH PRIVATE KEY` |
+| OpenSSH 私钥无法解析 | 内容截断或带加密口令 | 核对粘贴完整；去掉口令后再发布 |
+| 头与正文类型不符 | `BEGIN OPENSSH` 塞 RSA `MIIE…`，或相反 | 只贴裸 Base64 让程序按正文自动包装，或头尾与正文一致 |
 
-正确示例（裸 Base64，注意缩进）：
+OpenSSH PEM 示例：
+
+```yaml
+terminal:
+  ssh_private_key: |
+    -----BEGIN OPENSSH PRIVATE KEY-----
+    b3BlbnNzaC1rZXktdjEAAAAA…（每行缩进）
+    -----END OPENSSH PRIVATE KEY-----
+```
+
+RSA 裸 Base64 示例：
 
 ```yaml
 terminal:

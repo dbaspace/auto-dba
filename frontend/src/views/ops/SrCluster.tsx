@@ -1085,6 +1085,82 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
     message.info(`暂无${changeCategoryLabel(SR_CHANGE_CATEGORIES, category)}`)
   }
 
+  /** 将 failed（或已有节点的 draft）标为 ready；默认 FE 探活，不等于重新初始化 */
+  const markClusterReady = (cluster: SrCluster) => {
+    Modal.confirm({
+      title: '标记集群为就绪？',
+      width: 520,
+      content: (
+        <div>
+          <p>
+            仅修改纳管生命周期标签（
+            <code>failed</code>
+            {' '}
+            →
+            {' '}
+            <code>ready</code>
+            ），
+            <strong>不会</strong>
+            停服、装包或重新初始化。
+          </p>
+          <p style={{ color: '#666', marginBottom: 0 }}>
+            请确认 FE 业务已正常，且已补齐 FE 密码（否则探活会失败）。若探活失败但业务确认正常，可在下一提示中选择强制标记。
+          </p>
+        </div>
+      ),
+      okText: '标记就绪',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          const res = await api.post(`/sr-cluster/clusters/${cluster.id}/mark-ready`, {})
+          const updated = res.data?.data as SrCluster | undefined
+          message.success('已标记为就绪')
+          await loadClusters()
+          if (updated) {
+            setSelected((prev) => (prev && prev.id === cluster.id ? { ...prev, ...updated, status: 'ready' } : prev))
+          } else {
+            setSelected((prev) => (prev && prev.id === cluster.id ? { ...prev, status: 'ready' } : prev))
+          }
+          void loadNodeLive(cluster.id)
+        } catch (e: any) {
+          const msg = e?.response?.data?.message || e.message || '标记失败'
+          Modal.confirm({
+            title: '标记就绪未成功',
+            width: 560,
+            content: (
+              <div style={{ whiteSpace: 'pre-wrap' }}>
+                <div>{msg}</div>
+                <div style={{ marginTop: 12, color: '#666', fontSize: 12 }}>
+                  常见原因：FE 密码未配置（Access denied / using password: NO）。请到实例管理或 FE 管理补密后重试；若确认集群业务已健康，可强制标记（跳过探活）。
+                </div>
+              </div>
+            ),
+            okText: '强制标记就绪',
+            okButtonProps: { danger: true },
+            cancelText: '取消',
+            onOk: async () => {
+              try {
+                const res = await api.post(`/sr-cluster/clusters/${cluster.id}/mark-ready`, { force: true })
+                const updated = res.data?.data as SrCluster | undefined
+                message.success('已强制标记为就绪')
+                await loadClusters()
+                if (updated) {
+                  setSelected((prev) => (prev && prev.id === cluster.id ? { ...prev, ...updated, status: 'ready' } : prev))
+                } else {
+                  setSelected((prev) => (prev && prev.id === cluster.id ? { ...prev, status: 'ready' } : prev))
+                }
+              } catch (e2: any) {
+                message.error(e2?.response?.data?.message || e2.message || '强制标记失败')
+                throw e2
+              }
+            },
+          })
+          throw e
+        }
+      },
+    })
+  }
+
   const startClusterInit = async (cluster: SrCluster) => {
     try {
       const res = await api.post(`/sr-cluster/clusters/${cluster.id}/init`)
@@ -1489,6 +1565,13 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                           <Button type="primary" onClick={() => { void startClusterInit(selected) }}>
                             集群初始化
                           </Button>
+                        )}
+                        {(selected.status === 'failed' || (selected.status === 'draft' && nodes.length > 0)) && (
+                          <Tooltip title="仅改纳管标签为 ready，不停服/不装包；默认先探活 FE。启停失败不会导致「初始化失败」。">
+                            <Button onClick={() => { markClusterReady(selected) }}>
+                              标记就绪
+                            </Button>
+                          </Tooltip>
                         )}
                         {(selected.status === 'ready' || selected.status === 'failed' || selected.status === 'initializing') && (
                           <Button danger onClick={() => { startClusterReinit(selected) }}>
