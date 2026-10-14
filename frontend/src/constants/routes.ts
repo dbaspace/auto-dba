@@ -91,6 +91,7 @@ export const PAGE_ROUTES = [
   { path: '/config/fe-admin', title: 'FE管理' },
   { path: '/config/ds-admin', title: '海豚配置' },
   { path: '/config/databases', title: '已登记库' },
+  { path: '/config/domains', title: '域名管理' },
   { path: '/config/accounts', title: '账号管理' },
   { path: '/config/review-rules', title: '审核规则' },
   { path: '/config/sql-insight', title: 'SQL 洞察设置' },

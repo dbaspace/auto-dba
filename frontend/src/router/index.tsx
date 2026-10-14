@@ -51,6 +51,7 @@ import AuthConfig from '../views/config/AuthConfig'
 import ReviewRules from '../views/config/ReviewRules'
 import Instances from '../views/config/Instances'
 import Databases from '../views/config/Databases'
+import AccessDomains from '../views/config/AccessDomains'
 import Accounts from '../views/config/Accounts'
 import Menus from '../views/config/Menus'
 import RunHistory from '../views/archive/RunHistory'
@@ -240,6 +241,7 @@ const router = createHashRouter([
       { path: 'config/ds-admin', element: <DsAdmin /> },
       { path: 'metadata/database/manage/connector', element: <Navigate to="/config/connectors" replace /> },
       { path: 'config/databases', element: <Databases /> },
+      { path: 'config/domains', element: <AccessDomains /> },
       { path: 'config/accounts', element: <Accounts /> },
       { path: 'metadata/database/manage/account', element: <Navigate to="/config/accounts" replace /> },
       { path: 'database/manage/account', element: <Navigate to="/config/accounts" replace /> },

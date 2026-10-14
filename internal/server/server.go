@@ -137,6 +137,7 @@ func Run(cfg *config.Config, configPath string) {
 		Auth:               &handler.AuthHandler{Store: db, Cfg: cfg},
 		Inst:               &handler.InstanceHandler{Store: db, Secret: fieldCrypto},
 		DB:                 &handler.DatabaseHandler{Store: db, Secret: fieldCrypto},
+		AccessDomain:       &handler.AccessDomainHandler{Store: db},
 		Region:             &handler.RegionHandler{Store: db},
 		Env:                &handler.EnvironmentHandler{Store: db},
 		Connector:          &handler.ConnectorHandler{Store: db},

@@ -454,9 +454,13 @@ func (d *DB) assignInstanceTenantOnly(id, toTenantID string) error {
 	return tx.Commit()
 }
 
-// reassignInstanceOwnedCatalogTx 只迁移仍归属 fromTid（或空）的库与对应账号，异租库不动。
+// reassignInstanceOwnedCatalogTx 只迁移仍归属 fromTid（或空）的库与对应账号，异租库不动；同条件迁移域名资源。
 func (d *DB) reassignInstanceOwnedCatalogTx(tx *sql.Tx, instanceID, fromTid, toTid, now string) error {
 	if _, err := tx.Exec(d.rewrite(`UPDATE tbl_databases SET tenant_id=?, updated_at=? WHERE instance_id=? AND (COALESCE(tenant_id,'')=? OR COALESCE(tenant_id,'')='')`),
+		toTid, now, instanceID, fromTid); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(d.rewrite(`UPDATE tbl_access_domains SET tenant_id=?, updated_at=? WHERE instance_id=? AND (COALESCE(tenant_id,'')=? OR COALESCE(tenant_id,'')='')`),
 		toTid, now, instanceID, fromTid); err != nil {
 		return err
 	}
@@ -575,6 +579,9 @@ func (d *DB) DeleteInstanceInTenant(id, tenantID string) error {
 		}
 	}
 	if _, err := d.Exec(`DELETE FROM tbl_databases WHERE instance_id=?`, id); err != nil {
+		return err
+	}
+	if err := d.DeleteAccessDomainsByInstance(id); err != nil {
 		return err
 	}
 	_, err := d.Exec(`DELETE FROM tbl_instances WHERE id=?`, id)

@@ -18,27 +18,90 @@ const defaultPort = 6379
 type Options struct {
 	Username string
 	Password string
+	// Host 可选连接主机覆盖（须为实例登记的 host/domain_name/domains 之一）。
+	Host string
+}
+
+// InstanceHosts 返回实例允许的连接主机（host、domain_name、domains），去重且保序。
+func InstanceHosts(inst *store.Instance) []string {
+	if inst == nil {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, 4)
+	add := func(s string) {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return
+		}
+		key := strings.ToLower(s)
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, s)
+	}
+	add(inst.Host)
+	add(inst.DomainName)
+	for _, d := range inst.Domains {
+		add(d)
+	}
+	return out
+}
+
+// ResolveHost 解析连接主机：domain 为空用默认（host 优先，否则 domain_name/domains[0]）；
+// 非空则必须命中 InstanceHosts，防止任意地址 SSRF。
+func ResolveHost(inst *store.Instance, domain string) (string, error) {
+	if inst == nil {
+		return "", fmt.Errorf("实例不存在")
+	}
+	domain = strings.TrimSpace(domain)
+	allowed := InstanceHosts(inst)
+	if domain == "" {
+		if len(allowed) == 0 {
+			return "", fmt.Errorf("实例未配置连接主机或域名")
+		}
+		return allowed[0], nil
+	}
+	want := strings.ToLower(domain)
+	for _, h := range allowed {
+		if strings.ToLower(h) == want {
+			return h, nil
+		}
+	}
+	return "", fmt.Errorf("域名不在该实例登记范围内")
+}
+
+func instancePort(inst *store.Instance) int {
+	if inst == nil || inst.Port <= 0 {
+		return defaultPort
+	}
+	return inst.Port
+}
+
+func formatAddr(host string, port int) string {
+	host = strings.TrimSpace(host)
+	if port <= 0 {
+		port = defaultPort
+	}
+	if host == "" {
+		return fmt.Sprintf("localhost:%d", port)
+	}
+	if _, _, err := net.SplitHostPort(host); err == nil {
+		return host
+	}
+	return fmt.Sprintf("%s:%d", host, port)
 }
 
 func Addr(inst *store.Instance) string {
 	if inst == nil {
-		return fmt.Sprintf("localhost:%d", defaultPort)
+		return formatAddr("", defaultPort)
 	}
-	h := strings.TrimSpace(inst.Host)
-	if h == "" {
-		h = strings.TrimSpace(inst.DomainName)
+	h, err := ResolveHost(inst, "")
+	if err != nil {
+		return formatAddr("", instancePort(inst))
 	}
-	port := inst.Port
-	if port <= 0 {
-		port = defaultPort
-	}
-	if h == "" {
-		return fmt.Sprintf("localhost:%d", port)
-	}
-	if _, _, err := net.SplitHostPort(h); err == nil {
-		return h
-	}
-	return fmt.Sprintf("%s:%d", h, port)
+	return formatAddr(h, instancePort(inst))
 }
 
 func ParseDBIndex(dbName string) (int, error) {
@@ -55,8 +118,12 @@ func ParseDBIndex(dbName string) (int, error) {
 }
 
 func newClient(inst *store.Instance, opt Options, db int) *redis.Client {
+	host := strings.TrimSpace(opt.Host)
+	if host == "" {
+		host, _ = ResolveHost(inst, "")
+	}
 	return redis.NewClient(&redis.Options{
-		Addr:         Addr(inst),
+		Addr:         formatAddr(host, instancePort(inst)),
 		Username:     strings.TrimSpace(firstNonEmpty(opt.Username, inst.Username)),
 		Password:     opt.Password,
 		DB:           db,

@@ -201,6 +201,10 @@ export default function Instances() {
   const [pageSize, setPageSize] = useState(10)
   const [sortKey, setSortKey] = useState<SortKey | ''>('')
   const [sortOrder, setSortOrder] = useState<'ascend' | 'descend' | null>(null)
+  const [tenants, setTenants] = useState<{ id: string; name?: string; code?: string }[]>([])
+  const [assignRow, setAssignRow] = useState<InstanceRow | null>(null)
+  const [assignTid, setAssignTid] = useState('')
+  const [assigning, setAssigning] = useState(false)
 
   const dbTypeKey = typeKey(form.db_type)
   const hostType = isHostType(form.db_type)
@@ -390,7 +394,12 @@ export default function Instances() {
   async function load() {
     const { data } = await api.get('/instances', { params: { q } })
     setRows(data.data || [])
+  }
+
+  /** 查询：重新筛选后回到第 1 页；保存/删除等刷新不调用此函数，以保留当前页 */
+  async function search() {
     setPage(1)
+    await load()
   }
 
   function open(row?: InstanceRow) {
@@ -547,19 +556,30 @@ export default function Instances() {
     }
   }
 
-  function assignToCurrentTenant(row: InstanceRow) {
-    if (!row.id || !currentTenantId) return
-    const from = row.tenant_name || row.tenant_id || '其它租户'
-    Modal.confirm({
-      title: '划拨到当前租户',
-      content: `将实例「${row.name || row.id}」（当前归属：${from}）划拨到「${currentTenantLabel}」？下属已登记库与账号一并迁移。`,
-      okText: '划拨',
-      onOk: async () => {
-        await api.post(`/instances/${row.id}/assign-tenant`, { tenant_id: currentTenantId })
-        message.success('已划拨到 ' + currentTenantLabel)
-        await load()
-      },
-    })
+  function openAssign(row: InstanceRow) {
+    if (!row.id) return
+    setAssignTid(currentTenantId)
+    setAssignRow(row)
+  }
+
+  async function confirmAssign() {
+    if (!assignRow?.id || !assignTid) {
+      message.warning('请选择目标租户')
+      return
+    }
+    setAssigning(true)
+    try {
+      await api.post(`/instances/${assignRow.id}/assign-tenant`, { tenant_id: assignTid })
+      const label =
+        tenants.find((t) => t.id === assignTid)?.name ||
+        tenants.find((t) => t.id === assignTid)?.code ||
+        assignTid
+      message.success('已划拨到 ' + label)
+      setAssignRow(null)
+      await load()
+    } finally {
+      setAssigning(false)
+    }
   }
 
   function remove(row: InstanceRow) {
@@ -587,7 +607,17 @@ export default function Instances() {
   }
 
   useEffect(() => {
-    Promise.all([load(), loadTypes(), loadMeta()])
+    ;(async () => {
+      await Promise.all([load(), loadTypes(), loadMeta()])
+      if (impersonating) {
+        try {
+          const { data } = await api.get('/tenants')
+          setTenants((data.data || []).filter((t: { status?: string }) => t.status !== 'disabled'))
+        } catch {
+          setTenants([])
+        }
+      }
+    })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -622,10 +652,10 @@ export default function Instances() {
       <div className="ops-filters">
         <div className="filter-item">
           <span className="label">关键词：</span>
-          <Input value={q} placeholder="请输入名称/主机" onChange={(e) => setQ(e.target.value)} onPressEnter={load} />
+          <Input value={q} placeholder="请输入名称/主机" onChange={(e) => setQ(e.target.value)} onPressEnter={() => void search()} />
         </div>
         <div className="toolbar" style={{ margin: 0, flexShrink: 0 }}>
-          <Button type="primary" onClick={load}>
+          <Button type="primary" onClick={() => void search()}>
             查询
           </Button>
           <Auth urn={Perm.instances.create}>
@@ -637,7 +667,7 @@ export default function Instances() {
       </div>
       {impersonating ? (
         <div className="type-hint" style={{ margin: '0 0 8px', color: 'var(--ant-color-text-secondary, #666)' }}>
-          审计中：列表含全平台实例。其它租户资源可「划拨到当前租户（{currentTenantLabel}）」后供该租户成员使用。
+          审计中：列表含全平台实例。可用「指定租户」将实例（及下属已登记库/账号）划到目标租户；当前审计租户为「{currentTenantLabel}」。
         </div>
       ) : null}
       <div className="ops-table">
@@ -777,10 +807,10 @@ export default function Instances() {
               fixed: 'right' as const,
               render: (_: unknown, row: InstanceRow) => (
                 <>
-                  {impersonating && row.tenant_id && row.tenant_id !== currentTenantId ? (
+                  {impersonating ? (
                     <Auth urn={Perm.tenants.impersonate}>
-                      <Button type="link" onClick={() => assignToCurrentTenant(row)}>
-                        划拨到当前租户
+                      <Button type="link" onClick={() => openAssign(row)}>
+                        指定租户
                       </Button>
                     </Auth>
                   ) : null}
@@ -1096,6 +1126,31 @@ export default function Instances() {
             <Input value={form.description || ''} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} />
           </div>
         </div>
+      </Modal>
+      <Modal
+        open={!!assignRow}
+        title="指定实例归属租户"
+        okText="划拨"
+        confirmLoading={assigning}
+        onCancel={() => !assigning && setAssignRow(null)}
+        onOk={confirmAssign}
+      >
+        <p style={{ marginBottom: 12 }}>
+          将实例「{assignRow?.name || assignRow?.id}」（当前归属：
+          {assignRow?.tenant_name || assignRow?.tenant_id || '—'}
+          ）划到指定租户。下属已登记库与账号一并迁移；其它租户要用请走授权（只读）。
+        </p>
+        <Select
+          style={{ width: '100%' }}
+          showSearch
+          optionFilterProp="label"
+          value={assignTid || undefined}
+          onChange={(v) => setAssignTid(v)}
+          options={tenants.map((t) => ({
+            value: t.id,
+            label: `${t.name || t.code || t.id}${t.id === currentTenantId ? '（当前审计）' : ''}`,
+          }))}
+        />
       </Modal>
     </div>
   )

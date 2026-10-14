@@ -1519,7 +1519,16 @@ func (d *DB) ensureFlashbackSchema() error {
 	if err := d.ensureCDCSyncLogsTable(); err != nil {
 		return err
 	}
-	return d.ensureSchemaCompareFixSQLColumn()
+	if err := d.ensureSchemaCompareFixSQLColumn(); err != nil {
+		return err
+	}
+	if err := d.ensureAccessDomainsTable(); err != nil {
+		return err
+	}
+	if _, err := d.BackfillAccessDomainsFromInstances(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (d *DB) ensureCDCSyncLogsTable() error {

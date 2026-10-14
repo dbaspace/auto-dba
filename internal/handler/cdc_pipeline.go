@@ -585,7 +585,7 @@ func (h *CDCHandler) DiscoverDatabases(c *gin.Context) {
 		if rows.Scan(&n) != nil || n == "" {
 			continue
 		}
-		if prefix != "" && !strings.HasPrefix(n, prefix) {
+		if prefix != "" && !cdc.MatchNumericShardName(n, prefix) {
 			continue
 		}
 		names = append(names, n)

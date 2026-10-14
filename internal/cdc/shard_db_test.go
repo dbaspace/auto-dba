@@ -25,10 +25,45 @@ func TestValidateShardCreate(t *testing.T) {
 		t.Fatal("expected error")
 	}
 	err := ValidateShardCreate(map[string]string{
-		"shard_db": "true", "source_db_names": "db_a,db_b", "source_db_prefix": "db_",
-	}, "db_a")
+		"shard_db": "true", "source_db_names": "db_a_0,db_a_1", "source_db_prefix": "db_a_",
+	}, "db_a_0")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if err := ValidateShardCreate(map[string]string{
+		"shard_db": "true", "source_db_names": "db_order_0,db_ordering_config", "source_db_prefix": "db_order",
+	}, "db_order_0"); err == nil {
+		t.Fatal("expected reject db_ordering_config")
+	}
+}
+
+func TestMatchNumericShardName(t *testing.T) {
+	cases := []struct {
+		name, prefix string
+		want         bool
+	}{
+		{"db_order_0", "db_order_", true},
+		{"db_order_63", "db_order_", true},
+		{"db_order_0", "db_order", true},
+		{"db_ordering_config", "db_order_", false},
+		{"db_ordering_config", "db_order", false},
+		{"loadtest_db01", "loadtest_db", true},
+		{"db_order_", "db_order_", false},
+		{"db_order", "db_order", false},
+		{"", "db_", false},
+		{"db_0", "", false},
+	}
+	for _, c := range cases {
+		if got := MatchNumericShardName(c.name, c.prefix); got != c.want {
+			t.Fatalf("MatchNumericShardName(%q,%q)=%v want %v", c.name, c.prefix, got, c.want)
+		}
+	}
+	got := FilterNumericShardNames(
+		[]string{"db_order_0", "db_order_1", "db_ordering_config", "other"},
+		"db_order_",
+	)
+	if len(got) != 2 || got[0] != "db_order_0" || got[1] != "db_order_1" {
+		t.Fatalf("FilterNumericShardNames: %v", got)
 	}
 }
 

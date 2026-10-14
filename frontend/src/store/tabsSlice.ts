@@ -30,7 +30,38 @@ function tabKey(path: string, search = ''): string {
   return s ? `${p}${s.startsWith('?') ? s : `?${s}`}` : p
 }
 
-/** 展示名：仪表盘 → 工作台；其余优先菜单标题 */
+/** PAGE_ROUTES 精确路径标题（用于覆盖菜单短名，如 Redis → Redis 查询） */
+function pageRouteTitle(path: string): string {
+  const p = normPath(path)
+  return PAGE_ROUTES.find((r) => r.path === p)?.title || ''
+}
+
+/** 数据查询等固定页：菜单短名会被 PAGE_ROUTES 纠正（勿作用于 /config/instances?db_type=） */
+const QUERY_TAB_ROUTE_PATHS = new Set(['/ops/redis-query', '/ops/kafka-query', '/ops/query'])
+
+/**
+ * 打开 Tab 时的最终标题。
+ * 数据查询路径优先 PAGE_ROUTES（Redis → Redis 查询）；其余保留传入 title（如实例类型 Redis）。
+ */
+export function resolveOpenTabTitle(path: string, title: string | undefined, menus?: MenuNode[]): string {
+  const p = normPath(path)
+  const routeTitle = pageRouteTitle(p)
+  const t = (title || '').trim()
+  if (routeTitle && QUERY_TAB_ROUTE_PATHS.has(p)) return routeTitle
+  if (t) return t
+  if (routeTitle) return routeTitle
+  return titleForPath(p, menus)
+}
+
+/** 恢复缓存 Tab 时校正数据查询旧短名 */
+function normalizeCachedTabTitle(path: string, title: string, menus?: MenuNode[]): string {
+  const p = normPath(path)
+  const routeTitle = pageRouteTitle(p)
+  if (routeTitle && QUERY_TAB_ROUTE_PATHS.has(p)) return routeTitle
+  return clusterDeployEngineTitle(p) || title || titleForPath(p, menus)
+}
+
+/** 展示名：仪表盘 → 工作台；其余优先 PAGE_ROUTES，再菜单标题 */
 export function titleForPath(path: string, menus?: MenuNode[]): string {
   const p = normPath(path)
   if (p === HOME_PATH || p === '/metadata/database/search/dashboard') return '工作台'
@@ -133,13 +164,16 @@ export function loadTabsState(menus?: MenuNode[]): TabsState {
     if (!raw) return fallback
     const parsed = JSON.parse(raw) as { tabs?: unknown; activeKey?: unknown }
     if (!Array.isArray(parsed.tabs) || !parsed.tabs.length) return fallback
-    const tabs = parsed.tabs.filter(isAppTab).map((t) => ({
-      key: t.key,
-      path: normPath(t.path),
-      search: typeof t.search === 'string' ? t.search : '',
-      title: clusterDeployEngineTitle(normPath(t.path)) || t.title || titleForPath(t.path, menus),
-      closable: !!t.closable,
-    }))
+    const tabs = parsed.tabs.filter(isAppTab).map((t) => {
+      const path = normPath(t.path)
+      return {
+        key: t.key,
+        path,
+        search: typeof t.search === 'string' ? t.search : '',
+        title: normalizeCachedTabTitle(path, t.title, menus),
+        closable: !!t.closable,
+      }
+    })
     if (!tabs.length) return fallback
 
     const home = makeHomeTab(menus)
@@ -218,10 +252,11 @@ const tabsSlice = createSlice({
       if (!force && allowed.length && !pathAllowed(path, allowed)) return
 
       const key = tabKey(path, search)
+      const resolvedTitle = resolveOpenTabTitle(path, title, menus)
       const existing = state.tabs.find((t) => t.key === key)
       if (existing) {
         state.activeKey = existing.key
-        if (title) existing.title = title
+        if (resolvedTitle) existing.title = resolvedTitle
         return
       }
 
@@ -231,7 +266,7 @@ const tabsSlice = createSlice({
         key,
         path,
         search: search && !search.startsWith('?') ? `?${search}` : search,
-        title: title || titleForPath(path, menus),
+        title: resolvedTitle,
         closable: !isPinned,
       }
 

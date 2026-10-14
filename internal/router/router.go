@@ -22,6 +22,7 @@ type Deps struct {
 	Auth               *handler.AuthHandler
 	Inst               *handler.InstanceHandler
 	DB                 *handler.DatabaseHandler
+	AccessDomain       *handler.AccessDomainHandler
 	Region             *handler.RegionHandler
 	Env                *handler.EnvironmentHandler
 	Connector          *handler.ConnectorHandler
@@ -206,6 +207,13 @@ func Init(e *gin.Engine, d Deps) {
 	secured.PUT("/users/:id/enable", requireURN(store.URNUsersEdit), d.RBAC.EnableUser)
 	secured.PUT("/users/:id/unlock", requireURN(store.URNUsersEdit), d.RBAC.UnlockUser)
 	secured.DELETE("/users/:id", requireURN(store.URNUsersDelete), d.RBAC.DeleteUser)
+
+	if d.AccessDomain != nil {
+		secured.GET("/access-domains", d.AccessDomain.List)
+		secured.POST("/access-domains/sync", requireURN(store.URNDomainsSync), d.AccessDomain.Sync)
+		secured.POST("/access-domains/assign-tenant", requireURN(store.URNTenantsImpersonate), d.AccessDomain.AssignTenantBatch)
+		secured.POST("/access-domains/:id/assign-tenant", requireURN(store.URNTenantsImpersonate), d.AccessDomain.AssignTenant)
+	}
 
 	secured.GET("/instances", d.Inst.List)
 	secured.POST("/instances", requireURN(store.URNInstancesCreate), d.Inst.Create)

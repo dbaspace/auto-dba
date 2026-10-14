@@ -134,6 +134,12 @@ export const Perm = {
     impersonate: 'um.action.tenants.impersonate',
     sidebar: 'um.sidebar.tenants',
   },
+  domains: {
+    sync: 'um.action.domains.sync',
+    assign: 'um.action.domains.assign',
+    edit: 'um.action.domains.edit',
+    sidebar: 'um.sidebar.config-domains',
+  },
 } as const
 
 function isAdminRole(role: unknown): boolean {

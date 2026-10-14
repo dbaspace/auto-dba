@@ -74,6 +74,7 @@ type GrantResourceOpt = { id: string; label: string }
 const GRANT_TYPES = [
   { value: 'instance', label: '实例' },
   { value: 'database', label: '已登记库' },
+  { value: 'domain', label: '域名' },
   { value: 'sr_cluster', label: 'SR集群' },
   { value: 'db_deploy_cluster', label: '部署集群' },
 ]

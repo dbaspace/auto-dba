@@ -340,6 +340,7 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "创建失败（可能是 host+port 已存在）: " + err.Error()})
 		return
 	}
+	_, _ = h.Store.SyncAccessDomainsFromInstance(&it)
 	_ = h.Store.AppendCmdbAudit(c.GetString(middleware.CtxUsername), "create", "instance", it.ID, "api", nil, redactInstanceCopy(it))
 	redactInstance(&it)
 	c.JSON(http.StatusOK, gin.H{"data": it})
@@ -405,6 +406,7 @@ func (h *InstanceHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
+	_, _ = h.Store.SyncAccessDomainsFromInstance(&it)
 	_ = h.Store.AppendCmdbAudit(c.GetString(middleware.CtxUsername), "update", "instance", it.ID, "api", redactInstanceCopy(*exist), redactInstanceCopy(it))
 	redactInstance(&it)
 	c.JSON(http.StatusOK, gin.H{"data": it})
@@ -729,9 +731,14 @@ func (h *InstanceHandler) ListRedisDatabases(c *gin.Context) {
 	if !ok {
 		return
 	}
+	host, err := redisquery.ResolveHost(inst, c.Query("domain"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
 	defer cancel()
-	list, err := redisquery.ListDatabasesWithKeys(ctx, inst, redisquery.Options{Username: inst.Username, Password: password})
+	list, err := redisquery.ListDatabasesWithKeys(ctx, inst, redisquery.Options{Username: inst.Username, Password: password, Host: host})
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
@@ -748,9 +755,15 @@ func (h *InstanceHandler) ExecuteRedis(c *gin.Context) {
 		Command    string `json:"command"`
 		SQLContent string `json:"sql_content"`
 		DBName     string `json:"db_name"`
+		Domain     string `json:"domain"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "参数无效"})
+		return
+	}
+	host, err := redisquery.ResolveHost(inst, req.Domain)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
 	cmd := strings.TrimSpace(req.Command)
@@ -759,7 +772,7 @@ func (h *InstanceHandler) ExecuteRedis(c *gin.Context) {
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
 	defer cancel()
-	res, err := redisquery.Execute(ctx, inst, redisquery.Options{Username: inst.Username, Password: password}, req.DBName, cmd)
+	res, err := redisquery.Execute(ctx, inst, redisquery.Options{Username: inst.Username, Password: password, Host: host}, req.DBName, cmd)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return

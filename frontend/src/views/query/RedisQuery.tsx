@@ -21,41 +21,88 @@ interface RedisDb {
   keys?: any
 }
 
+interface DomainEntry {
+  id: string
+  domain: string
+  env_code: string
+  instance_id: string
+  port?: number
+  instance_name?: string
+}
+
+function domainAddr(domain: string, port?: number) {
+  const h = String(domain || '').trim()
+  if (!h) return ''
+  if (h.includes(':')) return h
+  return `${h}:${port || 6379}`
+}
+
+function normalizeDomain(s: string) {
+  return String(s || '')
+    .trim()
+    .replace(/\.+$/, '')
+    .toLowerCase()
+}
+
 export default function RedisQuery() {
   const [instLoading, setInstLoading] = useState(false)
   const [dbLoading, setDbLoading] = useState(false)
   const [running, setRunning] = useState(false)
   const queryAbortRef = useRef<AbortController | null>(null)
-  const [instances, setInstances] = useState<any[]>([])
-  const [envs, setEnvs] = useState<any[]>([])
+  const [domains, setDomains] = useState<DomainEntry[]>([])
   const [keyword, setKeyword] = useState('')
   const [envFilter, setEnvFilter] = useState('')
+  const [expandedEnv, setExpandedEnv] = useState('')
   const [selectedId, setSelectedId] = useState('')
+  const [selectedDomain, setSelectedDomain] = useState('')
   const [databases, setDatabases] = useState<RedisDb[]>([])
   const [dbName, setDbName] = useState('')
   const [command, setCommand] = useState('SCAN 0 MATCH * COUNT 100')
   const [result, setResult] = useState<RedisResult | null>(null)
   const [history, setHistory] = useState<string[]>([])
 
-  const selected = useMemo(() => instances.find((i) => i.id === selectedId), [instances, selectedId])
+  const selected = useMemo(
+    () => domains.find((d) => d.instance_id === selectedId && normalizeDomain(d.domain) === normalizeDomain(selectedDomain)),
+    [domains, selectedId, selectedDomain],
+  )
 
   const envOptions = useMemo(() => {
     const set = new Set<string>()
-    for (const e of envs) {
-      if (e.code) set.add(e.code)
-      if (e.name) set.add(e.name)
+    for (const d of domains) {
+      if (d.env_code) set.add(d.env_code)
     }
-    for (const i of instances) {
-      if (i.idc) set.add(i.idc)
+    return [...set].sort()
+  }, [domains])
+
+  const envGroups = useMemo(() => {
+    let list = domains
+    if (envFilter) list = list.filter((d) => d.env_code === envFilter)
+    const q = keyword.trim().toLowerCase()
+    if (q) {
+      list = list.filter(
+        (d) =>
+          d.domain.toLowerCase().includes(q) ||
+          (d.instance_name || '').toLowerCase().includes(q) ||
+          domainAddr(d.domain, d.port).toLowerCase().includes(q) ||
+          (d.env_code || '').toLowerCase().includes(q),
+      )
     }
-    return [...set]
-  }, [envs, instances])
+    const map = new Map<string, DomainEntry[]>()
+    for (const d of list) {
+      const env = d.env_code || '未标注环境'
+      if (!map.has(env)) map.set(env, [])
+      map.get(env)!.push(d)
+    }
+    return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0], 'zh-CN'))
+  }, [domains, envFilter, keyword])
 
   const resultRows = useMemo(() => {
     const cols = result?.columns || []
     return (result?.rows || []).map((row, ri) => {
       const obj: Record<string, any> = { __k: ri }
-      cols.forEach((c, i) => { obj[c] = row[i] == null ? 'null' : String(row[i]) })
+      cols.forEach((c, i) => {
+        obj[c] = row[i] == null ? 'null' : String(row[i])
+      })
       return obj
     })
   }, [result])
@@ -76,14 +123,6 @@ export default function RedisQuery() {
     return 160
   }
 
-  function instEnv(i: any) {
-    return i?.idc || i?.env_id || ''
-  }
-  function instAddr(i: any) {
-    if (!i) return ''
-    const host = i.host || i.domain_name || ''
-    return host ? `${host}:${i.port || 6379}` : ''
-  }
   function formatKeys(n: any) {
     if (n == null || Number(n) < 0) return '—'
     const v = Number(n)
@@ -91,21 +130,23 @@ export default function RedisQuery() {
     return `${v} keys`
   }
 
-  const filteredInstances = useMemo(() => {
-    let list = instances
-    if (envFilter) list = list.filter((i) => instEnv(i) === envFilter)
-    const q = keyword.trim().toLowerCase()
-    if (q) list = list.filter((i) => (i.name || '').toLowerCase().includes(q) || instAddr(i).toLowerCase().includes(q))
-    return list
-  }, [instances, envFilter, keyword])
+  function toggleEnv(env: string) {
+    if (expandedEnv === env) {
+      setExpandedEnv('')
+      return
+    }
+    setExpandedEnv(env)
+  }
 
-  function selectInstance(inst: any) {
-    if (selectedId === inst.id) return
-    setSelectedId(inst.id)
+  function selectDomain(entry: DomainEntry) {
+    const d = String(entry.domain || '').trim()
+    if (!d || !entry.instance_id) return
+    setSelectedId(entry.instance_id)
+    setSelectedDomain(d)
     setDbName('')
     setDatabases([])
     setResult(null)
-    loadDBs(inst.id)
+    void loadDBs(entry.instance_id, d)
   }
 
   function selectDB(name: string) {
@@ -113,14 +154,14 @@ export default function RedisQuery() {
     setResult(null)
   }
 
-  async function loadDBs(id: string = selectedId) {
-    if (!id) return
+  async function loadDBs(id: string = selectedId, domain: string = selectedDomain) {
+    if (!id || !domain) return
     setDbLoading(true)
     try {
-      const { data } = await api.get(`/instances/${id}/redis/databases`)
+      const { data } = await api.get(`/instances/${id}/redis/databases`, { params: { domain } })
       const list: RedisDb[] = data.data || []
       setDatabases(list)
-      setDbName((prev) => (list.some((d) => d.name === prev) ? prev : (list[0]?.name || '')))
+      setDbName((prev) => (list.some((x) => x.name === prev) ? prev : list[0]?.name || ''))
     } catch {
       setDatabases([])
       setDbName('')
@@ -132,14 +173,18 @@ export default function RedisQuery() {
   function pushHistory(sql: string) {
     setHistory((list) => {
       const next = [sql, ...list.filter((x) => x !== sql)].slice(0, 12)
-      try { localStorage.setItem(HIST_KEY, JSON.stringify(next)) } catch { /* ignore */ }
+      try {
+        localStorage.setItem(HIST_KEY, JSON.stringify(next))
+      } catch {
+        /* ignore */
+      }
       return next
     })
   }
 
   async function run() {
     const sql = command.trim()
-    if (!selectedId || !sql || !dbName) return
+    if (!selectedId || !selectedDomain || !sql || !dbName) return
     queryAbortRef.current?.abort()
     const ac = new AbortController()
     queryAbortRef.current = ac
@@ -147,7 +192,7 @@ export default function RedisQuery() {
     try {
       const { data } = await api.post(
         `/instances/${selectedId}/redis/execute`,
-        { command: sql, db_name: dbName },
+        { command: sql, db_name: dbName, domain: selectedDomain },
         { signal: ac.signal },
       )
       if (data?.canceled) {
@@ -175,41 +220,99 @@ export default function RedisQuery() {
   function onCmdKey(e: React.KeyboardEvent) {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
       e.preventDefault()
-      run()
+      void run()
     }
   }
 
   async function loadMeta() {
     setInstLoading(true)
     try {
-      const [instRes, envRes] = await Promise.all([
+      const [domRes, instRes] = await Promise.all([
+        api.get('/access-domains', { params: { db_type: 'redis' } }).catch(() => ({ data: { data: [] } })),
         api.get('/instances', { params: { db_type: 'redis' } }),
-        api.get('/environments'),
       ])
-      setInstances(instRes.data.data || [])
-      setEnvs(envRes.data.data || [])
-      try { setHistory(JSON.parse(localStorage.getItem(HIST_KEY) || '[]')) } catch { setHistory([]) }
+      const instMap = new Map<string, any>()
+      for (const i of instRes.data.data || []) {
+        instMap.set(i.id, i)
+      }
+      const fromDomains: DomainEntry[] = (domRes.data.data || []).map((r: any) => {
+        const inst = instMap.get(r.instance_id)
+        return {
+          id: r.id || `${r.domain}-${r.instance_id}`,
+          domain: String(r.domain || '').trim(),
+          env_code: String(r.env_code || inst?.idc || '').trim(),
+          instance_id: String(r.instance_id || ''),
+          port: inst?.port,
+          instance_name: inst?.name,
+        }
+      }).filter((d: DomainEntry) => d.domain && d.instance_id)
+
+      if (fromDomains.length) {
+        setDomains(fromDomains)
+      } else {
+        // 回退：尚未同步域名表时，由实例 domains 拼装
+        const fallback: DomainEntry[] = []
+        const seen = new Set<string>()
+        for (const i of instRes.data.data || []) {
+          const list: string[] = []
+          const add = (s: string) => {
+            const v = String(s || '').trim()
+            if (!v) return
+            const key = normalizeDomain(v)
+            if (seen.has(`${i.id}:${key}`)) return
+            seen.add(`${i.id}:${key}`)
+            list.push(v)
+          }
+          for (const d of i.domains || []) add(String(d))
+          if (!list.length) add(i.domain_name)
+          if (!list.length) add(i.host)
+          for (const dom of list) {
+            fallback.push({
+              id: `${i.id}:${normalizeDomain(dom)}`,
+              domain: dom,
+              env_code: String(i.idc || '').trim(),
+              instance_id: i.id,
+              port: i.port,
+              instance_name: i.name,
+            })
+          }
+        }
+        setDomains(fallback)
+      }
+      try {
+        setHistory(JSON.parse(localStorage.getItem(HIST_KEY) || '[]'))
+      } catch {
+        setHistory([])
+      }
     } finally {
       setInstLoading(false)
     }
   }
 
-  useEffect(() => { loadMeta() }, [])
-
-  useEffect(() => () => {
-    queryAbortRef.current?.abort()
+  useEffect(() => {
+    void loadMeta()
   }, [])
+
+  useEffect(
+    () => () => {
+      queryAbortRef.current?.abort()
+    },
+    [],
+  )
+
+  const canRun = Boolean(selectedId && selectedDomain && dbName && command.trim())
 
   return (
     <div className="ops-page redis-query">
       <div className="layout">
-        <CollapsibleSide
-          storageKey="auto-dba-redis-side-collapsed"
-          title="Redis 实例"
-          width={280}
-          className="side"
-        >
-          <Input value={keyword} allowClear placeholder="搜索实例" className="mb" onChange={(e) => setKeyword(e.target.value)} />
+        <CollapsibleSide storageKey="auto-dba-redis-side-collapsed" title="Redis 域名" width={280} className="side">
+          <Input
+            value={keyword}
+            allowClear
+            placeholder="搜索域名/环境"
+            className="mb"
+            onChange={(e) => setKeyword(e.target.value)}
+          />
           <Select
             value={envFilter || undefined}
             allowClear
@@ -220,48 +323,81 @@ export default function RedisQuery() {
             options={envOptions.map((e) => ({ label: e, value: e }))}
           />
           <Spin spinning={instLoading} wrapperClassName="inst-list">
-            {filteredInstances.map((i) => (
-              <div key={i.id} className="inst-block">
-                <div className={`inst-item${selectedId === i.id ? ' active' : ''}`} onClick={() => selectInstance(i)}>
-                  <span className={`caret${selectedId === i.id ? ' open' : ''}`}>▸</span>
-                  <span className="name">{i.name || instAddr(i)}</span>
-                  <span className="env">{instEnv(i)}</span>
+            {envGroups.map(([env, list]) => {
+              const open = expandedEnv === env
+              return (
+                <div key={env} className="inst-block">
+                  <div className={`inst-item${open ? ' open' : ''}`} onClick={() => toggleEnv(env)}>
+                    <span className={`caret${open ? ' open' : ''}`}>▸</span>
+                    <span className="name">{env}</span>
+                    <span className="env">{list.length}</span>
+                  </div>
+                  {open ? (
+                    <div className="domain-list">
+                      {list.map((entry) => {
+                        const domActive =
+                          selectedId === entry.instance_id &&
+                          normalizeDomain(selectedDomain) === normalizeDomain(entry.domain)
+                        return (
+                          <div key={entry.id} className="domain-block">
+                            <button
+                              type="button"
+                              className={`domain-item${domActive ? ' active' : ''}`}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                selectDomain(entry)
+                              }}
+                            >
+                              <span className="domain-name">{entry.domain}</span>
+                            </button>
+                            {domActive ? (
+                              <Spin spinning={dbLoading} wrapperClassName="db-list">
+                                {databases.map((d) => (
+                                  <button
+                                    key={d.name}
+                                    type="button"
+                                    className={`db-item${dbName === d.name ? ' active' : ''}`}
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      selectDB(d.name)
+                                    }}
+                                  >
+                                    <span className="db-name">{d.name}</span>
+                                    <span className="keys">{formatKeys(d.keys)}</span>
+                                  </button>
+                                ))}
+                                {!dbLoading && !databases.length ? (
+                                  <p className="empty inner">未拉取到逻辑库，请检查实例账号或点右侧「刷新库」</p>
+                                ) : null}
+                              </Spin>
+                            ) : null}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  ) : null}
                 </div>
-                {selectedId === i.id ? (
-                  <Spin spinning={dbLoading} wrapperClassName="db-list">
-                    {databases.map((d) => (
-                      <button
-                        key={d.name}
-                        type="button"
-                        className={`db-item${dbName === d.name ? ' active' : ''}`}
-                        onClick={(e) => { e.stopPropagation(); selectDB(d.name) }}
-                      >
-                        <span className="db-name">{d.name}</span>
-                        <span className="keys">{formatKeys(d.keys)}</span>
-                      </button>
-                    ))}
-                    {!dbLoading && !databases.length ? (
-                      <p className="empty inner">未拉取到逻辑库，请检查实例账号或点右侧「刷新库」</p>
-                    ) : null}
-                  </Spin>
-                ) : null}
-              </div>
-            ))}
-            {!instLoading && !filteredInstances.length ? (
-              <p className="empty">暂无 Redis 实例，请先在「配置 → 实例」登记 db_type=redis</p>
+              )
+            })}
+            {!instLoading && !envGroups.length ? (
+              <p className="empty">
+                暂无 Redis 域名。请在「资源配置 → 域名管理」一键同步，或在实例中登记 domains。
+              </p>
             ) : null}
           </Spin>
         </CollapsibleSide>
         <section className="main">
-          {!selectedId ? (
-            <div className="placeholder">请从左侧选择 Redis 实例和逻辑库，再执行只读命令</div>
+          {!selectedId || !selectedDomain ? (
+            <div className="placeholder">请从左侧展开环境并选择域名与逻辑库，再执行只读命令</div>
           ) : (
             <>
               <div className="toolbar">
-                <strong>{selected?.name || instAddr(selected)}</strong>
-                <span className="muted">{instAddr(selected)}</span>
+                <strong>{selected?.instance_name || selectedDomain}</strong>
+                <span className="muted">{domainAddr(selectedDomain, selected?.port)}</span>
                 <Tag color="default">{dbName || '未选库'}</Tag>
-                <Button loading={dbLoading} onClick={() => loadDBs()}>刷新库</Button>
+                <Button loading={dbLoading} onClick={() => void loadDBs()}>
+                  刷新库
+                </Button>
               </div>
               <Input.TextArea
                 value={command}
@@ -271,15 +407,27 @@ export default function RedisQuery() {
                 onKeyDown={onCmdKey}
               />
               <div className="actions">
-                <Button type="primary" loading={running} disabled={!command.trim() || !dbName} onClick={run}>运行</Button>
-                <Button danger disabled={!running} icon={<StopOutlined />} onClick={stopQuery}>查询终止</Button>
-                <Button onClick={() => setCommand('SCAN 0 MATCH * COUNT 100')} disabled={running}>SCAN 示例</Button>
-                <Button onClick={() => setCommand('INFO server')} disabled={running}>INFO 示例</Button>
-                <span className="muted">仅允许 GET / INFO / SCAN · Ctrl/⌘ + Enter 运行 · 当前 {dbName || '未选库'}</span>
+                <Button type="primary" loading={running} disabled={!canRun} onClick={() => void run()}>
+                  运行
+                </Button>
+                <Button danger disabled={!running} icon={<StopOutlined />} onClick={stopQuery}>
+                  查询终止
+                </Button>
+                <Button onClick={() => setCommand('SCAN 0 MATCH * COUNT 100')} disabled={running}>
+                  SCAN 示例
+                </Button>
+                <Button onClick={() => setCommand('INFO server')} disabled={running}>
+                  INFO 示例
+                </Button>
+                <span className="muted">
+                  仅允许 GET / INFO / SCAN · Ctrl/⌘ + Enter 运行 · 当前 {dbName || '未选库'}
+                </span>
               </div>
               {result ? (
                 <div className="result">
-                  <div className="result-meta">{result.row_count ?? 0} 行 · {result.execution_time_ms ?? 0} ms</div>
+                  <div className="result-meta">
+                    {result.row_count ?? 0} 行 · {result.execution_time_ms ?? 0} ms
+                  </div>
                   {textBlob ? (
                     <pre className="result-pre">{textBlob}</pre>
                   ) : (
@@ -305,7 +453,9 @@ export default function RedisQuery() {
                 <div className="history">
                   <div className="side-head">最近命令</div>
                   {history.map((h, i) => (
-                    <div key={i} className="hist-item" onClick={() => setCommand(h)}>{h}</div>
+                    <div key={i} className="hist-item" onClick={() => setCommand(h)}>
+                      {h}
+                    </div>
                   ))}
                 </div>
               ) : null}

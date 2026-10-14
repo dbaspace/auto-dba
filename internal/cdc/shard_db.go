@@ -56,6 +56,51 @@ func ResolveShardDBs(extra map[string]string, representative string) []string {
 	return cleanStringSlice(names)
 }
 
+// MatchNumericShardName 分库名须以前缀开头，且去掉可选一个分隔 `_` 后后缀为非空纯数字。
+// 例：prefix=db_order_ / db_order 匹配 db_order_0；拒绝 db_ordering_config。
+func MatchNumericShardName(name, prefix string) bool {
+	name = strings.TrimSpace(name)
+	prefix = strings.TrimSpace(prefix)
+	if name == "" || prefix == "" {
+		return false
+	}
+	if !strings.HasPrefix(name, prefix) {
+		return false
+	}
+	rest := name[len(prefix):]
+	if strings.HasPrefix(rest, "_") {
+		rest = rest[1:]
+	}
+	if rest == "" {
+		return false
+	}
+	for _, c := range rest {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// FilterNumericShardNames 按 MatchNumericShardName 过滤库名列表。
+func FilterNumericShardNames(names []string, prefix string) []string {
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		return nil
+	}
+	var out []string
+	for _, n := range names {
+		n = strings.TrimSpace(n)
+		if n == "" {
+			continue
+		}
+		if MatchNumericShardName(n, prefix) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
 func ValidateShardCreate(extra map[string]string, sourceDB string) error {
 	if extra == nil {
 		return nil
@@ -76,8 +121,8 @@ func ValidateShardCreate(extra map[string]string, sourceDB string) error {
 	}
 	if prefix := strings.TrimSpace(extra["source_db_prefix"]); prefix != "" {
 		for _, db := range dbs {
-			if !strings.HasPrefix(db, prefix) {
-				return fmt.Errorf("分库 %q 不匹配前缀 %q", db, prefix)
+			if !MatchNumericShardName(db, prefix) {
+				return fmt.Errorf("分库 %q 不匹配前缀且后缀为数字的规则 %q", db, prefix)
 			}
 		}
 	}

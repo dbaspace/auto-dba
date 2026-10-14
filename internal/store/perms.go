@@ -105,6 +105,11 @@ const (
 	URNTenantsGrants      = "um.action.tenants.grants"
 	URNTenantsImpersonate = "um.action.tenants.impersonate"
 	URNSidebarTenants     = "um.sidebar.tenants"
+
+	URNSidebarConfigDomains = "um.sidebar.config-domains"
+	URNDomainsSync          = "um.action.domains.sync"
+	URNDomainsAssign        = "um.action.domains.assign"
+	URNDomainsEdit          = "um.action.domains.edit"
 )
 
 func IsActionURN(urn string) bool {

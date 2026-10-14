@@ -245,6 +245,9 @@ func (d *DB) seedRBAC(now string) error {
 	if err := d.ensureDbConfigMenuTree(now); err != nil {
 		return err
 	}
+	if err := d.ensureAccessDomainsMenu(now); err != nil {
+		return err
+	}
 	if err := d.ensureLoginLogsMenu(now); err != nil {
 		return err
 	}
@@ -484,6 +487,8 @@ func defaultMenuIcon(id, path string) string {
 		return "histogram"
 	case "m-cfg-db":
 		return "coin"
+	case "m-cfg-domains":
+		return "share"
 	case "m-cfg-accounts":
 		return "user"
 	case "m-cfg-review":
@@ -544,8 +549,8 @@ func (d *DB) seedMenus(now string) error {
 		{"m-dashboard", "", "仪表盘", "/ops/dashboard", "um.sidebar.ops-dashboard", "查看仪表盘", "dashboard", 1},
 		{"m-data-query", "", "数据查询", "", "um.sidebar.data-query", "查看数据查询", "search", 5},
 		{"m-query", "m-data-query", "数据库", "/ops/query", "um.sidebar.ops-query", "查看数据库", "search", 1},
-		{"m-query-kafka", "m-data-query", "Kafka", "/ops/kafka-query", "um.sidebar.ops-query-kafka", "查看 Kafka", "share", 2},
-		{"m-query-redis", "m-data-query", "Redis", "/ops/redis-query", "um.sidebar.ops-query-redis", "查看 Redis", "coin", 3},
+		{"m-query-kafka", "m-data-query", "Kafka 查询", "/ops/kafka-query", "um.sidebar.ops-query-kafka", "查看 Kafka", "share", 2},
+		{"m-query-redis", "m-data-query", "Redis 查询", "/ops/redis-query", "um.sidebar.ops-query-redis", "查看 Redis", "coin", 3},
 		{"m-tickets", "", "工单申请", "", "um.sidebar.tickets", "查看工单申请", "tickets", 10},
 		{"m-tickets-list", "m-tickets", "工单列表", "/ops/tickets", "um.sidebar.ops-tickets", "查看工单列表", "list", 11},
 		{"m-tickets-ddl", "m-tickets", "DDL 工单", "/ops/ddl", "um.sidebar.ops-ddl", "查看 DDL 工单", "edit", 12},
@@ -631,9 +636,10 @@ func (d *DB) seedMenus(now string) error {
 		{"m-db-config", "", "资源配置", "", "um.sidebar.db-config", "查看资源配置", "coin", 3},
 		{"m-cfg-inst", "m-db-config", "实例管理", "/config/instances", "um.sidebar.config-instances", "查看实例管理", "monitor", 1},
 		{"m-cfg-db", "m-db-config", "已登记库", "/config/databases", "um.sidebar.config-databases", "查看已登记库", "coin", 2},
-		{"m-cfg-accounts", "m-db-config", "账号管理", "/config/accounts", "um.sidebar.config-accounts", "查看账号管理", "user", 3},
-		{"m-cfg-review", "m-db-config", "审核规则", "/config/review-rules", "um.sidebar.config-review-rules", "查看审核规则", "document", 4},
-		{"m-cfg-sql-insight", "m-db-config", "SQL 洞察设置", "/config/sql-insight", "um.sidebar.config-sql-insight", "查看 SQL 洞察设置", "setting", 5},
+		{"m-cfg-domains", "m-db-config", "域名管理", "/config/domains", URNSidebarConfigDomains, "查看域名管理", "share", 3},
+		{"m-cfg-accounts", "m-db-config", "账号管理", "/config/accounts", "um.sidebar.config-accounts", "查看账号管理", "user", 4},
+		{"m-cfg-review", "m-db-config", "审核规则", "/config/review-rules", "um.sidebar.config-review-rules", "查看审核规则", "document", 5},
+		{"m-cfg-sql-insight", "m-db-config", "SQL 洞察设置", "/config/sql-insight", "um.sidebar.config-sql-insight", "查看 SQL 洞察设置", "setting", 6},
 	}
 	for _, it := range items {
 		m := &Menu{
@@ -735,8 +741,8 @@ func (d *DB) ensureDataQueryMenuTree(now string) error {
 	}
 	items := []seedMenu{
 		{"m-query", "m-data-query", "数据库", "/ops/query", "um.sidebar.ops-query", "查看数据库", "search", 1},
-		{"m-query-kafka", "m-data-query", "Kafka", "/ops/kafka-query", "um.sidebar.ops-query-kafka", "查看 Kafka", "share", 2},
-		{"m-query-redis", "m-data-query", "Redis", "/ops/redis-query", "um.sidebar.ops-query-redis", "查看 Redis", "coin", 3},
+		{"m-query-kafka", "m-data-query", "Kafka 查询", "/ops/kafka-query", "um.sidebar.ops-query-kafka", "查看 Kafka", "share", 2},
+		{"m-query-redis", "m-data-query", "Redis 查询", "/ops/redis-query", "um.sidebar.ops-query-redis", "查看 Redis", "coin", 3},
 	}
 	for _, it := range items {
 		m := &Menu{
@@ -1196,9 +1202,10 @@ func (d *DB) ensureDbConfigMenuTree(now string) error {
 	items := []seedMenu{
 		{"m-cfg-inst", "m-db-config", "实例管理", "/config/instances", "um.sidebar.config-instances", "查看实例管理", "monitor", 1},
 		{"m-cfg-db", "m-db-config", "已登记库", "/config/databases", "um.sidebar.config-databases", "查看已登记库", "coin", 2},
-		{"m-cfg-accounts", "m-db-config", "账号管理", "/config/accounts", "um.sidebar.config-accounts", "查看账号管理", "user", 3},
-		{"m-cfg-review", "m-db-config", "审核规则", "/config/review-rules", "um.sidebar.config-review-rules", "查看审核规则", "document", 4},
-		{"m-cfg-sql-insight", "m-db-config", "SQL 洞察设置", "/config/sql-insight", "um.sidebar.config-sql-insight", "查看 SQL 洞察设置", "setting", 5},
+		{"m-cfg-domains", "m-db-config", "域名管理", "/config/domains", URNSidebarConfigDomains, "查看域名管理", "share", 3},
+		{"m-cfg-accounts", "m-db-config", "账号管理", "/config/accounts", "um.sidebar.config-accounts", "查看账号管理", "user", 4},
+		{"m-cfg-review", "m-db-config", "审核规则", "/config/review-rules", "um.sidebar.config-review-rules", "查看审核规则", "document", 5},
+		{"m-cfg-sql-insight", "m-db-config", "SQL 洞察设置", "/config/sql-insight", "um.sidebar.config-sql-insight", "查看 SQL 洞察设置", "setting", 6},
 	}
 	for _, it := range items {
 		m := &Menu{
@@ -1213,6 +1220,33 @@ func (d *DB) ensureDbConfigMenuTree(now string) error {
 			return err
 		}
 	}
+	return nil
+}
+
+// ensureAccessDomainsMenu 资源配置 · 域名管理 + 同步/划拨动作（幂等）。
+func (d *DB) ensureAccessDomainsMenu(now string) error {
+	if err := d.ensureDbConfigMenuTree(now); err != nil {
+		return err
+	}
+	actions := []seedMenu{
+		{"m-act-domains-sync", "m-cfg-domains", "同步域名", "", URNDomainsSync, "一键同步实例域名", "refresh", 90},
+		{"m-act-domains-assign", "m-cfg-domains", "划拨域名", "", URNDomainsAssign, "划拨域名归属租户", "share", 91},
+		{"m-act-domains-edit", "m-cfg-domains", "编辑域名", "", URNDomainsEdit, "编辑域名资源", "edit", 92},
+	}
+	for _, it := range actions {
+		m := &Menu{
+			ID: it.ID, ParentID: it.Parent, Title: it.Title, Path: it.Path,
+			URN: it.URN, PermissionDesc: it.Perm, Icon: it.Icon, SortOrder: it.Sort, Enabled: true,
+			CreatedAt: now, UpdatedAt: now,
+		}
+		if err := d.EnsureMenu(m); err != nil {
+			return err
+		}
+		if err := d.GrantMenuFollowingParent(m.ID, m.ParentID); err != nil {
+			return err
+		}
+	}
+	log.Printf("seed: access domains menu ensured")
 	return nil
 }
 

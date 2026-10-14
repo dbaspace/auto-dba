@@ -165,6 +165,20 @@ API：
 - Hub：`/ops/cluster-deploy`；StarRocks 工作台：`/ops/cluster-deploy/starrocks`（旧 `/ops/sr-cluster` 前端重定向）
 - 写接口一期仍挂 `/api/v1/sr-cluster/*` 与页面权限；方案见 [sr-cluster.md](sr-cluster.md)
 
+## 域名管理（增量）
+
+- 页面：资源配置下 `m-cfg-domains` → `/config/domains`，URN `um.sidebar.config-domains`
+- 操作权限（挂 `m-cfg-domains` 下）：
+
+| 操作 | Title | URN |
+|------|-------|-----|
+| 一键同步 | 同步域名 | `um.action.domains.sync` |
+| 划拨（菜单登记） | 划拨域名 | `um.action.domains.assign` |
+| 编辑 | 编辑域名 | `um.action.domains.edit` |
+
+- 后端：`POST /access-domains/sync` 绑 `um.action.domains.sync`；单条/批量划拨绑 `um.action.tenants.impersonate`（与实例/库划拨一致，须审计会话）
+- 前端：`Perm.domains.sync` 控同步按钮；划拨按钮用 `Perm.tenants.impersonate`
+
 ## 数据备份（增量）
 
 - 菜单树挂「数据安全」：`m-safe-bak` → policies / runs / settings（备份存储）

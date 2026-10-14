@@ -11,8 +11,8 @@ import (
 
 // 启动引导版本：修改 migrate.go / seed.go 后请递增对应常量，否则已初始化库会跳过重跑。
 const (
-	SchemaVersion = "2026-10-12.copilot-session-title"
-	SeedVersion   = "2026-10-12.kb-learn-align"
+	SchemaVersion = "2026-10-14.access-domains"
+	SeedVersion   = "2026-10-14.access-domains-menu"
 )
 
 const (
@@ -78,6 +78,12 @@ func (d *DB) migrateFast() error {
 			if err := d.ensureIssueDomainColumn(); err != nil {
 				return err
 			}
+			if err := d.ensureAccessDomainsTable(); err != nil {
+				return err
+			}
+			if _, err := d.BackfillAccessDomainsFromInstances(); err != nil {
+				return err
+			}
 			log.Printf("migrate: skip (schema_version=%s) in %s", SchemaVersion, time.Since(t0).Round(time.Millisecond))
 			return nil
 		}
@@ -114,6 +120,9 @@ func (d *DB) seedFast() error {
 			}
 			// 租户动作菜单（含新增 delete）须在 skip 路径幂等补齐，否则仅升 SeedVersion 才写入
 			if err := d.ensureTenantMenus(now); err != nil {
+				return err
+			}
+			if err := d.ensureAccessDomainsMenu(now); err != nil {
 				return err
 			}
 			if err := d.SyncDefaultTenantMemberships(); err != nil {

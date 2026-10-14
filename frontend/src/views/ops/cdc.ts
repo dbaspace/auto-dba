@@ -614,11 +614,27 @@ export function collectSqlOverrides(previews: any[]): Record<string, any> {
   return out
 }
 
+/** 分库名须以前缀开头，且去掉可选一个分隔 `_` 后后缀为非空纯数字（与后端 MatchNumericShardName 一致）。 */
+export function matchNumericShardName(name: string, prefix: string): boolean {
+  const n = String(name || '').trim()
+  const pre = String(prefix || '').trim()
+  if (!n || !pre) return false
+  if (!n.startsWith(pre)) return false
+  let rest = n.slice(pre.length)
+  if (rest.startsWith('_')) rest = rest.slice(1)
+  if (!rest) return false
+  for (let i = 0; i < rest.length; i++) {
+    const c = rest.charCodeAt(i)
+    if (c < 48 || c > 57) return false
+  }
+  return true
+}
+
 export function filterShardDatabases(names: string[], prefix: string): string[] {
-  const pre = String(prefix || '').trim().toLowerCase()
+  const pre = String(prefix || '').trim()
   if (!pre) return []
   return (names || [])
-    .filter((n) => String(n || '').toLowerCase().startsWith(pre))
+    .filter((n) => matchNumericShardName(String(n || ''), pre))
     .sort((a, b) => a.localeCompare(b))
 }
 

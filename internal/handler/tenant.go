@@ -181,7 +181,7 @@ func (h *TenantHandler) ListGrants(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": list})
 }
 
-// ListGrantResources GET /tenants/:id/grant-resources?type=instance|database|sr_cluster|db_deploy_cluster
+// ListGrantResources GET /tenants/:id/grant-resources?type=instance|database|domain|sr_cluster|db_deploy_cluster
 func (h *TenantHandler) ListGrantResources(c *gin.Context) {
 	typ := strings.TrimSpace(c.Query("type"))
 	if typ == "" {

@@ -92,6 +92,23 @@ func (d *DB) ListGrantResources(tenantID, resourceType string) ([]GrantResourceO
 			out = append(out, GrantResourceOption{ID: it.ID, Label: label})
 		}
 		return out, nil
+	case "domain":
+		list, err := d.ListAccessDomainsInTenant(tenantID, "", "", "")
+		if err != nil {
+			return nil, err
+		}
+		out := make([]GrantResourceOption, 0, len(list))
+		for _, it := range list {
+			label := strings.TrimSpace(it.Domain)
+			if label == "" {
+				label = it.ID
+			}
+			if t := strings.TrimSpace(it.DBType); t != "" {
+				label = fmt.Sprintf("%s (%s)", label, t)
+			}
+			out = append(out, GrantResourceOption{ID: it.ID, Label: label})
+		}
+		return out, nil
 	default:
 		return nil, fmt.Errorf("不支持的资源类型 %s", resourceType)
 	}
