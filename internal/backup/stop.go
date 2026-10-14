@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"auto-dba/internal/agentport"
 	"auto-dba/internal/secret"
 	"auto-dba/internal/sshx"
 	"auto-dba/internal/store"
@@ -199,6 +200,7 @@ func agentHostID(a *store.BackupAgent) string {
 }
 
 // killAgentRemoteScript 安全停止远端 Agent（pid 文件 + 精确进程名；勿用 pkill -f 全路径）。
+// fuser 仅在约定 Agent 端口带执行，避免误杀业务进程。
 func killAgentRemoteScript(pidFile string, listenPort int) string {
 	return fmt.Sprintf(
 		`set +e
@@ -214,22 +216,23 @@ if [ -f "$PIDF" ]; then
   rm -f "$PIDF"
 fi
 if command -v pgrep >/dev/null 2>&1; then
-  for p in $(pgrep -x backup-agent 2>/dev/null); do
-    [ "$p" = "$$" ] && continue
-    kill "$p" 2>/dev/null
-    sleep 0.5
-    kill -9 "$p" 2>/dev/null
+  for name in platform-agent backup-agent; do
+    for p in $(pgrep -x "$name" 2>/dev/null); do
+      [ "$p" = "$$" ] && continue
+      kill "$p" 2>/dev/null
+      sleep 0.5
+      kill -9 "$p" 2>/dev/null
+    done
   done
 elif command -v pidof >/dev/null 2>&1; then
-  for p in $(pidof backup-agent 2>/dev/null); do
-    kill "$p" 2>/dev/null
-    kill -9 "$p" 2>/dev/null
+  for name in platform-agent backup-agent; do
+    for p in $(pidof "$name" 2>/dev/null); do
+      kill "$p" 2>/dev/null
+      kill -9 "$p" 2>/dev/null
+    done
   done
 fi
-if [ "$PORT" -gt 0 ] 2>/dev/null && command -v fuser >/dev/null 2>&1; then
-  fuser -k "${PORT}/tcp" 2>/dev/null || true
-  sleep 0.5
-fi
+%s
 if command -v ss >/dev/null 2>&1; then
   ss -lnt "sport = :${PORT}" 2>/dev/null | grep -q ":${PORT}" && echo STILL_LISTEN || echo STOPPED
 elif command -v netstat >/dev/null 2>&1; then
@@ -241,6 +244,7 @@ exit 0
 `,
 		shellQuote(pidFile),
 		listenPort,
+		agentport.FuserKillSnippet(listenPort),
 	)
 }
 

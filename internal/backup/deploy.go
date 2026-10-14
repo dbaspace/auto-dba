@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"auto-dba/internal/agentport"
 	"auto-dba/internal/secret"
 	"auto-dba/internal/sshx"
 	"auto-dba/internal/store"
@@ -91,6 +92,9 @@ func (e *Engine) StartDeploy(opts DeployOpts) (string, error) {
 	}
 	if port <= 0 {
 		port = 8090
+	}
+	if err := agentport.ValidateListenPort(port); err != nil {
+		return "", err
 	}
 	remoteDir := strings.TrimSpace(opts.RemoteDir)
 	if remoteDir == "" {
@@ -245,6 +249,7 @@ func (e *Engine) runDeploy(deployID, workdir string, groups, backupEngines []str
 	startRemote := path.Join(dep.RemoteDir, "start.sh")
 	unitRemote := path.Join(dep.RemoteDir, "platform-agent.service")
 
+	logf("仅安装/重启平台 Agent（目录 %s、端口 %d）；不启停数据库或其它业务服务", dep.RemoteDir, dep.ListenPort)
 	logf("连接 %s@%s:%d …", sshUser, host, sshPort)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()

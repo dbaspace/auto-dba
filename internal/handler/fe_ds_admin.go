@@ -174,6 +174,105 @@ func feAdminSyncKey(task, env, domain string) string {
 		strings.ToLower(strings.TrimSpace(domain))
 }
 
+// ResolveCredential POST /feadmin/resolve-credential — 按 FE 主机 / 任务匹配解密凭据（供登记集群等）。
+func (h *FeAdminHandler) ResolveCredential(c *gin.Context) {
+	var req struct {
+		Hosts       []string `json:"hosts"`
+		TaskName    string   `json:"task_name"`
+		Environment string   `json:"environment"`
+		Domain      string   `json:"domain"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	list, err := h.Store.ListFeAdminsInTenant(effectiveListTenantID(h.Store, c), "", "")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	hit, by := matchFeAdmin(list, req.Hosts, req.TaskName, req.Environment, req.Domain)
+	if hit == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "未匹配到 FE 管理凭据，请先在配置中心 · FE 管理同步并补充密码"})
+		return
+	}
+	if strings.TrimSpace(hit.PasswordEnc) == "" {
+		c.JSON(http.StatusNotFound, gin.H{"message": "已匹配 FE 管理记录但尚未设置密码，请先编辑补充"})
+		return
+	}
+	plain, err := secret.Decrypt(h.Secret, hit.PasswordEnc)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "解密失败"})
+		return
+	}
+	user := strings.TrimSpace(hit.Username)
+	if user == "" {
+		user = "root"
+	}
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{
+		"fe_admin_id": hit.ID,
+		"username":    user,
+		"password":    plain,
+		"matched_by":  by,
+		"task_name":   hit.TaskName,
+		"domain":      hit.Domain,
+	}})
+}
+
+// matchFeAdmin 优先 fe_node∩hosts，其次 task+env+domain，再次 domain。
+func matchFeAdmin(list []store.FeAdmin, hosts []string, task, env, domain string) (*store.FeAdmin, string) {
+	normHosts := map[string]struct{}{}
+	for _, h := range hosts {
+		h = feHostOnly(h)
+		if h != "" {
+			normHosts[strings.ToLower(h)] = struct{}{}
+		}
+	}
+	if len(normHosts) > 0 {
+		for i := range list {
+			it := &list[i]
+			for _, ep := range strings.FieldsFunc(it.FeNode, func(r rune) bool {
+				return r == ',' || r == '，' || r == ';' || r == '\n'
+			}) {
+				ep = feHostOnly(strings.TrimSpace(ep))
+				if ep == "" {
+					continue
+				}
+				if _, ok := normHosts[strings.ToLower(ep)]; ok {
+					return it, "fe_node"
+				}
+			}
+		}
+	}
+	task, env, domain = strings.TrimSpace(task), strings.TrimSpace(env), strings.TrimSpace(domain)
+	if task != "" && env != "" && domain != "" {
+		want := feAdminSyncKey(task, env, domain)
+		for i := range list {
+			if feAdminSyncKey(list[i].TaskName, list[i].Environment, list[i].Domain) == want {
+				return &list[i], "task_env_domain"
+			}
+		}
+	}
+	if domain != "" {
+		dl := strings.ToLower(domain)
+		for i := range list {
+			if strings.ToLower(strings.TrimSpace(list[i].Domain)) == dl {
+				return &list[i], "domain"
+			}
+		}
+	}
+	return nil, ""
+}
+
+func feHostOnly(ep string) string {
+	ep = strings.TrimSpace(ep)
+	if ep == "" {
+		return ""
+	}
+	h, _ := splitHostPortLoose(ep)
+	return strings.TrimSpace(h)
+}
+
 func (h *FeAdminHandler) Update(c *gin.Context) {
 	exist, err := h.Store.GetFeAdminInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || exist == nil {

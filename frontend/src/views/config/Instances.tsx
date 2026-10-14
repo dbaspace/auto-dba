@@ -205,6 +205,7 @@ export default function Instances() {
   const [assignRow, setAssignRow] = useState<InstanceRow | null>(null)
   const [assignTid, setAssignTid] = useState('')
   const [assigning, setAssigning] = useState(false)
+  const [syncingHosts, setSyncingHosts] = useState(false)
 
   const dbTypeKey = typeKey(form.db_type)
   const hostType = isHostType(form.db_type)
@@ -394,6 +395,25 @@ export default function Instances() {
   async function load() {
     const { data } = await api.get('/instances', { params: { q } })
     setRows(data.data || [])
+  }
+
+  async function syncHostsFromMonitor() {
+    setSyncingHosts(true)
+    try {
+      const { data } = await api.post('/instances/sync-hosts-from-monitor')
+      const d = data?.data || {}
+      message.success(
+        `已从监控同步主机：新建 ${d.created || 0}` +
+          (d.skipped ? `，已存在跳过 ${d.skipped}` : '') +
+          (d.hosts != null ? `（监控去重后 ${d.hosts} 台）` : '') +
+          '。名称/审批人等不足项请事后编辑补充。',
+      )
+      await load()
+    } catch (e: any) {
+      message.error(e?.response?.data?.message || e.message || '同步失败')
+    } finally {
+      setSyncingHosts(false)
+    }
   }
 
   /** 查询：重新筛选后回到第 1 页；保存/删除等刷新不调用此函数，以保留当前页 */
@@ -663,6 +683,13 @@ export default function Instances() {
               新增实例
             </Button>
           </Auth>
+          {isHostType(activeType) ? (
+            <Auth urn={Perm.instances.create}>
+              <Button loading={syncingHosts} onClick={() => void syncHostsFromMonitor()}>
+                从监控同步
+              </Button>
+            </Auth>
+          ) : null}
         </div>
       </div>
       {impersonating ? (

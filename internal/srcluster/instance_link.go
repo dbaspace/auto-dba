@@ -192,25 +192,113 @@ func (e *Engine) LinkedInstance(cl *store.SrCluster, nodes []store.SrNode) *Inst
 	return &InstanceLink{ID: it.ID, Name: it.Name, Host: it.Host, Port: it.Port, PasswordSet: strings.TrimSpace(it.Password) != "", MatchedBy: by}
 }
 
-// feCredentials 连 FE 的账号密码：关联实例设了密码优先用实例；否则用集群自身（初装空密码）。
-// preferCluster 为 true 且集群已存密码时先用集群的（登记时表单显式填写的密码）。
+// feCredentials 连 FE 的账号密码：preferCluster 时集群密码优先；否则实例 → FeAdmin → 集群。
 func (e *Engine) feCredentials(cl *store.SrCluster, nodes []store.SrNode, preferCluster bool) (user, pass string, err error) {
 	user = strings.TrimSpace(cl.FeUser)
 	if user == "" {
 		user = "root"
 	}
-	if !(preferCluster && strings.TrimSpace(cl.FePasswordEnc) != "") {
-		if it, _ := e.findLinkedInstance(cl, nodes); it != nil && strings.TrimSpace(it.Password) != "" {
-			if p, derr := secret.Decrypt(e.Secret, it.Password); derr == nil {
-				if u := strings.TrimSpace(it.Username); u != "" {
-					user = u
-				}
-				return user, p, nil
+	if preferCluster && strings.TrimSpace(cl.FePasswordEnc) != "" {
+		pass, err = secret.Decrypt(e.Secret, cl.FePasswordEnc)
+		return user, pass, err
+	}
+	if it, _ := e.findLinkedInstance(cl, nodes); it != nil && strings.TrimSpace(it.Password) != "" {
+		if p, derr := secret.Decrypt(e.Secret, it.Password); derr == nil {
+			if u := strings.TrimSpace(it.Username); u != "" {
+				user = u
 			}
+			return user, p, nil
 		}
+	}
+	if u, p, ok := e.lookupFeAdminCred(cl, nodes); ok {
+		return u, p, nil
 	}
 	pass, err = secret.Decrypt(e.Secret, cl.FePasswordEnc)
 	return user, pass, err
+}
+
+func stripHostPort(ep string) string {
+	ep = strings.TrimSpace(ep)
+	if ep == "" {
+		return ""
+	}
+	if h, _, ok := strings.Cut(ep, ":"); ok {
+		// 仅当后缀像端口时截断
+		allDigit := true
+		for _, c := range ep[len(h)+1:] {
+			if c < '0' || c > '9' {
+				allDigit = false
+				break
+			}
+		}
+		if allDigit && len(ep) > len(h)+1 {
+			return h
+		}
+	}
+	return ep
+}
+
+// LookupFeAdminCredForProbe 供登记探测在表单无密码时回退 FE 管理凭据。
+func (e *Engine) LookupFeAdminCredForProbe(cl *store.SrCluster, nodes []store.SrNode) (user, pass string, ok bool) {
+	return e.lookupFeAdminCred(cl, nodes)
+}
+
+// lookupFeAdminCred 按 FE 节点主机匹配配置中心 FE 管理凭据。
+func (e *Engine) lookupFeAdminCred(cl *store.SrCluster, nodes []store.SrNode) (user, pass string, ok bool) {
+	if e.Store == nil {
+		return "", "", false
+	}
+	list, err := e.Store.ListFeAdmins("", "")
+	if err != nil || len(list) == 0 {
+		return "", "", false
+	}
+	hosts := make([]string, 0, len(nodes)+1)
+	if h := strings.TrimSpace(cl.FeHost); h != "" {
+		hosts = append(hosts, h)
+	}
+	for _, n := range nodes {
+		if n.Component == "fe" && strings.TrimSpace(n.Host) != "" {
+			hosts = append(hosts, n.Host)
+		}
+	}
+	want := map[string]struct{}{}
+	for _, h := range hosts {
+		h = strings.ToLower(strings.TrimSpace(h))
+		if h != "" {
+			want[h] = struct{}{}
+		}
+	}
+	if len(want) == 0 {
+		return "", "", false
+	}
+	for i := range list {
+		it := &list[i]
+		if strings.TrimSpace(it.PasswordEnc) == "" {
+			continue
+		}
+		for _, ep := range strings.FieldsFunc(it.FeNode, func(r rune) bool {
+			return r == ',' || r == '，' || r == ';' || r == '\n'
+		}) {
+			host := stripHostPort(strings.TrimSpace(ep))
+			if host == "" {
+				continue
+			}
+			host = strings.ToLower(host)
+			if _, hit := want[host]; !hit {
+				continue
+			}
+			p, derr := secret.Decrypt(e.Secret, it.PasswordEnc)
+			if derr != nil || p == "" {
+				continue
+			}
+			u := strings.TrimSpace(it.Username)
+			if u == "" {
+				u = "root"
+			}
+			return u, p, true
+		}
+	}
+	return "", "", false
 }
 
 func buildFEDSN(user, pass, host string, port int) string {

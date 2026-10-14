@@ -35,3 +35,7 @@
 制品须预置于配置中心 OSS，由控制面签发 download_url。工作台支持 **SSH 下发** 本 Agent（默认 `:8092`）到 host 实例。详见 `docs/db-cluster.md`。
 
 与 StarRocks **Node Agent**（`:8091`）及配置中心**平台 Agent**（`:8090`）相互独立，勿混用。
+
+## 对已运行服务的影响
+
+SSH 下发 / 重新下发 **仅**安装或重启 DB Agent，不启停 MySQL/PG/Redis 等业务服务。装包与 systemd 启停只通过变更单调用 Agent HTTP 触发，与「下发 Agent」分离。

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"auto-dba/internal/agentport"
 	"auto-dba/internal/nodecheck"
 	"auto-dba/internal/secret"
 	"auto-dba/internal/sshx"
@@ -84,6 +85,9 @@ func (e *Engine) StartDeploy(opts DeployOpts) (string, error) {
 	}
 	if port <= 0 {
 		port = 8091
+	}
+	if err := agentport.ValidateListenPort(port); err != nil {
+		return "", err
 	}
 	remoteDir := strings.TrimSpace(opts.RemoteDir)
 	if remoteDir == "" {
@@ -165,6 +169,7 @@ func (e *Engine) runDeploy(deployID, escalate string) {
 	unitRemote := path.Join(dep.RemoteDir, "node-agent.service")
 	pidFile := path.Join(dep.RemoteDir, "agent.pid")
 
+	logf("仅安装/重启 Node Agent（目录 %s、端口 %d）；不启停 FE/BE、不改业务 systemd/二进制/数据盘", dep.RemoteDir, dep.ListenPort)
 	if escalate != "" {
 		logf("提权模式: %s", escalate)
 	}
@@ -308,6 +313,7 @@ func (e *Engine) runDeploy(deployID, escalate string) {
 }
 
 // killNodeAgentScript 安全停止远端 Node Agent（pid 文件 + 精确进程名；勿用 pkill -f 全路径）。
+// fuser 仅在约定 Agent 端口带执行，避免误杀 FE/BE 等业务进程。
 func killNodeAgentScript(pidFile string, listenPort int) string {
 	return fmt.Sprintf(
 		`set +e
@@ -335,10 +341,7 @@ elif command -v pidof >/dev/null 2>&1; then
     kill -9 "$p" 2>/dev/null
   done
 fi
-if [ "$PORT" -gt 0 ] 2>/dev/null && command -v fuser >/dev/null 2>&1; then
-  fuser -k "${PORT}/tcp" 2>/dev/null || true
-  sleep 0.5
-fi
+%s
 if command -v ss >/dev/null 2>&1; then
   ss -lnt "sport = :${PORT}" 2>/dev/null | grep -q ":${PORT}" && echo STILL_LISTEN || echo STOPPED
 elif command -v netstat >/dev/null 2>&1; then
@@ -347,7 +350,7 @@ else
   echo STOPPED
 fi
 exit 0
-`, shellQuote(pidFile), listenPort)
+`, shellQuote(pidFile), listenPort, agentport.FuserKillSnippet(listenPort))
 }
 
 func randomToken(n int) string {

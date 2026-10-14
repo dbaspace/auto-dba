@@ -16,6 +16,11 @@
 - 选 host 类型实例、端口默认 **8091**、远程目录默认 `/home/sysadmin/auto-dba/node-agent`
 - 成功后自动登记到 `/api/v1/sr-cluster/agents`（与配置中心平台 Agent :8090 **无关**）
 - 依赖 `terminal.ssh_identity_file`
+- **对已有集群**：下发只装/重启 Agent，不启停 FE/BE、不改业务 unit/二进制/盘；勿把 9030/8030/8040 等业务端口填成监听端口
+
+## 对已运行服务的影响
+
+SSH 下发路径不会对 FE/BE 做 `systemctl`、装包或磁盘 init。装包 / 启停 / mkfs 只通过变更单调用 Agent HTTP（`/v1/sr/*`）触发，与「下发 Agent」分离。
 
 亦可本机手工运行后在 Tab「手工登记」：
 

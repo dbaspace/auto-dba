@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"auto-dba/internal/agentport"
 	"auto-dba/internal/nodecheck"
 	"auto-dba/internal/secret"
 	"auto-dba/internal/sshx"
@@ -84,6 +85,9 @@ func (e *Engine) StartAgentDeploy(opts DeployOpts) (string, error) {
 	}
 	if port <= 0 {
 		port = 8092
+	}
+	if err := agentport.ValidateListenPort(port); err != nil {
+		return "", err
 	}
 	remoteDir := strings.TrimSpace(opts.RemoteDir)
 	if remoteDir == "" {
@@ -165,6 +169,7 @@ func (e *Engine) runAgentDeploy(deployID, escalate string) {
 	unitRemote := path.Join(dep.RemoteDir, "db-agent.service")
 	pidFile := path.Join(dep.RemoteDir, "agent.pid")
 
+	logf("仅安装/重启 DB Agent（目录 %s、端口 %d）；不启停 MySQL/PG/Redis 等已运行服务", dep.RemoteDir, dep.ListenPort)
 	if escalate != "" {
 		logf("提权模式: %s", escalate)
 	}
@@ -333,12 +338,9 @@ elif command -v pidof >/dev/null 2>&1; then
     kill -9 "$p" 2>/dev/null
   done
 fi
-if [ "$PORT" -gt 0 ] 2>/dev/null && command -v fuser >/dev/null 2>&1; then
-  fuser -k "${PORT}/tcp" 2>/dev/null || true
-  sleep 0.5
-fi
+%s
 exit 0
-`, shellQuote(pidFile), listenPort)
+`, shellQuote(pidFile), listenPort, agentport.FuserKillSnippet(listenPort))
 }
 
 func randomToken(n int) string {

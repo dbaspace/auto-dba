@@ -10,7 +10,7 @@ import Auth from '../../components/Auth'
 import { Perm } from '../../hooks/usePermission'
 import { useAppSelector } from '../../store'
 import {
-  NodePrecheckPanel, agentMatchesHost, agentMismatchMessage, hostPrimaryAddr, resolveNodeHostInstanceId, useHostApprovers,
+  NodePrecheckPanel, agentMatchesHost, agentMismatchMessage, hostAddrs, hostPrimaryAddr, resolveNodeHostInstanceId, useHostApprovers,
   type NodePrecheckResult,
 } from './node-precheck/nodePrecheck'
 import {
@@ -406,6 +406,10 @@ export default function SrClusterPage() {
   /** 快速登记后回填到集群表单某一行 */
   const [agentBindTarget, setAgentBindTarget] = useState<{ list: 'fe_nodes' | 'be_nodes'; index: number } | null>(null)
   const [deployModal, setDeployModal] = useState(false)
+  const [deploySource, setDeploySource] = useState<'host' | 'monitor'>('monitor')
+  const [deployMonTask, setDeployMonTask] = useState<string | undefined>()
+  const [deployMonRows, setDeployMonRows] = useState<{ host: string; hostId?: string; name?: string }[]>([])
+  const [deployMonSelected, setDeployMonSelected] = useState<string[]>([])
   const [deployBusy, setDeployBusy] = useState(false)
   const [hosts, setHosts] = useState<HostInst[]>([])
   const [deploys, setDeploys] = useState<SrAgentDeploy[]>([])
@@ -610,19 +614,53 @@ export default function SrClusterPage() {
   const bindClusterNodeAgent = useCallback(async (list: 'fe_nodes' | 'be_nodes', index: number, hostRaw: string) => {
     const host = endpointHost(hostRaw) || String(hostRaw || '').trim()
     if (!host) return
+    // 登记模式：仅匹配已有 Agent，不强制自动创建（可暂空稍后补）
+    const allowCreate = clusterModalMode !== 'register'
     const id = await ensureAgentForHost({
       agents,
       host,
       port: 8091,
       createPath: '/sr-cluster/agents',
       namePrefix: 'sr',
-      allowCreate: true,
+      allowCreate,
       reloadAgents: loadAgents,
+      silent: clusterModalMode === 'register',
     })
     if (id) {
       clusterForm.setFieldValue([list, index, 'agent_id'], id)
     }
-  }, [agents, clusterForm, loadAgents])
+  }, [agents, clusterForm, clusterModalMode, loadAgents])
+
+  const resolveFePasswordFromAdmin = useCallback(async (opts?: { silent?: boolean }) => {
+    const feNodes: { host?: string }[] = clusterForm.getFieldValue('fe_nodes') || []
+    const hosts = feNodes.map((n) => endpointHost(n.host || '') || String(n.host || '').trim()).filter(Boolean)
+    const task = String(monitorTask || clusterForm.getFieldValue('name') || '').trim()
+    const environment = String(clusterForm.getFieldValue('environment') || '').trim()
+    try {
+      const { data } = await api.post('/feadmin/resolve-credential', {
+        hosts,
+        task_name: task,
+        environment,
+        domain: monitorDomain || undefined,
+      })
+      const d = data?.data || {}
+      if (d.password) {
+        clusterForm.setFieldsValue({
+          fe_password: d.password,
+          fe_user: d.username || 'root',
+        })
+        if (!opts?.silent) {
+          message.success(`已从 FE 管理获取密码（${d.matched_by || '匹配'}）`)
+        }
+        return String(d.password)
+      }
+    } catch (e: any) {
+      if (!opts?.silent) {
+        message.warning(e?.response?.data?.message || '未从 FE 管理匹配到密码')
+      }
+    }
+    return ''
+  }, [clusterForm, monitorDomain, monitorTask])
 
   const probeRegisterFERoles = useCallback(async () => {
     const feNodes: { host?: string }[] = clusterForm.getFieldValue('fe_nodes') || []
@@ -631,12 +669,16 @@ export default function SrClusterPage() {
       message.warning('请先填写 FE Host')
       return
     }
-    const password = String(clusterForm.getFieldValue('fe_password') || '')
+    let password = String(clusterForm.getFieldValue('fe_password') || '')
+    if (!password) {
+      password = await resolveFePasswordFromAdmin({ silent: true })
+    }
     setFeProbeBusy(true)
     try {
       const { data } = await api.post('/sr-cluster/probe-fe-roles', {
         fe_host: hosts[0],
         fe_password: password,
+        fe_user: clusterForm.getFieldValue('fe_user') || 'root',
         fe_query_port: 9030,
       })
       const roles: { host?: string; role?: string }[] = data?.data || []
@@ -674,7 +716,7 @@ export default function SrClusterPage() {
     } finally {
       setFeProbeBusy(false)
     }
-  }, [clusterForm])
+  }, [clusterForm, resolveFePasswordFromAdmin])
   const loadHosts = useCallback(async () => {
     try {
       const res = await api.get('/instances', { params: { db_type: 'host' } })
@@ -1321,9 +1363,11 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
     if (ver) parts.push(`版本 ${ver}${matchedRelease ? '（已匹配制品目录）' : ''}`)
     else parts.push('监控目标无 version 标签，请手工填写版本')
     if (autoBound > 0) parts.push(`已按 host 自动绑定 ${autoBound} 个 Node Agent`)
-    else if (agents.length === 0) parts.push('尚无 Node Agent 登记（与配置中心 8090 平台 Agent 不同），请点「按主机登记」或到 Node Agent Tab')
-    else parts.push('未匹配到已有 Agent，请选择或按主机登记 :8091')
+    else parts.push('Agent 可暂空，登记后到 Node Agent Tab 批量下发再补绑')
     message.success(parts.join('；'))
+    void resolveFePasswordFromAdmin({ silent: true }).then((pwd) => {
+      if (pwd) message.info('已从 FE 管理自动填入密码', 3)
+    })
   }
 
   return (
@@ -2326,19 +2370,37 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                       配置中心「平台 Agent」(:8090)。下发前请在控制面机器执行
                       {' '}
                       <code>cd deploy/node-agent && ./build.sh</code>
-                      。
+                      。对已有集群：下发
+                      <strong>仅安装/重启 Agent 自身</strong>
+                      ，不启停 FE/BE、不改业务 systemd/二进制/数据盘。
                     </>
                   )}
                 />
                 <Space wrap>
-                  <Button type="primary" onClick={() => {
+                  <Button type="primary" onClick={async () => {
                     deployForm.resetFields()
                     deployForm.setFieldsValue({
                       listen_port: 8091,
                       remote_dir: '/home/sysadmin/auto-dba/node-agent',
                       escalate: false,
+                      host_instance_ids: [],
                     })
+                    setDeploySource('monitor')
+                    setDeployMonTask(undefined)
+                    setDeployMonRows([])
+                    setDeployMonSelected([])
                     loadHosts()
+                    try {
+                      const [feRes, beRes] = await Promise.all([
+                        api.get('/monitor-targets/preview', { params: { kind: 'starrocks-fe' } }),
+                        api.get('/monitor-targets/preview', { params: { kind: 'starrocks-be' } }),
+                      ])
+                      setFePreview(feRes.data?.data || [])
+                      setBePreview(beRes.data?.data || [])
+                    } catch {
+                      setFePreview([])
+                      setBePreview([])
+                    }
                     setDeployModal(true)
                   }}
                   >
@@ -2766,23 +2828,40 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
             name="fe_password"
             label={clusterModalMode === 'register' ? 'FE 密码' : 'FE 密码（初装可空）'}
             extra={clusterModalMode === 'register'
-              ? '可留空：留空时使用「资源配置 → 实例管理 → StarRocks」中匹配到的实例密码；提交时会校验 FE 连接'
+              ? '优先从「配置中心 · FE 管理」按 FE 主机匹配；亦可留空由服务端回退 FE 管理 / 实例密码'
               : '初装后 root 上了密码，请在「资源配置 → 实例管理 → StarRocks」的对应实例中维护，平台优先使用实例密码'}
           >
             <Input.Password />
           </Form.Item>
           {clusterModalMode === 'register' ? (
             <div style={{ marginBottom: 12 }}>
-              <Button loading={feProbeBusy} onClick={() => void probeRegisterFERoles()}>
-                探测 FE 角色
-              </Button>
-              <span className="muted" style={{ marginLeft: 8 }}>
-                连接首个 FE（:9030）自动标出 LEADER/FOLLOWER/OBSERVER，并将 Leader 设为首 FE
-              </span>
+              <Space wrap>
+                <Button onClick={() => void resolveFePasswordFromAdmin()}>从 FE 管理获取密码</Button>
+                <Button loading={feProbeBusy} onClick={() => void probeRegisterFERoles()}>
+                  探测 FE 角色
+                </Button>
+              </Space>
+              <div className="muted" style={{ marginTop: 4 }}>
+                探测将连接首个 FE（:9030），标出 LEADER/FOLLOWER/OBSERVER，并将 Leader 设为首 FE
+              </div>
             </div>
           ) : null}
 
-          {agents.length === 0 && (
+          {clusterModalMode === 'register' ? (
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 12 }}
+              message="登记已有：Node Agent 可暂空"
+              description={(
+                <>
+                  先保存拓扑与 FE 凭据；Agent（
+                  <code>:8091</code>
+                  ）可稍后在「Node Agent」Tab 从监控批量下发后再绑。填 Host 时若已有匹配 Agent 会自动选中。
+                </>
+              )}
+            />
+          ) : agents.length === 0 ? (
             <Alert
               type="warning"
               showIcon
@@ -2790,28 +2869,24 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
               message="尚无 Node Agent 可选项"
               description={(
                 <>
-                  本下拉读取工作台「Node Agent」登记（默认
+                  新建装机须绑定 Node Agent（默认
                   {' '}
                   <code>:8091</code>
-                  ，API
-                  {' '}
-                  <code>/v1/sr/*</code>
-                  ），
-                  <strong>不是</strong>
-                  配置中心「平台 Agent」下发记录（:8090）。请先
+                  ）。请
                   {' '}
                   <Button type="link" size="small" style={{ padding: 0 }} onClick={goNodeAgentTab}>打开 Node Agent Tab</Button>
                   {' '}
-                  登记，或在每行点「按主机登记」预填
-                  {' '}
-                  <code>http://主机:8091</code>
-                  。
+                  或点「按主机登记」。
                 </>
               )}
             />
-          )}
+          ) : null}
 
-          <div style={{ fontWeight: 600, marginBottom: 8 }}>FE 节点（须奇数；启动：首 FE 无 helper / 其余 --helper；填 Host 自动绑 Node Agent :8091）</div>
+          <div style={{ fontWeight: 600, marginBottom: 8 }}>
+            FE 节点（须奇数；填 Host 自动匹配已有 Agent
+            {clusterModalMode === 'register' ? '，可暂空' : ''}
+            ）
+          </div>
           <Form.List name="fe_nodes">
             {(fields, { add, remove }) => (
               <>
@@ -2826,11 +2901,17 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                         onBlur={(e) => void bindClusterNodeAgent('fe_nodes', field.name, e.target.value)}
                       />
                     </Form.Item>
-                    <Form.Item {...field} name={[field.name, 'agent_id']} rules={[{ required: true, message: 'Agent' }]} style={{ width: 260 }}>
+                    <Form.Item
+                      {...field}
+                      name={[field.name, 'agent_id']}
+                      rules={clusterModalMode === 'register' ? [] : [{ required: true, message: 'Agent' }]}
+                      style={{ width: 260 }}
+                    >
                       <Select
-                        placeholder="Node Agent (:8091)"
+                        allowClear={clusterModalMode === 'register'}
+                        placeholder={clusterModalMode === 'register' ? '可选 Agent / 稍后补' : 'Node Agent (:8091)'}
                         options={agentSelectOptions}
-                        notFoundContent={agents.length === 0 ? '请先登记 Node Agent（非平台 Agent 8090）' : '无匹配'}
+                        notFoundContent={agents.length === 0 ? '暂无 Agent' : '无匹配'}
                         showSearch
                         optionFilterProp="label"
                       />
@@ -2860,7 +2941,11 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
             )}
           </Form.List>
 
-          <div style={{ fontWeight: 600, margin: '16px 0 8px' }}>BE 节点（填 Host 自动绑 Node Agent :8091）</div>
+          <div style={{ fontWeight: 600, margin: '16px 0 8px' }}>
+            BE 节点（填 Host 自动匹配已有 Agent
+            {clusterModalMode === 'register' ? '，可暂空' : ''}
+            ）
+          </div>
           <Form.List name="be_nodes">
             {(fields, { add, remove }) => (
               <>
@@ -2872,11 +2957,17 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                         onBlur={(e) => void bindClusterNodeAgent('be_nodes', field.name, e.target.value)}
                       />
                     </Form.Item>
-                    <Form.Item {...field} name={[field.name, 'agent_id']} rules={[{ required: true, message: 'Agent' }]} style={{ width: 260 }}>
+                    <Form.Item
+                      {...field}
+                      name={[field.name, 'agent_id']}
+                      rules={clusterModalMode === 'register' ? [] : [{ required: true, message: 'Agent' }]}
+                      style={{ width: 260 }}
+                    >
                       <Select
-                        placeholder="Node Agent (:8091)"
+                        allowClear={clusterModalMode === 'register'}
+                        placeholder={clusterModalMode === 'register' ? '可选 Agent / 稍后补' : 'Node Agent (:8091)'}
                         options={agentSelectOptions}
-                        notFoundContent={agents.length === 0 ? '请先登记 Node Agent（非平台 Agent 8090）' : '无匹配'}
+                        notFoundContent={agents.length === 0 ? '暂无 Agent' : '无匹配'}
                         showSearch
                         optionFilterProp="label"
                       />
@@ -3032,21 +3123,51 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
         title="SSH 下发 Node Agent"
         open={deployModal}
         confirmLoading={deployBusy}
+        width={720}
         onCancel={() => setDeployModal(false)}
         onOk={async () => {
           const v = await deployForm.validateFields()
+          let ids: string[] = []
+          if (deploySource === 'monitor') {
+            ids = deployMonSelected.filter(Boolean)
+            if (!ids.length) {
+              message.warning('请勾选已匹配到主机实例的节点')
+              return
+            }
+          } else {
+            ids = (v.host_instance_ids || []).filter(Boolean)
+            if (!ids.length) {
+              message.warning('请选择至少一台目标主机')
+              return
+            }
+          }
           setDeployBusy(true)
           try {
-            const res = await api.post('/sr-cluster/agents/deploy', {
-              host_instance_id: v.host_instance_id,
+            const res = await api.post('/sr-cluster/agents/deploy-batch', {
+              host_instance_ids: ids,
               listen_port: v.listen_port || 8091,
               remote_dir: v.remote_dir,
               escalate: v.escalate ? 'sudo_su' : '',
             })
-            const deployId = res.data?.data?.deploy_id as string
-            message.success('已提交下发，进度见下发记录，完成后会通知')
+            const d = res.data?.data || {}
+            const results: { host_instance_id: string; deploy_id?: string; error?: string }[] = d.results || []
+            for (const r of results) {
+              if (r.deploy_id) deployTracker.track(r.deploy_id)
+            }
+            message.success(`已提交：成功 ${d.ok_count || 0}，失败 ${d.fail_count || 0}（进度见下发记录）`)
+            if (d.fail_count > 0) {
+              Modal.warning({
+                title: '部分主机下发失败',
+                content: (
+                  <ul style={{ margin: 0, paddingLeft: 18, maxHeight: 240, overflow: 'auto' }}>
+                    {results.filter((r) => r.error).map((r) => (
+                      <li key={r.host_instance_id}>{r.host_instance_id}：{r.error}</li>
+                    ))}
+                  </ul>
+                ),
+              })
+            }
             setDeployModal(false)
-            if (deployId) deployTracker.track(deployId)
             loadDeploys()
           } catch (e: any) {
             message.error(e?.response?.data?.message || e.message)
@@ -3061,32 +3182,127 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
           type="warning"
           showIcon
           style={{ marginBottom: 12 }}
-          message="下发前请确认控制面已构建制品"
-          description={<code>cd deploy/node-agent && ./build.sh</code>}
+          message="下发前请确认控制面已构建制品；对已运行集群安全"
+          description={(
+            <>
+              <div><code>cd deploy/node-agent && ./build.sh</code></div>
+              <div style={{ marginTop: 6 }}>
+                仅安装/重启 Node Agent，不启停 FE/BE、不装包、不 init 盘。监听端口请用 8091（约定 8090–8199），禁止填 9030/8030/8040 等业务端口。
+              </div>
+            </>
+          )}
         />
         <Form form={deployForm} layout="vertical" initialValues={{ listen_port: 8091, remote_dir: '/home/sysadmin/auto-dba/node-agent', escalate: false }}>
-          <Form.Item
-            name="host_instance_id"
-            label="目标主机"
-            rules={[{ required: true, message: '请选择 host 类型实例' }]}
-            extra="须在实例管理登记类型为 host；依赖 terminal.ssh_identity_file。"
-          >
+          <Form.Item label="目标来源">
             <Select
-              showSearch
-              optionFilterProp="label"
-              placeholder={hosts.length ? '选择主机' : '暂无 host 实例'}
-              options={hosts.map((h) => ({
-                value: h.id,
-                disabled: deployingHostIds.has(h.id),
-                label: `${h.name} — ${h.host || h.domain_name || '-'} :${h.port || 22}${deployingHostIds.has(h.id) ? '（下发中）' : ''}`,
-              }))}
+              value={deploySource}
+              onChange={(v) => {
+                setDeploySource(v)
+                setDeployMonSelected([])
+                deployForm.setFieldsValue({ host_instance_ids: [] })
+              }}
+              options={[
+                { value: 'monitor', label: '从监控目标（StarRocks FE/BE）批量' },
+                { value: 'host', label: '从已登记主机多选' },
+              ]}
             />
           </Form.Item>
+          {deploySource === 'monitor' ? (
+            <>
+              <Form.Item label="监控任务" required>
+                <Select
+                  showSearch
+                  allowClear
+                  placeholder="选择 StarRocks 监控任务"
+                  value={deployMonTask}
+                  options={Array.from(new Set([
+                    ...fePreview.map((p) => p.task_name),
+                    ...bePreview.map((p) => p.task_name),
+                  ].filter(Boolean) as string[])).map((t) => ({ value: t, label: t }))}
+                  onChange={(task) => {
+                    setDeployMonTask(task)
+                    const eps = new Set<string>()
+                    for (const p of [...fePreview, ...bePreview]) {
+                      if (p.task_name !== task) continue
+                      for (const e of p.endpoints || []) {
+                        const h = endpointHost(e) || String(e || '').trim()
+                        if (h) eps.add(h)
+                      }
+                    }
+                    const rows = [...eps].sort().map((host) => {
+                      const hn = host.toLowerCase()
+                      const inst = hosts.find((x) => hostAddrs(x).includes(hn))
+                      return {
+                        host,
+                        hostId: inst && !deployingHostIds.has(inst.id) ? inst.id : undefined,
+                        name: inst?.name,
+                      }
+                    })
+                    setDeployMonRows(rows)
+                    setDeployMonSelected(rows.filter((r) => r.hostId).map((r) => r.hostId!))
+                  }}
+                />
+              </Form.Item>
+              <Form.Item
+                label="节点主机"
+                extra="仅「已匹配主机实例」可下发；未登记请先到实例管理登记 host 并配置 SSH"
+              >
+                {deployMonRows.length === 0 ? (
+                  <span className="muted">请先选择监控任务</span>
+                ) : (
+                  <Checkbox.Group
+                    style={{ width: '100%' }}
+                    value={deployMonSelected}
+                    onChange={(vals) => setDeployMonSelected(vals as string[])}
+                  >
+                    <Space direction="vertical" style={{ width: '100%' }}>
+                      {deployMonRows.map((r) => (
+                        <Checkbox
+                          key={r.host}
+                          value={r.hostId || `__miss__${r.host}`}
+                          disabled={!r.hostId}
+                        >
+                          {r.host}
+                          {r.hostId
+                            ? <Tag color="blue" style={{ marginLeft: 8 }}>{r.name || r.hostId}</Tag>
+                            : <Tag color="error" style={{ marginLeft: 8 }}>未登记主机实例</Tag>}
+                        </Checkbox>
+                      ))}
+                    </Space>
+                  </Checkbox.Group>
+                )}
+              </Form.Item>
+            </>
+          ) : (
+            <Form.Item
+              name="host_instance_ids"
+              label="目标主机"
+              rules={[{ required: true, type: 'array', min: 1, message: '请选择至少一台主机' }]}
+              extra="须在实例管理登记类型为 host；依赖 terminal.ssh_identity_file。"
+            >
+              <Select
+                mode="multiple"
+                showSearch
+                optionFilterProp="label"
+                placeholder={hosts.length ? '选择一台或多台主机' : '暂无 host 实例'}
+                options={hosts.map((h) => ({
+                  value: h.id,
+                  disabled: deployingHostIds.has(h.id),
+                  label: `${h.name} — ${h.host || h.domain_name || '-'} :${h.port || 22}${deployingHostIds.has(h.id) ? '（下发中）' : ''}`,
+                }))}
+              />
+            </Form.Item>
+          )}
           <Form.Item name="escalate" label="提权执行（sudo su -）" valuePropName="checked">
             <Switch checkedChildren="开" unCheckedChildren="关" />
           </Form.Item>
-          <Form.Item name="listen_port" label="监听端口" extra="默认 8091，勿与平台 Agent 8090 冲突">
-            <InputNumber min={1} max={65535} style={{ width: '100%' }} />
+          <Form.Item
+            name="listen_port"
+            label="监听端口"
+            extra="默认 8091；勿与平台 Agent 8090 / 业务端口（9030、8030、8040 等）冲突"
+            rules={[{ required: true, type: 'number', min: 1024, max: 65535, message: '端口须在 1024–65535' }]}
+          >
+            <InputNumber min={1024} max={65535} style={{ width: '100%' }} />
           </Form.Item>
           <Form.Item name="remote_dir" label="远程目录">
             <Input placeholder="/home/sysadmin/auto-dba/node-agent" />

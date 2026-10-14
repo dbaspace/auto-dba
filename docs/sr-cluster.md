@@ -128,11 +128,19 @@ flowchart TB
 | 项 | 约定 |
 |----|------|
 | 建议路径 | `deploy/node-agent`（独立进程；勿与 Backup / 平台 Agent 端口冲突） |
-| 监听 | 默认 `:8091`（**平台 Agent / Backup Agent** 常用 `:8090`） |
+| 监听 | 默认 `:8091`（**平台 Agent / Backup Agent** 常用 `:8090`）；约定 Agent 端口带 **8090–8199** |
 | 鉴权 | HTTP BasicAuth，密码加密存库 |
-| 下发 | **本工作台 Node Agent Tab「SSH 下发」**（复用 sshx，制品 `deploy/node-agent/bin/node-agent`）；亦可手工安装后「手工登记」 |
+| 下发 | **本工作台 Node Agent Tab「SSH 下发」**（复用 sshx，制品 `deploy/node-agent/bin/node-agent`）；亦可手工安装后「手工登记」；支持从监控目标批量 |
 | 绑定 | `SrNode.agent_id` → `tbl_sr_agents`；无健康 Agent **禁止**对该节点预检/部署 |
 | 探活 | `GET /healthz` |
+
+**对已有集群安全（下发 Agent ≠ 变更业务）**：SSH 下发 / 重新下发 **只**操作 Agent 自身目录与进程（停旧 Agent → 上传二进制 → nohup 拉起），**不会**：
+
+- `systemctl` 启停 FE/BE，或改已有 FE/BE unit / conf
+- 触碰 FE/BE 二进制、数据目录，或执行 mkfs / 挂载
+- 触发装包、`ADD BACKEND` 等变更编排（那些只走变更单 / Agent HTTP）
+
+停旧 Agent 时仅按 pid / 精确进程名 `node-agent` 杀进程；`fuser -k` **仅**在约定端口带 8090–8199 执行。服务端拒绝将 9030 / 8030 / 8040 等业务端口配置为 Agent 监听，避免误杀已运行服务。
 
 **与配置中心「平台 Agent」切割**：
 
@@ -828,8 +836,9 @@ update-alternatives --set javac /home/jdk-21.0.4/bin/javac
 
 登记数据来源：
 
-1. **手工**填写 FE/BE host、版本、路径、FE 密码；Host 失焦自动绑 Agent，亦可「按主机登记」。登记前可 `POST /sr-cluster/probe-fe-roles` 探测实时角色。  
-2. **从监控目标导入**（推荐）：`GET /monitor-targets/preview?kind=starrocks-fe|starrocks-be`（与 FE 管理同源），按监控任务 / domain 预填 host、环境，以及标签 **`version` / `sr_version` / `starrocks_version`**。登记可不绑定制品 Release（仅写 version）；若设置中已有同号 Release 则自动关联。填写 FE/BE Host 后会按 `http://host:8091` **自动匹配或登记** Node Agent；登记模式可点「探测 FE 角色」对齐 LEADER/FOLLOWER。无监控目标时可去「配置中心 · 监控目标注册」先录入。
+1. **手工**填写 FE/BE host、版本、路径；FE 密码优先从「配置中心 · FE 管理」按主机匹配（`POST /feadmin/resolve-credential`），亦可留空由服务端回退。登记时 **Node Agent 可暂空**，运维前再到 Node Agent Tab 补绑。登记前可 `POST /sr-cluster/probe-fe-roles` 探测实时角色。  
+2. **从监控目标导入**（推荐）：`GET /monitor-targets/preview?kind=starrocks-fe|starrocks-be`，预填 host / 环境 / version；导入后尝试自动填 FE 管理密码；Agent 有匹配则自动选中，无匹配可暂空。可点「探测 FE 角色」对齐 LEADER/FOLLOWER。  
+3. **批量下发 Node Agent**：工作台「Node Agent」→ SSH 下发 → 选「从监控目标」，勾选任务下 FE/BE 主机（须已在实例管理登记为 host），`POST /sr-cluster/agents/deploy-batch` 批量下发。
 
 登记后维护：添加节点 / 加入 / 重启 / 下线 / 升级；`ready` 集群不再显示「集群初始化」。
 

@@ -666,8 +666,13 @@ export default function PlatformAgent() {
               <Checkbox.Group options={BACKUP_ENGINE_OPTS} />
             </Form.Item>
           ) : null}
-          <Form.Item name="listen_port" label="Agent 监听端口">
-            <InputNumber min={1} max={65535} style={{ width: '100%' }} />
+          <Form.Item
+            name="listen_port"
+            label="Agent 监听端口"
+            extra="默认 8090。下发仅安装/重启 Agent，不启停数据库等业务服务；禁止填业务端口"
+            rules={[{ required: true, type: 'number', min: 1024, max: 65535, message: '端口须在 1024–65535' }]}
+          >
+            <InputNumber min={1024} max={65535} style={{ width: '100%' }} />
           </Form.Item>
           <Form.Item
             name="remote_dir"

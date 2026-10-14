@@ -1417,7 +1417,9 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
                       下发前请在控制面执行
                       {' '}
                       <code>cd deploy/db-agent && ./build.sh</code>
-                      。云托管单入口无需 Agent。
+                      。云托管单入口无需 Agent。对已有集群：下发
+                      <strong>仅安装/重启 Agent 自身</strong>
+                      ，不启停 MySQL/PG/Redis 等业务服务。
                     </>
                   )}
                 />
@@ -2350,8 +2352,15 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
           type="warning"
           showIcon
           style={{ marginBottom: 12 }}
-          message="下发前请确认控制面已构建制品"
-          description={<code>cd deploy/db-agent && ./build.sh</code>}
+          message="下发前请确认控制面已构建制品；对已运行集群安全"
+          description={(
+            <>
+              <div><code>cd deploy/db-agent && ./build.sh</code></div>
+              <div style={{ marginTop: 6 }}>
+                仅安装/重启 DB Agent，不启停业务库。监听端口请用 8092（约定 8090–8199），禁止填业务端口。
+              </div>
+            </>
+          )}
         />
         <Form form={deployForm} layout="vertical" initialValues={{ listen_port: 8092, remote_dir: '/home/sysadmin/auto-dba/db-agent', escalate: false }}>
           <Form.Item
@@ -2374,8 +2383,13 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
           <Form.Item name="escalate" label="提权执行（sudo su -）" valuePropName="checked">
             <Switch checkedChildren="开" unCheckedChildren="关" />
           </Form.Item>
-          <Form.Item name="listen_port" label="监听端口" extra="默认 8092；勿与平台 Agent 8090、StarRocks Node Agent 8091 冲突">
-            <InputNumber min={1} max={65535} style={{ width: '100%' }} />
+          <Form.Item
+            name="listen_port"
+            label="监听端口"
+            extra="默认 8092；勿与平台 8090、Node 8091 及业务端口冲突"
+            rules={[{ required: true, type: 'number', min: 1024, max: 65535, message: '端口须在 1024–65535' }]}
+          >
+            <InputNumber min={1024} max={65535} style={{ width: '100%' }} />
           </Form.Item>
           <Form.Item name="remote_dir" label="远程目录">
             <Input placeholder="/home/sysadmin/auto-dba/db-agent" />

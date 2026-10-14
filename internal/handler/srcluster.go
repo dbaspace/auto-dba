@@ -155,6 +155,69 @@ func (h *SrClusterHandler) DeployAgent(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{"deploy_id": id}})
 }
 
+// DeployAgentBatch POST /sr-cluster/agents/deploy-batch — 对多台已登记主机批量 SSH 下发。
+func (h *SrClusterHandler) DeployAgentBatch(c *gin.Context) {
+	var req struct {
+		HostInstanceIDs []string `json:"host_instance_ids"`
+		ListenPort      int      `json:"listen_port"`
+		RemoteDir       string   `json:"remote_dir"`
+		Escalate        string   `json:"escalate"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	ids := make([]string, 0, len(req.HostInstanceIDs))
+	seen := map[string]struct{}{}
+	for _, id := range req.HostInstanceIDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "host_instance_ids 必填"})
+		return
+	}
+	who := middleware.Username(c)
+	type one struct {
+		HostInstanceID string `json:"host_instance_id"`
+		DeployID       string `json:"deploy_id,omitempty"`
+		Error          string `json:"error,omitempty"`
+	}
+	out := make([]one, 0, len(ids))
+	okCount, failCount := 0, 0
+	for _, id := range ids {
+		if it, err := resolveInstanceInTenant(h.Store, c, id); err != nil || it == nil {
+			out = append(out, one{HostInstanceID: id, Error: "主机实例不存在或不在当前租户"})
+			failCount++
+			continue
+		}
+		deployID, err := h.eng().StartDeploy(srcluster.DeployOpts{
+			HostInstanceID: id,
+			ListenPort:     req.ListenPort,
+			RemoteDir:      req.RemoteDir,
+			Escalate:       req.Escalate,
+			Operator:       who,
+		})
+		if err != nil {
+			out = append(out, one{HostInstanceID: id, Error: err.Error()})
+			failCount++
+			continue
+		}
+		out = append(out, one{HostInstanceID: id, DeployID: deployID})
+		okCount++
+	}
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{
+		"results": out, "ok_count": okCount, "fail_count": failCount,
+	}})
+}
+
 func (h *SrClusterHandler) ListAgentDeploys(c *gin.Context) {
 	limit, _ := strconv.Atoi(c.Query("limit"))
 	list, err := h.Store.ListSrAgentDeploysInTenant(effectiveListTenantID(h.Store, c), c.Query("host_instance_id"), limit)
@@ -332,10 +395,11 @@ func (h *SrClusterHandler) GetClusterLive(c *gin.Context) {
 // ProbeFERoles POST /sr-cluster/probe-fe-roles — 登记前探测 SHOW PROC '/frontends' 实时角色（不写库）。
 func (h *SrClusterHandler) ProbeFERoles(c *gin.Context) {
 	var req struct {
-		FeHost      string `json:"fe_host"`
-		FePassword  string `json:"fe_password"`
-		FeUser      string `json:"fe_user"`
-		FeQueryPort int    `json:"fe_query_port"`
+		FeHost      string   `json:"fe_host"`
+		FePassword  string   `json:"fe_password"`
+		FeUser      string   `json:"fe_user"`
+		FeQueryPort int      `json:"fe_query_port"`
+		Hosts       []string `json:"hosts"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
@@ -346,13 +410,29 @@ func (h *SrClusterHandler) ProbeFERoles(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "fe_host 必填"})
 		return
 	}
-	roles, err := h.eng().ProbeFERoles(c.Request.Context(), host, req.FeUser, req.FePassword, req.FeQueryPort)
+	user := strings.TrimSpace(req.FeUser)
+	pass := req.FePassword
+	if strings.TrimSpace(pass) == "" {
+		// 表单未填时按 FE 管理凭据回退
+		cl := &store.SrCluster{FeHost: host, FeUser: user}
+		nodes := []store.SrNode{{Component: "fe", Host: host}}
+		for _, hst := range req.Hosts {
+			hst = strings.TrimSpace(hst)
+			if hst != "" && !strings.EqualFold(hst, host) {
+				nodes = append(nodes, store.SrNode{Component: "fe", Host: hst})
+			}
+		}
+		if u, p, ok := h.eng().LookupFeAdminCredForProbe(cl, nodes); ok {
+			user, pass = u, p
+		}
+	}
+	roles, err := h.eng().ProbeFERoles(c.Request.Context(), host, user, pass, req.FeQueryPort)
 	if err != nil {
 		port := req.FeQueryPort
 		if port <= 0 {
 			port = 9030
 		}
-		c.JSON(http.StatusBadRequest, gin.H{"message": fmt.Sprintf("无法连接 FE %s:%d（%v）", host, port, err)})
+		c.JSON(http.StatusBadRequest, gin.H{"message": fmt.Sprintf("无法连接 FE %s:%d（%v）。请填写密码或先在 FE 管理配置凭据", host, port, err)})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": roles})
@@ -392,7 +472,7 @@ func (h *SrClusterHandler) CreateCluster(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"message": "节点 host 必填"})
 			return
 		}
-		if strings.TrimSpace(n.AgentID) == "" {
+		if strings.TrimSpace(n.AgentID) == "" && !req.RegisterExisting {
 			c.JSON(http.StatusBadRequest, gin.H{"message": fmt.Sprintf("节点 %s 须绑定 Node Agent", n.Host)})
 			return
 		}

@@ -14,6 +14,7 @@ import (
 	"auto-dba/internal/dbprobe"
 	kquery "auto-dba/internal/kafka"
 	"auto-dba/internal/middleware"
+	"auto-dba/internal/nodecheck"
 	"auto-dba/internal/redisquery"
 	"auto-dba/internal/secret"
 	"auto-dba/internal/store"
@@ -344,6 +345,148 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 	_ = h.Store.AppendCmdbAudit(c.GetString(middleware.CtxUsername), "create", "instance", it.ID, "api", nil, redactInstanceCopy(it))
 	redactInstance(&it)
 	c.JSON(http.StatusOK, gin.H{"data": it})
+}
+
+// SyncHostsFromMonitor POST /instances/sync-hosts-from-monitor —
+// 从「监控目标注册」全部 endpoints 提取主机地址，按规范化 IP/主机名去重后登记为 db_type=host；
+// 已存在则跳过；有多少登记多少。SSH 默认 sysadmin:22、私有可见（当前用户）；名称/审批人等不足字段事后人工补充。
+func (h *InstanceHandler) SyncHostsFromMonitor(c *gin.Context) {
+	hosts, err := collectUniqueHostsFromMonitor(h.Store)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	tid := middleware.TenantID(c)
+	exist, err := h.Store.ListInstancesInTenant(tid, "", "")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	known := map[string]bool{}
+	for i := range exist {
+		if !store.IsHostInstanceType(exist[i].DBType) {
+			continue
+		}
+		for _, a := range nodecheck.HostAddrs(&exist[i]) {
+			known[a] = true
+		}
+	}
+	who := actorName(c)
+	if who == "" {
+		who = "admin"
+	}
+	enc, err := secret.Encrypt(h.Secret, "")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "密码加密失败"})
+		return
+	}
+	created, skipped := 0, 0
+	for _, host := range hosts {
+		if known[host] {
+			skipped++
+			continue
+		}
+		it := store.Instance{
+			Name:        host,
+			Host:        host,
+			DomainName:  host,
+			Domains:     []string{host},
+			Port:        22,
+			DBType:      "host",
+			Username:    "sysadmin",
+			Password:    enc,
+			Visibility:  "private",
+			AccessUsers: []string{who},
+			Approvers:   []string{who},
+			Description: "从监控目标自动同步",
+			TenantID:    tid,
+		}
+		if err := h.Store.CreateInstance(&it); err != nil {
+			// 并发或唯一约束冲突视为已存在
+			skipped++
+			continue
+		}
+		_, _ = h.Store.SyncAccessDomainsFromInstance(&it)
+		_ = h.Store.AppendCmdbAudit(who, "create", "instance", it.ID, "sync-hosts-from-monitor", nil, redactInstanceCopy(it))
+		known[host] = true
+		created++
+	}
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{
+		"created": created,
+		"skipped": skipped,
+		"hosts":   len(hosts),
+	}})
+}
+
+func collectUniqueHostsFromMonitor(db *store.DB) ([]string, error) {
+	jobs, err := db.ListMonitorJobs("")
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, j := range jobs {
+		groups, err := db.ListMonitorTargetGroups(j.ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, g := range groups {
+			for _, ep := range splitMonitorEndpointList(g.Endpoints) {
+				host := syncNormHost(hostFromMonitorEndpoint(ep))
+				if host == "" || seen[host] {
+					continue
+				}
+				seen[host] = true
+				out = append(out, host)
+			}
+		}
+	}
+	return out, nil
+}
+
+func splitMonitorEndpointList(s string) []string {
+	parts := strings.FieldsFunc(s, func(r rune) bool {
+		return r == ',' || r == '\n' || r == ';' || r == ' ' || r == '\t'
+	})
+	var out []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func hostFromMonitorEndpoint(ep string) string {
+	ep = strings.TrimSpace(ep)
+	ep = strings.TrimPrefix(ep, "http://")
+	ep = strings.TrimPrefix(ep, "https://")
+	if i := strings.IndexByte(ep, '/'); i >= 0 {
+		ep = ep[:i]
+	}
+	if ep == "" {
+		return ""
+	}
+	if h, _, err := net.SplitHostPort(ep); err == nil {
+		return h
+	}
+	// IPv4 host:port（无括号）
+	if i := strings.LastIndexByte(ep, ':'); i > 0 {
+		if _, err := strconv.Atoi(ep[i+1:]); err == nil {
+			return ep[:i]
+		}
+	}
+	return ep
+}
+
+func syncNormHost(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	s = strings.TrimPrefix(strings.TrimSuffix(s, "]"), "[")
+	if ip := net.ParseIP(s); ip != nil {
+		return ip.String()
+	}
+	return strings.TrimSuffix(s, ".")
 }
 
 func (h *InstanceHandler) Update(c *gin.Context) {
