@@ -121,6 +121,13 @@ func resolveInstanceInTenant(db *store.DB, c *gin.Context, instanceID string) (*
 	if n > 0 {
 		return db.GetInstance(instanceID)
 	}
+	viaDomain, err := db.InstanceReachableViaAccessDomain(instanceID, tid, middleware.UserID(c))
+	if err != nil {
+		return nil, err
+	}
+	if viaDomain {
+		return db.GetInstance(instanceID)
+	}
 	granted, err := db.ListGrantedDatabases(tid, middleware.UserID(c), instanceID, "")
 	if err != nil || len(granted) == 0 {
 		return nil, err

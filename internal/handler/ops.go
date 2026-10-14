@@ -929,10 +929,41 @@ func (h *KafkaHandler) List(c *gin.Context) {
 }
 
 func (h *KafkaHandler) Create(c *gin.Context) {
-	var t store.KafkaOrder
-	if err := c.ShouldBindJSON(&t); err != nil {
+	var req struct {
+		store.KafkaOrder
+		InstanceID string `json:"instance_id"`
+		Domain     string `json:"domain"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
+	}
+	t := req.KafkaOrder
+	instanceID := strings.TrimSpace(req.InstanceID)
+	domain := strings.TrimSpace(req.Domain)
+	if instanceID == "" || domain == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "请选择 Kafka 地址（域名）"})
+		return
+	}
+	inst, err := resolveInstanceInTenant(h.Store, c, instanceID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	if inst == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "实例不存在"})
+		return
+	}
+	if !strings.EqualFold(strings.TrimSpace(inst.DBType), "kafka") {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "仅支持 db_type=kafka 的实例"})
+		return
+	}
+	if err := ensureTicketDomainVisible(h.Store, c, inst, domain); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	if strings.TrimSpace(t.Cluster) == "" {
+		t.Cluster = domain
 	}
 	t.Submitter = middleware.Username(c)
 	if t.TicketNo == "" {
@@ -953,11 +984,14 @@ func (h *KafkaHandler) Create(c *gin.Context) {
 	}
 	issue := &store.Issue{
 		ID: t.ID, TicketNo: t.TicketNo, IssueType: store.IssueTypeKafka,
+		InstanceID: instanceID, Domain: domain,
 		SQLContent:  fmt.Sprintf("%s %s/%s", t.Action, t.Cluster, t.Topic),
 		Description: t.Description, Submitter: t.Submitter, AssignedTo: t.AssignedTo,
 	}
 	stampTenantID(c, func(tid string) {
-		if issue != nil { issue.TenantID = tid }
+		if issue != nil {
+			issue.TenantID = tid
+		}
 	})
 	_ = h.Store.CreateIssue(issue)
 	NotifyIssueCreatedAsync(h.Store, h.Secret, issue)

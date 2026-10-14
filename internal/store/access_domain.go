@@ -208,6 +208,42 @@ func (d *DB) ListAccessDomainsInTenant(tenantID, dbType, envCode, q string) ([]A
 	return out, rows.Err()
 }
 
+// InstanceReachableViaAccessDomain 本租户是否通过域名归属或 domain grant 可见该实例。
+func (d *DB) InstanceReachableViaAccessDomain(instanceID, tenantID, userID string) (bool, error) {
+	instanceID = strings.TrimSpace(instanceID)
+	tenantID = strings.TrimSpace(tenantID)
+	if instanceID == "" || tenantID == "" {
+		return false, nil
+	}
+	var n int
+	if err := d.QueryRow(
+		`SELECT COUNT(1) FROM tbl_access_domains WHERE instance_id=? AND COALESCE(tenant_id,'')=?`,
+		instanceID, tenantID,
+	).Scan(&n); err != nil {
+		return false, err
+	}
+	if n > 0 {
+		return true, nil
+	}
+	gs, err := d.ListTenantGrantsTo(tenantID, userID)
+	if err != nil {
+		return false, err
+	}
+	for _, g := range gs {
+		if g.ResourceType != "domain" {
+			continue
+		}
+		it, err := d.GetAccessDomain(g.ResourceID)
+		if err != nil || it == nil {
+			continue
+		}
+		if strings.TrimSpace(it.InstanceID) == instanceID {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (d *DB) ListGrantedAccessDomains(toTenantID, toUserID, dbType, envCode, q string) ([]AccessDomain, error) {
 	gs, err := d.ListTenantGrantsTo(toTenantID, toUserID)
 	if err != nil {

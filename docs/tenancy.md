@@ -46,7 +46,7 @@ JWT `imp=true` 且用户为平台管理员时：
 - 可 **划拨** 实例：`POST /api/v1/instances/:id/assign-tenant`（body `tenant_id` 指定目标，默认当前 `tid`）；下属同归属已登记库、账号与**域名资源**一并更新。带 `sr-cluster=` / `ha-from-dbdeploy` 标签时，同步划拨所属部署集群。前端审计页为「指定租户」弹窗（可选任意目标租户）。
 - 可 **划拨已登记库**：`POST /api/v1/databases/:id/assign-tenant`（body `tenant_id`）。只改库与该库账号归属，**不改实例**。批量：`POST /api/v1/databases/assign-tenant`（`tenant_id` + `ids`）。
 - 可 **划拨域名**：`POST /api/v1/access-domains/:id/assign-tenant`；批量：`POST /api/v1/access-domains/assign-tenant`（`tenant_id` + `ids`）。域名与引擎类型绑定（`UNIQUE(domain, db_type)`），同地址不同引擎互不影响。一键同步：`POST /api/v1/access-domains/sync`（可选 `db_type`）。跨租只读用 grant（`resource_type=domain`）。
-- **工单数据源可见性**：DDL / DML / 建库 / 权限申请的「数据源」选项来自 `GET /access-domains`（本租户归属 ∪ `domain` grant）；提交时校验域名在域名管理中登记且对本租户可见（审计会话放宽）。不再用实例 `tenant_id` 决定地址是否出现。
+- **工单 / 查询数据源可见性**：DDL / DML / 建库 / 权限申请 / **Redis 工单** / **Kafka 工单** 的地址选项来自 `GET /access-domains`（本租户归属 ∪ `domain` grant）；提交时校验域名对本租户可见（审计会话放宽）。**Redis / Kafka 查询**侧栏同理；拉取逻辑库或 Topic 时，`resolveInstanceInTenant` 在「仅划拨域名、实例仍属其它租户」的情况下，经域名归属/grant 即可解析父实例（不再报「实例不存在」）。工单「环境」取自 `GET /environments`（环境管理），不以写死的 test/prod 为准。
 - 可 **划拨集群**：`POST /api/v1/sr-cluster/clusters/:id/assign-tenant`、`POST /api/v1/db-deploy/clusters/:id/assign-tenant`（同样仅审计会话）；带走 tagged / linked 实例、库账号，以及 description 含 `sr-cluster=<id>` 的监控任务。Node Agent 不迁。
 - 可 **划拨接入层代理**：`POST /api/v1/proxy/services/:id/assign-tenant`（HAProxy/Nginx/LVS）；目标租户内同 kind+name 或同 VIP 冲突则拒绝。
 - 划拨前校验目标租户内：实例 `UNIQUE(tenant_id, domain_name, port)`；SR 同名或同 FE 入口；db-deploy **展示名可重复**，冲突看云 `endpoint_host:port` 与关联实例 domain+port；代理同 kind+name 或同 VIP。冲突返回明确错误。

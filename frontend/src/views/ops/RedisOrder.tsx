@@ -5,6 +5,17 @@ import ResponsiveTable from '../../components/ResponsiveTable'
 import type { ColumnsType } from 'antd/es/table'
 import api from '../../api/request'
 import { useWorkOrderDraft } from '../../hooks/useWorkOrderDraft'
+import { buildEnvOptions, type EnvOption } from '../../utils/env'
+import {
+  filterAccessDomainRows,
+  parseSourceKey,
+  sourceKey,
+  sourcePrimaryLabel,
+  sourceSecondaryLabel,
+  sourcesFromAccessDomains,
+  type AccessDomainRow,
+  type DomainSource,
+} from '../../utils/instanceSource'
 import { splitRedisArgs } from '../../utils/redisArgs'
 import './RedisOrder.css'
 
@@ -34,21 +45,12 @@ function emptyForm() {
   return {
     env: '',
     instance_id: '',
+    domain: '',
     db_name: '',
     assigned_to: '',
     command: '',
     description: '',
   }
-}
-
-function instAddress(i: any) {
-  if (i?.host) return `${i.host}:${i.port || 6379}`
-  return i?.domain_name || ''
-}
-
-function instLabel(i: any) {
-  const addr = instAddress(i)
-  return i?.name ? (addr ? `${i.name} (${addr})` : i.name) : addr
 }
 
 function isProdEnv(env: string) {
@@ -141,7 +143,9 @@ export default function RedisOrder() {
   const formRef = useRef(form)
   formRef.current = form
   const [antdForm] = Form.useForm()
-  const [instances, setInstances] = useState<any[]>([])
+  const [accessDomains, setAccessDomains] = useState<AccessDomainRow[]>([])
+  const [instById, setInstById] = useState<Record<string, any>>({})
+  const [envOptions, setEnvOptions] = useState<EnvOption[]>([])
   const [catalog, setCatalog] = useState<CmdItem[]>([])
   const [blacklist, setBlacklist] = useState<Set<string>>(() => new Set())
   const [instLoading, setInstLoading] = useState(false)
@@ -153,7 +157,10 @@ export default function RedisOrder() {
   function patchForm(patch: Partial<ReturnType<typeof emptyForm>>) {
     setForm((f) => {
       const next = { ...f, ...patch }
-      antdForm.setFieldsValue(next)
+      antdForm.setFieldsValue({
+        ...next,
+        source_key: next.instance_id && next.domain ? sourceKey(next.instance_id, next.domain) : undefined,
+      })
       return next
     })
   }
@@ -166,7 +173,10 @@ export default function RedisOrder() {
     applyValues: (d) => {
       const next = { ...emptyForm(), ...d }
       setForm(next)
-      antdForm.setFieldsValue(next)
+      antdForm.setFieldsValue({
+        ...next,
+        source_key: next.instance_id && next.domain ? sourceKey(next.instance_id, next.domain) : undefined,
+      })
     },
   })
 
@@ -174,26 +184,15 @@ export default function RedisOrder() {
     schedulePersist()
   }, [form, schedulePersist])
 
-  const envOptions = useMemo(() => {
-    const set = new Set(['test', 'prod'])
-    for (const i of instances) {
-      if (i.idc) set.add(i.idc)
-    }
-    return [...set]
-  }, [instances])
-
-  const redisOptions = useMemo(() => {
+  const redisOptions = useMemo((): DomainSource[] => {
     if (!form.env) return []
-    return instances.filter((i) => !i.idc || i.idc === form.env)
-  }, [instances, form.env])
+    return sourcesFromAccessDomains(filterAccessDomainRows(accessDomains, { env: form.env, dbType: 'redis' }))
+  }, [accessDomains, form.env])
 
-  const currentInst = useMemo(
-    () => instances.find((i) => i.id === form.instance_id),
-    [instances, form.instance_id],
-  )
+  const currentInst = useMemo(() => instById[form.instance_id], [instById, form.instance_id])
   const approvers = useMemo(() => currentInst?.approvers || [], [currentInst])
   const approverPlaceholder = !form.instance_id
-    ? '请先选择 Redis 实例'
+    ? '请先选择 Redis 地址'
     : !approvers.length
       ? '该实例未配置审批人员，可手动填写'
       : '选填，来自实例中配置的审批人员'
@@ -206,26 +205,43 @@ export default function RedisOrder() {
   const prodRisk = isProdEnv(form.env) || isProdEnv(currentInst?.idc || '')
 
   function onEnvChange(env: string) {
-    patchForm({ env, instance_id: '', assigned_to: '' })
+    patchForm({ env, instance_id: '', domain: '', assigned_to: '' })
     setChecked(false)
     setCheckPassed(false)
     setCheckRows([])
   }
 
-  function onInstChange(instance_id: string) {
-    const inst = instances.find((i) => i.id === instance_id)
+  async function onSourceChange(key: string) {
+    const parsed = parseSourceKey(key)
+    if (!parsed) {
+      patchForm({ instance_id: '', domain: '', assigned_to: '' })
+      return
+    }
+    let inst = instById[parsed.instance_id]
+    if (!inst) {
+      try {
+        const { data } = await api.get(`/instances/${parsed.instance_id}`)
+        inst = data.data
+        if (inst) setInstById((m) => ({ ...m, [parsed.instance_id]: inst }))
+      } catch {
+        /* keep empty approvers */
+      }
+    }
     const first = (inst?.approvers || [])[0] || ''
-    patchForm({ instance_id, assigned_to: first })
+    patchForm({ instance_id: parsed.instance_id, domain: parsed.domain, assigned_to: first })
   }
 
   async function loadData() {
     setInstLoading(true)
     try {
-      const [instRes, catRes] = await Promise.all([
-        api.get('/redis/instances'),
+      const [domRes, envRes, catRes] = await Promise.all([
+        api.get('/access-domains', { params: { db_type: 'redis' } }),
+        api.get('/environments').catch(() => ({ data: { data: [] } })),
         api.get('/redis/command-catalog'),
       ])
-      setInstances(instRes.data.data || [])
+      const domains: AccessDomainRow[] = domRes.data.data || []
+      setAccessDomains(domains)
+      setEnvOptions(buildEnvOptions(envRes.data.data || [], domains))
       setCatalog(catRes.data.data || [])
       setBlacklist(new Set((catRes.data.blacklist || []).map((x: string) => String(x).toUpperCase())))
     } finally {
@@ -270,6 +286,7 @@ export default function RedisOrder() {
       await api.post('/redis/orders', {
         env: f.env,
         instance_id: f.instance_id,
+        domain: f.domain,
         db_name: f.db_name,
         command: f.command,
         assigned_to: f.assigned_to,
@@ -332,14 +349,14 @@ export default function RedisOrder() {
                 placeholder="请选择"
                 optionFilterProp="label"
                 onChange={onEnvChange}
-                options={envOptions.map((e) => ({ value: e, label: e }))}
+                options={envOptions.map((e) => ({ value: e.value, label: e.label }))}
               />
             </Form.Item>
 
             <Form.Item
-              name="instance_id"
-              label="Redis 实例"
-              rules={[{ required: true, message: '请选择 Redis 实例' }]}
+              name="source_key"
+              label="Redis 地址"
+              rules={[{ required: true, message: '请选择 Redis 地址' }]}
             >
               <Select
                 showSearch
@@ -348,17 +365,18 @@ export default function RedisOrder() {
                 loading={instLoading}
                 placeholder={form.env ? '请选择' : '请先选择环境'}
                 optionFilterProp="label"
-                onChange={onInstChange}
-                options={redisOptions.map((i) => ({
-                  value: i.id,
-                  label: instLabel(i),
-                  optlabel: i.name || instAddress(i),
-                  addr: instAddress(i),
+                value={form.instance_id && form.domain ? sourceKey(form.instance_id, form.domain) : undefined}
+                onChange={(v) => void onSourceChange(v || '')}
+                options={redisOptions.map((s) => ({
+                  value: s.key,
+                  label: `${sourcePrimaryLabel(s)} ${sourceSecondaryLabel(s)}`.trim(),
+                  primary: sourcePrimaryLabel(s),
+                  secondary: sourceSecondaryLabel(s),
                 }))}
                 optionRender={(opt) => (
                   <div className="ds-opt">
-                    <span>{(opt.data as any).optlabel}</span>
-                    <span className="muted">{(opt.data as any).addr}</span>
+                    <span>{(opt.data as any).primary}</span>
+                    <span className="muted">{(opt.data as any).secondary}</span>
                   </div>
                 )}
               />
@@ -369,7 +387,7 @@ export default function RedisOrder() {
                 type="warning"
                 showIcon
                 className="hint-alert"
-                message="当前环境暂无 Redis 实例，请先在「实例」中登记"
+                message="当前环境暂无 Redis 域名，请先在「域名管理」同步并划拨"
               />
             ) : null}
 

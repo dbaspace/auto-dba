@@ -4,6 +4,7 @@ import { AutoComplete, Button, Checkbox, Form, Input, Select, Space, message } f
 import api from '../../api/request'
 import DatabasePicker from '../../components/DatabasePicker'
 import { dbLabel } from '../../utils/db'
+import { buildEnvOptions, type EnvOption } from '../../utils/env'
 import {
   filterAccessDomainRows,
   filterDbsByDomain,
@@ -41,6 +42,7 @@ export default function DclGrants() {
   formRef.current = form
   const [instances, setInstances] = useState<any[]>([])
   const [accessDomains, setAccessDomains] = useState<AccessDomainRow[]>([])
+  const [envOptions, setEnvOptions] = useState<EnvOption[]>([])
   const [databases, setDatabases] = useState<any[]>([])
   const [dbLoading, setDbLoading] = useState(false)
   const [approverLoading, setApproverLoading] = useState(false)
@@ -51,18 +53,6 @@ export default function DclGrants() {
   function patchForm(patch: Partial<ReturnType<typeof emptyForm>>) {
     setForm((f) => ({ ...f, ...patch }))
   }
-
-  const extraEnvs = useMemo(() => {
-    const set = new Set<string>()
-    for (const r of accessDomains) {
-      const code = String(r.env_code || '').trim()
-      if (code && code !== 'test' && code !== 'prod') set.add(code)
-    }
-    for (const i of instances) {
-      if (i.idc && i.idc !== 'test' && i.idc !== 'prod') set.add(i.idc)
-    }
-    return [...set]
-  }, [accessDomains, instances])
 
   const sourceOptions = useMemo((): DomainSource[] => {
     if (!form.env || !form.db_type) return []
@@ -236,12 +226,16 @@ export default function DclGrants() {
 
   useEffect(() => {
     ;(async () => {
-      const [instRes, domRes] = await Promise.all([
+      const [instRes, domRes, envRes] = await Promise.all([
         api.get('/instances'),
         api.get('/access-domains').catch(() => ({ data: { data: [] } })),
+        api.get('/environments').catch(() => ({ data: { data: [] } })),
       ])
-      setInstances(instRes.data.data || [])
-      setAccessDomains(domRes.data.data || [])
+      const domains: AccessDomainRow[] = domRes.data.data || []
+      const instList = instRes.data.data || []
+      setInstances(instList)
+      setAccessDomains(domains)
+      setEnvOptions(buildEnvOptions(envRes.data.data || [], [...domains, ...instList]))
       setApproverLoading(true)
       try {
         const args = (await api.get('/global-args')).data.data || []
@@ -284,14 +278,12 @@ export default function DclGrants() {
           <Form.Item label="环境" name="env" rules={[{ required: true, message: '请选择环境' }]}>
             <Select
               allowClear
+              showSearch
+              optionFilterProp="label"
               placeholder="请选择环境"
               value={form.env || undefined}
               onChange={(v) => onEnvOrTypeChange({ env: v || '' })}
-              options={[
-                { label: '测试', value: 'test' },
-                { label: '生产', value: 'prod' },
-                ...extraEnvs.map((e) => ({ label: e, value: e })),
-              ]}
+              options={envOptions.map((e) => ({ label: e.label, value: e.value }))}
             />
           </Form.Item>
           <Form.Item label="数据库类型" name="db_type" rules={[{ required: true, message: '请选择数据库类型' }]}>

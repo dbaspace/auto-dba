@@ -731,7 +731,14 @@ func (h *InstanceHandler) ListRedisDatabases(c *gin.Context) {
 	if !ok {
 		return
 	}
-	host, err := redisquery.ResolveHost(inst, c.Query("domain"))
+	domain := strings.TrimSpace(c.Query("domain"))
+	if domain != "" {
+		if err := ensureTicketDomainVisible(h.Store, c, inst, domain); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+			return
+		}
+	}
+	host, err := redisquery.ResolveHost(inst, domain)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
@@ -761,7 +768,14 @@ func (h *InstanceHandler) ExecuteRedis(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "参数无效"})
 		return
 	}
-	host, err := redisquery.ResolveHost(inst, req.Domain)
+	domain := strings.TrimSpace(req.Domain)
+	if domain != "" {
+		if err := ensureTicketDomainVisible(h.Store, c, inst, domain); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+			return
+		}
+	}
+	host, err := redisquery.ResolveHost(inst, domain)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return

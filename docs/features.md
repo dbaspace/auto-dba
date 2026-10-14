@@ -89,8 +89,8 @@ Client Secret（及 LDAP Bind 密码）用字段加密密钥落库（优先 `app
 | DDL 工单 | `/ops/ddl` | 结构变更。提交前按审核规则做 SQL 检查，可看执行影响；可多选域名级数据源 |
 | DML 工单 | `/ops/dml` | 数据变更，同样走审核与审批。PostgreSQL DML 由平台包事务执行，脚本中的 `BEGIN`/`COMMIT`/`ROLLBACK` 会被忽略（避免与外层事务双重提交） |
 | DQL 工单 | `/ops/dql` | 数据导出。左侧填环境、库、审批人和事由，右侧写查询 SQL |
-| Kafka 工单 | `/ops/kafka` | 创建或调整 Topic（分区、副本、保留策略等） |
-| Redis 工单 | `/ops/redis` | 按 Redis 命令规则提交变更，规则在审核规则中维护 |
+| Kafka 工单 | `/ops/kafka` | 创建或调整 Topic；地址选自域名管理（本租户可见），环境选自环境管理 |
+| Redis 工单 | `/ops/redis` | 按 Redis 命令规则提交变更；地址选自域名管理，环境选自环境管理 |
 | 权限申请 | `/ops/dcl` | 为数据库账号申请权限，并选择目标库 |
 | 新增数据库 | `/ops/createdb` | 在已登记实例上申请建库 |
 
@@ -240,7 +240,7 @@ DBA 域配置管理门面：统一目录（含 SR/部署/代理/账号/CDC）、
 |------|------|------|
 | 实例管理 | `/config/instances?db_type=…` | 登记 PostgreSQL、MySQL 族、Kafka、Redis、主机等连接；按类型各开 Tab；列表支持列排序与底部分页；域名/标签列表折叠；域名可多行粘贴并去重；可见范围（全局/私有）；审计下「指定租户」（可选目标） |
 | 已登记库 | `/config/databases` | 登记业务库、审批人与可见范围；审计下可单条或**批量指定归属租户**（不迁实例） |
-| 域名管理 | `/config/domains` | 全引擎统一域名资源；按类型一键同步（`UNIQUE(domain,db_type)` 隔离）；新域名默认归属默认租户；审计下单条/批量指定租户；可授权跨租只读。工单（DDL/DML/建库/权限申请）「数据源」下拉按**本租户可见域名**列出，不再按实例租户展开 |
+| 域名管理 | `/config/domains` | 全引擎统一域名资源；按类型一键同步（`UNIQUE(domain,db_type)` 隔离）；新域名默认归属默认租户；审计下单条/批量指定租户；可授权跨租只读。工单（DDL/DML/建库/权限申请/Redis/Kafka）与 Redis/Kafka 查询的地址按**本租户可见域名**列出；仅划拨域名即可查询父实例 |
 | 账号管理 | `/config/accounts` | 登记供权限申请和执行使用的数据库账号（随库租户） |
 | 审核规则 | `/config/review-rules` | DDL / DML 的 SQL 审核规则，以及 Redis 命令规则。PostgreSQL 时间字段等多值规则见 [review-rules.md](review-rules.md) |
 

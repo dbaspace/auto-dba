@@ -83,6 +83,7 @@ func (h *RedisHandler) Instances(c *gin.Context) {
 func (h *RedisHandler) Create(c *gin.Context) {
 	var req struct {
 		InstanceID  string `json:"instance_id"`
+		Domain      string `json:"domain"`
 		DBName      string `json:"db_name"`
 		Command     string `json:"command"`
 		Title       string `json:"title"`
@@ -95,9 +96,14 @@ func (h *RedisHandler) Create(c *gin.Context) {
 		return
 	}
 	instanceID := strings.TrimSpace(req.InstanceID)
+	domain := strings.TrimSpace(req.Domain)
 	command := strings.TrimSpace(req.Command)
 	if instanceID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "请选择 Redis 实例"})
+		return
+	}
+	if domain == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "请选择 Redis 域名"})
 		return
 	}
 	rules, err := h.loadRules()
@@ -120,6 +126,10 @@ func (h *RedisHandler) Create(c *gin.Context) {
 	}
 	if !strings.EqualFold(strings.TrimSpace(inst.DBType), "redis") {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "仅支持 db_type=redis 的实例"})
+		return
+	}
+	if err := ensureTicketDomainVisible(h.Store, c, inst, domain); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
 	dbName := strings.TrimSpace(req.DBName)
@@ -165,6 +175,7 @@ func (h *RedisHandler) Create(c *gin.Context) {
 		TicketNo:     "R" + strings.ReplaceAll(uuid.NewString(), "-", "")[:10],
 		IssueType:    store.IssueTypeRedis,
 		InstanceID:   instanceID,
+		Domain:       domain,
 		DBName:       dbName,
 		SQLContent:   command,
 		Description:  desc,

@@ -4,6 +4,17 @@ import { Alert, AutoComplete, Button, DatePicker, Form, Input, InputNumber, Sele
 import dayjs, { Dayjs } from 'dayjs'
 import api from '../../api/request'
 import { useWorkOrderDraft } from '../../hooks/useWorkOrderDraft'
+import { buildEnvOptions, type EnvOption } from '../../utils/env'
+import {
+  filterAccessDomainRows,
+  parseSourceKey,
+  sourceKey,
+  sourcePrimaryLabel,
+  sourceSecondaryLabel,
+  sourcesFromAccessDomains,
+  type AccessDomainRow,
+  type DomainSource,
+} from '../../utils/instanceSource'
 import './KafkaOrder.css'
 
 const TOPIC_RE = /^[a-zA-Z0-9._-]+$/
@@ -12,6 +23,7 @@ function emptyForm() {
   return {
     env: '',
     instance_id: '',
+    domain: '',
     action: 'create_topic',
     topic: '',
     partition: undefined as number | undefined,
@@ -24,18 +36,15 @@ function emptyForm() {
   }
 }
 
-function instLabel(i: any) {
-  const addr = i.host ? `${i.host}:${i.port}` : i.domain_name || ''
-  return i.name ? `${i.name} — ${addr}` : addr
-}
-
 export default function KafkaOrder() {
   const navigate = useNavigate()
   const [form, setForm] = useState(emptyForm())
   const formRef = useRef(form)
   formRef.current = form
   const [antdForm] = Form.useForm()
-  const [instances, setInstances] = useState<any[]>([])
+  const [accessDomains, setAccessDomains] = useState<AccessDomainRow[]>([])
+  const [instById, setInstById] = useState<Record<string, any>>({})
+  const [envOptions, setEnvOptions] = useState<EnvOption[]>([])
   const [instLoading, setInstLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
 
@@ -44,6 +53,7 @@ export default function KafkaOrder() {
       const next = { ...f, ...patch }
       antdForm.setFieldsValue({
         ...next,
+        source_key: next.instance_id && next.domain ? sourceKey(next.instance_id, next.domain) : undefined,
         scheduled_at: next.scheduled_at ? dayjs(next.scheduled_at, 'YYYY-MM-DD HH:mm') : null,
       })
       return next
@@ -60,6 +70,7 @@ export default function KafkaOrder() {
       setForm(next)
       antdForm.setFieldsValue({
         ...next,
+        source_key: next.instance_id && next.domain ? sourceKey(next.instance_id, next.domain) : undefined,
         scheduled_at: next.scheduled_at ? dayjs(next.scheduled_at, 'YYYY-MM-DD HH:mm') : null,
       })
     },
@@ -69,23 +80,12 @@ export default function KafkaOrder() {
     schedulePersist()
   }, [form, schedulePersist])
 
-  const envOptions = useMemo(() => {
-    const set = new Set(['test', 'prod'])
-    for (const i of instances) {
-      if (i.idc) set.add(i.idc)
-    }
-    return [...set]
-  }, [instances])
-
-  const kafkaOptions = useMemo(() => {
+  const kafkaOptions = useMemo((): DomainSource[] => {
     if (!form.env) return []
-    return instances.filter((i) => !i.idc || i.idc === form.env)
-  }, [instances, form.env])
+    return sourcesFromAccessDomains(filterAccessDomainRows(accessDomains, { env: form.env, dbType: 'kafka' }))
+  }, [accessDomains, form.env])
 
-  const currentInst = useMemo(
-    () => instances.find((i) => i.id === form.instance_id),
-    [instances, form.instance_id],
-  )
+  const currentInst = useMemo(() => instById[form.instance_id], [instById, form.instance_id])
   const approvers = useMemo(() => currentInst?.approvers || [], [currentInst])
   const approverPlaceholder = !form.instance_id
     ? '请先选择 Kafka 地址'
@@ -94,20 +94,39 @@ export default function KafkaOrder() {
       : '选填，来自实例中配置的审批人员'
 
   function onEnvChange(env: string) {
-    patchForm({ env, instance_id: '', assigned_to: '' })
+    patchForm({ env, instance_id: '', domain: '', assigned_to: '' })
   }
 
-  function onInstChange(instance_id: string) {
-    const inst = instances.find((i) => i.id === instance_id)
+  async function onSourceChange(key: string) {
+    const parsed = parseSourceKey(key)
+    if (!parsed) {
+      patchForm({ instance_id: '', domain: '', assigned_to: '' })
+      return
+    }
+    let inst = instById[parsed.instance_id]
+    if (!inst) {
+      try {
+        const { data } = await api.get(`/instances/${parsed.instance_id}`)
+        inst = data.data
+        if (inst) setInstById((m) => ({ ...m, [parsed.instance_id]: inst }))
+      } catch {
+        /* ignore */
+      }
+    }
     const first = (inst?.approvers || [])[0] || ''
-    patchForm({ instance_id, assigned_to: first })
+    patchForm({ instance_id: parsed.instance_id, domain: parsed.domain, assigned_to: first })
   }
 
   async function loadInst() {
     setInstLoading(true)
     try {
-      const { data } = await api.get('/kafka/instances')
-      setInstances(data.data || [])
+      const [domRes, envRes] = await Promise.all([
+        api.get('/access-domains', { params: { db_type: 'kafka' } }),
+        api.get('/environments').catch(() => ({ data: { data: [] } })),
+      ])
+      const domains: AccessDomainRow[] = domRes.data.data || []
+      setAccessDomains(domains)
+      setEnvOptions(buildEnvOptions(envRes.data.data || [], domains))
     } finally {
       setInstLoading(false)
     }
@@ -127,7 +146,6 @@ export default function KafkaOrder() {
       return
     }
     const f = formRef.current
-    const inst = instances.find((i) => i.id === f.instance_id)
     const extra: string[] = []
     if (f.action === 'create_topic') {
       extra.push(
@@ -141,7 +159,9 @@ export default function KafkaOrder() {
     setSubmitting(true)
     try {
       await api.post('/kafka/orders', {
-        cluster: inst ? instLabel(inst) : f.instance_id,
+        instance_id: f.instance_id,
+        domain: f.domain,
+        cluster: f.domain,
         topic: f.topic,
         action: f.action,
         assigned_to: f.assigned_to,
@@ -192,20 +212,21 @@ export default function KafkaOrder() {
               type="warning"
               showIcon
               className="mb"
-              message="当前环境暂无可用 Kafka 资源，请先在「实例」中登记 db_type=kafka 的实例"
+              message="当前环境暂无可用 Kafka 域名，请先在「域名管理」同步并划拨"
             />
           ) : null}
           <Form.Item name="env" label="环境" rules={[{ required: true, message: '请选择环境' }]}>
             <Select
               allowClear
               showSearch
+              optionFilterProp="label"
               placeholder="请选择环境"
               onChange={onEnvChange}
-              options={envOptions.map((e) => ({ value: e, label: e }))}
+              options={envOptions.map((e) => ({ value: e.value, label: e.label }))}
             />
           </Form.Item>
           <Form.Item
-            name="instance_id"
+            name="source_key"
             label="Kafka 地址"
             rules={[{ required: true, message: '请选择 Kafka 地址' }]}
           >
@@ -216,8 +237,12 @@ export default function KafkaOrder() {
               disabled={!form.env}
               loading={instLoading}
               placeholder="选择环境的 kafka 地址"
-              onChange={onInstChange}
-              options={kafkaOptions.map((i) => ({ value: i.id, label: instLabel(i) }))}
+              value={form.instance_id && form.domain ? sourceKey(form.instance_id, form.domain) : undefined}
+              onChange={(v) => void onSourceChange(v || '')}
+              options={kafkaOptions.map((s) => ({
+                value: s.key,
+                label: `${sourcePrimaryLabel(s)} ${sourceSecondaryLabel(s)}`.trim(),
+              }))}
             />
           </Form.Item>
           <Form.Item name="action" label="工单类型" rules={[{ required: true, message: '请选择工单类型' }]}>
