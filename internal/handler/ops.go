@@ -1095,8 +1095,12 @@ func (h *DCLHandler) Submit(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"message": ierr.Error()})
 			return
 		}
-		if inst == nil || !instanceContainsDomain(inst, domain) {
+		if inst == nil {
 			c.JSON(http.StatusBadRequest, gin.H{"message": "数据源域名不属于所选实例登记的域名"})
+			return
+		}
+		if err := ensureTicketDomainVisible(h.Store, c, inst, domain); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 			return
 		}
 		if strings.TrimSpace(req.DBName) != "" {

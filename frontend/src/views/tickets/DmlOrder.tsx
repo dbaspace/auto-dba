@@ -18,12 +18,14 @@ import api from '../../api/request'
 import { dbLabel } from '../../utils/db'
 import { buildEnvOptions, EnvOption } from '../../utils/env'
 import {
-  expandDomainSources,
+  filterAccessDomainRows,
   filterDbsByDomain,
   parseSourceKey,
   sourceKey,
   sourcePrimaryLabel,
   sourceSecondaryLabel,
+  sourcesFromAccessDomains,
+  type AccessDomainRow,
   type DomainSource,
 } from '../../utils/instanceSource'
 import DbTypeIcon from '../../components/DbTypeIcon'
@@ -115,7 +117,7 @@ export default function DmlOrder() {
   formRef.current = form
   const [antdForm] = Form.useForm()
 
-  const [instances, setInstances] = useState<any[]>([])
+  const [accessDomains, setAccessDomains] = useState<AccessDomainRow[]>([])
   const [envOptions, setEnvOptions] = useState<EnvOption[]>([])
   const [dbTypes, setDbTypes] = useState<DbType[]>(DEFAULT_DB_TYPES)
   const [dbRecords, setDbRecords] = useState<any[]>([])
@@ -134,13 +136,10 @@ export default function DmlOrder() {
   }
 
   const dataSourceOptions = useMemo((): DomainSource[] => {
-    const filtered = instances.filter((i) => {
-      if (form.env && (i.idc || '') !== form.env) return false
-      if (form.instance_type && String(i.db_type || '').toLowerCase() !== form.instance_type) return false
-      return true
-    })
-    return expandDomainSources(filtered)
-  }, [instances, form.env, form.instance_type])
+    return sourcesFromAccessDomains(
+      filterAccessDomainRows(accessDomains, { env: form.env, dbType: form.instance_type }),
+    )
+  }, [accessDomains, form.env, form.instance_type])
 
   const filteredDbRecords = useMemo(
     () => (form.domain ? filterDbsByDomain(dbRecords, form.domain) : []),
@@ -483,14 +482,14 @@ export default function DmlOrder() {
   async function loadMeta() {
     setDsLoading(true)
     try {
-      const [instRes, envRes, argRes] = await Promise.all([
-        api.get('/tickets/instances'),
+      const [domRes, envRes, argRes] = await Promise.all([
+        api.get('/access-domains'),
         api.get('/environments').catch(() => ({ data: { data: [] } })),
         api.get('/global-args').catch(() => ({ data: { data: [] } })),
       ])
-      const insts = instRes.data.data || []
-      setInstances(insts)
-      setEnvOptions(buildEnvOptions(envRes.data.data || [], insts))
+      const domains: AccessDomainRow[] = domRes.data.data || []
+      setAccessDomains(domains)
+      setEnvOptions(buildEnvOptions(envRes.data.data || [], domains))
       const args = argRes.data.data || argRes.data || []
       const raw =
         (Array.isArray(args) ? args : []).find((a: any) => a.key === 'ticket_instance_types')?.value || ''
@@ -513,6 +512,7 @@ export default function DmlOrder() {
       if (cur.instance_type && !nextTypes.some((t) => t.value === cur.instance_type)) {
         patchForm({ instance_type: '' })
       }
+      return domains
     } finally {
       setDsLoading(false)
     }
@@ -522,18 +522,15 @@ export default function DmlOrder() {
     ;(async () => {
       const incoming = applyIncoming()
       if (!incoming) restoreDraft()
-      await loadMeta()
+      const domains = (await loadMeta()) || []
       const cur = formRef.current
-      const valid = new Set(
-        instances
-          .filter((i) => {
-            if (cur.env && (i.idc || '') !== cur.env) return false
-            if (cur.instance_type && String(i.db_type || '').toLowerCase() !== cur.instance_type) return false
-            return true
-          })
-          .map((i) => i.id),
+      const validKeys = new Set(
+        sourcesFromAccessDomains(
+          filterAccessDomainRows(domains, { env: cur.env, dbType: cur.instance_type }),
+        ).map((s) => s.key),
       )
-      if (cur.instance_id && !valid.has(cur.instance_id)) {
+      const curKey = cur.instance_id && cur.domain ? sourceKey(cur.instance_id, cur.domain) : ''
+      if (curKey && !validKeys.has(curKey)) {
         patchForm({ instance_id: '', domain: '', db_name: '', assigned_to: '' })
       }
       await loadDatabases(formRef.current.instance_id)

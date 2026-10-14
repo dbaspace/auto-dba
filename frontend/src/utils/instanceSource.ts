@@ -1,10 +1,30 @@
-/** 工单数据源：按实例登记的 domains 展开（非 host） */
+/** 工单数据源：按域名管理（access-domains）或实例 domains 展开（非 host） */
 
 export type DomainSource = {
   key: string
   instance_id: string
   domain: string
   name: string
+}
+
+export type AccessDomainRow = {
+  id?: string
+  instance_id?: string
+  instance_name?: string
+  domain?: string
+  env_code?: string
+  db_type?: string
+}
+
+/** 与后端 NormalizeEngineType / AccessDomains.typeKey 对齐 */
+export function engineTypeKey(t?: string) {
+  const n = String(t || '')
+    .trim()
+    .toLowerCase()
+  if (n === 'postgresql' || n === 'pg' || n === 'pgsql') return 'postgres'
+  if (n === 'mssql') return 'sqlserver'
+  if (n === 'cockroach' || n === 'cockroadchdb') return 'cockroachdb'
+  return n
 }
 
 function domainKey(s: string) {
@@ -61,6 +81,41 @@ export function expandDomainSources(instances: any[]): DomainSource[] {
     }
   }
   return out
+}
+
+/** 从域名管理列表构建工单数据源选项（可见性已由 /access-domains 按租户过滤） */
+export function sourcesFromAccessDomains(rows: AccessDomainRow[]): DomainSource[] {
+  const out: DomainSource[] = []
+  const seen = new Set<string>()
+  for (const row of rows || []) {
+    const instance_id = String(row?.instance_id || '').trim()
+    const domain = String(row?.domain || '').trim()
+    if (!instance_id || !domain) continue
+    const key = sourceKey(instance_id, domain)
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push({
+      key,
+      instance_id,
+      domain,
+      name: String(row?.instance_name || '').trim(),
+    })
+  }
+  return out
+}
+
+/** 按环境码 / 引擎类型过滤域名行 */
+export function filterAccessDomainRows(
+  rows: AccessDomainRow[],
+  opts: { env?: string; dbType?: string } = {},
+): AccessDomainRow[] {
+  const env = String(opts.env || '').trim()
+  const wantType = engineTypeKey(opts.dbType)
+  return (rows || []).filter((r) => {
+    if (env && String(r.env_code || '').trim() !== env) return false
+    if (wantType && engineTypeKey(r.db_type) !== wantType) return false
+    return true
+  })
 }
 
 export function sourcePrimaryLabel(row: DomainSource) {

@@ -12,15 +12,16 @@ import (
 
 // AccessDomain 访问域名资源（由实例 domains / domain_name 同步，可按租户划拨）。
 type AccessDomain struct {
-	ID         string `json:"id"`
-	TenantID   string `json:"tenant_id"`
-	TenantName string `json:"tenant_name,omitempty"`
-	InstanceID string `json:"instance_id"`
-	Domain     string `json:"domain"`
-	EnvCode    string `json:"env_code"`
-	DBType     string `json:"db_type"`
-	CreatedAt  string `json:"created_at"`
-	UpdatedAt  string `json:"updated_at"`
+	ID           string `json:"id"`
+	TenantID     string `json:"tenant_id"`
+	TenantName   string `json:"tenant_name,omitempty"`
+	InstanceID   string `json:"instance_id"`
+	InstanceName string `json:"instance_name,omitempty"` // 运行时填充，非表列
+	Domain       string `json:"domain"`
+	EnvCode      string `json:"env_code"`
+	DBType       string `json:"db_type"`
+	CreatedAt    string `json:"created_at"`
+	UpdatedAt    string `json:"updated_at"`
 }
 
 // SyncAccessDomainsResult 同步统计。

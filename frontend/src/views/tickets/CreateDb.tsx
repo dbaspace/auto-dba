@@ -6,10 +6,12 @@ import dayjs, { Dayjs } from 'dayjs'
 import api from '../../api/request'
 import { buildEnvOptions } from '../../utils/env'
 import {
-  expandDomainSources,
+  filterAccessDomainRows,
   parseSourceKey,
   sourcePrimaryLabel,
   sourceSecondaryLabel,
+  sourcesFromAccessDomains,
+  type AccessDomainRow,
   type DomainSource,
 } from '../../utils/instanceSource'
 import DbTypeIcon from '../../components/DbTypeIcon'
@@ -85,7 +87,7 @@ export default function CreateDb() {
   const formMirror = useRef(form)
   formMirror.current = form
   const [antdForm] = Form.useForm()
-  const [instances, setInstances] = useState<any[]>([])
+  const [accessDomains, setAccessDomains] = useState<AccessDomainRow[]>([])
   const [envOptions, setEnvOptions] = useState<{ value: string; label: string }[]>([])
   const [approvers, setApprovers] = useState<string[]>([])
   const [checkRows, setCheckRows] = useState<any[]>([])
@@ -101,13 +103,10 @@ export default function CreateDb() {
   }
 
   const dataSourceOptions = useMemo((): DomainSource[] => {
-    const filtered = instances.filter((i) => {
-      if (form.env && (i.idc || '') !== form.env) return false
-      if (form.instance_type && String(i.db_type || '').toLowerCase() !== form.instance_type) return false
-      return true
-    })
-    return expandDomainSources(filtered)
-  }, [instances, form.env, form.instance_type])
+    return sourcesFromAccessDomains(
+      filterAccessDomainRows(accessDomains, { env: form.env, dbType: form.instance_type }),
+    )
+  }, [accessDomains, form.env, form.instance_type])
 
   const selectedSources = useMemo(() => parseSelectedSources(form.instance_ids), [form.instance_ids])
 
@@ -310,14 +309,14 @@ export default function CreateDb() {
       setDsLoading(true)
       setReviewerLoading(true)
       try {
-        const [instRes, envRes, apprRes] = await Promise.all([
-          api.get('/create-db/instances'),
+        const [domRes, envRes, apprRes] = await Promise.all([
+          api.get('/access-domains'),
           api.get('/environments').catch(() => ({ data: { data: [] } })),
           api.get('/create-db/approvers'),
         ])
-        const instList = instRes.data.data || []
-        setInstances(instList)
-        setEnvOptions(buildEnvOptions(envRes.data.data || [], instList))
+        const domains: AccessDomainRow[] = domRes.data.data || []
+        setAccessDomains(domains)
+        setEnvOptions(buildEnvOptions(envRes.data.data || [], domains))
         const uniq = unionApproverNames(
           (apprRes.data.data || []).map((a: any) => String(a?.name || a || '')),
         )
@@ -335,12 +334,8 @@ export default function CreateDb() {
         })
         setForm((f) => {
           const valid = new Set(
-            expandDomainSources(
-              instList.filter((i: any) => {
-                if (f.env && (i.idc || '') !== f.env) return false
-                if (f.instance_type && String(i.db_type || '').toLowerCase() !== f.instance_type) return false
-                return true
-              }),
+            sourcesFromAccessDomains(
+              filterAccessDomainRows(domains, { env: f.env, dbType: f.instance_type }),
             ).map((s) => s.key),
           )
           return { ...f, instance_ids: (f.instance_ids || []).filter((id) => valid.has(id)) }

@@ -5,12 +5,14 @@ import api from '../../api/request'
 import DatabasePicker from '../../components/DatabasePicker'
 import { dbLabel } from '../../utils/db'
 import {
-  expandDomainSources,
+  filterAccessDomainRows,
   filterDbsByDomain,
   parseSourceKey,
   sourceKey,
   sourcePrimaryLabel,
   sourceSecondaryLabel,
+  sourcesFromAccessDomains,
+  type AccessDomainRow,
   type DomainSource,
 } from '../../utils/instanceSource'
 import { useWorkOrderDraft } from '../../hooks/useWorkOrderDraft'
@@ -38,6 +40,7 @@ export default function DclGrants() {
   const formRef = useRef(form)
   formRef.current = form
   const [instances, setInstances] = useState<any[]>([])
+  const [accessDomains, setAccessDomains] = useState<AccessDomainRow[]>([])
   const [databases, setDatabases] = useState<any[]>([])
   const [dbLoading, setDbLoading] = useState(false)
   const [approverLoading, setApproverLoading] = useState(false)
@@ -51,20 +54,22 @@ export default function DclGrants() {
 
   const extraEnvs = useMemo(() => {
     const set = new Set<string>()
+    for (const r of accessDomains) {
+      const code = String(r.env_code || '').trim()
+      if (code && code !== 'test' && code !== 'prod') set.add(code)
+    }
     for (const i of instances) {
       if (i.idc && i.idc !== 'test' && i.idc !== 'prod') set.add(i.idc)
     }
     return [...set]
-  }, [instances])
+  }, [accessDomains, instances])
 
   const sourceOptions = useMemo((): DomainSource[] => {
     if (!form.env || !form.db_type) return []
-    return expandDomainSources(
-      instances.filter(
-        (i) => i.db_type === form.db_type && (!i.idc || i.idc === form.env || i.idc === 'default'),
-      ),
+    return sourcesFromAccessDomains(
+      filterAccessDomainRows(accessDomains, { env: form.env, dbType: form.db_type }),
     )
-  }, [instances, form.env, form.db_type])
+  }, [accessDomains, form.env, form.db_type])
 
   const currentInst = useMemo(
     () => instances.find((i) => i.id === form.instance_id),
@@ -231,8 +236,12 @@ export default function DclGrants() {
 
   useEffect(() => {
     ;(async () => {
-      const { data } = await api.get('/instances')
-      setInstances(data.data || [])
+      const [instRes, domRes] = await Promise.all([
+        api.get('/instances'),
+        api.get('/access-domains').catch(() => ({ data: { data: [] } })),
+      ])
+      setInstances(instRes.data.data || [])
+      setAccessDomains(domRes.data.data || [])
       setApproverLoading(true)
       try {
         const args = (await api.get('/global-args')).data.data || []

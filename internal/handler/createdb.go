@@ -226,9 +226,11 @@ func (h *CreateDBHandler) Submit(c *gin.Context) {
 				break
 			}
 		}
-		if dom != "" && !instanceContainsDomain(inst, dom) {
-			c.JSON(http.StatusBadRequest, gin.H{"message": "数据源域名不属于所选实例登记的域名"})
-			return
+		if dom != "" {
+			if err := ensureTicketDomainVisible(h.Store, c, inst, dom); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+				return
+			}
 		}
 		for _, name := range names {
 			if exist, _ := h.Store.FindDatabase(id, name); exist != nil {

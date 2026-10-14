@@ -18,6 +18,7 @@ interface DomainRow {
   tenant_id?: string
   tenant_name?: string
   instance_id?: string
+  instance_name?: string
   domain?: string
   env_code?: string
   db_type?: string
@@ -73,6 +74,7 @@ export default function AccessDomains() {
         (r) =>
           (r.domain || '').toLowerCase().includes(kw) ||
           (r.instance_id || '').toLowerCase().includes(kw) ||
+          (r.instance_name || '').toLowerCase().includes(kw) ||
           (r.env_code || '').toLowerCase().includes(kw),
       )
     }
@@ -295,7 +297,13 @@ export default function AccessDomains() {
                 return same ? <Tag color="green">{label}</Tag> : label
               },
             },
-            { title: '实例 ID', dataIndex: 'instance_id', key: 'instance_id', width: 280, ellipsis: true },
+            {
+              title: '实例',
+              key: 'instance',
+              width: 220,
+              ellipsis: true,
+              render: (_: unknown, row: DomainRow) => row.instance_name || row.instance_id || '—',
+            },
             {
               title: '操作',
               width: 120,

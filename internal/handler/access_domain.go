@@ -37,6 +37,31 @@ func (h *AccessDomainHandler) enrichTenants(list []store.AccessDomain) {
 	}
 }
 
+func (h *AccessDomainHandler) enrichInstanceNames(list []store.AccessDomain) {
+	instCache := map[string]*store.Instance{}
+	for i := range list {
+		iid := list[i].InstanceID
+		if iid == "" {
+			continue
+		}
+		inst := instCache[iid]
+		if inst == nil {
+			inst, _ = h.Store.GetInstance(iid)
+			if inst != nil {
+				instCache[iid] = inst
+			}
+		}
+		if inst != nil {
+			list[i].InstanceName = inst.Name
+		}
+	}
+}
+
+func (h *AccessDomainHandler) enrichList(list []store.AccessDomain) {
+	h.enrichTenants(list)
+	h.enrichInstanceNames(list)
+}
+
 // List GET /access-domains?db_type=&env_code=&q=
 func (h *AccessDomainHandler) List(c *gin.Context) {
 	tid := middleware.TenantID(c)
@@ -71,7 +96,7 @@ func (h *AccessDomainHandler) List(c *gin.Context) {
 			list = append(list, it)
 		}
 	}
-	h.enrichTenants(list)
+	h.enrichList(list)
 	c.JSON(http.StatusOK, gin.H{"data": list, "audit_scope": platformAdminAuditing(h.Store, c)})
 }
 
@@ -104,7 +129,7 @@ func (h *AccessDomainHandler) AssignTenant(c *gin.Context) {
 	it, _ := h.Store.GetAccessDomain(id)
 	if it != nil {
 		list := []store.AccessDomain{*it}
-		h.enrichTenants(list)
+		h.enrichList(list)
 		c.JSON(http.StatusOK, gin.H{"data": list[0], "ok": true})
 		return
 	}

@@ -512,14 +512,39 @@ func (h *TicketHandler) Submit(c *gin.Context) {
 			domain = strings.TrimSpace(extra.Domain)
 		}
 	}
-	if domain != "" && strings.TrimSpace(req.InstanceID) != "" {
+	if req.Type == store.IssueTypeDDL {
+		ids := ddlDataSourceIDs(req.NeedRollback, req.InstanceID)
+		for _, id := range ids {
+			dom := ddlDomainForInstance(req.NeedRollback, id, domain)
+			if strings.TrimSpace(dom) == "" {
+				continue
+			}
+			inst, ierr := h.Store.GetInstance(id)
+			if ierr != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"message": ierr.Error()})
+				return
+			}
+			if inst == nil {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "数据源域名不属于所选实例登记的域名"})
+				return
+			}
+			if err := ensureTicketDomainVisible(h.Store, c, inst, dom); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+				return
+			}
+		}
+	} else if domain != "" && strings.TrimSpace(req.InstanceID) != "" {
 		inst, ierr := h.Store.GetInstance(req.InstanceID)
 		if ierr != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"message": ierr.Error()})
 			return
 		}
-		if inst == nil || !instanceContainsDomain(inst, domain) {
+		if inst == nil {
 			c.JSON(http.StatusBadRequest, gin.H{"message": "数据源域名不属于所选实例登记的域名"})
+			return
+		}
+		if err := ensureTicketDomainVisible(h.Store, c, inst, domain); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 			return
 		}
 		if strings.TrimSpace(req.DBName) != "" {

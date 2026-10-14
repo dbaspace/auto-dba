@@ -13,6 +13,7 @@ export function buildEnvOptions(envRows: any[] = [], instances: any[] = []): Env
   }
   for (const i of instances || []) {
     if (i?.idc && !codes.has(i.idc)) codes.set(i.idc, i.idc)
+    if (i?.env_code && !codes.has(i.env_code)) codes.set(i.env_code, i.env_code)
     const env = byId.get(i?.env_id)
     if (env?.code && !codes.has(env.code)) codes.set(env.code, env.name || env.code)
   }

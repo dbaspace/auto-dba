@@ -14,6 +14,40 @@ const MODE_LABEL: Record<string, string> = {
   sso: 'SSO',
 }
 
+const LS_LAST_AUTH_MODE = 'login_last_auth_mode'
+const LS_USERNAME_PREFIX = 'login_username_'
+
+function usernameStorageKey(mode: string) {
+  const m = String(mode || 'platform').trim() || 'platform'
+  return `${LS_USERNAME_PREFIX}${m}`
+}
+
+function readRememberedUsername(mode: string) {
+  try {
+    return String(localStorage.getItem(usernameStorageKey(mode)) || '').trim()
+  } catch {
+    return ''
+  }
+}
+
+function writeRememberedUsername(mode: string, username: string) {
+  try {
+    const u = String(username || '').trim()
+    const key = usernameStorageKey(mode)
+    if (u) localStorage.setItem(key, u)
+    else localStorage.removeItem(key)
+  } catch {
+    /* ignore */
+  }
+}
+
+function credentialsForMode(mode: string): { username: string; password: string } {
+  const remembered = readRememberedUsername(mode)
+  if (remembered) return { username: remembered, password: '' }
+  if (mode === 'platform') return { username: 'admin', password: 'admin123' }
+  return { username: '', password: '' }
+}
+
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]'])
 
 /** 当前页与 SSO 回调配置在 loopback 上混用 localhost / 127.0.0.1 时返回 true */
@@ -44,8 +78,8 @@ export default function Login() {
   const [ssoCallbackURL, setSsoCallbackURL] = useState('')
   const [authMode, setAuthMode] = useState('platform')
   const [error, setError] = useState('')
-  const [username, setUsername] = useState('admin')
-  const [password, setPassword] = useState('admin123')
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
   const [requireCaptcha, setRequireCaptcha] = useState(false)
   const [captchaId, setCaptchaId] = useState('')
   const [captchaImg, setCaptchaImg] = useState('')
@@ -62,7 +96,15 @@ export default function Login() {
     [authModes],
   )
 
-  function finishLogin(data: any) {
+  function finishLogin(data: any, loginUsername?: string, loginMode?: string) {
+    const mode = String(loginMode || authMode || 'platform').trim() || 'platform'
+    const uname = String(loginUsername || username || data?.user?.username || '').trim()
+    try {
+      localStorage.setItem(LS_LAST_AUTH_MODE, mode)
+      writeRememberedUsername(mode, uname)
+    } catch {
+      /* ignore */
+    }
     localStorage.setItem('token', data.token)
     localStorage.setItem('user', JSON.stringify(data.user))
     localStorage.setItem('last_activity_at', String(Date.now()))
@@ -104,9 +146,21 @@ export default function Login() {
         const callbackURL = String(data.sso_callback_url || '').trim()
         setSsoCallbackURL(callbackURL)
         const priority = Array.isArray(data.auth_priority) ? data.auth_priority : []
+        let lastMode = ''
+        try {
+          lastMode = String(localStorage.getItem(LS_LAST_AUTH_MODE) || '').trim()
+        } catch {
+          lastMode = ''
+        }
         const preferred =
-          priority.find((m: string) => list.includes(m)) || list.find((m) => m !== 'platform') || list[0]
+          (lastMode && list.includes(lastMode) ? lastMode : '') ||
+          priority.find((m: string) => list.includes(m)) ||
+          list.find((m) => m !== 'platform') ||
+          list[0]
         setAuthMode(preferred)
+        const creds = credentialsForMode(preferred)
+        setUsername(creds.username)
+        setPassword(creds.password)
         if (list.includes('sso') && grant === 'authorization_code') {
           setAuthHint('SSO 可输入账号密码登录，或使用下方跳转授权登录')
           if (callbackURL && isLoopbackHostMismatch(window.location.origin, callbackURL)) {
@@ -129,7 +183,7 @@ export default function Login() {
     setError('')
     api
       .get('/auth/sso/ticket', { params: { ticket } })
-      .then(({ data }) => finishLogin(data))
+      .then(({ data }) => finishLogin(data, data?.user?.username, 'sso'))
       .catch((e: any) => {
         setError(e?.response?.data?.message || e?.message || 'SSO 登录失败')
       })
@@ -230,7 +284,7 @@ export default function Login() {
         payload.captcha_code = captchaCode
       }
       const { data } = await api.post('/auth/login', payload)
-      finishLogin(data)
+      finishLogin(data, username, authMode || 'platform')
     } catch (e: any) {
       const body = e?.response?.data || {}
       const msg = body.message || e?.message || '登录失败'
@@ -281,11 +335,11 @@ export default function Login() {
               value={authMode}
               options={modeOptions}
               onChange={(v) => {
+                writeRememberedUsername(authMode, username)
                 setAuthMode(v)
-                if (v === 'sso' && (username === 'admin' || password === 'admin' || password === 'admin123')) {
-                  setUsername('')
-                  setPassword('')
-                }
+                const creds = credentialsForMode(v)
+                setUsername(creds.username)
+                setPassword(creds.password)
               }}
               disabled={retryAfter > 0 || ssoLoading}
             />

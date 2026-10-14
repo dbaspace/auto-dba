@@ -6,6 +6,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gin-gonic/gin"
+
+	"auto-dba/internal/middleware"
 	"auto-dba/internal/secret"
 	"auto-dba/internal/sqlcheck"
 	"auto-dba/internal/store"
@@ -146,6 +149,42 @@ func instanceContainsDomain(inst *store.Instance, domain string) bool {
 		}
 	}
 	return normalizeDomainKey(inst.DomainName) == want
+}
+
+// ensureTicketDomainVisible 校验域名属于实例登记，且在域名管理中对本租户可见（审计会话放宽）。
+func ensureTicketDomainVisible(db *store.DB, c *gin.Context, inst *store.Instance, domain string) error {
+	domain = strings.TrimSpace(domain)
+	if domain == "" || inst == nil {
+		return nil
+	}
+	if !instanceContainsDomain(inst, domain) {
+		return fmt.Errorf("数据源域名不属于所选实例登记的域名")
+	}
+	ad, err := db.GetAccessDomainByDomainType(domain, inst.DBType)
+	if err != nil {
+		return err
+	}
+	if ad == nil {
+		return fmt.Errorf("域名未在域名管理中登记，请先同步域名资源")
+	}
+	if ad.InstanceID != "" && ad.InstanceID != inst.ID {
+		return fmt.Errorf("数据源域名与所选实例不匹配")
+	}
+	if platformAdminAuditing(db, c) {
+		return nil
+	}
+	tid := middleware.TenantID(c)
+	if ad.TenantID == tid {
+		return nil
+	}
+	ok, err := db.HasResourceGrant(tid, middleware.UserID(c), "domain", ad.ID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("数据源域名对本租户不可见")
+	}
+	return nil
 }
 
 func databaseContainsDomain(db *store.Database, domain string) bool {
