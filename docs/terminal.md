@@ -78,7 +78,7 @@ terminal:
 |----|------|
 | `enabled` | `false` 时打开终端接口直接拒绝 |
 | `ssh_identity_file` | 平台私钥路径；文件不存在会创建会话失败 |
-| `ssh_private_key` | 可选；来自 Nacos 的 PEM 正文，启动时物化为 `config/terminal/.runtime_id_ed25519`（0600）并覆盖 `ssh_identity_file`，见 [nacos-config.md](nacos-config.md) |
+| `ssh_private_key` | 可选；Nacos 中的 PEM 或裸 Base64（须 `\|` 块标量且每行缩进）。启动/热更时归一化为 PEM，写入 `config/terminal/.runtime_id_ed25519`（0600）并覆盖 `ssh_identity_file`；见 [nacos-config.md](nacos-config.md)「SSH 私钥」 |
 | `ssh_user` | 默认 SSH 用户，默认回退为 `sysadmin` |
 | `scripts_dir` | 含 `node-terminal.sh`：实际执行 `ssh -tt -i <key> user@host` |
 | `max_lifetime_sec` | JWT / 会话生命周期 |

@@ -88,7 +88,7 @@ func MergeRemoteYAML(configPath, remoteContent string) (*Config, error) {
 		return nil, fmt.Errorf("nacos: remote content empty")
 	}
 	if err := yaml.Unmarshal([]byte(remoteContent), next); err != nil {
-		return nil, fmt.Errorf("parse remote yaml: %w", err)
+		return nil, fmt.Errorf("parse remote yaml: %w%s", err, yamlSSHPrivateKeyHint(remoteContent, err))
 	}
 	next.Nacos = boot
 	preserveHTTPFromLocal(&next.HTTP, localHTTP, remoteContent)
@@ -142,7 +142,8 @@ func DiffConfig(old, next *Config) ReloadDiff {
 		old.Terminal.SSHUser != next.Terminal.SSHUser ||
 		old.Terminal.SSHHostKeyPolicy != next.Terminal.SSHHostKeyPolicy ||
 		old.Terminal.SSHInsecureHostKey != next.Terminal.SSHInsecureHostKey ||
-		old.Terminal.SSHKnownHostsFile != next.Terminal.SSHKnownHostsFile
+		old.Terminal.SSHKnownHostsFile != next.Terminal.SSHKnownHostsFile ||
+		old.Terminal.SSHKeyFingerprint != next.Terminal.SSHKeyFingerprint
 	d.ListenAddr = old.HTTP.Host != next.HTTP.Host || old.HTTP.Port != next.HTTP.Port
 	d.OldListen = fmt.Sprintf("%s:%d", old.HTTP.Host, old.HTTP.Port)
 	d.NewListen = fmt.Sprintf("%s:%d", next.HTTP.Host, next.HTTP.Port)

@@ -112,6 +112,16 @@ terminal:
 	if err := os.WriteFile(cfgPath, []byte(local), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	_, bare := testRSAMaterial(t)
+	// 模拟生产：裸 Base64 多行；物化后应写成 RSA PEM
+	var b64lines []string
+	for i := 0; i < len(bare); i += 64 {
+		end := i + 64
+		if end > len(bare) {
+			end = len(bare)
+		}
+		b64lines = append(b64lines, "    "+bare[i:end])
+	}
 	remote := `
 app:
   jwt_secret: nacos-secret
@@ -120,10 +130,7 @@ db:
 terminal:
   ssh_user: nacosuser
   ssh_private_key: |
-    -----BEGIN OPENSSH PRIVATE KEY-----
-    testdata
-    -----END OPENSSH PRIVATE KEY-----
-`
+` + strings.Join(b64lines, "\n") + "\n"
 	orig := fetchNacosConfig
 	fetchNacosConfig = func(nc NacosConfig) (string, error) {
 		if nc.Namespace != "ns-test" || nc.ServerAddr != "127.0.0.1:8848" {
@@ -146,6 +153,9 @@ terminal:
 	if cfg.Terminal.SSHPrivateKey != "" {
 		t.Fatal("pem should be cleared after materialize")
 	}
+	if cfg.Terminal.SSHKeyFingerprint == "" {
+		t.Fatal("fingerprint should be set")
+	}
 	if !strings.HasSuffix(cfg.Terminal.SSHIdentityFile, ".runtime_id_ed25519") {
 		t.Fatalf("identity=%q", cfg.Terminal.SSHIdentityFile)
 	}
@@ -153,8 +163,8 @@ terminal:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(b), "BEGIN OPENSSH PRIVATE KEY") {
-		t.Fatalf("pem file: %q", b)
+	if !strings.Contains(string(b), "BEGIN RSA PRIVATE KEY") {
+		t.Fatalf("pem file: %q", b[:min(80, len(b))])
 	}
 	st, err := os.Stat(cfg.Terminal.SSHIdentityFile)
 	if err != nil {

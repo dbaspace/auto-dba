@@ -336,25 +336,34 @@ func remoteYAMLHasHTTPKey(remoteYAML, key string) bool {
 }
 
 func materializeSSHPrivateKey(cfg *Config, configPath string) error {
-	pem := strings.TrimSpace(cfg.Terminal.SSHPrivateKey)
-	if pem == "" {
+	raw := strings.TrimSpace(cfg.Terminal.SSHPrivateKey)
+	if raw == "" {
 		return nil
 	}
+	pemText, err := normalizeSSHPrivateKeyPEM(raw)
+	if err != nil {
+		return fmt.Errorf("ssh_private_key: %w", err)
+	}
+	fp := sshKeyFingerprint(pemText)
 	root := repoRootFromConfigPath(configPath)
 	dir := filepath.Join(root, "config", "terminal")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("创建 terminal 目录: %w", err)
 	}
 	path := filepath.Join(dir, ".runtime_id_ed25519")
-	if !strings.HasSuffix(pem, "\n") {
-		pem += "\n"
+	if prev, err := os.ReadFile(path); err == nil && string(prev) == pemText {
+		cfg.Terminal.SSHIdentityFile = path
+		cfg.Terminal.SSHPrivateKey = ""
+		cfg.Terminal.SSHKeyFingerprint = fp
+		return nil
 	}
-	if err := os.WriteFile(path, []byte(pem), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(pemText), 0o600); err != nil {
 		return fmt.Errorf("写入 SSH 私钥 %s: %w", path, err)
 	}
 	_ = os.Chmod(path, 0o600)
 	cfg.Terminal.SSHIdentityFile = path
 	cfg.Terminal.SSHPrivateKey = ""
+	cfg.Terminal.SSHKeyFingerprint = fp
 	return nil
 }
 

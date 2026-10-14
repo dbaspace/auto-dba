@@ -1,6 +1,6 @@
 # KeePlus / auto-dba v1.1～v1.10 更新点汇总
 
-本文汇总原 GitHub Release **v1.1.0～v1.10.0** 的要点（这些中间版本的 Release/标签已下线，能力并入后续正式包）。早期包见 [v1.0.0](https://github.com/dbaspace/auto-dba/releases/tag/v1.0.0)。当前推荐下载见 [deploy.md](deploy.md) 与最新 Release（如 [v2.3.5](changelog-v2.3.5.md)）。
+本文汇总原 GitHub Release **v1.1.0～v1.10.0** 的要点（这些中间版本的 Release/标签已下线，能力并入后续正式包）。早期包见 [v1.0.0](https://github.com/dbaspace/auto-dba/releases/tag/v1.0.0)。当前推荐下载见 [deploy.md](deploy.md) 与最新 Release（如 [v2.3.6](changelog-v2.3.6.md)）。
 
 ## 打包与部署（原 v1.1.0）
 

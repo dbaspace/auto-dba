@@ -159,7 +159,7 @@ type TerminalConfig struct {
 	Enabled         bool   `yaml:"enabled"`
 	SSHUser         string `yaml:"ssh_user"`
 	SSHIdentityFile string `yaml:"ssh_identity_file"`
-	// SSHPrivateKey Nacos/远程配置中的 PEM 正文；Load 后物化为 ssh_identity_file，内存中清空
+	// SSHPrivateKey Nacos/远程配置中的 PEM 或裸 Base64；Load 后物化为 ssh_identity_file，内存中清空
 	SSHPrivateKey      string `yaml:"ssh_private_key,omitempty"`
 	SSHInsecureHostKey bool   `yaml:"ssh_insecure_host_key"` // true：忽略 known_hosts（仅开发），等同 ssh_host_key_policy=insecure
 	SSHHostKeyPolicy   string `yaml:"ssh_host_key_policy"`   // accept-new（默认）| strict | insecure
@@ -167,6 +167,8 @@ type TerminalConfig struct {
 	ScriptsDir         string `yaml:"scripts_dir"`
 	MaxLifetimeSec     int    `yaml:"max_lifetime_sec"`
 	StaticDir          string `yaml:"static_dir"`
+	// SSHKeyFingerprint 物化后 PEM 的 SHA-256 hex（不入 YAML）；供热更 Diff 感知仅改密钥
+	SSHKeyFingerprint string `yaml:"-"`
 }
 
 func Load(path string) (*Config, error) {
@@ -192,7 +194,7 @@ func Load(path string) (*Config, error) {
 			return nil, fmt.Errorf("nacos: data_id %q group %q 内容为空", boot.DataID, boot.Group)
 		}
 		if err := yaml.Unmarshal([]byte(content), cfg); err != nil {
-			return nil, fmt.Errorf("nacos: parse yaml: %w", err)
+			return nil, fmt.Errorf("nacos: parse yaml: %w%s", err, yamlSSHPrivateKeyHint(content, err))
 		}
 		// 远程 DataId 不应嵌套 nacos 引导；始终保留本地/环境变量引导
 		cfg.Nacos = boot

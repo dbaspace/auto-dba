@@ -148,10 +148,12 @@ http:
 terminal:
   enabled: true
   ssh_user: sysadmin
+  # 必须用 | 块标量；私钥每一行都要缩进（勿顶格），否则报 expected ':'
   ssh_private_key: |
-    -----BEGIN OPENSSH PRIVATE KEY-----
-    ...完整 PEM...
-    -----END OPENSSH PRIVATE KEY-----
+    -----BEGIN RSA PRIVATE KEY-----
+    MIIE…（完整 Base64，每行与首行同缩进）
+    -----END RSA PRIVATE KEY-----
+  # 生产若只给裸 Base64（无 BEGIN/END、前缀常为 MIIE…），同样用 | 并缩进即可，启动/热更时会自动包成 PEM
   ssh_host_key_policy: accept-new
 
 # DBA Copilot（核心密钥；仅从此段读取，不回退库表全局参数）
@@ -213,9 +215,28 @@ curl -u 'nacos:密码' \
 
 ## SSH 私钥
 
-- Nacos 字段：`terminal.ssh_private_key`（PEM 正文）
-- 启动后写入 `config/terminal/.runtime_id_ed25519`（权限 `0600`），并设置 `ssh_identity_file` 指向该文件
-- 现有终端 / Agent SSH 下发逻辑不变；`config/terminal/` 已 gitignore
+- Nacos 字段：`terminal.ssh_private_key`（PEM 正文，或**无头尾的裸 Base64**）
+- 启动 / 热更时归一化为 PEM，写入 `config/terminal/.runtime_id_ed25519`（`0600`），并设置 `ssh_identity_file`
+- 热更用 PEM 内容指纹判断变更；仅改私钥也会 `nacos watch: applied … sections=[terminal]`
+- `config/terminal/` 已 gitignore
+
+### 写法与常见报错
+
+| 现象 | 原因 | 处理 |
+|------|------|------|
+| `parse remote yaml: … could not find expected ':'` | 块标量内后续行**顶格**或未写 `\|` | 每一行与首行同缩进；必须有 `ssh_private_key: \|` |
+| 内容推送但业务字段无变化 | 旧版不比较密钥指纹 | 升级后按指纹热更；或重启一次 |
+| 密钥无法登录 / ParsePrivateKey 失败 | 用了 `BEGIN OPENSSH` 却塞入 RSA `MIIE…` 正文 | 改用 `BEGIN RSA PRIVATE KEY`，或只贴裸 Base64 让程序自动包装 |
+
+正确示例（裸 Base64，注意缩进）：
+
+```yaml
+terminal:
+  ssh_private_key: |
+    MIIEowIBAAKCAQEA…
+    xlSS2R5DbEDhrEja…
+    （后续行同样缩进，不要顶格）
+```
 
 ## 行为说明
 
@@ -285,7 +306,8 @@ go build -o bin/db-monitor ./cmd/db-monitor
 - [ ] 控制台对应 Namespace 下已发布 `auto-dba.yaml`（含 `jwt_secret`、`db.dsn`；SSH 用则含 `ssh_private_key`；Copilot 用则含 `copilot.*`）
 - [ ] 本地 `nacos.enabled: true`；`namespace` 省略（public）或与 DataId 所在空间 ID 一致（非业务环境 code）
 - [ ] 启动日志有「已从 Nacos 加载配置」与 `nacos watch: listening ... debounce=`
-- [ ] 若配置了私钥：存在 `config/terminal/.runtime_id_ed25519`（0600）
+- [ ] 若配置了私钥：存在 `config/terminal/.runtime_id_ed25519`（0600），文件含 `BEGIN … PRIVATE KEY`（裸 Base64 会被自动包装）
+- [ ] 仅改 `ssh_private_key` 后出现 `nacos watch: applied` 且 `sections` 含 `terminal`（旧版可能误报「业务字段无变化」）
 - [ ] 改 `jwt_secret` / 非端口字段后出现 `nacos watch: applied`；DSN 失败应看到 `before-apply aborted` 且旧库仍可用
 - [ ] 改 `http.port` 有提示；`restart_on_listen_change: true` 时自重启
 - [ ] 改 `frontend.dev_port` 后重启 Vite；优先使用 `bin/print_dev_api_proxy`
