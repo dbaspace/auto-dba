@@ -87,7 +87,8 @@ PLATFORM 资源（全局共享）：用户/角色/菜单、LDAP/SSO/SMTP、区�
 - `POST /instances/:id/assign-tenant`：平台审计会话下划拨实例归属（需 `um.action.tenants.impersonate`）
 - `POST /databases/:id/assign-tenant`：指定库的单一归属租户（实例可留在原租户）
 - `POST /databases/assign-tenant`：批量指定库归属（body `tenant_id` + `ids`；需审计会话）
-- `POST /access-domains/:id/assign-tenant`、`POST /access-domains/assign-tenant`：单条/批量指定域名归属（需审计会话）
+- `POST /access-domains/:id/assign-tenant`：单条指定域名归属（需审计会话；前端单条划拨走此路径）
+- `POST /access-domains/assign-tenant`：批量指定域名归属（body `tenant_id` + `ids`；需审计会话）
 - `POST /sr-cluster/clusters/:id/assign-tenant`、`POST /db-deploy/clusters/:id/assign-tenant`、`POST /proxy/services/:id/assign-tenant`：审计会话下划拨 StarRocks / MySQL·PG·Redis 等部署集群 / HAProxy·Nginx·LVS
 
 前端：请求带 `X-Tenant-Id`；无活跃租户进入业务页会跳转 `/select-tenant`。审计中实例/库/域名页可用「指定租户」或批量划拨。

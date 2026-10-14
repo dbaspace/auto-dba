@@ -143,30 +143,36 @@ export default function AccessDomains() {
     const ids = assignRows.map((r) => r.id!).filter(Boolean)
     setAssigning(true)
     try {
-      const { data } = await api.post('/access-domains/assign-tenant', { tenant_id: assignTid, ids })
       const label =
         tenants.find((t) => t.id === assignTid)?.name ||
         tenants.find((t) => t.id === assignTid)?.code ||
         assignTid
-      const okCount = Number(data.ok_count || 0)
-      const failCount = Number(data.fail_count || 0)
-      const failed: { id?: string; domain?: string; db_type?: string; message?: string }[] = data.failed || []
-      if (failCount === 0) {
-        message.success(`已划拨 ${okCount} 个域名到 ${label}`)
+      // 单条走 /:id/assign-tenant（与已启动后端兼容）；多条走批量接口
+      if (ids.length === 1) {
+        await api.post(`/access-domains/${ids[0]}/assign-tenant`, { tenant_id: assignTid })
+        message.success(`已划拨到 ${label}`)
       } else {
-        Modal.warning({
-          title: `划拨完成：成功 ${okCount}，失败 ${failCount}`,
-          content: (
-            <ul style={{ margin: 0, paddingLeft: 18, maxHeight: 240, overflow: 'auto' }}>
-              {failed.map((f) => (
-                <li key={f.id || f.domain}>
-                  {f.domain || f.id}
-                  {f.db_type ? `（${f.db_type}）` : ''}：{f.message || '失败'}
-                </li>
-              ))}
-            </ul>
-          ),
-        })
+        const { data } = await api.post('/access-domains/assign-tenant', { tenant_id: assignTid, ids })
+        const okCount = Number(data.ok_count || 0)
+        const failCount = Number(data.fail_count || 0)
+        const failed: { id?: string; domain?: string; db_type?: string; message?: string }[] = data.failed || []
+        if (failCount === 0) {
+          message.success(`已划拨 ${okCount} 个域名到 ${label}`)
+        } else {
+          Modal.warning({
+            title: `划拨完成：成功 ${okCount}，失败 ${failCount}`,
+            content: (
+              <ul style={{ margin: 0, paddingLeft: 18, maxHeight: 240, overflow: 'auto' }}>
+                {failed.map((f) => (
+                  <li key={f.id || f.domain}>
+                    {f.domain || f.id}
+                    {f.db_type ? `（${f.db_type}）` : ''}：{f.message || '失败'}
+                  </li>
+                ))}
+              </ul>
+            ),
+          })
+        }
       }
       setAssignRows([])
       setSelectedKeys([])
