@@ -11,6 +11,7 @@ import ProxyArchitectureDiagram, {
   parseBackendsJSON,
   parseBackendsText,
 } from './proxy/ProxyArchitectureDiagram'
+import { endpointHost, matchAgentByHost } from './ensureAgentForHost'
 import './ProxyWorkbench.css'
 
 type ProxyKind = 'haproxy' | 'nginx' | 'lvs'
@@ -855,7 +856,7 @@ export default function ProxyWorkbench({ kind }: { kind: ProxyKind }) {
           <Form.Item
             label={kind === 'nginx' ? 'HA 节点（至少主+备，可追加）' : 'HA 节点（主+备）'}
             required
-            extra="每个节点绑定一台平台 Agent（:8090）；priority/state 由角色自动生成"
+            extra="填 Host 后自动匹配同主机平台 Agent（:8090，不自动创建）；priority/state 由角色自动生成"
           >
             <Form.List name="nodes">
               {(fields, { add, remove }) => (
@@ -875,6 +876,25 @@ export default function ProxyWorkbench({ kind }: { kind: ProxyKind }) {
                             { value: 'backup', label: 'BACKUP' },
                           ]}
                           disabled={kind !== 'nginx' && index < 2}
+                        />
+                      </Form.Item>
+                      <Form.Item {...field} name={[field.name, 'host']} style={{ marginBottom: 0 }}>
+                        <Input
+                          placeholder="Host / IP"
+                          style={{ width: 140 }}
+                          onBlur={(e) => {
+                            const host = endpointHost(e.target.value) || e.target.value.trim()
+                            if (!host) return
+                            const hit = matchAgentByHost(agents, host)
+                            if (hit?.id) {
+                              form.setFieldValue(['nodes', field.name, 'agent_id'], hit.id)
+                              if (!form.getFieldValue(['nodes', field.name, 'name'])) {
+                                form.setFieldValue(['nodes', field.name, 'name'], host)
+                              }
+                            } else {
+                              message.warning(`主机 ${host} 无匹配平台 Agent（:8090），请先在配置中心登记或下发`)
+                            }
+                          }}
                         />
                       </Form.Item>
                       <Form.Item

@@ -329,6 +329,35 @@ func (h *SrClusterHandler) GetClusterLive(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{"nodes": live, "removed_nodes": removedOut}})
 }
 
+// ProbeFERoles POST /sr-cluster/probe-fe-roles — 登记前探测 SHOW PROC '/frontends' 实时角色（不写库）。
+func (h *SrClusterHandler) ProbeFERoles(c *gin.Context) {
+	var req struct {
+		FeHost      string `json:"fe_host"`
+		FePassword  string `json:"fe_password"`
+		FeUser      string `json:"fe_user"`
+		FeQueryPort int    `json:"fe_query_port"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	host := strings.TrimSpace(req.FeHost)
+	if host == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "fe_host 必填"})
+		return
+	}
+	roles, err := h.eng().ProbeFERoles(c.Request.Context(), host, req.FeUser, req.FePassword, req.FeQueryPort)
+	if err != nil {
+		port := req.FeQueryPort
+		if port <= 0 {
+			port = 9030
+		}
+		c.JSON(http.StatusBadRequest, gin.H{"message": fmt.Sprintf("无法连接 FE %s:%d（%v）", host, port, err)})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": roles})
+}
+
 func (h *SrClusterHandler) CreateCluster(c *gin.Context) {
 	var req struct {
 		store.SrCluster

@@ -41,6 +41,8 @@ export default function AccessDomains() {
   const [activeType, setActiveType] = useState('')
   const [rows, setRows] = useState<DomainRow[]>([])
   const [q, setQ] = useState('')
+  const [envFilter, setEnvFilter] = useState('')
+  const [envCatalog, setEnvCatalog] = useState<{ code: string; name: string }[]>([])
   const [loading, setLoading] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [page, setPage] = useState(1)
@@ -61,12 +63,29 @@ export default function AccessDomains() {
     return list
   }, [typeOptions, rows, knownTypes])
 
+  const envFilterOptions = useMemo(() => {
+    const codes = new Map<string, string>()
+    for (const e of envCatalog) {
+      if (e.code) codes.set(e.code, e.name || e.code)
+    }
+    for (const r of rows) {
+      const code = String(r.env_code || '').trim()
+      if (code && !codes.has(code)) codes.set(code, code)
+    }
+    return [...codes.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0], 'zh-CN'))
+      .map(([value, label]) => ({ value, label: label !== value ? `${label}（${value}）` : value }))
+  }, [envCatalog, rows])
+
   const filteredRows = useMemo(() => {
     let list = rows
     if (activeType === OTHER) {
       list = list.filter((r) => r.db_type && !knownTypes.has(typeKey(r.db_type)))
     } else if (activeType) {
       list = list.filter((r) => typeKey(r.db_type) === typeKey(activeType))
+    }
+    if (envFilter) {
+      list = list.filter((r) => String(r.env_code || '').trim() === envFilter)
     }
     const kw = q.trim().toLowerCase()
     if (kw) {
@@ -79,7 +98,7 @@ export default function AccessDomains() {
       )
     }
     return list
-  }, [rows, activeType, knownTypes, q])
+  }, [rows, activeType, knownTypes, q, envFilter])
 
   const pagedRows = useMemo(() => {
     const start = (page - 1) * pageSize
@@ -89,7 +108,7 @@ export default function AccessDomains() {
   useEffect(() => {
     setPage(1)
     setSelectedKeys([])
-  }, [activeType, q])
+  }, [activeType, q, envFilter])
 
   async function loadTypes() {
     const { data } = await api.get('/global-args')
@@ -100,8 +119,16 @@ export default function AccessDomains() {
   async function load() {
     setLoading(true)
     try {
-      const { data } = await api.get('/access-domains')
-      setRows(data.data || [])
+      const [domRes, envRes] = await Promise.all([
+        api.get('/access-domains'),
+        api.get('/environments').catch(() => ({ data: { data: [] } })),
+      ])
+      setRows(domRes.data.data || [])
+      setEnvCatalog(
+        (envRes.data.data || [])
+          .map((e: any) => ({ code: String(e.code || '').trim(), name: String(e.name || e.code || '').trim() }))
+          .filter((e: { code: string }) => e.code),
+      )
       setSelectedKeys([])
     } finally {
       setLoading(false)
@@ -232,6 +259,16 @@ export default function AccessDomains() {
         }))}
       />
       <div className="toolbar" style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+        <Select
+          allowClear
+          showSearch
+          optionFilterProp="label"
+          placeholder="全部环境"
+          style={{ width: 180 }}
+          value={envFilter || undefined}
+          onChange={(v) => setEnvFilter(v || '')}
+          options={envFilterOptions}
+        />
         <Input
           value={q}
           allowClear

@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { Button, Card, Input, Select, Space, message } from 'antd'
+import { AutoComplete, Button, Card, Checkbox, Input, Select, Space, message } from 'antd'
 import api from '../api/request'
-import { useAppDispatch } from '../store'
+import { store, useAppDispatch } from '../store'
 import { setUser } from '../store/authSlice'
-import { HOME_PATH } from '../store/tabsSlice'
+import { HOME_PATH, hydrateTabs } from '../store/tabsSlice'
 import loginBg from '../assets/login-bg.jpg'
 import BrandMark, { BrandWordmark } from '../components/BrandMark'
 
@@ -16,36 +16,104 @@ const MODE_LABEL: Record<string, string> = {
 
 const LS_LAST_AUTH_MODE = 'login_last_auth_mode'
 const LS_USERNAME_PREFIX = 'login_username_'
+const LS_ACCOUNTS_PREFIX = 'login_accounts_'
+const MAX_SAVED_ACCOUNTS = 12
+
+type SavedAccount = {
+  username: string
+  password?: string
+  rememberPassword: boolean
+  updatedAt: number
+}
 
 function usernameStorageKey(mode: string) {
   const m = String(mode || 'platform').trim() || 'platform'
   return `${LS_USERNAME_PREFIX}${m}`
 }
 
-function readRememberedUsername(mode: string) {
-  try {
-    return String(localStorage.getItem(usernameStorageKey(mode)) || '').trim()
-  } catch {
-    return ''
-  }
+function accountsStorageKey(mode: string) {
+  const m = String(mode || 'platform').trim() || 'platform'
+  return `${LS_ACCOUNTS_PREFIX}${m}`
 }
 
-function writeRememberedUsername(mode: string, username: string) {
+function readAccounts(mode: string): SavedAccount[] {
   try {
-    const u = String(username || '').trim()
-    const key = usernameStorageKey(mode)
-    if (u) localStorage.setItem(key, u)
-    else localStorage.removeItem(key)
+    const raw = localStorage.getItem(accountsStorageKey(mode))
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed)) {
+        return parsed
+          .filter((a) => a && typeof a.username === 'string' && a.username.trim())
+          .map((a) => ({
+            username: String(a.username).trim(),
+            password: typeof a.password === 'string' ? a.password : undefined,
+            rememberPassword: !!a.rememberPassword && typeof a.password === 'string' && !!a.password,
+            updatedAt: typeof a.updatedAt === 'number' ? a.updatedAt : 0,
+          }))
+          .sort((a, b) => b.updatedAt - a.updatedAt)
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  // 兼容旧版仅存用户名
+  try {
+    const legacy = String(localStorage.getItem(usernameStorageKey(mode)) || '').trim()
+    if (legacy) {
+      return [{ username: legacy, rememberPassword: false, updatedAt: Date.now() }]
+    }
+  } catch {
+    /* ignore */
+  }
+  return []
+}
+
+function writeAccounts(mode: string, list: SavedAccount[]) {
+  try {
+    localStorage.setItem(accountsStorageKey(mode), JSON.stringify(list.slice(0, MAX_SAVED_ACCOUNTS)))
+    const top = list[0]?.username || ''
+    const uk = usernameStorageKey(mode)
+    if (top) localStorage.setItem(uk, top)
+    else localStorage.removeItem(uk)
   } catch {
     /* ignore */
   }
 }
 
-function credentialsForMode(mode: string): { username: string; password: string } {
-  const remembered = readRememberedUsername(mode)
-  if (remembered) return { username: remembered, password: '' }
-  if (mode === 'platform') return { username: 'admin', password: 'admin123' }
-  return { username: '', password: '' }
+function upsertAccount(
+  mode: string,
+  username: string,
+  password: string,
+  rememberPassword: boolean,
+) {
+  const u = String(username || '').trim()
+  if (!u) return
+  const prev = readAccounts(mode).filter((a) => a.username.toLowerCase() !== u.toLowerCase())
+  const next: SavedAccount = {
+    username: u,
+    rememberPassword: !!rememberPassword,
+    updatedAt: Date.now(),
+    ...(rememberPassword ? { password: String(password || '') } : {}),
+  }
+  writeAccounts(mode, [next, ...prev])
+}
+
+function credentialsForMode(mode: string): {
+  username: string
+  password: string
+  rememberPassword: boolean
+} {
+  const accounts = readAccounts(mode)
+  if (accounts.length) {
+    const top = accounts[0]
+    return {
+      username: top.username,
+      password: top.rememberPassword && top.password ? top.password : '',
+      rememberPassword: !!top.rememberPassword,
+    }
+  }
+  if (mode === 'platform') return { username: 'admin', password: 'admin123', rememberPassword: false }
+  return { username: '', password: '', rememberPassword: false }
 }
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]'])
@@ -80,6 +148,8 @@ export default function Login() {
   const [error, setError] = useState('')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const [rememberPassword, setRememberPassword] = useState(false)
+  const [accountOptions, setAccountOptions] = useState<{ value: string; label: string }[]>([])
   const [requireCaptcha, setRequireCaptcha] = useState(false)
   const [captchaId, setCaptchaId] = useState('')
   const [captchaImg, setCaptchaImg] = useState('')
@@ -96,12 +166,34 @@ export default function Login() {
     [authModes],
   )
 
+  function refreshAccountOptions(mode: string) {
+    setAccountOptions(
+      readAccounts(mode).map((a) => ({
+        value: a.username,
+        label: a.rememberPassword ? `${a.username}（已记密）` : a.username,
+      })),
+    )
+  }
+
+  function applyAccount(mode: string, uname: string) {
+    const u = String(uname || '').trim()
+    setUsername(u)
+    const hit = readAccounts(mode).find((a) => a.username.toLowerCase() === u.toLowerCase())
+    if (hit?.rememberPassword && hit.password) {
+      setPassword(hit.password)
+      setRememberPassword(true)
+    } else {
+      setPassword('')
+      setRememberPassword(false)
+    }
+  }
+
   function finishLogin(data: any, loginUsername?: string, loginMode?: string) {
     const mode = String(loginMode || authMode || 'platform').trim() || 'platform'
     const uname = String(loginUsername || username || data?.user?.username || '').trim()
     try {
       localStorage.setItem(LS_LAST_AUTH_MODE, mode)
-      writeRememberedUsername(mode, uname)
+      upsertAccount(mode, uname, password, rememberPassword)
     } catch {
       /* ignore */
     }
@@ -109,6 +201,7 @@ export default function Login() {
     localStorage.setItem('user', JSON.stringify(data.user))
     localStorage.setItem('last_activity_at', String(Date.now()))
     dispatch(setUser(data.user))
+    dispatch(hydrateTabs({ menus: data.user?.menus || [] }))
     setRequireCaptcha(false)
     startCooldown(0)
     if (data.need_tenant_select) {
@@ -121,6 +214,13 @@ export default function Login() {
     const redirect = params.get('redirect')
     if (redirect) {
       navigate(redirect, { replace: true })
+      return
+    }
+    // 优先回到上次打开的 Tab（hydrate 后的 active）
+    const tabsState = store.getState().tabs
+    const restored = tabsState.tabs.find((t) => t.key === tabsState.activeKey)
+    if (restored?.path && restored.path !== HOME_PATH) {
+      navigate(restored.path + (restored.search || ''), { replace: true })
       return
     }
     const first = (data.user?.menus || []).flatMap(function walk(n: any): string[] {
@@ -161,6 +261,8 @@ export default function Login() {
         const creds = credentialsForMode(preferred)
         setUsername(creds.username)
         setPassword(creds.password)
+        setRememberPassword(creds.rememberPassword)
+        refreshAccountOptions(preferred)
         if (list.includes('sso') && grant === 'authorization_code') {
           setAuthHint('SSO 可输入账号密码登录，或使用下方跳转授权登录')
           if (callbackURL && isLoopbackHostMismatch(window.location.origin, callbackURL)) {
@@ -335,29 +437,51 @@ export default function Login() {
               value={authMode}
               options={modeOptions}
               onChange={(v) => {
-                writeRememberedUsername(authMode, username)
+                if (username.trim()) {
+                  upsertAccount(authMode, username, password, rememberPassword)
+                }
                 setAuthMode(v)
                 const creds = credentialsForMode(v)
                 setUsername(creds.username)
                 setPassword(creds.password)
+                setRememberPassword(creds.rememberPassword)
+                refreshAccountOptions(v)
               }}
               disabled={retryAfter > 0 || ssoLoading}
             />
           ) : null}
-          <Input
-            style={{ marginBottom: 12 }}
+          <AutoComplete
+            style={{ width: '100%', marginBottom: 12 }}
+            options={accountOptions}
             value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            placeholder="用户名"
+            onChange={(v) => setUsername(v)}
+            onSelect={(v) => applyAccount(authMode, v)}
             disabled={retryAfter > 0 || ssoLoading}
-          />
+            allowClear
+            filterOption={(input, option) =>
+              String(option?.value || '')
+                .toLowerCase()
+                .includes(String(input || '').toLowerCase())
+            }
+          >
+            <Input placeholder="用户名（可从历史账号选择）" disabled={retryAfter > 0 || ssoLoading} />
+          </AutoComplete>
           <Input.Password
-            style={{ marginBottom: 12 }}
+            style={{ marginBottom: 8 }}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             placeholder="密码"
             disabled={retryAfter > 0 || ssoLoading}
           />
+          <div style={{ marginBottom: 12 }}>
+            <Checkbox
+              checked={rememberPassword}
+              onChange={(e) => setRememberPassword(e.target.checked)}
+              disabled={retryAfter > 0 || ssoLoading}
+            >
+              记住密码
+            </Checkbox>
+          </div>
           {requireCaptcha ? (
             <div style={{ marginBottom: 12 }}>
               <Space.Compact style={{ width: '100%' }}>

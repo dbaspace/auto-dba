@@ -150,9 +150,9 @@ func (d *DB) ListAccessDomains(dbType, envCode, q string) ([]AccessDomain, error
 		args = append(args, envCode)
 	}
 	if q != "" {
-		query += ` AND (domain LIKE ? OR instance_id LIKE ?)`
+		query += ` AND (domain LIKE ? OR instance_id LIKE ? OR env_code LIKE ?)`
 		like := "%" + q + "%"
-		args = append(args, like, like)
+		args = append(args, like, like, like)
 	}
 	query += ` ORDER BY env_code, domain`
 	rows, err := d.Query(query, args...)
@@ -187,9 +187,9 @@ func (d *DB) ListAccessDomainsInTenant(tenantID, dbType, envCode, q string) ([]A
 		args = append(args, envCode)
 	}
 	if q != "" {
-		query += ` AND (domain LIKE ? OR instance_id LIKE ?)`
+		query += ` AND (domain LIKE ? OR instance_id LIKE ? OR env_code LIKE ?)`
 		like := "%" + q + "%"
-		args = append(args, like, like)
+		args = append(args, like, like, like)
 	}
 	query += ` ORDER BY env_code, domain`
 	rows, err := d.Query(query, args...)
@@ -271,8 +271,13 @@ func (d *DB) ListGrantedAccessDomains(toTenantID, toUserID, dbType, envCode, q s
 		if envCode != "" && it.EnvCode != envCode {
 			continue
 		}
-		if q != "" && !strings.Contains(strings.ToLower(it.Domain), strings.ToLower(q)) {
-			continue
+		if q != "" {
+			ql := strings.ToLower(q)
+			if !strings.Contains(strings.ToLower(it.Domain), ql) &&
+				!strings.Contains(strings.ToLower(it.EnvCode), ql) &&
+				!strings.Contains(strings.ToLower(it.InstanceID), ql) {
+				continue
+			}
 		}
 		seen[it.ID] = struct{}{}
 		out = append(out, *it)

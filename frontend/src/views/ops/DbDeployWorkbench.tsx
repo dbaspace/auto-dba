@@ -9,6 +9,7 @@ import Auth from '../../components/Auth'
 import { Perm } from '../../hooks/usePermission'
 import { useAppSelector } from '../../store'
 import { activeDeployHostIds, isAgentDeployActive, useAgentDeployTracker } from './agentDeployTracker'
+import { ensureAgentForHost, endpointHost } from './ensureAgentForHost'
 import {
   NodePrecheckPanel, agentMatchesHost, agentMismatchMessage, hostPrimaryAddr, resolveNodeHostInstanceId, useHostApprovers,
   type NodePrecheckResult,
@@ -155,7 +156,7 @@ function instanceEndpointHost(it: RegInstance) {
   return String(it.host || '').split(/[,，]/)[0].trim()
 }
 
-type RegNode = { role: string; host: string; port?: number; source?: string }
+type RegNode = { role: string; host: string; port?: number; source?: string; agent_id?: string }
 
 type InstanceProbe = {
   version?: string
@@ -709,18 +710,56 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
     [agents, nodeHostInst],
   )
 
+  const reloadDbAgents = useCallback(async () => {
+    const res = await api.get('/db-deploy/agents').catch(() => ({ data: { data: [] } }))
+    const list = res.data?.data || []
+    setAgents(list)
+    return list
+  }, [])
+
   const onNodeHostChange = async (hostId?: string) => {
     const inst = hosts.find((h) => h.id === hostId) || null
+    const host = hostPrimaryAddr(inst)
+    let agentId: string | undefined
     const matched = agents.filter((a) => agentMatchesHost(a, inst))
+    if (matched.length === 1) {
+      agentId = matched[0].id
+    } else if (host) {
+      agentId = await ensureAgentForHost({
+        agents,
+        host,
+        port: 8092,
+        createPath: '/db-deploy/agents',
+        namePrefix: 'db',
+        allowCreate: true,
+        reloadAgents: reloadDbAgents,
+        silent: matched.length > 1,
+      })
+    }
     nodeForm.setFieldsValue({
-      host: hostPrimaryAddr(inst),
-      agent_id: matched.length === 1 ? matched[0].id : undefined,
+      host,
+      agent_id: agentId,
       assigned_to: undefined,
     })
     const list = await nodeApprovers.load(hostId)
     if (nodeForm.getFieldValue('host_instance_id') === hostId && list.length > 0) {
       nodeForm.setFieldsValue({ assigned_to: list[0] })
     }
+  }
+
+  const bindRegNodeAgent = async (index: number, hostRaw: string) => {
+    const host = endpointHost(hostRaw) || String(hostRaw || '').trim()
+    if (!host) return
+    const id = await ensureAgentForHost({
+      agents,
+      host,
+      port: 8092,
+      createPath: '/db-deploy/agents',
+      namePrefix: 'db',
+      allowCreate: true,
+      reloadAgents: reloadDbAgents,
+    })
+    if (id) form.setFieldValue(['nodes', index, 'agent_id'], id)
   }
 
   const buildAddNodePayload = (v: Record<string, any>): Record<string, unknown> => ({
@@ -1628,7 +1667,12 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
                   return
                 }
                 if (regNodes.length) {
-                  payload.nodes = regNodes.map((n) => ({ role: n.role, host: n.host.trim(), port: n.port }))
+                  payload.nodes = regNodes.map((n) => ({
+                    role: n.role,
+                    host: n.host.trim(),
+                    port: n.port,
+                    agent_id: n.agent_id,
+                  }))
                 }
               }
               const res = await api.post('/db-deploy/clusters', payload)
@@ -1859,13 +1903,13 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
                   {regFromInstance && (
                     <Form.Item
                       label="节点"
-                      extra="提交时一并登记为运行中；DB Agent 与节点主机地址一致时自动绑定，否则在该主机下发 Agent 后自动补绑"
+                      extra="填 Host 失焦后自动匹配/登记 DB Agent（:8092）；提交时后端也会按地址补绑"
                     >
                       <Form.List name="nodes">
                         {(fields, { add, remove }) => (
                           <>
                             {fields.map((f) => (
-                              <Space key={f.key} align="baseline" style={{ display: 'flex', marginBottom: 4 }}>
+                              <Space key={f.key} align="baseline" style={{ display: 'flex', marginBottom: 4 }} wrap>
                                 <Form.Item name={[f.name, 'role']} noStyle rules={[{ required: true }]}>
                                   <Select
                                     style={{ width: 110 }}
@@ -1876,10 +1920,27 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
                                   />
                                 </Form.Item>
                                 <Form.Item name={[f.name, 'host']} noStyle rules={[{ required: true, message: '主机必填' }]}>
-                                  <Input style={{ width: 200 }} placeholder="主机 / IP" />
+                                  <Input
+                                    style={{ width: 160 }}
+                                    placeholder="主机 / IP"
+                                    onBlur={(e) => void bindRegNodeAgent(f.name, e.target.value)}
+                                  />
                                 </Form.Item>
                                 <Form.Item name={[f.name, 'port']} noStyle rules={[{ required: true, message: '端口必填' }]}>
                                   <InputNumber style={{ width: 100 }} placeholder="端口" min={1} max={65535} />
+                                </Form.Item>
+                                <Form.Item name={[f.name, 'agent_id']} noStyle>
+                                  <Select
+                                    allowClear
+                                    showSearch
+                                    optionFilterProp="label"
+                                    style={{ width: 220 }}
+                                    placeholder="DB Agent (:8092)"
+                                    options={agents.map((a) => ({
+                                      value: a.id,
+                                      label: `${a.name || a.id} (${a.base_url})`,
+                                    }))}
+                                  />
                                 </Form.Item>
                                 <Button type="link" size="small" danger onClick={() => remove(f.name)}>删除</Button>
                               </Space>

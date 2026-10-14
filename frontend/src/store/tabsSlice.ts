@@ -197,8 +197,15 @@ export function loadTabsState(menus?: MenuNode[]): TabsState {
   }
 }
 
+/** resetTabs / hydrate 期间抑制一次写盘，避免把「仅工作台」覆盖用户历史桶 */
+let suppressTabsPersist = false
+
 /** 仅在已登录（有 user.id）时写入，避免登出后把空态写回用户桶 */
 export function saveTabsState(state: TabsState): void {
+  if (suppressTabsPersist) {
+    suppressTabsPersist = false
+    return
+  }
   const uid = currentTabsOwnerId()
   if (!uid) return
   try {
@@ -237,10 +244,18 @@ const tabsSlice = createSlice({
   initialState,
   reducers: {
     resetTabs(state, action: PayloadAction<{ menus?: MenuNode[] }>) {
-      clearTabsState()
+      // 不删 localStorage 用户桶，便于登出后再登录恢复；抑制本次空态写盘
+      suppressTabsPersist = true
       const home = makeHomeTab(action.payload?.menus)
       state.tabs = [home]
       state.activeKey = home.key
+    },
+    /** 登录后从 localStorage 恢复该用户上次打开的 Tab */
+    hydrateTabs(state, action: PayloadAction<{ menus?: MenuNode[] }>) {
+      suppressTabsPersist = true
+      const next = loadTabsState(action.payload?.menus)
+      state.tabs = next.tabs
+      state.activeKey = next.activeKey
     },
     openTab(state, action: PayloadAction<OpenPayload>) {
       const { menus, force, title } = action.payload
@@ -392,7 +407,16 @@ const tabsSlice = createSlice({
   },
 })
 
-export const { resetTabs, openTab, activateTab, updateTabMeta, closeTab, closeOtherTabs, pruneUnauthorizedTabs, reorderTabs } =
-  tabsSlice.actions
+export const {
+  resetTabs,
+  hydrateTabs,
+  openTab,
+  activateTab,
+  updateTabMeta,
+  closeTab,
+  closeOtherTabs,
+  pruneUnauthorizedTabs,
+  reorderTabs,
+} = tabsSlice.actions
 export { normPath, tabKey }
 export default tabsSlice.reducer

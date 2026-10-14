@@ -21,6 +21,7 @@ import {
   ChangeConfRollbackModal, ConfApplyConfirmModal, ConfHistoryPanel, keySummary, type ConfPatchPlan,
 } from './SrConfDiff'
 import { activeDeployHostIds, isAgentDeployActive, useAgentDeployTracker } from './agentDeployTracker'
+import { ensureAgentForHost, matchAgentByHost } from './ensureAgentForHost'
 import './SrCluster.css'
 
 type SrAgent = { id: string; name?: string; base_url: string; username?: string; password_set?: boolean; host_instance_id?: string }
@@ -198,22 +199,8 @@ function endpointHost(ep: string): string {
   return s
 }
 
-/** 从 Agent base_url 解析主机（忽略端口与 scheme） */
-function agentUrlHost(baseUrl: string): string {
-  const s = (baseUrl || '').trim()
-  if (!s) return ''
-  try {
-    const u = new URL(s.includes('://') ? s : `http://${s}`)
-    return (u.hostname || '').replace(/^\[|\]$/g, '')
-  } catch {
-    return endpointHost(s.replace(/^https?:\/\//, ''))
-  }
-}
-
 function matchAgentForHost(agents: SrAgent[], host: string): SrAgent | undefined {
-  const h = endpointHost(host) || host.trim()
-  if (!h) return undefined
-  return agents.find((a) => agentUrlHost(a.base_url) === h)
+  return matchAgentByHost(agents, host) as SrAgent | undefined
 }
 
 const statusColor: Record<string, string> = {
@@ -403,6 +390,8 @@ export default function SrClusterPage() {
   const [changeCat, setChangeCat] = useState<ChangeCategoryKey>('init')
   const [clusterModal, setClusterModal] = useState(false)
   const [clusterModalMode, setClusterModalMode] = useState<'create' | 'register'>('create')
+  const [feProbeBusy, setFeProbeBusy] = useState(false)
+  const [feProbedRoles, setFeProbedRoles] = useState<Record<string, string>>({})
   const [fePreview, setFePreview] = useState<MonitorPreview[]>([])
   const [bePreview, setBePreview] = useState<MonitorPreview[]>([])
   const [monitorTask, setMonitorTask] = useState<string | undefined>()
@@ -597,7 +586,7 @@ export default function SrClusterPage() {
       setLoading(false)
     }
   }, [])
-  const loadAgents = useCallback(async () => {
+  const loadAgents = useCallback(async (): Promise<SrAgent[]> => {
     try {
       const res = await api.get('/sr-cluster/agents')
       const list: SrAgent[] = res.data?.data || []
@@ -611,10 +600,81 @@ export default function SrClusterPage() {
       } catch {
         /* 状态探测失败不影响列表 */
       }
+      return list
     } catch (e: any) {
       message.error(e?.response?.data?.message || e.message)
+      return []
     }
   }, [])
+
+  const bindClusterNodeAgent = useCallback(async (list: 'fe_nodes' | 'be_nodes', index: number, hostRaw: string) => {
+    const host = endpointHost(hostRaw) || String(hostRaw || '').trim()
+    if (!host) return
+    const id = await ensureAgentForHost({
+      agents,
+      host,
+      port: 8091,
+      createPath: '/sr-cluster/agents',
+      namePrefix: 'sr',
+      allowCreate: true,
+      reloadAgents: loadAgents,
+    })
+    if (id) {
+      clusterForm.setFieldValue([list, index, 'agent_id'], id)
+    }
+  }, [agents, clusterForm, loadAgents])
+
+  const probeRegisterFERoles = useCallback(async () => {
+    const feNodes: { host?: string }[] = clusterForm.getFieldValue('fe_nodes') || []
+    const hosts = feNodes.map((n) => endpointHost(n.host || '') || String(n.host || '').trim()).filter(Boolean)
+    if (!hosts.length) {
+      message.warning('请先填写 FE Host')
+      return
+    }
+    const password = String(clusterForm.getFieldValue('fe_password') || '')
+    setFeProbeBusy(true)
+    try {
+      const { data } = await api.post('/sr-cluster/probe-fe-roles', {
+        fe_host: hosts[0],
+        fe_password: password,
+        fe_query_port: 9030,
+      })
+      const roles: { host?: string; role?: string }[] = data?.data || []
+      const map: Record<string, string> = {}
+      for (const r of roles) {
+        const h = endpointHost(r.host || '') || String(r.host || '').trim()
+        if (h && r.role) map[h] = String(r.role).toUpperCase()
+      }
+      setFeProbedRoles(map)
+      const next = feNodes.map((n, i) => {
+        const h = endpointHost(n.host || '') || String(n.host || '').trim()
+        const role = map[h] || ''
+        const isLeader = role === 'LEADER'
+        return {
+          ...n,
+          is_primary_fe: isLeader || (i === 0 && !Object.values(map).includes('LEADER')),
+          fe_role: role === 'OBSERVER' ? 'observer' : 'follower',
+        }
+      })
+      // 保证仅一个首 FE
+      let primarySeen = false
+      for (const n of next) {
+        if (n.is_primary_fe && !primarySeen) {
+          primarySeen = true
+        } else if (n.is_primary_fe) {
+          n.is_primary_fe = false
+        }
+      }
+      if (!primarySeen && next.length) next[0].is_primary_fe = true
+      clusterForm.setFieldsValue({ fe_nodes: next })
+      const leader = roles.find((r) => String(r.role).toUpperCase() === 'LEADER')
+      message.success(leader ? `已探测：Leader=${leader.host}` : `已探测 ${roles.length} 个 FE 角色`)
+    } catch (e: any) {
+      message.error(e?.response?.data?.message || e.message || '探测失败')
+    } finally {
+      setFeProbeBusy(false)
+    }
+  }, [clusterForm])
   const loadHosts = useCallback(async () => {
     try {
       const res = await api.get('/instances', { params: { db_type: 'host' } })
@@ -1068,6 +1128,7 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
   const openClusterModal = async (mode: 'create' | 'register') => {
     setClusterModalMode(mode)
     clusterForm.resetFields()
+    setFeProbedRoles({})
     clusterForm.setFieldsValue({
       software_base: '/home/dorisdb_base',
       data_root: '/data',
@@ -2710,6 +2771,16 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
           >
             <Input.Password />
           </Form.Item>
+          {clusterModalMode === 'register' ? (
+            <div style={{ marginBottom: 12 }}>
+              <Button loading={feProbeBusy} onClick={() => void probeRegisterFERoles()}>
+                探测 FE 角色
+              </Button>
+              <span className="muted" style={{ marginLeft: 8 }}>
+                连接首个 FE（:9030）自动标出 LEADER/FOLLOWER/OBSERVER，并将 Leader 设为首 FE
+              </span>
+            </div>
+          ) : null}
 
           {agents.length === 0 && (
             <Alert
@@ -2740,14 +2811,20 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
             />
           )}
 
-          <div style={{ fontWeight: 600, marginBottom: 8 }}>FE 节点（须奇数；启动：首 FE 无 helper / 其余 --helper）</div>
+          <div style={{ fontWeight: 600, marginBottom: 8 }}>FE 节点（须奇数；启动：首 FE 无 helper / 其余 --helper；填 Host 自动绑 Node Agent :8091）</div>
           <Form.List name="fe_nodes">
             {(fields, { add, remove }) => (
               <>
-                {fields.map((field) => (
+                {fields.map((field) => {
+                  const hostVal = clusterForm.getFieldValue(['fe_nodes', field.name, 'host'])
+                  const probed = feProbedRoles[endpointHost(hostVal || '') || String(hostVal || '').trim()]
+                  return (
                   <Space key={field.key} align="start" style={{ display: 'flex', marginBottom: 8 }} wrap>
                     <Form.Item {...field} name={[field.name, 'host']} rules={[{ required: true, message: 'host' }]} style={{ width: 160 }}>
-                      <Input placeholder="FE Host" />
+                      <Input
+                        placeholder="FE Host"
+                        onBlur={(e) => void bindClusterNodeAgent('fe_nodes', field.name, e.target.value)}
+                      />
                     </Form.Item>
                     <Form.Item {...field} name={[field.name, 'agent_id']} rules={[{ required: true, message: 'Agent' }]} style={{ width: 260 }}>
                       <Select
@@ -2764,6 +2841,7 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                     <Form.Item {...field} name={[field.name, 'is_primary_fe']} valuePropName="checked" style={{ marginBottom: 0 }}>
                       <Checkbox>首 FE</Checkbox>
                     </Form.Item>
+                    {probed ? <Tag color={probed === 'LEADER' ? 'gold' : 'blue'}>{probed}</Tag> : null}
                     <Form.Item {...field} name={[field.name, 'fe_role']} style={{ width: 120 }}>
                       <Select
                         allowClear
@@ -2773,7 +2851,8 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                     </Form.Item>
                     {fields.length > 1 && <MinusCircleOutlined onClick={() => remove(field.name)} />}
                   </Space>
-                ))}
+                  )
+                })}
                 <Button type="dashed" onClick={() => add({ is_primary_fe: false, fe_role: 'follower' })} icon={<PlusOutlined />} block>
                   添加 FE
                 </Button>
@@ -2781,14 +2860,17 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
             )}
           </Form.List>
 
-          <div style={{ fontWeight: 600, margin: '16px 0 8px' }}>BE 节点（装包到 software_base/be；初始化含盘 /data）</div>
+          <div style={{ fontWeight: 600, margin: '16px 0 8px' }}>BE 节点（填 Host 自动绑 Node Agent :8091）</div>
           <Form.List name="be_nodes">
             {(fields, { add, remove }) => (
               <>
                 {fields.map((field) => (
                   <Space key={field.key} align="start" style={{ display: 'flex', marginBottom: 8 }} wrap>
                     <Form.Item {...field} name={[field.name, 'host']} rules={[{ required: true, message: 'host' }]} style={{ width: 160 }}>
-                      <Input placeholder="BE Host" />
+                      <Input
+                        placeholder="BE Host"
+                        onBlur={(e) => void bindClusterNodeAgent('be_nodes', field.name, e.target.value)}
+                      />
                     </Form.Item>
                     <Form.Item {...field} name={[field.name, 'agent_id']} rules={[{ required: true, message: 'Agent' }]} style={{ width: 260 }}>
                       <Select

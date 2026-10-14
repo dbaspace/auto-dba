@@ -15,6 +15,29 @@ interface Topic {
   stats?: boolean
 }
 
+interface DomainEntry {
+  id: string
+  domain: string
+  env_code: string
+  instance_id: string
+  port?: number
+  instance_name?: string
+}
+
+function domainAddr(domain: string, port?: number) {
+  const h = String(domain || '').trim()
+  if (!h) return ''
+  if (h.includes(':')) return h
+  return `${h}:${port || 9092}`
+}
+
+function normalizeDomain(s: string) {
+  return String(s || '')
+    .trim()
+    .replace(/\.+$/, '')
+    .toLowerCase()
+}
+
 export default function KafkaQuery() {
   const [instLoading, setInstLoading] = useState(false)
   const [topicsLoading, setTopicsLoading] = useState(false)
@@ -24,11 +47,11 @@ export default function KafkaQuery() {
   const liteInflight = useRef<Map<string, Promise<Topic[]>>>(new Map())
   const liteGen = useRef<Map<string, number>>(new Map())
   const statsAsked = useRef<Set<string>>(new Set())
-  const [instances, setInstances] = useState<any[]>([])
-  const [envs, setEnvs] = useState<any[]>([])
+  const [domains, setDomains] = useState<DomainEntry[]>([])
   const [keyword, setKeyword] = useState('')
   const [envFilter, setEnvFilter] = useState('')
   const [selectedId, setSelectedId] = useState('')
+  const [selectedDomain, setSelectedDomain] = useState('')
   const [topics, setTopics] = useState<Topic[]>([])
   const [topicSearch, setTopicSearch] = useState('')
   const [hideInternal, setHideInternal] = useState(false)
@@ -38,37 +61,36 @@ export default function KafkaQuery() {
   const [modalTopic, setModalTopic] = useState('')
   const [modalTab, setModalTab] = useState('data')
 
-  const selected = useMemo(() => instances.find((i) => i.id === selectedId), [instances, selectedId])
+  const selected = useMemo(
+    () =>
+      domains.find(
+        (d) => d.instance_id === selectedId && normalizeDomain(d.domain) === normalizeDomain(selectedDomain),
+      ),
+    [domains, selectedId, selectedDomain],
+  )
 
   const envOptions = useMemo(() => {
     const set = new Set<string>()
-    for (const e of envs) {
-      if (e.code) set.add(e.code)
-      if (e.name) set.add(e.name)
+    for (const d of domains) {
+      if (d.env_code) set.add(d.env_code)
     }
-    for (const i of instances) {
-      if (i.idc) set.add(i.idc)
-    }
-    return [...set]
-  }, [envs, instances])
+    return [...set].sort()
+  }, [domains])
 
-  function instEnv(i: any) {
-    return i?.idc || i?.env_id || ''
-  }
-
-  function instAddr(i: any) {
-    if (!i) return ''
-    const host = i.host || i.domain_name || ''
-    return host ? `${host}:${i.port || 9092}` : ''
-  }
-
-  const filteredInstances = useMemo(() => {
-    let list = instances
-    if (envFilter) list = list.filter((i) => instEnv(i) === envFilter)
+  const filteredDomains = useMemo(() => {
+    let list = domains
+    if (envFilter) list = list.filter((d) => d.env_code === envFilter)
     const q = keyword.trim().toLowerCase()
-    if (q) list = list.filter((i) => (i.name || '').toLowerCase().includes(q) || instAddr(i).toLowerCase().includes(q))
+    if (q) {
+      list = list.filter(
+        (d) =>
+          d.domain.toLowerCase().includes(q) ||
+          (d.instance_name || '').toLowerCase().includes(q) ||
+          domainAddr(d.domain, d.port).toLowerCase().includes(q),
+      )
+    }
     return list
-  }, [instances, envFilter, keyword])
+  }, [domains, envFilter, keyword])
 
   const filteredTopics = useMemo(() => {
     let list = topics
@@ -139,13 +161,14 @@ export default function KafkaQuery() {
     return p
   }
 
-  function selectInstance(inst: any) {
-    setSelectedId(inst.id)
+  function selectDomain(d: DomainEntry) {
+    setSelectedId(d.instance_id)
+    setSelectedDomain(d.domain)
     setPage(1)
     statsSeq.current += 1
     statsAsked.current = new Set()
-    setTopics(topicCache.current.get(inst.id) || [])
-    loadTopics(inst.id)
+    setTopics(topicCache.current.get(d.instance_id) || [])
+    loadTopics(d.instance_id)
   }
 
   function openTopic(name: string, tab: string) {
@@ -245,14 +268,70 @@ export default function KafkaQuery() {
   async function loadMeta() {
     setInstLoading(true)
     try {
-      const [instRes, envRes] = await Promise.all([
-        api.get('/instances', { params: { db_type: 'kafka' } }),
-        api.get('/environments'),
+      const [domRes, instRes] = await Promise.all([
+        api.get('/access-domains', { params: { db_type: 'kafka' } }).catch(() => ({ data: { data: [] } })),
+        api.get('/instances', { params: { db_type: 'kafka' } }).catch(() => ({ data: { data: [] } })),
       ])
-      setInstances(instRes.data.data || [])
-      setEnvs(envRes.data.data || [])
-      for (const inst of instRes.data.data || []) {
-        if (inst?.id) fetchLite(inst.id).catch(() => {})
+      const instMap = new Map<string, any>()
+      for (const i of instRes.data.data || []) {
+        instMap.set(i.id, i)
+      }
+      const fromDomains: DomainEntry[] = (domRes.data.data || [])
+        .map((r: any) => {
+          const inst = instMap.get(r.instance_id)
+          return {
+            id: r.id || `${r.domain}-${r.instance_id}`,
+            domain: String(r.domain || '').trim(),
+            env_code: String(r.env_code || inst?.idc || '').trim(),
+            instance_id: String(r.instance_id || ''),
+            port: inst?.port,
+            instance_name: r.instance_name || inst?.name,
+          }
+        })
+        .filter((d: DomainEntry) => d.domain && d.instance_id)
+
+      if (fromDomains.length) {
+        setDomains(fromDomains)
+      } else {
+        const fallback: DomainEntry[] = []
+        const seen = new Set<string>()
+        for (const i of instRes.data.data || []) {
+          const list: string[] = []
+          const add = (s: string) => {
+            const v = String(s || '').trim()
+            if (!v) return
+            const key = `${i.id}:${normalizeDomain(v)}`
+            if (seen.has(key)) return
+            seen.add(key)
+            list.push(v)
+          }
+          for (const d of i.domains || []) add(String(d))
+          if (!list.length) add(i.domain_name)
+          if (!list.length) add(i.host)
+          for (const dom of list) {
+            fallback.push({
+              id: `${i.id}:${normalizeDomain(dom)}`,
+              domain: dom,
+              env_code: String(i.idc || '').trim(),
+              instance_id: i.id,
+              port: i.port,
+              instance_name: i.name,
+            })
+          }
+        }
+        setDomains(fallback)
+      }
+      const seenInst = new Set<string>()
+      for (const d of fromDomains.length ? fromDomains : []) {
+        if (d.instance_id && !seenInst.has(d.instance_id)) {
+          seenInst.add(d.instance_id)
+          fetchLite(d.instance_id).catch(() => {})
+        }
+      }
+      if (!fromDomains.length) {
+        for (const i of instRes.data.data || []) {
+          if (i?.id) fetchLite(i.id).catch(() => {})
+        }
       }
     } finally {
       setInstLoading(false)
@@ -266,11 +345,13 @@ export default function KafkaQuery() {
     <div className="ops-page kafka-query">
       <div className="layout">
         <aside className="side">
-          <div className="side-head">Kafka 实例</div>
-          <Input value={keyword} allowClear placeholder="搜索实例" className="mb" onChange={(e) => setKeyword(e.target.value)} />
+          <div className="side-head">Kafka 域名</div>
+          <Input value={keyword} allowClear placeholder="搜索域名" className="mb" onChange={(e) => setKeyword(e.target.value)} />
           <Select
             value={envFilter || undefined}
             allowClear
+            showSearch
+            optionFilterProp="label"
             placeholder="全部环境"
             className="mb"
             style={{ width: '100%' }}
@@ -278,29 +359,36 @@ export default function KafkaQuery() {
             options={envOptions.map((e) => ({ label: e, value: e }))}
           />
           <Spin spinning={instLoading} wrapperClassName="inst-list">
-            {filteredInstances.map((i) => (
+            {filteredDomains.map((d) => (
               <div
-                key={i.id}
-                className={`inst-item${selectedId === i.id ? ' active' : ''}`}
-                onClick={() => selectInstance(i)}
+                key={d.id}
+                className={`inst-item${
+                  selectedId === d.instance_id && normalizeDomain(selectedDomain) === normalizeDomain(d.domain)
+                    ? ' active'
+                    : ''
+                }`}
+                onClick={() => selectDomain(d)}
               >
-                <span className="name">{i.name || instAddr(i)}</span>
-                <span className="env">{instEnv(i)}</span>
+                <span className="name">{d.domain}</span>
+                <span className="env">{d.env_code || d.instance_name || ''}</span>
               </div>
             ))}
-            {!instLoading && !filteredInstances.length ? (
-              <p className="empty">暂无 Kafka 实例，请先在「配置 → 实例」登记 db_type=kafka</p>
+            {!instLoading && !filteredDomains.length ? (
+              <p className="empty">暂无 Kafka 域名，请先在「域名管理」同步并划拨</p>
             ) : null}
           </Spin>
         </aside>
         <section className="main">
           {!selectedId ? (
-            <div className="placeholder">请从左侧选择 Kafka 实例查看 Topic 列表</div>
+            <div className="placeholder">请从左侧选择 Kafka 域名查看 Topic 列表</div>
           ) : (
             <>
               <div className="toolbar">
-                <strong>{selected?.name || instAddr(selected)}</strong>
-                <span className="muted">{instAddr(selected)}</span>
+                <strong>{selected?.domain || selectedDomain}</strong>
+                <span className="muted">
+                  {domainAddr(selected?.domain || selectedDomain, selected?.port)}
+                  {selected?.instance_name ? ` · ${selected.instance_name}` : ''}
+                </span>
                 <Button loading={topicsLoading} onClick={() => loadTopics(selectedId, true)}>刷新 Topic</Button>
                 <Input value={topicSearch} allowClear placeholder="搜索 Topic" style={{ width: 200 }} onChange={(e) => setTopicSearch(e.target.value)} />
                 <Checkbox checked={hideInternal} onChange={(e) => setHideInternal(e.target.checked)}>隐藏内部 Topic（__ 前缀）</Checkbox>

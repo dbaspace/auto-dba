@@ -67,20 +67,22 @@ func (h *FeAdminHandler) Create(c *gin.Context) {
 		Username:    asString(raw["username"]),
 		Password:    asString(raw["password"]),
 	}
-	if strings.TrimSpace(it.Environment) == "" || strings.TrimSpace(it.Domain) == "" || strings.TrimSpace(it.FeNode) == "" || strings.TrimSpace(it.Username) == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "环境、域名、FE 节点、用户名不能为空"})
+	if strings.TrimSpace(it.Environment) == "" || strings.TrimSpace(it.Domain) == "" || strings.TrimSpace(it.FeNode) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "环境、域名、FE 节点不能为空"})
 		return
 	}
-	if strings.TrimSpace(it.Password) == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "请输入密码"})
-		return
+	if strings.TrimSpace(it.Username) == "" {
+		it.Username = "root"
 	}
-	enc, err := secret.Encrypt(h.Secret, it.Password)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
-		return
+	// 允许无密码创建（从监控同步后补凭据）；有密码则加密落库
+	if plain := strings.TrimSpace(it.Password); plain != "" {
+		enc, err := secret.Encrypt(h.Secret, plain)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+			return
+		}
+		it.PasswordEnc = enc
 	}
-	it.PasswordEnc = enc
 	it.CreatedBy = actorName(c)
 	it.UpdatedBy = it.CreatedBy
 	it.Password = ""
@@ -90,6 +92,86 @@ func (h *FeAdminHandler) Create(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": it})
+}
+
+// SyncFromMonitor POST /feadmin/sync-from-monitor — 从监控目标 starrocks-fe 同步拓扑；不覆盖已有账号密码。
+func (h *FeAdminHandler) SyncFromMonitor(c *gin.Context) {
+	items, err := h.Store.PreviewMonitorTargets("starrocks-fe")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	tid := effectiveListTenantID(h.Store, c)
+	exist, err := h.Store.ListFeAdminsInTenant(tid, "", "")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	byKey := map[string]*store.FeAdmin{}
+	for i := range exist {
+		k := feAdminSyncKey(exist[i].TaskName, exist[i].Environment, exist[i].Domain)
+		byKey[k] = &exist[i]
+	}
+	who := actorName(c)
+	created, updated, skipped := 0, 0, 0
+	for _, p := range items {
+		eps := p.Endpoints
+		if len(eps) == 0 {
+			skipped++
+			continue
+		}
+		feNode := strings.Join(eps, ",")
+		env := strings.TrimSpace(p.Env)
+		domain := strings.TrimSpace(p.Domain)
+		task := strings.TrimSpace(p.TaskName)
+		if env == "" || domain == "" {
+			skipped++
+			continue
+		}
+		port := 8030
+		if len(eps) > 0 {
+			if _, ps := splitHostPortLoose(eps[0]); ps != "" {
+				if p, err := strconv.Atoi(ps); err == nil && p > 0 {
+					port = p
+				}
+			}
+		}
+		key := feAdminSyncKey(task, env, domain)
+		if old := byKey[key]; old != nil {
+			old.TaskName = task
+			old.Environment = env
+			old.Domain = domain
+			old.Port = port
+			old.FeNode = feNode
+			old.UpdatedBy = who
+			// 保留 Username / PasswordEnc
+			if err := h.Store.UpdateFeAdmin(old); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+				return
+			}
+			updated++
+			continue
+		}
+		it := store.FeAdmin{
+			TaskName: task, Environment: env, Domain: domain, Port: port, FeNode: feNode,
+			Username: "root", CreatedBy: who, UpdatedBy: who,
+		}
+		stampTenantID(c, func(t string) { it.TenantID = t })
+		if err := h.Store.CreateFeAdmin(&it); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+			return
+		}
+		created++
+	}
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{
+		"created": created, "updated": updated, "skipped": skipped, "preview": len(items),
+	}})
+}
+
+func feAdminSyncKey(task, env, domain string) string {
+	return strings.ToLower(strings.TrimSpace(task)) + "|" +
+		strings.ToLower(strings.TrimSpace(env)) + "|" +
+		strings.ToLower(strings.TrimSpace(domain))
 }
 
 func (h *FeAdminHandler) Update(c *gin.Context) {

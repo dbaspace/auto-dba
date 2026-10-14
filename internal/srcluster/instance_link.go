@@ -230,6 +230,42 @@ func (e *Engine) ProbeAndAlignFERoles(ctx context.Context, cl *store.SrCluster, 
 	return alignRegisteredFERoles(nodes, rows), nil
 }
 
+// FERoleInfo 登记表单探测用的 FE 实时角色。
+type FERoleInfo struct {
+	Host string `json:"host"`
+	Role string `json:"role"` // LEADER | FOLLOWER | OBSERVER
+}
+
+// ProbeFERoles 用给定 FE 查询口与密码执行 SHOW PROC '/frontends'，返回各节点实时角色（不写库）。
+func (e *Engine) ProbeFERoles(ctx context.Context, feHost, user, pass string, queryPort int) ([]FERoleInfo, error) {
+	feHost = strings.TrimSpace(feHost)
+	if feHost == "" {
+		return nil, fmt.Errorf("fe_host 为空")
+	}
+	if queryPort <= 0 {
+		queryPort = 9030
+	}
+	user = strings.TrimSpace(user)
+	if user == "" {
+		user = "root"
+	}
+	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	rows, err := queryProcRowsDSN(cctx, buildFEDSN(user, pass, feHost, queryPort), "/frontends", false)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]FERoleInfo, 0, len(rows))
+	for _, r := range rows {
+		role := strings.ToUpper(strings.TrimSpace(r.Role))
+		if role == "" {
+			role = "FOLLOWER"
+		}
+		out = append(out, FERoleInfo{Host: r.Host, Role: role})
+	}
+	return out, nil
+}
+
 // probeFrontends 用给定节点解析凭据后执行 SHOW PROC '/frontends'（只读）。
 func (e *Engine) probeFrontends(ctx context.Context, cl *store.SrCluster, nodes []store.SrNode) ([]procVersionRow, error) {
 	host := strings.TrimSpace(cl.FeHost)

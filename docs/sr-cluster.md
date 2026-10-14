@@ -828,8 +828,8 @@ update-alternatives --set javac /home/jdk-21.0.4/bin/javac
 
 登记数据来源：
 
-1. **手工**填写 FE/BE host、版本、路径、FE 密码、每节点 Agent。  
-2. **从监控目标导入**（推荐）：`GET /monitor-targets/preview?kind=starrocks-fe|starrocks-be`（与 FE 管理同源），按监控任务 / domain 预填 host、环境，以及标签 **`version` / `sr_version` / `starrocks_version`**。登记可不绑定制品 Release（仅写 version）；若设置中已有同号 Release 则自动关联。Agent 仍须手选。无监控目标时可去「配置中心 · 监控目标注册」先录入。
+1. **手工**填写 FE/BE host、版本、路径、FE 密码；Host 失焦自动绑 Agent，亦可「按主机登记」。登记前可 `POST /sr-cluster/probe-fe-roles` 探测实时角色。  
+2. **从监控目标导入**（推荐）：`GET /monitor-targets/preview?kind=starrocks-fe|starrocks-be`（与 FE 管理同源），按监控任务 / domain 预填 host、环境，以及标签 **`version` / `sr_version` / `starrocks_version`**。登记可不绑定制品 Release（仅写 version）；若设置中已有同号 Release 则自动关联。填写 FE/BE Host 后会按 `http://host:8091` **自动匹配或登记** Node Agent；登记模式可点「探测 FE 角色」对齐 LEADER/FOLLOWER。无监控目标时可去「配置中心 · 监控目标注册」先录入。
 
 登记后维护：添加节点 / 加入 / 重启 / 下线 / 升级；`ready` 集群不再显示「集群初始化」。
 
