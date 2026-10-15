@@ -921,13 +921,19 @@ export default function Databases() {
                 value={form.tags || []}
                 showSearch
                 maxTagCount="responsive"
-                placeholder="输入后回车，同名库用标签区分"
+                placeholder="如 alias=账单ODS ，回车添加"
                 style={{ width: '100%' }}
                 optionFilterProp="label"
                 options={usedTags.map((t) => ({ value: t, label: t }))}
                 onChange={(v) => setForm((f) => ({ ...f, tags: v }))}
               />
-              <div className="type-hint">工单选库时会展示为「库名 [标签]」，用于区分相同库名</div>
+              <div className="type-hint">
+                格式 <code>key=value</code>。约定：
+                <code>alias=</code>（或兼容 <code>label=</code>）为查询树短名，同环境同库名时用来区分实例/业务；
+                <code>idc=</code> 环境；
+                <code>domain=</code> 访问域名。
+                查询树只显示 alias/label，不会把 idc、domain 整串挂在库名后。
+              </div>
             </div>
           </div>
           <div className="fi">

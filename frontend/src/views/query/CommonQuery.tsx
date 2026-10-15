@@ -171,6 +171,21 @@ function dbTags(db: any): string[] {
   return []
 }
 
+/** 查询树短展示名：优先 alias=，兼容 label=；无则空（不拼接整段 tags）。 */
+function dbAliasFromTags(db: any): string {
+  let fromLabel = ''
+  for (const raw of dbTags(db)) {
+    const i = raw.indexOf('=')
+    if (i <= 0) continue
+    const key = raw.slice(0, i).trim().toLowerCase()
+    const val = raw.slice(i + 1).trim()
+    if (!val) continue
+    if (key === 'alias') return val
+    if (key === 'label' && !fromLabel) fromLabel = val
+  }
+  return fromLabel
+}
+
 function normalizeSavedTab(t: any): TabItem | null {
   if (!t || !t.key || !t.dbId) return null
   return {
@@ -307,16 +322,9 @@ export default function CommonQuery() {
     return inst.name || inst.domain_name || (inst.domains && inst.domains[0]) || inst.host || ''
   }, [instMap])
 
-  const dbTagText = useCallback((db: any, siblings?: any[]) => {
-    const tags = dbTags(db)
-    if (tags.length) return tags.join(',')
-    const name = db?.db_name
-    const same = (siblings || databases || []).filter((d) => d.db_name === name)
-    if (same.length > 1) return instanceHint(db)
-    return ''
-  }, [databases, instanceHint])
+  const dbTagText = useCallback((db: any) => dbAliasFromTags(db), [])
 
-  const dbTag = useCallback((db: any) => dbTagText(db, databases), [dbTagText, databases])
+  const dbTag = useCallback((db: any) => dbTagText(db), [dbTagText])
 
   const sortDbs = useCallback((dbs: any[]) => {
     return [...dbs].sort((a, b) => {
@@ -328,7 +336,7 @@ export default function CommonQuery() {
       if (ta !== tb) return ta.localeCompare(tb)
       const byName = cmpName(a.db_name, b.db_name)
       if (byName) return byName
-      return cmpName(dbTagText(a).split(','), dbTagText(b).split(','))
+      return cmpName(dbTagText(a), dbTagText(b))
     })
   }, [dbTypeOf, dbTagText])
 
@@ -447,7 +455,7 @@ export default function CommonQuery() {
           dbId: db.id,
           env: inst.idc || '未分组',
           dbType: inst.db_type,
-          tag: dbTagText(db, dbs),
+          tag: dbTagText(db),
         }, false)
       })
       return buildNode(
