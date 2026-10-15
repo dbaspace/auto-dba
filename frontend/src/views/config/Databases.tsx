@@ -17,9 +17,11 @@ interface InstanceRow {
   id?: string
   name?: string
   db_type?: string
+  idc?: string
   domains?: string[]
   domain_name?: string
   approvers?: string[]
+  tenant_id?: string
 }
 
 interface RoleRow {
@@ -79,6 +81,48 @@ function defaultApprovers(inst?: InstanceRow): string[] {
   return fromInst.length ? fromInst : ['admin']
 }
 
+/** 从 tags 的 idc= 解析环境；无则回退实例 idc */
+function resolveRowEnv(row: DatabaseRow, inst?: InstanceRow): string {
+  for (const raw of row.tags || []) {
+    const t = String(raw || '').trim()
+    const i = t.indexOf('=')
+    if (i <= 0) continue
+    if (t.slice(0, i).trim().toLowerCase() === 'idc') {
+      const v = t.slice(i + 1).trim()
+      if (v) return v
+    }
+  }
+  return String(inst?.idc || '').trim()
+}
+
+/**
+ * 已登记库是明细：每行只展示该库自己的绑定域名。
+ * 优先 domains，其次 tags 的 domain=；仅当库本身未绑定时才回退实例主域名（不含实例 domains 全集）。
+ */
+function resolveRowDomains(row: DatabaseRow, inst?: InstanceRow): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  const add = (raw?: string) => {
+    const v = String(raw || '').trim()
+    if (!v) return
+    const key = v.toLowerCase()
+    if (seen.has(key)) return
+    seen.add(key)
+    out.push(v)
+  }
+  for (const d of row.domains || []) add(d)
+  for (const raw of row.tags || []) {
+    const t = String(raw || '').trim()
+    const i = t.indexOf('=')
+    if (i <= 0) continue
+    if (t.slice(0, i).trim().toLowerCase() === 'domain') add(t.slice(i + 1))
+  }
+  if (!out.length && inst) {
+    add(inst.domain_name)
+  }
+  return out
+}
+
 export default function Databases() {
   const user = useAppSelector((s) => s.auth.user)
   const impersonating = Boolean((user as { impersonating?: boolean })?.impersonating)
@@ -89,6 +133,9 @@ export default function Databases() {
   const [instances, setInstances] = useState<InstanceRow[]>([])
   const [rows, setRows] = useState<DatabaseRow[]>([])
   const [dbNameQ, setDbNameQ] = useState('')
+  const [domainFilter, setDomainFilter] = useState('')
+  const [envFilter, setEnvFilter] = useState('')
+  const [envCatalog, setEnvCatalog] = useState<{ code: string; name: string }[]>([])
   const [visible, setVisible] = useState(false)
   const [form, setForm] = useState<DatabaseRow>({})
   const [liveDbs, setLiveDbs] = useState<LiveDb[]>([])
@@ -167,16 +214,51 @@ export default function Databases() {
     return tabInstances
   }, [form.id, form.instance_id, instances, tabInstances])
 
+  const envFilterOptions = useMemo(() => {
+    const codes = new Map<string, string>()
+    for (const e of envCatalog) {
+      if (e.code) codes.set(e.code, e.name || e.code)
+    }
+    for (const r of rows) {
+      const inst = instances.find((i) => i.id === r.instance_id)
+      const code = resolveRowEnv(r, inst)
+      if (code && !codes.has(code)) codes.set(code, code)
+    }
+    return [...codes.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0], 'zh-CN'))
+      .map(([value, label]) => ({ value, label: label !== value ? `${label}（${value}）` : value }))
+  }, [envCatalog, rows, instances])
+
+  const domainFilterOptions = useMemo(() => {
+    const set = new Set<string>()
+    for (const r of rows) {
+      const inst = instances.find((i) => i.id === r.instance_id)
+      for (const d of resolveRowDomains(r, inst)) set.add(d)
+    }
+    return [...set]
+      .sort((a, b) => a.localeCompare(b, 'zh-CN'))
+      .map((value) => ({ value, label: value }))
+  }, [rows, instances])
+
   const filteredRows = useMemo(() => {
     const q = dbNameQ.trim().toLowerCase()
+    const dom = domainFilter.trim().toLowerCase()
     return rows.filter((r) => {
-      const dbType = instanceType(r.instance_id)
+      const inst = instances.find((i) => i.id === r.instance_id)
+      const dbType = inst?.db_type || ''
       if (activeType && !matchType(dbType, activeType)) return false
       if (q && !String(r.db_name || '').toLowerCase().includes(q)) return false
+      if (envFilter) {
+        if (resolveRowEnv(r, inst) !== envFilter) return false
+      }
+      if (dom) {
+        const domains = resolveRowDomains(r, inst)
+        if (!domains.some((d) => d.toLowerCase() === dom || d.toLowerCase().includes(dom))) return false
+      }
       return true
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, activeType, dbNameQ, instances, knownTypes])
+  }, [rows, activeType, dbNameQ, domainFilter, envFilter, instances, knownTypes])
 
   const pagedRows = useMemo(() => {
     const start = (page - 1) * pageSize
@@ -185,7 +267,8 @@ export default function Databases() {
 
   useEffect(() => {
     setPage(1)
-  }, [activeType, dbNameQ])
+    setSelectedKeys([])
+  }, [activeType, dbNameQ, domainFilter, envFilter])
 
   useEffect(() => {
     const maxPage = Math.max(1, Math.ceil(filteredRows.length / pageSize) || 1)
@@ -221,8 +304,17 @@ export default function Databases() {
   }
 
   async function loadMeta() {
-    const [instRes, argRes] = await Promise.all([api.get('/instances'), api.get('/global-args')])
+    const [instRes, argRes, envRes] = await Promise.all([
+      api.get('/instances'),
+      api.get('/global-args'),
+      api.get('/environments').catch(() => ({ data: { data: [] } })),
+    ])
     setInstances(instRes.data.data || [])
+    setEnvCatalog(
+      (envRes.data.data || [])
+        .map((e: any) => ({ code: String(e.code || '').trim(), name: String(e.name || e.code || '').trim() }))
+        .filter((e: { code: string }) => e.code),
+    )
     await loadAclOptions(currentTenantId)
     const raw = (argRes.data.data || []).find((a: any) => a.key === 'ticket_instance_types')?.value || ''
     setTypeOptions(parseInstanceTypes(raw))
@@ -456,13 +548,44 @@ export default function Databases() {
 
   return (
     <div className="ops-page">
-      <div className="ops-filters">
-        <div className="filter-item">
+      <div className="ops-filters db-filters">
+        <div className="filter-item filter-item-fixed">
+          <span className="label">环境：</span>
+          <Select
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            placeholder="全部环境"
+            style={{ width: 160 }}
+            popupMatchSelectWidth={false}
+            dropdownStyle={{ minWidth: 160, maxWidth: 220 }}
+            value={envFilter || undefined}
+            onChange={(v) => setEnvFilter(v || '')}
+            options={envFilterOptions}
+          />
+        </div>
+        <div className="filter-item filter-item-fixed">
+          <span className="label">域名：</span>
+          <Select
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            placeholder="全部域名"
+            style={{ width: 240 }}
+            popupMatchSelectWidth={false}
+            dropdownStyle={{ minWidth: 240, maxWidth: 360 }}
+            value={domainFilter || undefined}
+            onChange={(v) => setDomainFilter(v || '')}
+            options={domainFilterOptions}
+          />
+        </div>
+        <div className="filter-item filter-item-fixed">
           <span className="label">库名：</span>
           <Input
             value={dbNameQ}
             placeholder="请输入库名"
             allowClear
+            style={{ width: 180 }}
             onChange={(e) => setDbNameQ(e.target.value)}
             onPressEnter={load}
           />
@@ -502,7 +625,6 @@ export default function Databases() {
         activeKey={activeType}
         onChange={(k) => {
           setActiveType(k)
-          setDbNameQ('')
           setPage(1)
           setSelectedKeys([])
         }}
@@ -536,6 +658,23 @@ export default function Databases() {
               : undefined
           }
           columns={[
+            {
+              title: '环境',
+              width: 110,
+              render: (_, row) => {
+                const inst = instances.find((i) => i.id === row.instance_id)
+                return resolveRowEnv(row, inst) || '—'
+              },
+            },
+            {
+              title: '绑定域名',
+              width: 200,
+              render: (_, row) => {
+                const inst = instances.find((i) => i.id === row.instance_id)
+                const list = resolveRowDomains(row, inst)
+                return list.length ? list.join(', ') : '—'
+              },
+            },
             { title: '库名', dataIndex: 'db_name', width: 140 },
             ...(impersonating
               ? [
@@ -550,11 +689,6 @@ export default function Databases() {
                   },
                 ]
               : []),
-            {
-              title: '绑定域名',
-              width: 180,
-              render: (_, row) => (row.domains || []).join(', ') || '—',
-            },
             {
               title: '标签',
               width: 140,

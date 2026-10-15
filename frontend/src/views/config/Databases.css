@@ -1,3 +1,14 @@
+/* 筛选区固定宽度，避免环境/域名 Select 被 flex 拉得过宽 */
+.db-filters .filter-item-fixed {
+  flex: 0 0 auto;
+}
+
+.db-filters .filter-item-fixed .ant-select,
+.db-filters .filter-item-fixed .ant-input-affix-wrapper,
+.db-filters .filter-item-fixed .ant-input {
+  flex: none;
+}
+
 .inst-tabs {
   flex-shrink: 0;
 }

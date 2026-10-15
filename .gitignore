@@ -15,3 +15,14 @@ node_modules/
 /config/terminal/
 /dist/
 .pnpm-store/
+# 一次性库导入/对账产物，勿入库
+/scripts/import_registered_databases*.sql
+/scripts/patch_imported_databases*.sql
+/scripts/gen_import_from_dql_export.py
+/scripts/dql_export_*.tsv
+/scripts/idc_to_tags_mapping.txt
+/scripts/import_matched_count_reconcile.txt
+/scripts/_*.raw.txt
+/scripts/_*.sql
+/scripts/_imported_*.raw.txt
+/scripts/_platform_*.raw.txt
