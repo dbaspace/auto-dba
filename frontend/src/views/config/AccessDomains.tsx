@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Button, Input, Modal, Pagination, Select, Tabs, Tag, message } from 'antd'
+import { Button, Dropdown, Input, Modal, Pagination, Select, Tabs, Tag, message } from 'antd'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import api from '../../api/request'
 import Auth from '../../components/Auth'
@@ -9,6 +9,7 @@ import {
   parseInstanceTypes,
   type InstanceTypeOption,
 } from '../../utils/instanceTypes'
+import { splitTypeTabsByDataCount } from '../../utils/typeTabs'
 import './Databases.css'
 
 type TypeOption = InstanceTypeOption
@@ -62,6 +63,20 @@ export default function AccessDomains() {
     }
     return list
   }, [typeOptions, rows, knownTypes])
+
+  function typeCount(value: string) {
+    return rows.filter((r) =>
+      value === OTHER
+        ? !!(r.db_type && !knownTypes.has(typeKey(r.db_type)))
+        : typeKey(r.db_type) === typeKey(value),
+    ).length
+  }
+
+  const { visible: visibleTypeTabs, more: moreTypeTabs } = useMemo(
+    () => splitTypeTabsByDataCount(tabs, typeCount, activeType),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [tabs, rows, knownTypes, activeType],
+  )
 
   const envFilterOptions = useMemo(() => {
     const codes = new Map<string, string>()
@@ -230,9 +245,9 @@ export default function AccessDomains() {
   useEffect(() => {
     if (!tabs.length) return
     if (!tabs.some((t) => t.value === activeType)) {
-      setActiveType(tabs[0]?.value || '')
+      setActiveType(visibleTypeTabs[0]?.value || tabs[0]?.value || '')
     }
-  }, [tabs, activeType])
+  }, [tabs, activeType, visibleTypeTabs])
 
   return (
     <div className="ops-page">
@@ -242,20 +257,39 @@ export default function AccessDomains() {
         </p>
       ) : null}
       <Tabs
-        className="inst-tabs"
+        className="inst-tabs inst-tabs-fixed6"
         activeKey={activeType}
         onChange={(k) => {
           setActiveType(k)
           setPage(1)
           setSelectedKeys([])
         }}
-        items={tabs.map((t) => ({
+        tabBarExtraContent={
+          moreTypeTabs.length ? (
+            <Dropdown
+              trigger={['click']}
+              menu={{
+                selectedKeys: moreTypeTabs.some((t) => t.value === activeType) ? [activeType] : [],
+                items: moreTypeTabs.map((t) => ({
+                  key: t.value,
+                  label: `${t.label} (${t.count})`,
+                })),
+                onClick: ({ key }) => {
+                  setActiveType(String(key))
+                  setPage(1)
+                  setSelectedKeys([])
+                },
+              }}
+            >
+              <Button type="text" className="inst-tabs-more-btn" aria-label="更多类型">
+                …
+              </Button>
+            </Dropdown>
+          ) : null
+        }
+        items={visibleTypeTabs.map((t) => ({
           key: t.value,
-          label: `${t.label} (${rows.filter((r) =>
-            t.value === OTHER
-              ? r.db_type && !knownTypes.has(typeKey(r.db_type))
-              : typeKey(r.db_type) === typeKey(t.value),
-          ).length})`,
+          label: `${t.label} (${t.count})`,
         }))}
       />
       <div className="toolbar" style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>

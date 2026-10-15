@@ -41,6 +41,29 @@
   display: none;
 }
 
+/* 已登记库 / 域名管理：固定露出 6 个，其余进右侧「…」 */
+.inst-tabs-fixed6 .ant-tabs-nav-wrap {
+  overflow: hidden !important;
+}
+
+.inst-tabs-fixed6 .ant-tabs-nav {
+  align-items: center;
+}
+
+.inst-tabs-fixed6 .ant-tabs-extra-content {
+  flex: none;
+  margin-left: 4px;
+}
+
+.inst-tabs-more-btn {
+  min-width: 32px;
+  height: 32px;
+  padding: 0 8px;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--app-text-secondary, #6b7280);
+}
+
 /* 表格占满剩余高度，表体内部滚动，分页条始终可见 */
 .ops-page .ops-table .ant-table-wrapper,
 .ops-page .ops-table .ant-spin-nested-loading,

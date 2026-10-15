@@ -383,10 +383,10 @@ export default function CommonQuery() {
     const data = node.raw || {}
     if (data.type === 'db') {
       return (
-        <span className="tree-node" title={data.tag ? `${data.label} [${data.tag}]` : data.label}>
+        <span className="tree-node" title={data.tag ? `${data.label} ${data.tag}` : data.label}>
           <DbTypeIcon type={data.dbType} size={16} />
           <span className="tree-label">{highlightLabel(data.label)}</span>
-          {data.tag ? <span className="tree-tag">[{data.tag}]</span> : null}
+          {data.tag ? <span className="tree-tag">{data.tag}</span> : null}
         </span>
       )
     }

@@ -1,11 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Alert, Button, Checkbox, Input, Modal, Pagination, Radio, Select, Space, Tabs, Tag, message } from 'antd'
+import { Alert, Button, Checkbox, Dropdown, Input, Modal, Pagination, Radio, Select, Space, Tabs, Tag, message } from 'antd'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import api from '../../api/request'
 import Auth from '../../components/Auth'
 import { Perm } from '../../hooks/usePermission'
 import DbTypeIcon from '../../components/DbTypeIcon'
 import { useAppSelector } from '../../store'
+import { splitTypeTabsByDataCount } from '../../utils/typeTabs'
 import './Databases.css'
 
 interface TypeOption {
@@ -200,6 +201,16 @@ export default function Databases() {
     return list
   }, [typeOptions, instances, knownTypes])
 
+  function typeCount(value: string) {
+    return rows.filter((r) => matchType(instanceType(r.instance_id), value)).length
+  }
+
+  const { visible: visibleTypeTabs, more: moreTypeTabs } = useMemo(
+    () => splitTypeTabsByDataCount(tabs, typeCount, activeType),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [tabs, rows, instances, knownTypes, activeType],
+  )
+
   const tabInstances = useMemo(() => {
     if (!activeType) return instances
     return instances.filter((i) => matchType(i.db_type || '', activeType))
@@ -275,16 +286,6 @@ export default function Databases() {
     if (page > maxPage) setPage(maxPage)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filteredRows, pageSize])
-
-  function typeCount(value: string) {
-    return rows.filter((r) => matchType(instanceType(r.instance_id), value)).length
-  }
-
-  function ensureActiveTab(list: { value: string }[], cur: string) {
-    const names = list.map((t) => t.value)
-    if (!names.includes(cur)) return names[0] || ''
-    return cur
-  }
 
   function instanceName(id?: string, fallback?: string) {
     return fallback || instances.find((i) => i.id === id)?.name || id || ''
@@ -540,9 +541,12 @@ export default function Databases() {
   }, [])
 
   useEffect(() => {
-    setActiveType((cur) => ensureActiveTab(tabs, cur))
+    setActiveType((cur) => {
+      if (tabs.some((t) => t.value === cur)) return cur
+      return visibleTypeTabs[0]?.value || tabs[0]?.value || ''
+    })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tabs])
+  }, [tabs, visibleTypeTabs])
 
   const visibility = form.visibility === 'private' ? 'private' : 'global'
 
@@ -621,20 +625,50 @@ export default function Databases() {
         />
       ) : null}
       <Tabs
-        className="inst-tabs"
+        className="inst-tabs inst-tabs-fixed6"
         activeKey={activeType}
         onChange={(k) => {
           setActiveType(k)
           setPage(1)
           setSelectedKeys([])
         }}
-        items={tabs.map((t) => ({
+        tabBarExtraContent={
+          moreTypeTabs.length ? (
+            <Dropdown
+              trigger={['click']}
+              menu={{
+                selectedKeys: moreTypeTabs.some((t) => t.value === activeType) ? [activeType] : [],
+                items: moreTypeTabs.map((t) => ({
+                  key: t.value,
+                  label: (
+                    <span className="tab-label">
+                      <DbTypeIcon type={t.value} size={16} />
+                      <span>
+                        {t.label} ({t.count})
+                      </span>
+                    </span>
+                  ),
+                })),
+                onClick: ({ key }) => {
+                  setActiveType(String(key))
+                  setPage(1)
+                  setSelectedKeys([])
+                },
+              }}
+            >
+              <Button type="text" className="inst-tabs-more-btn" aria-label="更多类型">
+                …
+              </Button>
+            </Dropdown>
+          ) : null
+        }
+        items={visibleTypeTabs.map((t) => ({
           key: t.value,
           label: (
             <span className="tab-label">
               <DbTypeIcon type={t.value} size={16} />
               <span>
-                {t.label} ({typeCount(t.value)})
+                {t.label} ({t.count})
               </span>
             </span>
           ),

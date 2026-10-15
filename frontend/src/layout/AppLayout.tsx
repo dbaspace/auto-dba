@@ -60,7 +60,7 @@ function KeepAliveTabPanel({
 
 const { Sider, Header, Content } = Layout
 
-const SIDER_WIDTH = 220
+const SIDER_WIDTH = 192
 const SIDER_COLLAPSED_WIDTH = 64
 /** 离开侧栏/弹层后关闭延迟，避免移向弹层时闪关 */
 const FLYOUT_CLOSE_MS = 400
