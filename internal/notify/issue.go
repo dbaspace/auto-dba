@@ -26,17 +26,25 @@ func notifyApproverPending(db *store.DB, encKey string, issue *store.Issue, tran
 		return
 	}
 	ncfg, err := db.GetNotifyConfig()
-	if err != nil || ncfg == nil || !ncfg.EmailOnTicketCreate {
+	if err != nil || ncfg == nil {
 		return
 	}
-	smtpCfg, mailCfg, ok := loadSMTP(db, encKey, issue.TicketNo, "issue assignee notify")
-	if !ok {
+	wantEmail := ncfg.EmailOnTicketCreate
+	wantLark := ncfg.LarkOnTicketCreate
+	wantWecom := ncfg.WecomOnTicketCreate
+	wantRobot := ncfg.RobotsOnTicketCreate
+	if !wantEmail && !wantLark && !wantWecom && !wantRobot {
 		return
 	}
 	recipients := collectApproverUsernames(issue)
-	if len(recipients) == 0 {
+	if len(recipients) == 0 && !wantRobot {
+		log.Printf("notify ticket pending: no approver usernames ticket=%s", issue.TicketNo)
 		return
 	}
+	if len(recipients) == 0 {
+		log.Printf("notify ticket pending: no approver usernames, person channels skipped ticket=%s", issue.TicketNo)
+	}
+	smtpCfg, _ := db.GetSMTPConfig(encKey)
 	link := ticketLink(smtpCfg, issue.ID)
 	subject := fmt.Sprintf("[auto-dba] 待审批工单 %s", issue.TicketNo)
 	intro := "有新的工单待您审批"
@@ -56,7 +64,97 @@ func notifyApproverPending(db *store.DB, encKey string, issue *store.Issue, tran
 		strings.TrimSpace(issue.Description),
 		link,
 	)
-	sendToUsernames(db, mailCfg, recipients, subject, body, issue.TicketNo, "issue assignee notify")
+	if wantEmail && len(recipients) > 0 {
+		if _, mailCfg, ok := loadSMTP(db, encKey, issue.TicketNo, "issue assignee notify"); ok {
+			sendToUsernames(db, mailCfg, recipients, subject, body, issue.TicketNo, "issue assignee notify")
+		}
+	}
+	sendApproverChannels(db, ncfg, recipients, subject, body, link, issue.TicketNo)
+}
+
+func sendApproverChannels(db *store.DB, ncfg *store.NotifyConfig, usernames []string, subject, body, link, ticketNo string) {
+	if ncfg == nil {
+		return
+	}
+	text := body
+	md := fmt.Sprintf("**%s**\n\n%s\n\n[打开工单](%s)", subject, body, link)
+
+	if ncfg.LarkOnTicketCreate {
+		var ids []string
+		for _, uname := range usernames {
+			u, _ := db.GetUserByUsername(strings.TrimSpace(uname))
+			if u == nil {
+				continue
+			}
+			if id := ResolveLarkUserID(u.IMType, u.IMAccount); id != "" {
+				ids = append(ids, id)
+			} else {
+				log.Printf("notify lark: user %q has no im_account ticket=%s", uname, ticketNo)
+			}
+		}
+		if len(ids) > 0 {
+			SendVia(ChannelLark, Message{Title: subject, Text: text, Markdown: md, LarkUserIDs: ids})
+		}
+	}
+
+	if ncfg.WecomOnTicketCreate {
+		toParts := make([]string, 0)
+		seen := map[string]bool{}
+		for _, uname := range usernames {
+			u, _ := db.GetUserByUsername(strings.TrimSpace(uname))
+			if u == nil {
+				continue
+			}
+			id := ResolveWecomUserID(u.IMType, u.IMAccount)
+			if id == "" {
+				log.Printf("notify wecom: user %q has no wecom im_account ticket=%s", uname, ticketNo)
+				continue
+			}
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+			toParts = append(toParts, id)
+		}
+		to := strings.Join(toParts, "|")
+		if to == "" {
+			log.Printf("notify wecom: skip no wecom userid ticket=%s", ticketNo)
+		} else {
+			msg := Message{Title: subject, Text: text, Markdown: md, WecomToUser: to}
+			// 优先 Nacos 企微；否则回退库表凭证
+			if NotifyModule().WechatConfigured() {
+				SendVia(ChannelWecom, msg)
+			} else if ncfg.WecomEnabled && ncfg.WecomCorpID != "" && ncfg.WecomSecret != "" {
+				if err := sendWecomMarkdown(ncfg.WecomCorpID, ncfg.WecomSecret, ncfg.WecomAgentID, to, "", md); err != nil {
+					log.Printf("notify wecom ticket=%s: %v", ticketNo, err)
+				}
+			}
+		}
+	}
+
+	if ncfg.RobotsOnTicketCreate {
+		robots := NotifyModule().Robots
+		matched := 0
+		for i, r := range robots {
+			if strings.TrimSpace(r.URL) == "" {
+				continue
+			}
+			if robotMatchesFor(ncfg.RobotRouteFor(i), "ticket") {
+				matched++
+			}
+		}
+		if matched == 0 {
+			log.Printf("notify robot ticket: skip — 无方向含「工单」的群机器人（请在通知页把条目改为工单/两者） ticket=%s routes=%v",
+				ticketNo, ncfg.RobotRoutes)
+		} else if err := SendViaErr(ChannelRobot, Message{
+			Title: subject, Text: text, Markdown: md,
+			RobotFor: "ticket", RobotRoutes: ncfg.RobotRoutes,
+		}); err != nil {
+			log.Printf("notify robot ticket=%s: %v", ticketNo, err)
+		} else {
+			log.Printf("notify robot ticket: sent to %d robot(s) ticket=%s", matched, ticketNo)
+		}
+	}
 }
 
 // IssueExecFailed 工单执行失败通知提交人。
@@ -258,6 +356,11 @@ func collectApproverUsernames(issue *store.Issue) []string {
 			}
 		}
 		out = append(out, s)
+	}
+	// DQL 多级审批只通知当前关审批人（assigned_to）；推进后由 IssueAssigneeChanged 再通知下一关。
+	if issue != nil && issue.IssueType == store.IssueTypeDQL {
+		add(issue.AssignedTo)
+		return out
 	}
 	add(issue.AssignedTo)
 	if strings.TrimSpace(issue.NeedRollback) == "" {

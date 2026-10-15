@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Button, Divider, Form, Input, InputNumber, Radio, Space, Spin, Switch, Tabs, message } from 'antd'
+import { Alert, Button, Collapse, Divider, Form, Input, InputNumber, Radio, Select, Space, Spin, Switch, Tabs, Tag, message } from 'antd'
 import api from '../../api/request'
 import './Ldap.css'
 
@@ -730,16 +730,64 @@ function SmtpPanel() {
   )
 }
 
+function readyTag(ok: boolean, label?: string) {
+  return ok ? (
+    <Tag color="success">{label || '已就绪'}</Tag>
+  ) : (
+    <Tag>{label || '未配置'}</Tag>
+  )
+}
+
+function smtpStatusTag(ready: boolean, configured: boolean) {
+  if (ready) {
+    return <Tag color="success">SMTP 就绪</Tag>
+  }
+  if (configured) {
+    return <Tag color="warning">已配置·未启用</Tag>
+  }
+  return <Tag>未配置</Tag>
+}
+
+type RobotRouteRow = { index: number; for: 'alert' | 'ticket' | 'both' }
+
 function NotifyPanel() {
   const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [testing, setTesting] = useState<string>('')
+  const [providers, setProviders] = useState<Record<string, any>>({})
+  const [smtpReady, setSmtpReady] = useState(false)
+  const [smtpConfigured, setSmtpConfigured] = useState(false)
+  const [testTo, setTestTo] = useState<Record<string, string>>({})
+  const [robotRoutes, setRobotRoutes] = useState<RobotRouteRow[]>([])
+
+  function routeFor(index: number): RobotRouteRow['for'] {
+    const hit = robotRoutes.find((r) => r.index === index)
+    return hit?.for || 'alert'
+  }
+
+  function setRouteFor(index: number, forDir: RobotRouteRow['for']) {
+    setRobotRoutes((prev) => {
+      const rest = prev.filter((r) => r.index !== index)
+      return [...rest, { index, for: forDir }].sort((a, b) => a.index - b.index)
+    })
+  }
 
   async function load() {
     setLoading(true)
     try {
       const { data } = await api.get('/settings/notify')
       const d = data?.data || {}
+      setProviders(d.providers || {})
+      setSmtpReady(!!d.smtp_ready)
+      setSmtpConfigured(!!d.smtp_configured)
+      const saved: RobotRouteRow[] = Array.isArray(d.robot_routes)
+        ? d.robot_routes.map((r: any) => ({
+            index: Number(r.index),
+            for: (r.for === 'ticket' || r.for === 'both' ? r.for : 'alert') as RobotRouteRow['for'],
+          }))
+        : []
+      setRobotRoutes(saved)
       form.setFieldsValue({
         email_on_ticket_create: !!d.email_on_ticket_create,
         email_on_ticket_exec_failed: !!d.email_on_ticket_exec_failed,
@@ -747,19 +795,21 @@ function NotifyPanel() {
         email_on_ticket_await_exec_stuck: !!d.email_on_ticket_await_exec_stuck,
         email_on_backup_failed: !!d.email_on_backup_failed,
         await_exec_stuck_hours: Number(d.await_exec_stuck_hours) > 0 ? Number(d.await_exec_stuck_hours) : 2,
-        webhook_enabled: !!d.webhook_enabled,
-        webhook_url: d.webhook_url || '',
         webhook_on_alert: d.webhook_on_alert !== false,
-        wecom_enabled: !!d.wecom_enabled,
-        wecom_corp_id: d.wecom_corp_id || '',
-        wecom_agent_id: d.wecom_agent_id || '',
-        wecom_secret: '',
         wecom_on_alert: !!d.wecom_on_alert,
-        wecom_to_user: d.wecom_to_user || '@all',
-        phone_enabled: !!d.phone_enabled,
-        phone_api_url: d.phone_api_url || '',
+        wecom_on_ticket_create: !!d.wecom_on_ticket_create,
         phone_on_alert: !!d.phone_on_alert,
         email_on_alert: !!d.email_on_alert,
+        lark_on_ticket_create: !!d.lark_on_ticket_create,
+        lark_on_alert: !!d.lark_on_alert,
+        lark_alert_on_alert: !!d.lark_alert_on_alert,
+        sms_on_alert: !!d.sms_on_alert,
+        dingtalk_on_alert: !!d.dingtalk_on_alert,
+        robot_lark_on_alert: !!d.robot_lark_on_alert,
+        robots_on_ticket_create: !!d.robots_on_ticket_create,
+        alert_notify_max_fire: Number(d.alert_notify_max_fire) >= 0 ? Number(d.alert_notify_max_fire) : 3,
+        alert_notify_window: d.alert_notify_window || '15m',
+        alert_notify_repeat: d.alert_notify_repeat || '5m',
       })
     } catch (e: any) {
       message.error(e?.response?.data?.message || e?.message || '加载失败')
@@ -777,6 +827,16 @@ function NotifyPanel() {
     setSaving(true)
     try {
       const f = form.getFieldsValue()
+      if (f.robots_on_ticket_create) {
+        const robots = Array.isArray(providers.robots) ? providers.robots : []
+        const hasTicket = robots.some((r: any) => {
+          const dir = routeFor(Number(r.index))
+          return dir === 'ticket' || dir === 'both'
+        })
+        if (robots.length > 0 && !hasTicket) {
+          message.warning('已开「工单待审打群」，请至少把一条机器人方向设为「工单」或「两者」')
+        }
+      }
       await api.put('/settings/notify', {
         email_on_ticket_create: !!f.email_on_ticket_create,
         email_on_ticket_exec_failed: !!f.email_on_ticket_exec_failed,
@@ -784,22 +844,24 @@ function NotifyPanel() {
         email_on_ticket_await_exec_stuck: !!f.email_on_ticket_await_exec_stuck,
         email_on_backup_failed: !!f.email_on_backup_failed,
         await_exec_stuck_hours: Number(f.await_exec_stuck_hours) > 0 ? Number(f.await_exec_stuck_hours) : 2,
-        webhook_enabled: !!f.webhook_enabled,
-        webhook_url: (f.webhook_url || '').trim(),
         webhook_on_alert: !!f.webhook_on_alert,
-        wecom_enabled: !!f.wecom_enabled,
-        wecom_corp_id: (f.wecom_corp_id || '').trim(),
-        wecom_agent_id: (f.wecom_agent_id || '').trim(),
-        wecom_secret: (f.wecom_secret || '').trim(),
         wecom_on_alert: !!f.wecom_on_alert,
-        wecom_to_user: (f.wecom_to_user || '@all').trim(),
-        phone_enabled: !!f.phone_enabled,
-        phone_api_url: (f.phone_api_url || '').trim(),
         phone_on_alert: !!f.phone_on_alert,
         email_on_alert: !!f.email_on_alert,
+        wecom_on_ticket_create: !!f.wecom_on_ticket_create,
+        lark_on_ticket_create: !!f.lark_on_ticket_create,
+        lark_on_alert: !!f.lark_on_alert,
+        lark_alert_on_alert: !!f.lark_alert_on_alert,
+        sms_on_alert: !!f.sms_on_alert,
+        dingtalk_on_alert: !!f.dingtalk_on_alert,
+        robot_lark_on_alert: !!f.robot_lark_on_alert,
+        robots_on_ticket_create: !!f.robots_on_ticket_create,
+        robot_routes: robotRoutes,
+        alert_notify_max_fire: Number(f.alert_notify_max_fire) >= 0 ? Number(f.alert_notify_max_fire) : 3,
+        alert_notify_window: String(f.alert_notify_window || '15m').trim() || '15m',
+        alert_notify_repeat: String(f.alert_notify_repeat || '').trim(),
       })
       message.success('已保存')
-      form.setFieldValue('wecom_secret', '')
       await load()
     } catch (e: any) {
       message.error(e?.response?.data?.message || e?.message || '保存失败')
@@ -808,116 +870,351 @@ function NotifyPanel() {
     }
   }
 
+  async function onTest(channel: string, extra?: { for?: string; index?: number }) {
+    const key = extra?.index != null ? `${channel}:${extra.index}:${extra.for || 'alert'}` : channel
+    setTesting(key)
+    try {
+      const { data } = await api.post('/settings/notify/test', {
+        channel,
+        to: (testTo[channel] || '').trim(),
+        ...(extra?.for ? { for: extra.for } : {}),
+        ...(extra?.index != null ? { index: extra.index } : {}),
+      })
+      message.success(data?.message || '测试已发送')
+    } catch (e: any) {
+      message.error(e?.response?.data?.message || e?.message || '测试失败')
+    } finally {
+      setTesting('')
+    }
+  }
+
+  function testRow(channel: string, placeholder: string) {
+    return (
+      <Space wrap style={{ marginTop: 8 }}>
+        <Input
+          style={{ width: 260 }}
+          placeholder={placeholder}
+          value={testTo[channel] || ''}
+          onChange={(e) => setTestTo((prev) => ({ ...prev, [channel]: e.target.value }))}
+          allowClear
+        />
+        <Button loading={testing === channel} onClick={() => onTest(channel)}>
+          发送测试
+        </Button>
+      </Space>
+    )
+  }
+
+  const panelLabel = (title: string, ready: boolean, readyLabel?: string) => (
+    <Space>
+      <span>{title}</span>
+      {readyTag(ready, readyLabel)}
+    </Space>
+  )
+
   return (
     <Spin spinning={loading}>
-      <Form form={form} layout="vertical" style={{ maxWidth: 640 }}>
-        <Form.Item
-          label="工单创建邮件通知"
-          name="email_on_ticket_create"
-          valuePropName="checked"
-          extra={
-            <span className="field-hint">
-              开启后，工单创建成功将邮件通知审批人（需「邮件」Tab 已启用 SMTP，且审批人已绑定邮箱）
-            </span>
-          }
-        >
-          <Switch />
-        </Form.Item>
-        <Form.Item
-          label="工单执行失败通知"
-          name="email_on_ticket_exec_failed"
-          valuePropName="checked"
-          extra={
-            <span className="field-hint">工单执行失败时邮件通知提交人（需 SMTP 与提交人邮箱）</span>
-          }
-        >
-          <Switch />
-        </Form.Item>
-        <Form.Item
-          label="备份失败通知"
-          name="email_on_backup_failed"
-          valuePropName="checked"
-          extra={
-            <span className="field-hint">逻辑备份失败时邮件通知策略创建人（需 SMTP 与用户邮箱）</span>
-          }
-        >
-          <Switch />
-        </Form.Item>
-        <Form.Item
-          label="审批后待执行通知"
-          name="email_on_ticket_await_exec"
-          valuePropName="checked"
-          extra={
-            <span className="field-hint">
-              审批通过后若仍待执行（定时未到、需手动执行等），立即邮件通知提交人
-            </span>
-          }
-        >
-          <Switch />
-        </Form.Item>
-        <Form.Item
-          label="待执行超时告警"
-          name="email_on_ticket_await_exec_stuck"
-          valuePropName="checked"
-          extra={<span className="field-hint">长时间停在「已通过/待执行」时告警提交人（同一工单只发一次）</span>}
-        >
-          <Switch />
-        </Form.Item>
-        <Form.Item
-          label="待执行超时（小时）"
-          name="await_exec_stuck_hours"
-          extra={<span className="field-hint">默认 2 小时；定时工单在预约时间到期后才计入超时</span>}
-        >
-          <InputNumber min={1} max={168} style={{ width: 120 }} />
-        </Form.Item>
-        <Divider />
+      <Form form={form} layout="vertical" style={{ maxWidth: 720 }}>
         <p className="field-hint" style={{ marginBottom: 12 }}>
-          告警外发：Webhook / 企微 / 电话 / 邮件。也可在「通知路由」按标签覆盖渠道。
+          渠道凭证（app_id / secret / 群机器人 URL 等）请在 Nacos DataId <code>auto-dba.yaml</code> 的{' '}
+          <code>notify</code> 段配置；本页仅开关事件与发送测试。说明见仓库{' '}
+          <code>docs/nacos-config.md</code>。
         </p>
-        <Form.Item label="启用 Webhook" name="webhook_enabled" valuePropName="checked">
-          <Switch />
-        </Form.Item>
-        <Form.Item label="Webhook 用于告警" name="webhook_on_alert" valuePropName="checked">
-          <Switch />
-        </Form.Item>
-        <Form.Item label="Webhook URL" name="webhook_url"
-          extra={<span className="field-hint">通用 JSON；若为企微群机器人 URL 则自动改发 markdown</span>}>
-          <Input placeholder="https://example.com/hooks/..." />
-        </Form.Item>
-        <Form.Item label="启用企业微信应用" name="wecom_enabled" valuePropName="checked">
-          <Switch />
-        </Form.Item>
-        <Form.Item label="企微用于告警" name="wecom_on_alert" valuePropName="checked">
-          <Switch />
-        </Form.Item>
-        <Form.Item label="企业微信 CorpID" name="wecom_corp_id">
-          <Input placeholder="wwxxxxxxxx" />
-        </Form.Item>
-        <Form.Item label="企业微信 AgentID" name="wecom_agent_id">
-          <Input placeholder="1000002" />
-        </Form.Item>
-        <Form.Item label="企业微信 Secret" name="wecom_secret">
-          <Input.Password placeholder="留空表示不修改" />
-        </Form.Item>
-        <Form.Item label="企微接收人" name="wecom_to_user" extra={<span className="field-hint">默认 @all；值班排班可覆盖</span>}>
-          <Input placeholder="@all" />
-        </Form.Item>
-        <Form.Item label="启用电话通知" name="phone_enabled" valuePropName="checked">
-          <Switch />
-        </Form.Item>
-        <Form.Item label="电话用于告警" name="phone_on_alert" valuePropName="checked">
-          <Switch />
-        </Form.Item>
-        <Form.Item label="电话通知 API" name="phone_api_url"
-          extra={<span className="field-hint">POST JSON：severity/title/text 等字段</span>}>
-          <Input placeholder="https://..." />
-        </Form.Item>
-        <Form.Item label="告警邮件通知" name="email_on_alert" valuePropName="checked"
-          extra={<span className="field-hint">发给值班人 / labels.owner（需 SMTP）</span>}>
-          <Switch />
-        </Form.Item>
+        <Collapse
+          defaultActiveKey={['email', 'alert_rate', 'lark', 'wecom']}
+          items={[
+            {
+              key: 'alert_rate',
+              label: '告警发送频率',
+              children: (
+                <>
+                  <p className="field-hint" style={{ marginBottom: 12 }}>
+                    控制监控告警的触发/续报刷屏：滑动窗口内最多发送 N 次；满额后持续异常也不再发，窗口过后再发。
+                    告警最终恢复时仍会发送一条「告警已恢复」提示，不受此频控限制。规则可单独覆盖（告警规则 → 通知频控）。
+                  </p>
+                  <Form.Item
+                    label="窗口内最多通知"
+                    name="alert_notify_max_fire"
+                    extra={<span className="field-hint">含 trigger 与续报；0=不限制。默认 3</span>}
+                  >
+                    <InputNumber min={0} max={100} style={{ width: 120 }} />
+                  </Form.Item>
+                  <Form.Item
+                    label="计数窗口"
+                    name="alert_notify_window"
+                    extra={<span className="field-hint">如 15m / 1h。默认 15m</span>}
+                  >
+                    <Input style={{ width: 160 }} placeholder="15m" />
+                  </Form.Item>
+                  <Form.Item
+                    label="未处理续报间隔"
+                    name="alert_notify_repeat"
+                    extra={<span className="field-hint">持续 firing 且待认领时续报；空=关闭。默认 5m</span>}
+                  >
+                    <Input style={{ width: 160 }} placeholder="5m" />
+                  </Form.Item>
+                </>
+              ),
+            },
+            {
+              key: 'email',
+              label: (
+                <Space>
+                  <span>邮件</span>
+                  {smtpStatusTag(smtpReady, smtpConfigured)}
+                </Space>
+              ),
+              children: (
+                <>
+                  {!smtpReady && smtpConfigured ? (
+                    <p className="field-hint" style={{ marginBottom: 12 }}>
+                      SMTP 已在「邮件」Tab 配置，但未打开「启用 SMTP」——工单/告警邮件不会自动外发；仍可在此发送测试。
+                    </p>
+                  ) : null}
+                  {!smtpConfigured ? (
+                    <p className="field-hint" style={{ marginBottom: 12 }}>
+                      请先到「邮件」Tab 填写并保存 SMTP（服务器、发件人、密码）。
+                    </p>
+                  ) : null}
+                  <Form.Item label="工单创建" name="email_on_ticket_create" valuePropName="checked"
+                    extra={<span className="field-hint">通知审批人（需启用 SMTP + 审批人邮箱；未启用则不会实际外发）</span>}>
+                    <Switch />
+                  </Form.Item>
+                  <Form.Item label="工单执行失败" name="email_on_ticket_exec_failed" valuePropName="checked">
+                    <Switch />
+                  </Form.Item>
+                  <Form.Item label="备份失败" name="email_on_backup_failed" valuePropName="checked">
+                    <Switch />
+                  </Form.Item>
+                  <Form.Item label="审批后待执行" name="email_on_ticket_await_exec" valuePropName="checked">
+                    <Switch />
+                  </Form.Item>
+                  <Form.Item label="待执行超时告警" name="email_on_ticket_await_exec_stuck" valuePropName="checked">
+                    <Switch />
+                  </Form.Item>
+                  <Form.Item label="待执行超时（小时）" name="await_exec_stuck_hours">
+                    <InputNumber min={1} max={168} style={{ width: 120 }} />
+                  </Form.Item>
+                  <Form.Item label="告警邮件" name="email_on_alert" valuePropName="checked"
+                    extra={<span className="field-hint">发给值班人 / labels.owner</span>}>
+                    <Switch />
+                  </Form.Item>
+                  {testRow('email', '测试收件邮箱（空=当前用户邮箱）')}
+                </>
+              ),
+            },
+            {
+              key: 'lark',
+              label: panelLabel('飞书私聊', !!providers.lark_ready),
+              children: (
+                <>
+                  <p className="field-hint">Nacos：notify.provider.lark；用户 im_type=lark + im_account=user_id</p>
+                  <Form.Item label="工单创建通知审批人" name="lark_on_ticket_create" valuePropName="checked">
+                    <Switch />
+                  </Form.Item>
+                  <Form.Item label="告警私聊" name="lark_on_alert" valuePropName="checked">
+                    <Switch />
+                  </Form.Item>
+                  {testRow('lark', '飞书 user_id（空=当前用户 im_account）')}
+                </>
+              ),
+            },
+            {
+              key: 'lark_alert',
+              label: panelLabel('飞书告警应用', !!providers.alert_lark_ready),
+              children: (
+                <>
+                  <p className="field-hint">独立应用 notify.provider.alert_lark</p>
+                  <Form.Item label="告警通知" name="lark_alert_on_alert" valuePropName="checked">
+                    <Switch />
+                  </Form.Item>
+                  {testRow('lark_alert', '飞书 user_id')}
+                </>
+              ),
+            },
+            {
+              key: 'wecom',
+              label: panelLabel('企微应用', !!providers.wecom_ready, providers.wecom_ready ? 'Nacos 就绪' : '未配置(可回退库内旧凭证)'),
+              children: (
+                <>
+                  <p className="field-hint">凭证：Nacos notify.provider.wechat（corp_id / agent_id / api_secret）</p>
+                  <p className="field-hint">
+                    告警可发往 Nacos <code>party_ids</code>（部门 ID，需在应用可见范围）；工单按审批人 im_account。
+                    {Array.isArray(providers.wecom_party_ids) && providers.wecom_party_ids.length > 0
+                      ? ` 当前部门：${providers.wecom_party_ids.join(', ')}`
+                      : ' 当前未配置 party_ids'}
+                  </p>
+                  <Form.Item label="工单创建通知" name="wecom_on_ticket_create" valuePropName="checked">
+                    <Switch />
+                  </Form.Item>
+                  <Form.Item label="告警通知" name="wecom_on_alert" valuePropName="checked">
+                    <Switch />
+                  </Form.Item>
+                  {testRow('wecom', 'userid 或部门ID（如 ccj / 15 / party:15）')}
+                </>
+              ),
+            },
+            {
+              key: 'robots',
+              label: panelLabel(
+                '群机器人',
+                Number(providers.robots_count) > 0,
+                Number(providers.robots_count) > 0 ? `${providers.robots_count} 个` : '未配置',
+              ),
+              children: (
+                <>
+                  <p className="field-hint">
+                    Webhook URL 仍配在 Nacos <code>notify.robots</code>（kind + url）。用途方向（告警 / 工单）在本页按条配置并保存到库，不写 Nacos。
+                  </p>
+                  <Form.Item noStyle shouldUpdate={(prev, cur) => prev.robots_on_ticket_create !== cur.robots_on_ticket_create}>
+                    {() => {
+                      const ticketOn = !!form.getFieldValue('robots_on_ticket_create')
+                      const robots = Array.isArray(providers.robots) ? providers.robots : []
+                      const hasTicketRoute = robots.some((r: any) => {
+                        const f = routeFor(Number(r.index))
+                        return f === 'ticket' || f === 'both'
+                      })
+                      if (ticketOn && robots.length > 0 && !hasTicketRoute) {
+                        return (
+                          <Alert
+                            type="warning"
+                            showIcon
+                            style={{ marginBottom: 12 }}
+                            message="已开「工单待审打群」，但下方机器人方向都是「告警」"
+                            description="请把要用的条目改成「工单」或「两者」，再点保存；否则创建工单不会进群。"
+                          />
+                        )
+                      }
+                      return null
+                    }}
+                  </Form.Item>
+                  {Array.isArray(providers.robots) && providers.robots.length > 0 ? (
+                    <div style={{ marginBottom: 16 }}>
+                      {providers.robots.map((r: any) => {
+                        const idx = Number(r.index)
+                        const forDir = routeFor(idx)
+                        const testAlertKey = `robot:${idx}:alert`
+                        const testTicketKey = `robot:${idx}:ticket`
+                        return (
+                          <div
+                            key={idx}
+                            style={{
+                              display: 'flex',
+                              flexWrap: 'wrap',
+                              alignItems: 'center',
+                              gap: 8,
+                              marginBottom: 10,
+                              paddingBottom: 10,
+                              borderBottom: '1px solid var(--ant-color-split, #f0f0f0)',
+                            }}
+                          >
+                            <Tag>{r.kind || '?'}</Tag>
+                            <span className="field-hint" style={{ minWidth: 160 }}>
+                              #{idx} {r.url || ''}
+                            </span>
+                            <Select
+                              style={{ width: 120 }}
+                              value={forDir}
+                              options={[
+                                { value: 'alert', label: '告警' },
+                                { value: 'ticket', label: '工单' },
+                                { value: 'both', label: '两者' },
+                              ]}
+                              onChange={(v) => setRouteFor(idx, v)}
+                            />
+                            <Button
+                              size="small"
+                              loading={testing === testAlertKey}
+                              onClick={() => onTest('robot', { for: 'alert', index: idx })}
+                            >
+                              测告警
+                            </Button>
+                            <Button
+                              size="small"
+                              loading={testing === testTicketKey}
+                              onClick={() => onTest('robot', { for: 'ticket', index: idx })}
+                            >
+                              测工单
+                            </Button>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  ) : (
+                    <p className="field-hint">尚未加载到群机器人，请先在 Nacos 配置 URL。</p>
+                  )}
+                  <Form.Item
+                    label="工单待审打群"
+                    name="robots_on_ticket_create"
+                    valuePropName="checked"
+                    extra={<span className="field-hint">开启后，方向含「工单」的机器人会收到待审通知</span>}
+                  >
+                    <Switch />
+                  </Form.Item>
+                  <Form.Item label="通用 Webhook 告警" name="webhook_on_alert" valuePropName="checked">
+                    <Switch />
+                  </Form.Item>
+                  <Form.Item label="钉钉机器人告警" name="dingtalk_on_alert" valuePropName="checked"
+                    extra={<span className="field-hint">总闸：仅对方向含「告警」的钉钉条目生效</span>}>
+                    <Switch />
+                  </Form.Item>
+                  <Form.Item label="飞书群机器人告警" name="robot_lark_on_alert" valuePropName="checked"
+                    extra={<span className="field-hint">总闸：仅对方向含「告警」的飞书群条目生效</span>}>
+                    <Switch />
+                  </Form.Item>
+                  <Space wrap style={{ marginTop: 8 }}>
+                    <Button loading={testing === 'webhook'} onClick={() => onTest('webhook')}>
+                      测试 Webhook
+                    </Button>
+                    <Button loading={testing === 'dingtalk'} onClick={() => onTest('dingtalk', { for: 'alert' })}>
+                      测试钉钉告警
+                    </Button>
+                    <Button loading={testing === 'robot_lark'} onClick={() => onTest('robot_lark', { for: 'alert' })}>
+                      测试飞书群告警
+                    </Button>
+                  </Space>
+                </>
+              ),
+            },
+            {
+              key: 'sms',
+              label: panelLabel(
+                '短信',
+                !!providers.sms_ready,
+                providers.sms_ready ? `已就绪(${providers.sms_backend || ''})` : '未配置',
+              ),
+              children: (
+                <>
+                  <p className="field-hint">Nacos tele_provider + provider.sms；发给用户档案 phone</p>
+                  <Form.Item label="告警短信" name="sms_on_alert" valuePropName="checked">
+                    <Switch />
+                  </Form.Item>
+                  {testRow('sms', '手机号（空=当前用户）')}
+                </>
+              ),
+            },
+            {
+              key: 'call',
+              label: panelLabel(
+                '电话',
+                !!providers.call_ready,
+                providers.call_ready ? `已就绪(${providers.call_backend || ''})` : '未配置',
+              ),
+              children: (
+                <>
+                  <p className="field-hint">Nacos tele_provider + provider.call（cloopen / huawei / yjzy）</p>
+                  <Form.Item label="告警电话" name="phone_on_alert" valuePropName="checked">
+                    <Switch />
+                  </Form.Item>
+                  {testRow('call', '手机号（空=当前用户）')}
+                </>
+              ),
+            },
+          ]}
+        />
+        <Divider />
         <Button type="primary" loading={saving} onClick={onSave}>
-          保存
+          保存开关
         </Button>
       </Form>
     </Spin>
@@ -931,7 +1228,7 @@ export default function AuthConfig() {
         <h1>认证配置</h1>
       </div>
       <p className="field-hint" style={{ marginBottom: 16 }}>
-        开启哪个模块，登录页即可选择对应认证方式。邮件用于忘记密码与工单通知；通知 Tab 可配置创建、执行失败、待执行与超时告警。
+        开启哪个模块，登录页即可选择对应认证方式。邮件 SMTP 在「邮件」Tab；通知 Tab 按渠道开关事件并发送测试，凭证配在 Nacos notify 段。
       </p>
       <Tabs
         defaultActiveKey="ldap"

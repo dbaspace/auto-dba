@@ -47,6 +47,8 @@ func TestNotifyConfigPublicFields(t *testing.T) {
 		EmailOnTicketAwaitExec:  true,
 		EmailOnTicketAwaitStuck: true,
 		AwaitExecStuckHours:     3,
+		RobotsOnTicketCreate:    true,
+		RobotRoutes:             []RobotRoute{{Index: 0, For: "ticket"}},
 	}
 	p := c.Public()
 	if p["email_on_ticket_exec_failed"] != true {
@@ -54,6 +56,13 @@ func TestNotifyConfigPublicFields(t *testing.T) {
 	}
 	if p["await_exec_stuck_hours"] != 3 {
 		t.Fatalf("hours=%v", p["await_exec_stuck_hours"])
+	}
+	if p["robots_on_ticket_create"] != true {
+		t.Fatal("robots ticket flag")
+	}
+	routes, ok := p["robot_routes"].([]RobotRoute)
+	if !ok || len(routes) != 1 || routes[0].For != "ticket" {
+		t.Fatalf("robot_routes=%v", p["robot_routes"])
 	}
 	if DefaultNotifyConfig().AwaitStuckHours() != DefaultAwaitExecStuckHours {
 		t.Fatal("default hours")

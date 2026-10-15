@@ -26,8 +26,37 @@ import useIdleLogout from '../hooks/useIdleLogout'
 import NavFlyout from './NavFlyout'
 import AppearancePopover from './AppearancePopover'
 import { TabPagePanel } from '../router/appPages'
+import { shouldRemountOnTabActivate } from '../hooks/useReloadOnTabActive'
 import { readSiderCollapsed, writeSiderCollapsed } from '../theme/appearance'
 import './NavFlyout.css'
+
+/** 列表/看板类 Tab：从后台切回时重挂载以刷新数据；表单页保持保活 */
+function KeepAliveTabPanel({
+  tabKey: key,
+  path,
+  search,
+  active,
+}: {
+  tabKey: string
+  path: string
+  search: string
+  active: boolean
+}) {
+  const remount = shouldRemountOnTabActivate(path)
+  const [gen, setGen] = useState(0)
+  const prevActive = useRef<boolean | null>(null)
+  useEffect(() => {
+    if (prevActive.current === false && active && remount) {
+      setGen((g) => g + 1)
+    }
+    prevActive.current = active
+  }, [active, remount])
+  return (
+    <div className={`app-tab-panel${active ? ' active' : ''}`}>
+      <TabPagePanel key={`${key}:${gen}`} pathname={path} search={search} />
+    </div>
+  )
+}
 
 const { Sider, Header, Content } = Layout
 
@@ -487,9 +516,13 @@ export default function AppLayout() {
         >
           <div className="app-tab-panels">
             {tabs.map((t) => (
-              <div key={t.key} className={`app-tab-panel${t.key === activeKey ? ' active' : ''}`}>
-                <TabPagePanel pathname={t.path} search={t.search} />
-              </div>
+              <KeepAliveTabPanel
+                key={t.key}
+                tabKey={t.key}
+                path={t.path}
+                search={t.search || ''}
+                active={t.key === activeKey}
+              />
             ))}
           </div>
         </Content>

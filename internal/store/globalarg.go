@@ -28,6 +28,14 @@ const ArgLoginIdleTimeoutMin = "login_idle_timeout_min"
 const ArgUserWatermarkEnabled = "user_watermark_enabled"
 const ArgIssueGlobalApproverWhitelist = "issue_global_approver_whitelist"
 const ArgTicketDDLLongStmtTimeoutMinutes = "ticket_ddl_long_stmt_timeout_minutes"
+const ArgQueryDefaultLimit = "query_default_limit"
+const ArgQueryMaxLimit = "query_max_limit"
+
+const (
+	defaultQueryDefaultLimit = 1000
+	defaultQueryMaxLimit     = 10000
+	queryLimitSanityMax      = 100000
+)
 
 const defaultTicketDDLLongStmtTimeout = 6 * time.Hour
 
@@ -157,6 +165,46 @@ func (d *DB) LoginIdleTimeoutMin(def int) int {
 	}
 	n, err := strconv.Atoi(strings.TrimSpace(v))
 	if err != nil || n < 0 {
+		return def
+	}
+	return n
+}
+
+// QueryMaxLimit 最大查询条数硬顶；非法/空回退 10000，静默夹到 [1,100000]。
+func (d *DB) QueryMaxLimit() int {
+	n := d.intArg(ArgQueryMaxLimit, defaultQueryMaxLimit)
+	if n < 1 {
+		n = defaultQueryMaxLimit
+	}
+	if n > queryLimitSanityMax {
+		n = queryLimitSanityMax
+	}
+	return n
+}
+
+// QueryDefaultLimit 默认查询条数；非法/空回退 1000，且不超过 QueryMaxLimit。
+func (d *DB) QueryDefaultLimit() int {
+	max := d.QueryMaxLimit()
+	n := d.intArg(ArgQueryDefaultLimit, defaultQueryDefaultLimit)
+	if n < 1 {
+		n = defaultQueryDefaultLimit
+	}
+	if n > max {
+		n = max
+	}
+	return n
+}
+
+func (d *DB) intArg(key string, def int) int {
+	if d == nil {
+		return def
+	}
+	v, err := d.GetGlobalArg(key)
+	if err != nil || strings.TrimSpace(v) == "" {
+		return def
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil {
 		return def
 	}
 	return n

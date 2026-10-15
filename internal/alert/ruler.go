@@ -317,7 +317,9 @@ func (r *Ruler) maybeNotify(rule *store.AlertRule, a *store.Alert, justFired boo
 	if rule == nil || a == nil {
 		return
 	}
-	d := store.DecideAlertNotify(a, rule.NotifyPolicy, now, justFired)
+	_ = r.Store.LoadFingerprintNotifyIntoAlert(a)
+	policy := store.ResolveAlertNotifyPolicy(rule.NotifyPolicy)
+	d := store.DecideAlertNotify(a, policy, now, justFired)
 	if !d.Should {
 		return
 	}
@@ -331,7 +333,9 @@ func (r *Ruler) maybeNotify(rule *store.AlertRule, a *store.Alert, justFired boo
 		return
 	}
 	opts := r.buildDispatchOpts(a, sources)
-	store.ApplyAlertNotifyMark(a, rule.NotifyPolicy, now)
+	if err := r.Store.ApplyFingerprintNotifyMark(a, policy, now); err != nil {
+		store.ApplyAlertNotifyMark(a, policy, now)
+	}
 	if opts.GroupSize > 1 {
 		a.AggregateCount = opts.GroupSize
 	}
@@ -394,23 +398,39 @@ func (r *Ruler) resolveMissing(seen map[string]bool, now time.Time) {
 		if seen[a.Fingerprint] {
 			continue
 		}
+		alreadyResolveNotified := a.ResolveNotified
 		a.Status = store.AlertStatusResolved
 		a.Handle = store.AlertHandleResolved
 		a.ResolvedAt = now.UTC().Format(time.RFC3339)
+		// 最终恢复必发一条，且同一生命周期至多一次（不受 trigger 频控限制）
+		sendResolve := !alreadyResolveNotified
+		if sendResolve {
+			a.ResolveNotified = true
+		}
 		if err := r.Store.SaveAlert(&a); err != nil {
 			continue
 		}
 		_ = r.Store.AddAlertEvent(&store.AlertEvent{
 			AlertID: a.ID, Action: "resolve", Detail: "指标回落，告警自动恢复", Operator: "系统",
 		})
+		if !sendResolve {
+			continue
+		}
 		cp := a
 		opts := r.buildDispatchOpts(&cp, list)
 		var rule *store.AlertRule
+		ruleName := ""
 		if cp.RuleID != "" {
 			rule, _ = r.Store.GetAlertRule(cp.RuleID)
+			if rule != nil {
+				ruleName = rule.Name
+			}
 		}
 		ctxOpts := buildAlertNotifyContext(r.Store, &cp, rule)
-		go notify.AlertResolved(r.Store, r.Secret, &cp, "", opts, ctxOpts)
+		_ = r.Store.AddAlertEvent(&store.AlertEvent{
+			AlertID: a.ID, Action: "notify", Detail: "通知外发：resolve（告警已恢复）", Operator: "系统",
+		})
+		go notify.AlertResolved(r.Store, r.Secret, &cp, ruleName, opts, ctxOpts)
 	}
 }
 

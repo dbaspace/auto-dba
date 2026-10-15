@@ -10,7 +10,7 @@ import (
 // 多档规则用 MetricExpr + Tiers（Prom 查指标，Ruler 取最高命中档）。
 func DefaultAlertRules() []AlertRule {
 	global := DefaultAlertScope()
-	notify := DefaultAlertNotifyPolicy()
+	notify := AlertNotifyPolicy{InheritGlobal: true, RepeatOnHandles: []string{AlertHandleUnclaimed}}
 	hostDiskMetric := `(node_filesystem_size_bytes{mountpoint="/",fstype!="rootfs",__SCOPE__} - node_filesystem_avail_bytes{mountpoint="/",fstype!="rootfs",__SCOPE__}) / clamp_min(node_filesystem_size_bytes{mountpoint="/",fstype!="rootfs",__SCOPE__}, 1)`
 	mysqlConnMetric := `mysql_global_status_threads_connected{__SCOPE__} / clamp_min(mysql_global_variables_max_connections{__SCOPE__}, 1)`
 	return []AlertRule{

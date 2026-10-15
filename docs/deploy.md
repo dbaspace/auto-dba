@@ -25,20 +25,20 @@ KeePlus（进程 `auto-dba`）支持多种打包方式。**构建在有 Node 18+
 | **仅前端** | `./scripts/pack_release.sh frontend` | `dist/auto-dba-frontend-*.tgz` | Nginx/CDN 托管静态资源 |
 | **Docker** | `./scripts/pack_release.sh docker` | 镜像 `auto-dba:<时间戳>`（可用 `IMAGE_TAG=` 覆盖） | 容器环境 |
 
-可选环境变量：`GOOS` `GOARCH`（默认 `linux`/`amd64`）、`STAMP`（默认时间戳；发版用 `STAMP=v1.11.0`）、`IMAGE_TAG`、`SKIP_PNPM_INSTALL=1`（已有 `node_modules` 时）。
+可选环境变量：`GOOS` `GOARCH`（默认 `linux`/`amd64`）、`STAMP`（默认时间戳；发版用 `STAMP=v1.12.0`）、`IMAGE_TAG`、`SKIP_PNPM_INSTALL=1`（已有 `node_modules` 时）。
 
 ```bash
-STAMP=v1.11.0 ./scripts/pack_release.sh all
-STAMP=v1.11.0 ./scripts/pack_release.sh backend
-STAMP=v1.11.0 ./scripts/pack_release.sh frontend
-IMAGE_TAG=auto-dba:v1.11.0 ./scripts/pack_release.sh docker
+STAMP=v1.12.0 ./scripts/pack_release.sh all
+STAMP=v1.12.0 ./scripts/pack_release.sh backend
+STAMP=v1.12.0 ./scripts/pack_release.sh frontend
+IMAGE_TAG=auto-dba:v1.12.0 ./scripts/pack_release.sh docker
 ```
 
 ## 发布到 GitHub Release（固定流程）
 
 用 [`scripts/publish_github_release.sh`](../scripts/publish_github_release.sh)，**不要**依赖交互式 `gh auth login`（浏览器 OAuth 易超时）。
 
-凭据来源与 `git push https://github.com/...` 相同：从本机 **git credential / Keychain** 取出 token，临时注入 `GH_TOKEN` 再调 `gh`（与 v2.3.7、v1.11.0 发版成功路径一致）。
+凭据来源与 `git push https://github.com/...` 相同：从本机 **git credential / Keychain** 取出 token，临时注入 `GH_TOKEN` 再调 `gh`（与 v1.11.0 / v1.12.0 发版成功路径一致）。
 
 ```bash
 # 已 push 的提交 + 写好 docs/changelog-vX.Y.Z.md 后：
@@ -59,7 +59,8 @@ DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12
 
 | 版本 | 要点 |
 |------|------|
-| [v1.11.0](changelog-v1.11.0.md) | **当前推荐**。平台资源申请（默认租户划拨 / 异租授权 / 同租 ACL；库审核人）；平台侧跨租审核；LDAP 锁定可换账号与用户管理解锁；详见 changelog |
+| [v1.12.0](changelog-v1.12.0.md) | **当前推荐**。Nacos 通知渠道 + 群机器人方向页配；告警全局频控与恢复必达；查询收藏/脱敏等；详见 changelog |
+| [v1.11.0](changelog-v1.11.0.md) | 平台资源申请、跨租审核、LDAP 锁定解锁 |
 | [v1.0.0](https://github.com/dbaspace/auto-dba/releases/tag/v1.0.0) | 早期一体/分服务产物包基线 |
 | [v1.0.1](https://github.com/dbaspace/auto-dba/releases/tag/v1.0.1) | 早期补丁（若仍保留该标签） |
 | 历史 v1.1～v1.10 | Release 已下线，要点见 [changelog-v1.md](changelog-v1.md) |

@@ -157,6 +157,26 @@ func (d *DB) UpdateIssueAssignee(id, assignedTo, historyJSON string) error {
 	return err
 }
 
+// UpdateIssueAssigneeAndRollback 更新当前审核人、转移历史与 need_rollback（DQL 多级审批推进）。
+func (d *DB) UpdateIssueAssigneeAndRollback(id, assignedTo, historyJSON, needRollback string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	if strings.TrimSpace(historyJSON) == "" {
+		historyJSON = "[]"
+	}
+	_, err := d.Exec(
+		`UPDATE tbl_issues SET assigned_to=?, assignee_transfer_history=?, need_rollback=?, updated_at=? WHERE id=?`,
+		assignedTo, historyJSON, needRollback, now, id,
+	)
+	return err
+}
+
+// UpdateIssueNeedRollback 仅更新 need_rollback。
+func (d *DB) UpdateIssueNeedRollback(id, needRollback string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := d.Exec(`UPDATE tbl_issues SET need_rollback=?, updated_at=? WHERE id=?`, needRollback, now, id)
+	return err
+}
+
 // FormatAssigneeTransferLine 生成审计文案。
 func FormatAssigneeTransferLine(oldUser, newUser, by string) string {
 	return fmt.Sprintf("%s->%s by=%s at=%s",

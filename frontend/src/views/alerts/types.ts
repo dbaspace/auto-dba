@@ -35,6 +35,7 @@ export type AlertNotifyPolicy = {
   window: string
   repeat_interval: string
   repeat_on_handles: string[]
+  inherit_global?: boolean
 }
 
 export type AlertEvent = {

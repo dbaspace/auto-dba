@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -24,6 +25,7 @@ type ReloadDiff struct {
 	Terminal  bool
 	Services  bool
 	Copilot   bool
+	Notify    bool
 
 	// 派生：供 Reloader 做副作用（换密钥/换库/重启等）
 	JWTSecret    bool
@@ -43,7 +45,7 @@ type ReloadDiff struct {
 // Any 任一业务段有变更即为 true。
 func (d ReloadDiff) Any() bool {
 	return d.App || d.HTTP || d.Frontend || d.Log || d.DB || d.CDC ||
-		d.Migration || d.Flashback || d.Backup || d.External || d.Terminal || d.Services || d.Copilot
+		d.Migration || d.Flashback || d.Backup || d.External || d.Terminal || d.Services || d.Copilot || d.Notify
 }
 
 // Sections 返回有变更的段名（日志用）。
@@ -67,6 +69,7 @@ func (d ReloadDiff) Sections() []string {
 	add("terminal", d.Terminal)
 	add("services", d.Services)
 	add("copilot", d.Copilot)
+	add("notify", d.Notify)
 	return out
 }
 
@@ -128,6 +131,7 @@ func DiffConfig(old, next *Config) ReloadDiff {
 	d.Terminal = old.Terminal != next.Terminal
 	d.Services = old.Services != next.Services
 	d.Copilot = old.Copilot != next.Copilot
+	d.Notify = !reflect.DeepEqual(old.Notify, next.Notify)
 
 	d.JWTSecret = old.App.JWTSecret != next.App.JWTSecret
 	d.CryptoSecret = FieldCryptoFromApp(old.App) != FieldCryptoFromApp(next.App) ||

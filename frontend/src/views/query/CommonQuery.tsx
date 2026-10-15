@@ -12,6 +12,7 @@ import {
   Button,
   Input,
   Modal,
+  Pagination,
   Select,
   Spin,
   Tabs,
@@ -25,11 +26,18 @@ import type { DataNode } from 'antd/es/tree'
 import {
   CaretRightOutlined,
   CloseOutlined,
+  CodeOutlined,
+  CopyOutlined,
   DoubleLeftOutlined,
   DoubleRightOutlined,
+  DownloadOutlined,
   SearchOutlined,
   StarOutlined,
+  StopOutlined,
+  TableOutlined,
+  UnorderedListOutlined,
 } from '@ant-design/icons'
+import axios from 'axios'
 import api from '../../api/request'
 import DbTypeIcon from '../../components/DbTypeIcon'
 import './CommonQuery.css'
@@ -38,6 +46,7 @@ const DQL_DRAFT_KEY = 'auto-dba-dql-draft'
 const WORKSPACE_KEY = 'auto-dba-query-workspace'
 const FAV_KEY = 'auto-dba-query-favorites'
 const HIST_KEY = 'auto-dba-query-history'
+const PAGE_SIZE_KEY = 'query_result_page_size'
 
 const TYPE_ORDER = [
   'mysql', 'postgres', 'tidb', 'cockroachdb', 'oceanbase', 'cassandra',
@@ -49,6 +58,9 @@ interface QueryResult {
   rows?: any[][]
   truncated?: boolean
   elapsed_ms?: number
+  limit?: number
+  applied_limit?: number
+  valid_sql?: string
 }
 
 interface TabItem {
@@ -63,6 +75,8 @@ interface TabItem {
   sql: string
   ts: number
   result: QueryResult | null
+  results?: QueryResult[]
+  resultIdx?: number
   error: string
 }
 
@@ -171,6 +185,8 @@ function normalizeSavedTab(t: any): TabItem | null {
     sql: t.sql || '',
     ts: t.ts || Date.now(),
     result: t.result && Array.isArray(t.result.columns) ? t.result : null,
+    results: Array.isArray(t.results) ? t.results : undefined,
+    resultIdx: typeof t.resultIdx === 'number' ? t.resultIdx : 0,
     error: t.error || '',
   }
 }
@@ -228,6 +244,32 @@ export default function CommonQuery() {
   const [tabs, setTabs] = useState<TabItem[]>(saved.tabs)
   const [activeKey, setActiveKey] = useState(saved.activeKey)
   const [running, setRunning] = useState(false)
+  const queryAbortRef = useRef<AbortController | null>(null)
+  const sqlBoxRef = useRef<HTMLTextAreaElement | null>(null)
+  const resultTableWrapRef = useRef<HTMLDivElement | null>(null)
+  const [resultScrollY, setResultScrollY] = useState(240)
+  const [resultPageSize, setResultPageSize] = useState(() => {
+    const n = Number(localStorage.getItem(PAGE_SIZE_KEY) || 20)
+    return [10, 20, 50, 100].includes(n) ? n : 20
+  })
+  const [resultPage, setResultPage] = useState(1)
+  const [resultKeyword, setResultKeyword] = useState('')
+  const [tableInfoOpen, setTableInfoOpen] = useState(false)
+  const [tableInfoLoading, setTableInfoLoading] = useState(false)
+  const [tableInfoMode, setTableInfoMode] = useState<'list' | 'sql'>('list')
+  const [tableInfo, setTableInfo] = useState<{
+    schema?: string
+    table?: string
+    columns?: {
+      name: string
+      data_type: string
+      nullable: boolean
+      default?: string
+      comment?: string
+    }[]
+    ddl?: string
+  } | null>(null)
+  const [tableInfoError, setTableInfoError] = useState('')
   const [leftWidth, setLeftWidth] = useState(saved.leftWidth)
   const [leftCollapsed, setLeftCollapsed] = useState(false)
   const [editorHeight, setEditorHeight] = useState(saved.editorHeight)
@@ -491,8 +533,16 @@ export default function CommonQuery() {
     return favorites.filter((f) => `${f.name} ${f.sql}`.toLowerCase().includes(q))
   }, [favKeyword, favorites])
 
-  const resultRows = useMemo(() => {
-    const res = current?.result
+  const activeResult = useMemo(() => {
+    if (!current) return null
+    const list = current.results?.length ? current.results : current.result ? [current.result] : []
+    if (!list.length) return null
+    const idx = Math.min(Math.max(current.resultIdx || 0, 0), list.length - 1)
+    return list[idx]
+  }, [current])
+
+  const resultRowsAll = useMemo(() => {
+    const res = activeResult
     if (!res) return []
     return (res.rows || []).map((row, ri) => {
       const obj: Record<string, any> = { __k: ri }
@@ -501,7 +551,172 @@ export default function CommonQuery() {
       })
       return obj
     })
-  }, [current])
+  }, [activeResult])
+
+  const resultRowsFiltered = useMemo(() => {
+    const q = resultKeyword.trim().toLowerCase()
+    if (!q) return resultRowsAll
+    return resultRowsAll.filter((row) =>
+      Object.keys(row).some((k) => k !== '__k' && String(row[k] ?? '').toLowerCase().includes(q)),
+    )
+  }, [resultRowsAll, resultKeyword])
+
+  const resultRows = useMemo(() => {
+    const start = (Math.max(resultPage, 1) - 1) * resultPageSize
+    return resultRowsFiltered.slice(start, start + resultPageSize)
+  }, [resultRowsFiltered, resultPage, resultPageSize])
+
+  const execSQLText = useMemo(() => {
+    const v = String(activeResult?.valid_sql || current?.sql || '').trim()
+    return v.replace(/\s+/g, ' ')
+  }, [activeResult?.valid_sql, current?.sql])
+
+  const resultTableName = useMemo(() => {
+    const sql = String(activeResult?.valid_sql || current?.sql || '')
+    const m = /\bfrom\s+(?:([`"\[]?[\w$]+[`"\]]?)\.)?([`"\[]?[\w$]+[`"\]]?)/i.exec(sql)
+    if (!m) return current?.table || ''
+    const schema = (m[1] || '').replace(/[`"[\]]/g, '')
+    const table = (m[2] || '').replace(/[`"[\]]/g, '')
+    return schema ? `${schema}.${table}` : table
+  }, [activeResult?.valid_sql, current?.sql, current?.table])
+
+  const openTableInfo = async () => {
+    if (!current?.dbId) {
+      message.warning('请先选择数据库')
+      return
+    }
+    const sql = String(activeResult?.valid_sql || current.sql || '').trim()
+    if (!sql) {
+      message.warning('请先编写或执行 SQL')
+      return
+    }
+    setTableInfoOpen(true)
+    setTableInfoMode('list')
+    setTableInfo(null)
+    setTableInfoError('')
+    setTableInfoLoading(true)
+    try {
+      const { data } = await api.post('/query/table-info', {
+        database_id: current.dbId,
+        sql,
+      })
+      setTableInfo(data?.data || null)
+    } catch (e: any) {
+      setTableInfoError(e?.response?.data?.message || e?.message || '获取表信息失败')
+    } finally {
+      setTableInfoLoading(false)
+    }
+  }
+
+  const copyTableDDL = async () => {
+    const text = String(tableInfo?.ddl || '').trim()
+    if (!text) {
+      message.warning('无可复制的 SQL')
+      return
+    }
+    try {
+      await navigator.clipboard.writeText(text)
+      message.success('已复制')
+    } catch {
+      message.error('复制失败')
+    }
+  }
+
+  // 结果区高度变化时用像素设置 scroll.y；需扣除表头与横向滚动条，否则滚到底最后一行被裁切
+  useEffect(() => {
+    const el = resultTableWrapRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const measure = () => {
+      const wrapH = el.clientHeight
+      const header =
+        el.querySelector('.ant-table-header') ||
+        el.querySelector('.ant-table-thead')
+      const headerH = header instanceof HTMLElement ? header.offsetHeight : 39
+      // scroll.x 时底部会出现横向滚动条，占掉一部分可视高度
+      const hScrollReserve = 14
+      setResultScrollY(Math.max(120, wrapH - headerH - hScrollReserve))
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    // 表头渲染后再量一次，避免初次 header 尚未挂载
+    const t = window.setTimeout(measure, 0)
+    return () => {
+      ro.disconnect()
+      window.clearTimeout(t)
+    }
+  }, [!!activeResult, editorHeight, leftCollapsed, resultPageSize, activeResult?.columns?.length])
+
+  useEffect(() => {
+    setResultPage(1)
+    setResultKeyword('')
+  }, [activeResult, current?.resultIdx])
+
+  useEffect(() => {
+    setResultPage(1)
+  }, [resultKeyword])
+
+  const mergeRemoteHistory = useCallback(async () => {
+    try {
+      const { data: histRes } = await api.get('/query/history').catch(() => ({ data: { data: [] } }))
+      const remoteHist: HistItem[] = (histRes?.data || [])
+        .filter((h: any) => h?.statement)
+        .map((h: any) => ({
+          id: h.id,
+          dbId: '',
+          dbName: h.target || '',
+          sql: h.statement,
+          ts: Date.parse(h.created_at) || Date.now(),
+        }))
+      if (!remoteHist.length) return
+      setHistory((local) => {
+        const map = new Map<string, HistItem>()
+        // 服务端优先（按当前用户审计），再补本地未同步项
+        for (const h of [...remoteHist, ...local]) {
+          const key = `${h.sql}|${h.dbName}`
+          if (!map.has(key)) map.set(key, h)
+        }
+        const next = Array.from(map.values()).sort((a, b) => b.ts - a.ts).slice(0, 100)
+        saveJSON(HIST_KEY, next)
+        return next
+      })
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
+  useEffect(() => {
+    // 合并服务端收藏 / 历史，保留本地数据，不破坏现有能力
+    ;(async () => {
+      try {
+        const { data: favRes } = await api.get('/query/favorites').catch(() => ({ data: { data: [] } }))
+        const remoteFavs: FavItem[] = (favRes?.data || []).map((f: any) => ({
+          id: f.id,
+          name: f.name || f.db_name || '未命名',
+          dbId: f.database_id || '',
+          dbName: f.db_name || '',
+          sql: f.sql || '',
+          ts: Date.parse(f.updated_at || f.created_at) || Date.now(),
+        }))
+        if (remoteFavs.length) {
+          setFavorites((local) => {
+            const map = new Map<string, FavItem>()
+            for (const f of [...remoteFavs, ...local]) map.set(f.id, f)
+            const next = Array.from(map.values()).sort((a, b) => b.ts - a.ts)
+            saveJSON(FAV_KEY, next)
+            return next
+          })
+        }
+      } catch {
+        /* ignore */
+      }
+      await mergeRemoteHistory()
+    })()
+  }, [mergeRemoteHistory])
+
+  useEffect(() => {
+    if (storeTab === 'hist') void mergeRemoteHistory()
+  }, [storeTab, mergeRemoteHistory])
 
   const envPeers = useMemo(() => {
     if (!current) return []
@@ -669,25 +884,62 @@ export default function CommonQuery() {
       const next = [
         { id: `${Date.now()}`, dbId: tab.dbId, dbName: tab.dbName, sql: tab.sql, ts: Date.now() },
         ...list.filter((h) => h.sql !== tab.sql || h.dbId !== tab.dbId),
-      ].slice(0, 50)
+      ].slice(0, 100)
       saveJSON(HIST_KEY, next)
       return next
     })
   }
 
+  function stopQuery() {
+    queryAbortRef.current?.abort()
+  }
+
+  function selectedOrFullSQL(fallback: string): string {
+    const el = sqlBoxRef.current
+    if (el && typeof el.selectionStart === 'number' && el.selectionEnd > el.selectionStart) {
+      const sel = fallback.slice(el.selectionStart, el.selectionEnd).trim()
+      if (sel) return sel
+    }
+    return fallback
+  }
+
   async function runSQL(tab: TabItem | null = current) {
     if (!tab?.sql?.trim() || !tab.dbId) return
+    const sql = selectedOrFullSQL(tab.sql)
+    if (!sql.trim()) return
+    queryAbortRef.current?.abort()
+    const ac = new AbortController()
+    queryAbortRef.current = ac
     setRunning(true)
     setTabs((list) => list.map((t) => (t.key === tab.key ? { ...t, error: '' } : t)))
     try {
-      const { data } = await api.post('/query', { database_id: tab.dbId, sql: tab.sql, limit: 200 })
+      const { data } = await api.post(
+        '/query',
+        { database_id: tab.dbId, sql },
+        { signal: ac.signal },
+      )
+      if (data?.canceled) {
+        message.info(data.message || '查询已终止')
+        return
+      }
       const result = data.data || { columns: [], rows: [] }
-      setTabs((list) => list.map((t) => (t.key === tab.key ? { ...t, result, error: '' } : t)))
-      pushHistory(tab)
+      const results: QueryResult[] = Array.isArray(data.results) && data.results.length
+        ? data.results
+        : [result]
+      setTabs((list) => list.map((t) => (
+        t.key === tab.key ? { ...t, result: results[0], results, resultIdx: 0, error: '' } : t
+      )))
+      pushHistory({ ...tab, sql })
+      void mergeRemoteHistory()
     } catch (err: any) {
+      if (axios.isCancel(err) || err?.code === 'ERR_CANCELED' || err?.name === 'CanceledError') {
+        message.info('查询已终止')
+        return
+      }
       const errMsg = err.response?.data?.message || err.message || '查询失败'
-      setTabs((list) => list.map((t) => (t.key === tab.key ? { ...t, result: null, error: errMsg } : t)))
+      setTabs((list) => list.map((t) => (t.key === tab.key ? { ...t, result: null, results: undefined, error: errMsg } : t)))
     } finally {
+      if (queryAbortRef.current === ac) queryAbortRef.current = null
       setRunning(false)
     }
   }
@@ -728,19 +980,25 @@ export default function CommonQuery() {
     setFavVisible(true)
   }
 
-  function saveFavorite() {
+  async function saveFavorite() {
     const tab = current
     if (!tab) return
+    const name = favName.trim() || tab.dbName
+    let id = `${Date.now()}`
+    try {
+      const { data } = await api.post('/query/favorites', {
+        name,
+        database_id: tab.dbId,
+        db_name: tab.dbName,
+        sql: tab.sql,
+      })
+      if (data?.data?.id) id = data.data.id
+    } catch {
+      /* 服务端失败时仍写本地，不影响现有能力 */
+    }
     setFavorites((list) => {
       const next = [
-        {
-          id: `${Date.now()}`,
-          name: favName.trim() || tab.dbName,
-          dbId: tab.dbId,
-          dbName: tab.dbName,
-          sql: tab.sql,
-          ts: Date.now(),
-        },
+        { id, name, dbId: tab.dbId, dbName: tab.dbName, sql: tab.sql, ts: Date.now() },
         ...list,
       ]
       saveJSON(FAV_KEY, next)
@@ -751,6 +1009,7 @@ export default function CommonQuery() {
   }
 
   function removeFav(id: string) {
+    api.delete(`/query/favorites/${id}`).catch(() => { /* ignore */ })
     setFavorites((list) => {
       const next = list.filter((f) => f.id !== id)
       saveJSON(FAV_KEY, next)
@@ -918,6 +1177,14 @@ export default function CommonQuery() {
                       >
                         运行
                       </Button>
+                      <Button
+                        danger
+                        disabled={!running}
+                        icon={<StopOutlined />}
+                        onClick={stopQuery}
+                      >
+                        终止
+                      </Button>
                       <Button onClick={formatSQL}>格式化</Button>
                     </div>
                     <Button icon={<StarOutlined />} onClick={openFavorite}>收藏</Button>
@@ -934,10 +1201,11 @@ export default function CommonQuery() {
                     </span>
                   </div>
                   <textarea
+                    ref={sqlBoxRef}
                     value={current?.sql || ''}
                     className="sql-box"
                     spellCheck={false}
-                    placeholder="输入 SQL，Ctrl / ⌘ + Enter 运行"
+                    placeholder="输入 SQL，Ctrl / ⌘ + Enter 运行；选中片段则只执行选中内容"
                     onChange={(e) => updateCurrent({ sql: e.target.value })}
                     onKeyDown={onSqlKey}
                   />
@@ -946,7 +1214,8 @@ export default function CommonQuery() {
                 <div className="hist-col" style={{ width: histWidth }}>
                   <Tabs
                     activeKey={storeTab}
-                    onChange={setStoreTab}
+                    onChange={(k) => setStoreTab(k)}
+                    destroyInactiveTabPane
                     className="store-tabs"
                     items={[
                       {
@@ -1010,31 +1279,105 @@ export default function CommonQuery() {
               <Spin spinning={running} wrapperClassName="result-col">
                 {current?.error ? (
                   <div className="result-err">{current.error}</div>
-                ) : current?.result ? (
+                ) : activeResult ? (
                   <>
-                    <div className="result-meta">
-                      <span>
-                        {current.result.rows?.length || 0} 行
-                        {current.result.truncated ? '（已截断）' : ''}
-                        {' · '}{current.result.elapsed_ms || 0} ms
-                      </span>
-                      <Button type="primary" size="small" onClick={exportDQL}>导出</Button>
+                    {(current?.results?.length || 0) > 1 ? (
+                      <Tabs
+                        size="small"
+                        activeKey={String(current?.resultIdx || 0)}
+                        onChange={(k) => updateCurrent({ resultIdx: Number(k) || 0 })}
+                        items={(current?.results || []).map((_, i) => ({
+                          key: String(i),
+                          label: `查询 #${i + 1}`,
+                        }))}
+                      />
+                    ) : null}
+                    <div className="result-toolbar-1">
+                      <div className="result-exec">
+                        <span className="result-label">执行SQL:</span>
+                        <Input
+                          size="small"
+                          readOnly
+                          className="result-sql-input"
+                          value={execSQLText}
+                          title={execSQLText}
+                        />
+                        <span className="result-label">执行时间:</span>
+                        <span className="result-elapsed">{activeResult.elapsed_ms ?? 0}ms</span>
+                      </div>
+                      <div className="result-actions">
+                        <Button size="small" icon={<TableOutlined />} onClick={() => void openTableInfo()}>
+                          表信息
+                        </Button>
+                        <Button type="primary" size="small" icon={<DownloadOutlined />} onClick={() => exportDQL()}>
+                          导出
+                        </Button>
+                      </div>
                     </div>
-                    <ResponsiveTable
-                      dataSource={resultRows}
-                      rowKey="__k"
-                      bordered
-                      size="small"
-                      pagination={false}
-                      scroll={{ y: 'calc(100% - 40px)', x: 'max-content' }}
-                      columns={(current.result.columns || []).map((col) => ({
-                        title: col,
-                        dataIndex: col,
-                        key: col,
-                        width: 120,
-                        ellipsis: true,
-                      }))}
-                    />
+                    <div className="result-toolbar-2">
+                      <Input
+                        allowClear
+                        size="small"
+                        className="result-search"
+                        placeholder="搜索"
+                        prefix={<SearchOutlined />}
+                        value={resultKeyword}
+                        onChange={(e) => setResultKeyword(e.target.value)}
+                      />
+                      <div className="result-pagination">
+                        <span className="result-count">
+                          共 {resultRowsFiltered.length} 条记录【最大查询{activeResult.limit || activeResult.applied_limit || '—'}条】
+                          {activeResult.truncated ? '（已达上限）' : ''}
+                        </span>
+                        <Pagination
+                          size="small"
+                          current={resultPage}
+                          pageSize={resultPageSize}
+                          total={resultRowsFiltered.length}
+                          showSizeChanger
+                          showQuickJumper={false}
+                          pageSizeOptions={['10', '20', '50', '100']}
+                          onChange={(page, size) => {
+                            setResultPage(page)
+                            if (size && size !== resultPageSize) {
+                              setResultPageSize(size)
+                              localStorage.setItem(PAGE_SIZE_KEY, String(size))
+                            }
+                          }}
+                        />
+                      </div>
+                    </div>
+                    <div className="result-table-wrap" ref={resultTableWrapRef}>
+                      <ResponsiveTable
+                        dataSource={resultRows}
+                        rowKey="__k"
+                        bordered
+                        size="small"
+                        pagination={false}
+                        scroll={{ y: resultScrollY, x: 'max-content' }}
+                        columns={[
+                          {
+                            title: '#',
+                            key: '__rowno',
+                            width: 56,
+                            fixed: 'left' as const,
+                            className: 'result-rowno-col',
+                            // 仅展示用序号；导出走 result.columns，不会带上此列
+                            render: (_: unknown, __: unknown, index: number) => {
+                              const start = (Math.max(resultPage, 1) - 1) * resultPageSize
+                              return <span className="result-rowno">{start + index + 1}</span>
+                            },
+                          },
+                          ...(activeResult.columns || []).map((col) => ({
+                            title: col,
+                            dataIndex: col,
+                            key: col,
+                            width: 120,
+                            ellipsis: true,
+                          })),
+                        ]}
+                      />
+                    </div>
                   </>
                 ) : (
                   <div className="result-placeholder">运行查询后在此展示结果</div>
@@ -1056,6 +1399,114 @@ export default function CommonQuery() {
         destroyOnClose
       >
         <Input value={favName} placeholder="收藏名称" onChange={(e) => setFavName(e.target.value)} />
+      </Modal>
+
+      <Modal
+        open={tableInfoOpen}
+        width={880}
+        footer={null}
+        onCancel={() => setTableInfoOpen(false)}
+        destroyOnClose
+        className="table-info-modal"
+        title={
+          <div className="table-info-header">
+            <div className="table-info-title">
+              <TableOutlined />
+              <span>
+                查看表结构
+                {tableInfo?.table || resultTableName
+                  ? ` (${tableInfo?.table || resultTableName})`
+                  : ''}
+              </span>
+            </div>
+            {tableInfoMode === 'list' ? (
+              <Button
+                type="primary"
+                size="small"
+                icon={<CodeOutlined />}
+                disabled={!tableInfo?.ddl}
+                onClick={() => setTableInfoMode('sql')}
+              >
+                查看SQL
+              </Button>
+            ) : (
+              <div className="table-info-actions">
+                <Button
+                  type="primary"
+                  size="small"
+                  icon={<UnorderedListOutlined />}
+                  onClick={() => setTableInfoMode('list')}
+                >
+                  列表展示
+                </Button>
+                <Button type="primary" size="small" icon={<CopyOutlined />} onClick={() => void copyTableDDL()}>
+                  复制
+                </Button>
+              </div>
+            )}
+          </div>
+        }
+      >
+        <Spin spinning={tableInfoLoading}>
+          {tableInfoError ? (
+            <div className="table-info-error">{tableInfoError}</div>
+          ) : tableInfoMode === 'sql' ? (
+            <pre className="table-info-ddl">
+              {String(tableInfo?.ddl || '')
+                .replace(/\s+$/, '')
+                .split('\n')
+                .map((line, i) => (
+                  <div key={i} className="table-info-ddl-line">
+                    <span className="table-info-ddl-no">{i + 1}</span>
+                    <span className="table-info-ddl-code">{line || ' '}</span>
+                  </div>
+                ))}
+            </pre>
+          ) : (
+            <ResponsiveTable
+              size="small"
+              bordered
+              pagination={false}
+              rowKey={(r) => r.name}
+              scroll={{ x: 'max-content' }}
+              dataSource={tableInfo?.columns || []}
+              columns={[
+                { title: '字段名', dataIndex: 'name', key: 'name', width: 160 },
+                {
+                  title: '数据类型',
+                  dataIndex: 'data_type',
+                  key: 'data_type',
+                  width: 160,
+                  render: (v: string) => <Tag className="table-info-type">{v}</Tag>,
+                },
+                {
+                  title: '可为空',
+                  dataIndex: 'nullable',
+                  key: 'nullable',
+                  width: 80,
+                  render: (v: boolean) =>
+                    v ? <Tag>是</Tag> : <Tag color="gold">否</Tag>,
+                },
+                {
+                  title: '默认值',
+                  dataIndex: 'default',
+                  key: 'default',
+                  width: 220,
+                  ellipsis: true,
+                  render: (v: string) => v || '-',
+                },
+                {
+                  title: '注释',
+                  dataIndex: 'comment',
+                  key: 'comment',
+                  width: 160,
+                  ellipsis: true,
+                  render: (v: string) => v || '-',
+                },
+              ]}
+            />
+          )}
+        </Spin>
       </Modal>
     </div>
   )

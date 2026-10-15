@@ -1,7 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { Button, Form, Input, Select, Space, Switch, message } from 'antd'
 import api from '../../api/request'
+import { useAppDispatch, useAppSelector } from '../../store'
+import { closeTab, openTab, tabKey } from '../../store/tabsSlice'
 import { dbLabel } from '../../utils/db'
 import { buildEnvOptions } from '../../utils/env'
 import DbTypeIcon from '../../components/DbTypeIcon'
@@ -46,8 +48,37 @@ function parseTables(sql: string) {
   return out
 }
 
+function stripSQLComments(sql: string) {
+  return String(sql || '')
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/--[^\n]*/g, ' ')
+}
+
+/** 解析 SQL 中最后一个 LIMIT 行数；LIMIT a,b 取 b；无 LIMIT 返回 null */
+function parseLimitFromSQL(sql: string): number | null {
+  const s = stripSQLComments(sql)
+  const re = /\blimit\s+(\d+)(?:\s*,\s*(\d+))?/gi
+  let last: number | null = null
+  let m: RegExpExecArray | null
+  while ((m = re.exec(s))) {
+    const n = m[2] != null ? Number(m[2]) : Number(m[1])
+    if (Number.isFinite(n) && n >= 0) last = n
+  }
+  return last
+}
+
 export default function DqlExport() {
   const navigate = useNavigate()
+  const location = useLocation()
+  const dispatch = useAppDispatch()
+  const menus = useAppSelector((s) => s.auth.menus)
+
+  const goTicketListAndClose = () => {
+    const curKey = tabKey(location.pathname, location.search)
+    dispatch(openTab({ path: '/ops/tickets', menus, title: '工单列表' }))
+    dispatch(closeTab(curKey))
+    navigate('/ops/tickets')
+  }
   const [form, setForm] = useState(emptyForm())
   const formRef = useRef(form)
   formRef.current = form
@@ -59,12 +90,22 @@ export default function DqlExport() {
   const [dbTypes, setDbTypes] = useState(DEFAULT_DB_TYPES)
   const [approvers, setApprovers] = useState<string[]>([])
   const [extraApprovers, setExtraApprovers] = useState<string[]>([])
-  const [rowCount, setRowCount] = useState(0)
+  /** 草稿带来的行数提示；仅当 SQL 无 LIMIT 时参与估算 */
+  const [draftRowHint, setDraftRowHint] = useState(0)
   const [resultCols, setResultCols] = useState<string[]>([])
-  const rowCountRef = useRef(rowCount)
   const resultColsRef = useRef(resultCols)
-  rowCountRef.current = rowCount
   resultColsRef.current = resultCols
+
+  const rowCount = useMemo(() => {
+    const lim = parseLimitFromSQL(form.sql_content)
+    if (lim != null) return lim
+    // 无 LIMIT：保守按需审批，避免漏审
+    return Math.max(draftRowHint, 501)
+  }, [form.sql_content, draftRowHint])
+  const rowCountRef = useRef(rowCount)
+  rowCountRef.current = rowCount
+
+  const needStrictApproval = !!(form.need_sensitive_data || rowCount > 500)
 
   function patchForm(patch: Partial<ReturnType<typeof emptyForm>>) {
     setForm((f) => {
@@ -100,7 +141,7 @@ export default function DqlExport() {
       }
       setForm(next)
       antdForm.setFieldsValue(next)
-      setRowCount(Number(d.row_count || 0))
+      setDraftRowHint(Number(d.row_count || 0))
       setResultCols(Array.isArray(d.columns) ? d.columns : [])
     },
   })
@@ -108,6 +149,14 @@ export default function DqlExport() {
   useEffect(() => {
     schedulePersist()
   }, [form, rowCount, resultCols, schedulePersist])
+
+  // 不需要加强审批时清空 DBA/安全，避免误提交
+  useEffect(() => {
+    if (needStrictApproval) return
+    if (!form.dba_assigned_to && !form.security_assigned_to) return
+    patchForm({ dba_assigned_to: '', security_assigned_to: '' })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [needStrictApproval])
 
   const instMap = useMemo(() => {
     const m: Record<string, any> = {}
@@ -158,21 +207,32 @@ export default function DqlExport() {
       setApprovers([])
       return
     }
-    const { data } = await api.get('/tickets/target-approvers', {
-      params: { instance_id: instanceId, db_name: dbName },
-    })
-    const list = (data.data || []).map((a: any) => a.name || a).filter(Boolean)
-    setApprovers(list)
-    if (!formRef.current.assigned_to && list[0]) {
-      patchForm({ assigned_to: list[0] })
+    try {
+      const { data } = await api.get('/tickets/target-approvers', {
+        params: { instance_id: instanceId, db_name: dbName },
+      })
+      const list = (data.data || []).map((a: any) => a.name || a).filter(Boolean)
+      setApprovers(list)
+      if (!formRef.current.assigned_to && list[0]) {
+        patchForm({ assigned_to: list[0] })
+      }
+    } catch {
+      setApprovers([])
     }
   }
 
-  async function onDbChange(databaseId: string) {
-    const db = databases.find((d) => d.id === databaseId) || null
-    const instanceId = db?.instance_id || ''
-    const dbName = db?.db_name || ''
-    const inst = instMap[instanceId]
+  async function onDbChange(
+    databaseId: string,
+    opts?: { databases?: any[]; instances?: any[] },
+  ) {
+    const dbList = opts?.databases || databases
+    const instList = opts?.instances || instances
+    const localInstMap: Record<string, any> = {}
+    for (const i of instList) localInstMap[i.id] = i
+    const db = dbList.find((d) => d.id === databaseId) || null
+    const instanceId = db?.instance_id || formRef.current.instance_id || ''
+    const dbName = db?.db_name || formRef.current.db_name || ''
+    const inst = localInstMap[instanceId]
     const patch: Partial<ReturnType<typeof emptyForm>> = {
       database_id: databaseId,
       instance_id: instanceId,
@@ -190,7 +250,7 @@ export default function DqlExport() {
     restoreDraft()
   }
 
-  async function loadMeta() {
+  async function loadMeta(): Promise<{ instances: any[]; databases: any[] }> {
     const [instRes, dbRes, envRes, argRes, apprRes] = await Promise.all([
       api.get('/instances'),
       api.get('/databases'),
@@ -199,8 +259,9 @@ export default function DqlExport() {
       api.get('/create-db/approvers').catch(() => ({ data: { data: [] } })),
     ])
     const instList = instRes.data.data || []
+    const dbList = dbRes.data.data || []
     setInstances(instList)
-    setDatabases(dbRes.data.data || [])
+    setDatabases(dbList)
     setEnvs(buildEnvOptions(envRes.data.data || [], instList).map((e: any) => e.value))
     const raw = (argRes.data.data || []).find((a: any) => a.key === 'ticket_instance_types')?.value || ''
     try {
@@ -221,6 +282,7 @@ export default function DqlExport() {
     setExtraApprovers([
       ...new Set<string>((apprRes.data.data || []).map((a: any) => a.name || a).filter(Boolean)),
     ])
+    return { instances: instList, databases: dbList }
   }
 
   async function submit() {
@@ -236,17 +298,12 @@ export default function DqlExport() {
     }
     const hasDBA = !!f.dba_assigned_to
     const hasSec = !!f.security_assigned_to
-    if (hasDBA !== hasSec) {
-      message.error('请同步设置 DBA审批人 和 安全审批人')
-      return
-    }
-    if (f.need_sensitive_data && !hasDBA) {
-      message.error('开启原文导出敏感字段需设置DBA审批人和安全审批人')
-      return
-    }
-    if (rowCount > 500 && !hasDBA) {
-      message.error('导出数据超过500条需设置DBA审批人和安全审批人')
-      return
+    const strict = !!(f.need_sensitive_data || rowCount > 500)
+    if (strict) {
+      if (hasDBA !== hasSec || !hasDBA) {
+        message.error('请同步设置 DBA审批人 和 安全审批人')
+        return
+      }
     }
     setSaving(true)
     try {
@@ -259,13 +316,13 @@ export default function DqlExport() {
         description: f.description,
         assigned_to: f.assigned_to,
         need_sensitive_data: f.need_sensitive_data,
-        dba_assigned_to: f.dba_assigned_to,
-        security_assigned_to: f.security_assigned_to,
+        dba_assigned_to: strict ? f.dba_assigned_to : '',
+        security_assigned_to: strict ? f.security_assigned_to : '',
         row_count: rowCount,
       })
       message.success('工单创建成功 ' + (data.data?.ticket_no || ''))
       clearOnSubmitSuccess()
-      navigate('/ops/tickets/' + (data.data?.id || ''))
+      goTicketListAndClose()
     } finally {
       setSaving(false)
     }
@@ -275,16 +332,35 @@ export default function DqlExport() {
     let cancelled = false
     ;(async () => {
       applyDraft()
-      await loadMeta()
+      const meta = await loadMeta()
       if (cancelled) return
-      const f = formRef.current
-      if (f.database_id) await onDbChange(f.database_id)
+      // setForm 异步，草稿恢复后用 antdForm 同步取值，避免跳过审批人加载
+      const af = antdForm.getFieldsValue(true) || {}
+      const f = { ...formRef.current, ...af }
+      if (f.database_id) {
+        await onDbChange(String(f.database_id), meta)
+      } else if (f.instance_id) {
+        await loadApprovers(String(f.instance_id), String(f.db_name || ''))
+      }
     })()
     return () => {
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // 库/实例变化时刷新审批人（手动改选或其它恢复路径）
+  const approverKeyRef = useRef('')
+  useEffect(() => {
+    const instanceId = String(form.instance_id || '').trim()
+    const dbName = String(form.db_name || '').trim()
+    const databaseId = String(form.database_id || '').trim()
+    const key = `${databaseId}|${instanceId}|${dbName}`
+    if (!instanceId || key === approverKeyRef.current) return
+    approverKeyRef.current = key
+    void loadApprovers(instanceId, dbName)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.database_id, form.instance_id, form.db_name])
 
   return (
     <div className="dql-page order-page">
@@ -344,46 +420,48 @@ export default function DqlExport() {
             />
           </Form.Item>
 
-          <div className="warn-box">
-            <div className="warn-rules">
-              <p>
-                1. 原文导出 <b>敏感字段</b> 需开启原文导出敏感字段，并配置安全和DBA审批，
-                <b>否则此字段加密导出。</b>
-              </p>
-              <div className="mask-line">
-                <span>检测到查询敏感信息：</span>
-                {!matchMask.length ? <span className="muted">无</span> : null}
-                {matchMask.map((m) => (
-                  <span key={m.key} className="mask-chip">
-                    表:{m.table || '—'}，预设敏感字段：{m.columns.join(', ')}
-                  </span>
-                ))}
-              </div>
-              <p>
-                2. 导出 <b>数据超过500条</b> 需配置安全和DBA审批，<b>否则禁止导出。</b>
-              </p>
-              <p className="warn-strong">非以上场景无需设置安全和DBA审批。</p>
-            </div>
-            <Form.Item name="need_sensitive_data" label="原文导出敏感字段" valuePropName="checked">
-              <Switch checkedChildren="开启" unCheckedChildren="关闭" />
-            </Form.Item>
-            <Form.Item name="dba_assigned_to" label="DBA审批人">
-              <Select
-                allowClear
-                showSearch
-                placeholder="请选择审批人"
-                options={extraApprovers.map((a) => ({ value: a, label: a }))}
-              />
-            </Form.Item>
-            <Form.Item name="security_assigned_to" label="安全审批人">
-              <Select
-                allowClear
-                showSearch
-                placeholder="请选择审批人"
-                options={extraApprovers.map((a) => ({ value: a, label: a }))}
-              />
-            </Form.Item>
-          </div>
+          <Form.Item
+            name="need_sensitive_data"
+            label="原文导出敏感字段"
+            valuePropName="checked"
+            extra={
+              matchMask.length ? (
+                <div className="form-extra">
+                  检测到敏感字段：{matchMask.map((m) => m.columns.join(', ')).join('；')}（默认加密导出）
+                </div>
+              ) : undefined
+            }
+          >
+            <Switch checkedChildren="开启" unCheckedChildren="关闭" />
+          </Form.Item>
+          {needStrictApproval ? (
+            <>
+              <Form.Item
+                name="dba_assigned_to"
+                label="DBA审批人"
+                rules={[{ required: true, message: '请选择DBA审批人' }]}
+              >
+                <Select
+                  allowClear
+                  showSearch
+                  placeholder="请选择审批人"
+                  options={extraApprovers.map((a) => ({ value: a, label: a }))}
+                />
+              </Form.Item>
+              <Form.Item
+                name="security_assigned_to"
+                label="安全审批人"
+                rules={[{ required: true, message: '请选择安全审批人' }]}
+              >
+                <Select
+                  allowClear
+                  showSearch
+                  placeholder="请选择审批人"
+                  options={extraApprovers.map((a) => ({ value: a, label: a }))}
+                />
+              </Form.Item>
+            </>
+          ) : null}
 
           <Form.Item
             name="description"
@@ -398,7 +476,7 @@ export default function DqlExport() {
                 提交申请
               </Button>
               <Button onClick={() => saveDraft()}>保存草稿</Button>
-              <Button onClick={() => navigate('/ops/tickets')}>取消</Button>
+              <Button onClick={goTicketListAndClose}>取消</Button>
             </Space>
           </Form.Item>
         </aside>
@@ -411,7 +489,7 @@ export default function DqlExport() {
             className="dql-sql-item"
             rules={[{ required: true, message: 'SQL语句不能为空' }]}
           >
-            <Input.TextArea placeholder="SELECT ... " className="dql-sql-editor" />
+            <Input.TextArea placeholder="SELECT ... " className="dql-sql-editor" rows={12} />
           </Form.Item>
           <p className="dql-sql-hint">编辑框内填写导出查询 SQL；提交前请确认语句只读。</p>
         </main>

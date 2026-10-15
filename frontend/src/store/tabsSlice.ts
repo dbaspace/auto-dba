@@ -36,6 +36,11 @@ function pageRouteTitle(path: string): string {
   return PAGE_ROUTES.find((r) => r.path === p)?.title || ''
 }
 
+/** /ops/tickets/:id → 工单详情（勿沿用「工单列表」） */
+function ticketDetailTitle(path: string): string {
+  return /^\/ops\/tickets\/[^/]+$/.test(normPath(path)) ? '工单详情' : ''
+}
+
 /** 数据查询等固定页：菜单短名会被 PAGE_ROUTES 纠正（勿作用于 /config/instances?db_type=） */
 const QUERY_TAB_ROUTE_PATHS = new Set(['/ops/redis-query', '/ops/kafka-query', '/ops/query'])
 
@@ -45,6 +50,8 @@ const QUERY_TAB_ROUTE_PATHS = new Set(['/ops/redis-query', '/ops/kafka-query', '
  */
 export function resolveOpenTabTitle(path: string, title: string | undefined, menus?: MenuNode[]): string {
   const p = normPath(path)
+  const ticketTitle = ticketDetailTitle(p)
+  if (ticketTitle) return ticketTitle
   const routeTitle = pageRouteTitle(p)
   const t = (title || '').trim()
   if (routeTitle && QUERY_TAB_ROUTE_PATHS.has(p)) return routeTitle
@@ -56,6 +63,8 @@ export function resolveOpenTabTitle(path: string, title: string | undefined, men
 /** 恢复缓存 Tab 时校正数据查询旧短名 */
 function normalizeCachedTabTitle(path: string, title: string, menus?: MenuNode[]): string {
   const p = normPath(path)
+  const ticketTitle = ticketDetailTitle(p)
+  if (ticketTitle) return ticketTitle
   const routeTitle = pageRouteTitle(p)
   if (routeTitle && QUERY_TAB_ROUTE_PATHS.has(p)) return routeTitle
   return clusterDeployEngineTitle(p) || title || titleForPath(p, menus)
@@ -65,6 +74,8 @@ function normalizeCachedTabTitle(path: string, title: string, menus?: MenuNode[]
 export function titleForPath(path: string, menus?: MenuNode[]): string {
   const p = normPath(path)
   if (p === HOME_PATH || p === '/metadata/database/search/dashboard') return '工作台'
+  const ticketTitle = ticketDetailTitle(p)
+  if (ticketTitle) return ticketTitle
   const engineTitle = clusterDeployEngineTitle(p)
   if (engineTitle) return engineTitle
   const exactRoute = PAGE_ROUTES.find((r) => r.path === p)

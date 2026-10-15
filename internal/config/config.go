@@ -27,7 +27,8 @@ type Config struct {
 	External  ExternalConfig  `yaml:"external"`
 	Terminal  TerminalConfig  `yaml:"terminal"`
 	Services  ServicesConfig  `yaml:"services"`
-	Copilot   CopilotConfig   `yaml:"copilot"` // DBA Copilot；密钥放 Nacos，不读库表全局参数
+	Copilot   CopilotConfig       `yaml:"copilot"` // DBA Copilot；密钥放 Nacos，不读库表全局参数
+	Notify    NotifyModuleConfig  `yaml:"notify"`  // 通知渠道能力（飞书/企微/短信/电话/机器人）；密钥放 Nacos；不含邮件
 }
 
 // CopilotConfig DBA Copilot 上游（Cursor / OpenAI 兼容）。仅来自 YAML/Nacos。

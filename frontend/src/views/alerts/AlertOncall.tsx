@@ -110,7 +110,7 @@ export default function AlertOncall() {
     <div style={{ padding: 16 }}>
       <Typography.Title level={4} style={{ marginTop: 0 }}>值班排班</Typography.Title>
       <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
-        当前时段值班人会收到告警邮件，并优先作为企微 touser（需用户名与企微账号一致，或使用全局 WecomToUser）。
+        当前时段值班人会收到告警邮件；企微通知使用其个人资料中的 im_account（企微账号 userid）。
       </Typography.Paragraph>
       <Card size="small" extra={canEdit ? (
         <Button type="primary" onClick={() => {

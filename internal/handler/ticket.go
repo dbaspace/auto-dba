@@ -486,13 +486,12 @@ func (h *TicketHandler) Submit(c *gin.Context) {
 		return
 	}
 	if req.Type == store.IssueTypeDQL && req.NeedRollback == "" {
-		extra, _ := json.Marshal(map[string]any{
-			"need_sensitive_data":  req.NeedSensitive,
-			"dba_assigned_to":      strings.TrimSpace(req.DBAAssigned),
-			"security_assigned_to": strings.TrimSpace(req.SecAssigned),
-			"row_count":            req.RowCount,
-		})
-		req.NeedRollback = string(extra)
+		extra, err := buildDQLSubmitExtra(&req, reviewer)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+			return
+		}
+		req.NeedRollback = extra
 	}
 	domain := strings.TrimSpace(req.Domain)
 	if domain == "" {
@@ -704,6 +703,48 @@ func (h *TicketHandler) Approve(c *gin.Context) {
 		_ = h.Store.UpdateIssueAssignee(it.ID, it.AssignedTo, hist)
 		it.AssigneeTransferHistory = hist
 	}
+	// DQL 多级审批：指定审批人 → DBA → 安全，全部通过后才 approved
+	if it.IssueType == store.IssueTypeDQL {
+		exBefore, _ := parseDQLApprovalExtra(it.NeedRollback)
+		if exBefore != nil {
+			exBefore.normalizePhase(it.AssignedTo, it.Status)
+		}
+		prevPhase := ""
+		if exBefore != nil {
+			prevPhase = exBefore.Phase
+		}
+		advanced, aerr := advanceDQLApproval(it, user)
+		if aerr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"message": aerr.Error()})
+			return
+		}
+		if advanced {
+			ex, _ := parseDQLApprovalExtra(it.NeedRollback)
+			nextPhase := ""
+			if ex != nil {
+				nextPhase = ex.Phase
+			}
+			hist := store.AppendAssigneeTransferHistory(
+				it.AssigneeTransferHistory,
+				fmt.Sprintf("dql_%s_approved by=%s next=%s(%s) at=%s",
+					prevPhase, user, nextPhase, it.AssignedTo, time.Now().UTC().Format(time.RFC3339)),
+			)
+			if err := h.Store.UpdateIssueAssigneeAndRollback(it.ID, it.AssignedTo, hist, it.NeedRollback); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+				return
+			}
+			it.AssigneeTransferHistory = hist
+			NotifyIssueAssigneeChangedAsync(h.Store, h.Secret, it)
+			c.JSON(http.StatusOK, gin.H{
+				"data":    it,
+				"message": fmt.Sprintf("%s已通过，等待%s（%s）", dqlPhaseLabel(prevPhase), dqlPhaseLabel(nextPhase), it.AssignedTo),
+			})
+			return
+		}
+		if strings.TrimSpace(it.NeedRollback) != "" {
+			_ = h.Store.UpdateIssueNeedRollback(it.ID, it.NeedRollback)
+		}
+	}
 	if err := h.Store.UpdateIssueStatus(it.ID, store.StatusApproved, ""); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -771,6 +812,18 @@ func (h *TicketHandler) Reject(c *gin.Context) {
 		hist := store.AppendAssigneeTransferHistory(it.AssigneeTransferHistory, store.FormatWhitelistApprovalLine(user, "rejected"))
 		_ = h.Store.UpdateIssueAssignee(it.ID, it.AssignedTo, hist)
 	}
+	if it.IssueType == store.IssueTypeDQL {
+		if err := markDQLRejected(it, user); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+			return
+		}
+		if strings.TrimSpace(it.NeedRollback) != "" {
+			if err := h.Store.UpdateIssueNeedRollback(it.ID, it.NeedRollback); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+				return
+			}
+		}
+	}
 	if err := h.Store.UpdateIssueStatus(it.ID, store.StatusRejected, req.Reason); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -822,11 +875,20 @@ func (h *TicketHandler) TransferAssignee(c *gin.Context) {
 		it.AssigneeTransferHistory,
 		store.FormatAssigneeTransferLine(it.AssignedTo, newAssignee, user),
 	)
-	if err := h.Store.UpdateIssueAssignee(it.ID, newAssignee, hist); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+	if err := syncDQLExtraOnTransfer(it, newAssignee); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
 	it.AssignedTo = newAssignee
+	if it.IssueType == store.IssueTypeDQL && strings.TrimSpace(it.NeedRollback) != "" {
+		if err := h.Store.UpdateIssueAssigneeAndRollback(it.ID, newAssignee, hist, it.NeedRollback); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+			return
+		}
+	} else if err := h.Store.UpdateIssueAssignee(it.ID, newAssignee, hist); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
 	it.AssigneeTransferHistory = hist
 	h.syncMigrationAssigneeAfterTransfer(it, newAssignee)
 	NotifyIssueAssigneeChangedAsync(h.Store, h.Secret, it)

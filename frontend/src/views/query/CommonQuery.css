@@ -202,7 +202,16 @@
 .store-tabs { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .store-tabs .ant-tabs-content-holder { flex: 1; min-height: 0; overflow: hidden; }
 .store-tabs .ant-tabs-content { height: 100%; }
-.store-tabs .ant-tabs-tabpane { height: 100%; display: flex; flex-direction: column; gap: 8px; }
+/* 勿给全部 tabpane 设 display:flex，会覆盖 antd 的 tabpane-hidden(display:none)，导致收藏/历史叠在一起 */
+.store-tabs .ant-tabs-tabpane:not(.ant-tabs-tabpane-hidden) {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.store-tabs .ant-tabs-tabpane-hidden {
+  display: none !important;
+}
 .store-list { flex: 1; min-height: 0; overflow: auto; }
 .store-item {
   padding: 8px;
@@ -233,15 +242,128 @@
   display: flex;
   flex-direction: column;
 }
-.result-meta {
+/* 图1：上行执行SQL/耗时/操作，下行搜索+统计分页 */
+.result-toolbar-1 {
   flex-shrink: 0;
-  color: #6b7280;
-  font-size: 12px;
-  margin-bottom: 8px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  margin-bottom: 8px;
+  min-width: 0;
+}
+.result-exec {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+.result-label {
+  flex-shrink: 0;
+  color: #6b7280;
+  font-size: 12px;
+}
+.result-sql-input {
+  flex: 1;
+  min-width: 120px;
+  max-width: 560px;
+}
+.result-elapsed {
+  flex-shrink: 0;
+  color: #1677ff;
+  font-size: 12px;
+  font-weight: 500;
+}
+.result-actions {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.result-toolbar-2 {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  min-width: 0;
+}
+.result-search {
+  width: 220px;
+  max-width: 40%;
+  flex-shrink: 0;
+}
+.result-pagination {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 12px;
+  overflow: hidden;
+}
+.result-count {
+  flex-shrink: 0;
+  color: #6b7280;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.result-pagination .ant-pagination {
+  max-width: 100%;
+  flex-wrap: wrap;
+  row-gap: 4px;
+  justify-content: flex-end;
+}
+.table-info-modal .ant-modal-header { margin-bottom: 12px; }
+.table-info-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-right: 28px;
+}
+.table-info-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  min-width: 0;
+}
+.table-info-actions { display: flex; gap: 8px; }
+.table-info-error { color: #dc2626; font-size: 13px; padding: 16px 0; }
+.table-info-type {
+  margin: 0;
+  background: #f3f4f6;
+  border-color: #e5e7eb;
+  color: #374151;
+}
+.table-info-ddl {
+  margin: 0;
+  max-height: 480px;
+  overflow: auto;
+  background: #fafafa;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.table-info-ddl-line { display: flex; min-width: max-content; }
+.table-info-ddl-no {
+  flex: 0 0 40px;
+  text-align: right;
+  padding: 0 10px 0 8px;
+  color: #9ca3af;
+  user-select: none;
+  border-right: 1px solid #e5e7eb;
+  background: #f3f4f6;
+}
+.table-info-ddl-code {
+  padding: 0 12px;
+  white-space: pre;
+  color: #111827;
 }
 .result-err { color: #dc2626; font-size: 13px; padding: 12px; }
 .result-placeholder {
@@ -252,7 +374,46 @@
   color: #9ca3af;
   font-size: 13px;
 }
-.result-col .ant-table-wrapper { flex: 1; min-height: 0; }
+.result-table-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.result-table-wrap .ant-table-wrapper {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.result-table-wrap .ant-spin-nested-loading,
+.result-table-wrap .ant-spin-container {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.result-table-wrap .ant-table {
+  flex: 1;
+  min-height: 0;
+}
+/* 保证表体滚动区底部留出横向滚动条空间，避免最后一行被挡住 */
+.result-table-wrap .ant-table-body {
+  overflow: auto !important;
+  padding-bottom: 2px;
+}
+.result-table-wrap .result-rowno-col {
+  text-align: center;
+  background: #fafafa;
+}
+.result-table-wrap .result-rowno {
+  color: #6b7280;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
 .gutter-x {
   width: 6px;
   flex-shrink: 0;

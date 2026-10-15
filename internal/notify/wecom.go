@@ -70,7 +70,12 @@ func getWecomAccessToken(corpID, secret string) (string, error) {
 	return out.AccessToken, nil
 }
 
-func sendWecomMarkdown(corpID, secret, agentID, toUser, content string) error {
+// SendWecomMarkdownForTest 使用库内旧企微凭证发测试（Nacos 未配时回退）。
+func SendWecomMarkdownForTest(corpID, secret, agentID, toUser, toParty, content string) error {
+	return sendWecomMarkdown(corpID, secret, agentID, toUser, toParty, content)
+}
+
+func sendWecomMarkdown(corpID, secret, agentID, toUser, toParty, content string) error {
 	token, err := getWecomAccessToken(corpID, secret)
 	if err != nil {
 		return err
@@ -80,16 +85,25 @@ func sendWecomMarkdown(corpID, secret, agentID, toUser, content string) error {
 		return fmt.Errorf("企微 AgentID 无效")
 	}
 	toUser = strings.TrimSpace(toUser)
-	if toUser == "" {
-		toUser = "@all"
+	toParty = strings.TrimSpace(toParty)
+	if toUser == "@all" {
+		toUser = ""
+	}
+	if toUser == "" && toParty == "" {
+		return fmt.Errorf("企微接收人为空：请指定 userid 或部门 ID（toparty）")
 	}
 	payload := map[string]any{
-		"touser":  toUser,
 		"msgtype": "markdown",
 		"agentid": aid,
 		"markdown": map[string]string{
 			"content": content,
 		},
+	}
+	if toUser != "" {
+		payload["touser"] = toUser
+	}
+	if toParty != "" {
+		payload["toparty"] = toParty
 	}
 	raw, _ := json.Marshal(payload)
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)

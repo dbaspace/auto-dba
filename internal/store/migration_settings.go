@@ -92,7 +92,7 @@ func (d *DB) argOr(key, def string) string {
 	return strings.TrimSpace(v)
 }
 
-func (d *DB) intArg(key string, def, min, max int) int {
+func (d *DB) intArgClamped(key string, def, min, max int) int {
 	v, err := d.GetGlobalArg(key)
 	if err != nil || strings.TrimSpace(v) == "" {
 		return def
@@ -120,8 +120,8 @@ func (d *DB) GetMigrationSettings() MigrationSettings {
 		Prefix:        d.argOr(ArgMigrationOSSPrefix, "migration"),
 		AccessKey:     d.argOr(ArgMigrationOSSAccessKey, ""),
 		SecretKey:     d.argOr(ArgMigrationOSSSecretKey, ""),
-		RetentionDays: d.intArg(ArgMigrationOSSRetentionDays, 7, 1, 3650),
-		ChunkSizeMB:   d.intArg(ArgMigrationOSSChunkSizeMB, 100, 1, 10240),
+		RetentionDays: d.intArgClamped(ArgMigrationOSSRetentionDays, 7, 1, 3650),
+		ChunkSizeMB:   d.intArgClamped(ArgMigrationOSSChunkSizeMB, 100, 1, 10240),
 	}
 	oss.Configured = oss.Endpoint != "" && oss.Bucket != "" && oss.AccessKey != "" && oss.SecretKey != ""
 	return MigrationSettings{
@@ -129,12 +129,12 @@ func (d *DB) GetMigrationSettings() MigrationSettings {
 		ApproverUserIDs: d.argOr(ArgMigrationApproverUserIDs, ""),
 		OSS:             oss,
 		Performance: MigrationPerfSettings{
-			MaxConcurrentTasks:    d.intArg(ArgMigrationMaxConcurrentTasks, 3, 1, 10),
-			TableParallelism:      d.intArg(ArgMigrationTableParallelism, 4, 1, 16),
-			BatchSize:             d.intArg(ArgMigrationBatchSize, 10000, 100, 100000),
-			SingleTableTimeoutMin: d.intArg(ArgMigrationSingleTableTimeout, 30, 1, 1440),
-			DefaultSpeedLimit:     d.intArg(ArgMigrationDefaultSpeedLimit, 0, 0, 1000000),
-			ScheduleToleranceMin:  d.intArg(ArgMigrationScheduleTolerance, 10, 1, 60),
+			MaxConcurrentTasks:    d.intArgClamped(ArgMigrationMaxConcurrentTasks, 3, 1, 10),
+			TableParallelism:      d.intArgClamped(ArgMigrationTableParallelism, 4, 1, 16),
+			BatchSize:             d.intArgClamped(ArgMigrationBatchSize, 10000, 100, 100000),
+			SingleTableTimeoutMin: d.intArgClamped(ArgMigrationSingleTableTimeout, 30, 1, 1440),
+			DefaultSpeedLimit:     d.intArgClamped(ArgMigrationDefaultSpeedLimit, 0, 0, 1000000),
+			ScheduleToleranceMin:  d.intArgClamped(ArgMigrationScheduleTolerance, 10, 1, 60),
 		},
 	}
 }

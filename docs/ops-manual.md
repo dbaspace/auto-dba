@@ -183,6 +183,8 @@
 
 告警设计见 [alerts.md](alerts.md)；AIOps（知识库 / Copilot / 关联 / Runbook）见 [aiops.md](aiops.md)。告警数据按租户隔离。
 
+通知页可配**告警发送频率**（默认 15 分钟最多 3 次触发/续报）；恢复仍会发一条。群机器人方向（告警/工单）在通知页配置，Webhook URL 在 Nacos。升级若缺列见 [changelog-v1.12.0.md](changelog-v1.12.0.md) 中的 SQL。
+
 ---
 
 ## 8. 同步、迁移与数据安全
@@ -211,7 +213,7 @@
 
 | 配置 | 路径 | 说明 |
 |------|------|------|
-| LDAP / SSO / 邮件 / 通知 | 认证配置 | SSO 回调须与 IdP 白名单一致；更换 `jwt_secret` 后需重存 Client Secret / LDAP Bind 密码 |
+| LDAP / SSO / 邮件 / 通知 | 认证配置 | SSO 回调须与 IdP 白名单一致；更换 `jwt_secret` 后需重存 Client Secret / LDAP Bind 密码；飞书/企微(Nacos)/短信/电话凭证见 Nacos `notify`（[nacos-config.md](nacos-config.md)），通知 Tab 只开事件开关 |
 | 全局参数 | 配置中心 | 审批开关、空闲登出、白名单等 |
 | 区域 / 环境 | 配置中心 | 业务标签；**不是** Nacos Namespace |
 | 对象存储 / Agent | 配置中心 | 迁移中转、备份、下发 |

@@ -120,6 +120,19 @@ func (c *SMTPConfig) Public() map[string]any {
 	}
 }
 
+// Configured 表示 SMTP 参数已填齐（可测发），不要求 Enabled。
+func (c *SMTPConfig) Configured() bool {
+	if c == nil {
+		return false
+	}
+	hostOK := strings.TrimSpace(c.Host) != ""
+	addrOK := strings.Contains(strings.TrimSpace(c.From), "@") ||
+		strings.Contains(strings.TrimSpace(c.Username), "@")
+	passOK := strings.TrimSpace(c.Password) != "" || strings.TrimSpace(c.PasswordEnc) != ""
+	return hostOK && addrOK && passOK
+}
+
+// Ready 表示已启用且可自动发信（工单/忘记密码等）；测试发信可用 Configured。
 func (c *SMTPConfig) Ready() bool {
 	if c == nil || !c.Enabled {
 		return false

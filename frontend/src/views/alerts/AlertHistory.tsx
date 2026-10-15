@@ -39,7 +39,9 @@ export default function AlertHistory() {
       render: (_: unknown, a: AlertItem) => (
         <div>
           <div style={{ fontWeight: 600 }}>{a.title}</div>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>{a.id} · {a.cluster}</Typography.Text>
+          <Typography.Text type="secondary" ellipsis={{ tooltip: a.id }} style={{ fontSize: 12, maxWidth: '100%', display: 'inline-block' }}>
+            {a.id}{a.cluster ? ` · ${a.cluster}` : ''}
+          </Typography.Text>
         </div>
       ),
     },

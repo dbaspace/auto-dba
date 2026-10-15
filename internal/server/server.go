@@ -26,6 +26,7 @@ import (
 	"auto-dba/internal/dbmonitor"
 	"auto-dba/internal/flashback"
 	"auto-dba/internal/handler"
+	"auto-dba/internal/notify"
 	"auto-dba/internal/ossupload"
 	"auto-dba/internal/pgdiag"
 	"auto-dba/internal/pgspace"
@@ -218,6 +219,17 @@ func Run(cfg *config.Config, configPath string) {
 	}
 	router.Init(engine, deps)
 	log.Printf("boot: routes ready in %s", time.Since(bootStart).Round(time.Millisecond))
+
+	notify.InitProviders(cfg.Notify)
+	if ncfg, err := db.GetNotifyConfig(); err == nil {
+		store.ApplyAlertNotifyDefaultsOnLoad(ncfg)
+		log.Printf("boot: alert notify defaults max=%d window=%s repeat=%s",
+			ncfg.AlertNotifyMaxFire, ncfg.AlertNotifyWindow, ncfg.AlertNotifyRepeat)
+	} else {
+		store.ApplyAlertNotifyDefaultsOnLoad(nil)
+	}
+	log.Printf("boot: notify providers ready lark=%v alert_lark=%v wecom=%v",
+		cfg.Notify.LarkConfigured(), cfg.Notify.AlertLarkConfigured(), cfg.Notify.WechatConfigured())
 
 	hot := &hotReloadTargets{
 		cfg:      cfg,

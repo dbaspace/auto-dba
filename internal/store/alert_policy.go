@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -16,21 +17,71 @@ type AlertTier struct {
 	For      string  `json:"for,omitempty"`
 }
 
-// AlertNotifyPolicy 规则级频控与未处理续报。
+// AlertNotifyPolicy 规则级频控与未处理续报（仅 trigger/repeat；resolve 不受此限）。
 type AlertNotifyPolicy struct {
 	MaxFirePerWindow int      `json:"max_fire_per_window"` // 窗口内最多触发/续报次数，0=不限制
-	Window           string   `json:"window"`              // 如 1h
-	RepeatInterval   string   `json:"repeat_interval"`     // 如 30m；空或 0 关闭
+	Window           string   `json:"window"`              // 如 15m
+	RepeatInterval   string   `json:"repeat_interval"`     // 如 5m；空或 0 关闭
 	RepeatOnHandles  []string `json:"repeat_on_handles"`   // 默认 unclaimed
+	// InheritGlobal 为 true 时使用全局默认（通知页配置），忽略本规则窗口/次数/续报。
+	InheritGlobal bool `json:"inherit_global,omitempty"`
+}
+
+const (
+	DefaultAlertNotifyMaxFire = 3
+	DefaultAlertNotifyWindow  = "15m"
+	DefaultAlertNotifyRepeat  = "5m"
+)
+
+var (
+	globalNotifyMu   sync.RWMutex
+	globalNotifyPol  = builtinDefaultAlertNotifyPolicy()
+)
+
+func builtinDefaultAlertNotifyPolicy() AlertNotifyPolicy {
+	return AlertNotifyPolicy{
+		MaxFirePerWindow: DefaultAlertNotifyMaxFire,
+		Window:           DefaultAlertNotifyWindow,
+		RepeatInterval:   DefaultAlertNotifyRepeat,
+		RepeatOnHandles:  []string{AlertHandleUnclaimed},
+	}
+}
+
+// SyncGlobalAlertNotifyPolicy 由通知配置加载/保存时调用。
+func SyncGlobalAlertNotifyPolicy(maxFire int, window, repeat string) {
+	p := AlertNotifyPolicy{
+		MaxFirePerWindow: maxFire,
+		Window:           window,
+		RepeatInterval:   repeat,
+		RepeatOnHandles:  []string{AlertHandleUnclaimed},
+	}
+	p = NormalizeAlertNotifyPolicy(&p)
+	globalNotifyMu.Lock()
+	globalNotifyPol = p
+	globalNotifyMu.Unlock()
+}
+
+// GlobalAlertNotifyPolicy 返回当前全局默认（副本）。
+func GlobalAlertNotifyPolicy() AlertNotifyPolicy {
+	globalNotifyMu.RLock()
+	defer globalNotifyMu.RUnlock()
+	return globalNotifyPol
 }
 
 func DefaultAlertNotifyPolicy() AlertNotifyPolicy {
-	return AlertNotifyPolicy{
-		MaxFirePerWindow: 3,
-		Window:           "1h",
-		RepeatInterval:   "30m",
-		RepeatOnHandles:  []string{AlertHandleUnclaimed},
+	return GlobalAlertNotifyPolicy()
+}
+
+// ResolveAlertNotifyPolicy 规则显式配置优先；InheritGlobal 或空策略用全局。
+func ResolveAlertNotifyPolicy(rule AlertNotifyPolicy) AlertNotifyPolicy {
+	if rule.InheritGlobal {
+		g := GlobalAlertNotifyPolicy()
+		if len(rule.RepeatOnHandles) > 0 {
+			g.RepeatOnHandles = append([]string(nil), rule.RepeatOnHandles...)
+		}
+		return g
 	}
+	return NormalizeAlertNotifyPolicy(&rule)
 }
 
 func NormalizeAlertTiers(tiers []AlertTier) ([]AlertTier, error) {
@@ -66,20 +117,30 @@ func NormalizeAlertNotifyPolicy(p *AlertNotifyPolicy) AlertNotifyPolicy {
 		return DefaultAlertNotifyPolicy()
 	}
 	out := *p
+	if out.InheritGlobal {
+		// 持久化时保留 inherit，运行时再用 ResolveAlertNotifyPolicy 展开
+		if len(out.RepeatOnHandles) == 0 {
+			out.RepeatOnHandles = []string{AlertHandleUnclaimed}
+		}
+		out.MaxFirePerWindow = 0
+		out.Window = ""
+		out.RepeatInterval = ""
+		return out
+	}
 	if out.MaxFirePerWindow < 0 {
 		out.MaxFirePerWindow = 0
 	}
 	if strings.TrimSpace(out.Window) == "" {
-		out.Window = "1h"
+		out.Window = DefaultAlertNotifyWindow
 	}
 	if _, err := ParseAlertDuration(out.Window); err != nil {
-		out.Window = "1h"
+		out.Window = DefaultAlertNotifyWindow
 	}
 	ri := strings.TrimSpace(out.RepeatInterval)
 	if ri == "" || ri == "0" || ri == "0s" || ri == "0m" {
 		out.RepeatInterval = ""
 	} else if _, err := ParseAlertDuration(ri); err != nil {
-		out.RepeatInterval = "30m"
+		out.RepeatInterval = DefaultAlertNotifyRepeat
 	} else {
 		out.RepeatInterval = ri
 	}
@@ -120,13 +181,32 @@ func encodeAlertNotifyPolicy(p AlertNotifyPolicy) string {
 func decodeAlertNotifyPolicy(raw string) AlertNotifyPolicy {
 	raw = strings.TrimSpace(raw)
 	if raw == "" || raw == "{}" {
-		return DefaultAlertNotifyPolicy()
+		return AlertNotifyPolicy{InheritGlobal: true}
 	}
 	var p AlertNotifyPolicy
 	if err := json.Unmarshal([]byte(raw), &p); err != nil {
-		return DefaultAlertNotifyPolicy()
+		return AlertNotifyPolicy{InheritGlobal: true}
 	}
-	return NormalizeAlertNotifyPolicy(&p)
+	// 旧默认 1h/30m 视为「未定制」，改为继承全局（便于全局 15m 生效）
+	if !p.InheritGlobal && isLegacyDefaultNotifyPolicy(p) {
+		p.InheritGlobal = true
+	}
+	return p
+}
+
+func isLegacyDefaultNotifyPolicy(p AlertNotifyPolicy) bool {
+	w := strings.TrimSpace(p.Window)
+	ri := strings.TrimSpace(p.RepeatInterval)
+	if w != "1h" {
+		return false
+	}
+	if ri != "30m" && ri != "" {
+		return false
+	}
+	if p.MaxFirePerWindow != 0 && p.MaxFirePerWindow != 3 {
+		return false
+	}
+	return true
 }
 
 func severityRank(s string) int {
@@ -228,10 +308,10 @@ type AlertNotifyDecision struct {
 	Skip   string // rate_limited | silenced | handle | not_due | ""
 }
 
-// DecideAlertNotify 根据频控与未处理续报策略决定是否通知。
+// DecideAlertNotify 根据频控与未处理续报策略决定是否通知（仅 trigger/repeat）。
 // justFired：本轮由 pending→firing 或新建即 firing。
 func DecideAlertNotify(a *Alert, policy AlertNotifyPolicy, now time.Time, justFired bool) AlertNotifyDecision {
-	policy = NormalizeAlertNotifyPolicy(&policy)
+	policy = ResolveAlertNotifyPolicy(policy)
 	if a == nil || a.Status != AlertStatusFiring {
 		return AlertNotifyDecision{Skip: "not_firing"}
 	}
@@ -271,12 +351,13 @@ func DecideAlertNotify(a *Alert, policy AlertNotifyPolicy, now time.Time, justFi
 	return AlertNotifyDecision{Should: true, Reason: "repeat"}
 }
 
-// ApplyAlertNotifyMark 写入通知计数与时间（调用方随后 SaveAlert）。
+// ApplyAlertNotifyMark 写入告警行通知计数与时间（调用方随后 SaveAlert）。
+// 指纹级预算请用 DB.ApplyFingerprintNotifyMark。
 func ApplyAlertNotifyMark(a *Alert, policy AlertNotifyPolicy, now time.Time) {
 	if a == nil {
 		return
 	}
-	policy = NormalizeAlertNotifyPolicy(&policy)
+	policy = ResolveAlertNotifyPolicy(policy)
 	if NotifyWindowElapsed(a.LastNotifiedAt, policy.Window, now) {
 		a.NotifyCount = 1
 	} else {

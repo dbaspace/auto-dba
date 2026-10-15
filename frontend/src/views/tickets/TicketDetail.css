@@ -99,17 +99,20 @@
   border-radius: 4px;
   overflow: hidden;
 }
+.flow-card.is-active { border-color: #f59e0b; }
 .flow-card.is-done { border-color: #86efac; }
 .flow-card.is-danger { border-color: #fca5a5; }
-.flow-card.is-wait { border-color: #fcd34d; }
+.flow-card.is-wait { border-color: #e5e7eb; }
 .flow-card-head {
   padding: 8px 12px;
   background: #fffbeb;
   font-size: 13px;
   color: #374151;
 }
+.flow-card.is-active .flow-card-head { background: #fffbeb; }
 .flow-card.is-done .flow-card-head { background: #f0fdf4; }
 .flow-card.is-danger .flow-card-head { background: #fef2f2; }
+.flow-card.is-wait .flow-card-head { background: #f9fafb; }
 .flow-card-body { padding: 12px; }
 .approver-line {
   padding: 8px 10px;

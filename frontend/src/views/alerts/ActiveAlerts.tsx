@@ -376,41 +376,38 @@ export default function ActiveAlerts() {
         open={!!detail}
         onClose={() => setDetail(null)}
         title={detail ? (
-          <Space>
+          <Space wrap size={[4, 4]}>
             <Tag color={SEV_COLOR[detail.alert.severity]}>{detail.alert.severity}</Tag>
             <Tag color={HANDLE_LABEL[detail.alert.handle]?.color}>{HANDLE_LABEL[detail.alert.handle]?.label}</Tag>
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>{detail.alert.id}</Typography.Text>
           </Space>
         ) : null}
-        extra={detail && (
-          <Space wrap>
-            {hasUrn(Perm.alert.claim) && detail.alert.handle === 'unclaimed' && (
-              <Button type="primary" onClick={() => void act('claim', '已认领')}>认领</Button>
-            )}
-            {hasUrn(Perm.alert.claim) && detail.alert.status !== 'resolved' && (
-              <Button onClick={() => void act('processing', '已进入处理中')}>处理中</Button>
-            )}
-            {hasUrn(Perm.alert.silence) && detail.alert.status !== 'resolved' && (
-              <Button onClick={() => void act('silence', '已静默 2 小时')}>静默</Button>
-            )}
-            {hasUrn(Perm.alert.resolve) && detail.alert.status !== 'resolved' && (
-              <Tooltip title="标记误报并关闭">
-                <Button danger onClick={() => void act('false-positive', '已标记误报')}>误报</Button>
-              </Tooltip>
-            )}
-            {hasUrn(Perm.todo.create) && (
-              <Button onClick={() => void act('todo', '已转待办')}>转待办</Button>
-            )}
-            <Button onClick={() => void openRunbook()}>Runbook</Button>
-            {hasUrn(Perm.copilot.chat) && (
-              <Button onClick={() => { setCopilotAns(''); void openCopilot() }}>助手</Button>
-            )}
-          </Space>
-        )}
       >
         {detail && (
           <>
-            <Typography.Title level={5}>{detail.alert.title}</Typography.Title>
+            <Space wrap style={{ marginBottom: 12 }}>
+              {hasUrn(Perm.alert.claim) && detail.alert.handle === 'unclaimed' && (
+                <Button type="primary" onClick={() => void act('claim', '已认领')}>认领</Button>
+              )}
+              {hasUrn(Perm.alert.claim) && detail.alert.status !== 'resolved' && (
+                <Button onClick={() => void act('processing', '已进入处理中')}>处理中</Button>
+              )}
+              {hasUrn(Perm.alert.silence) && detail.alert.status !== 'resolved' && (
+                <Button onClick={() => void act('silence', '已静默 2 小时')}>静默</Button>
+              )}
+              {hasUrn(Perm.alert.resolve) && detail.alert.status !== 'resolved' && (
+                <Tooltip title="标记误报并关闭">
+                  <Button danger onClick={() => void act('false-positive', '已标记误报')}>误报</Button>
+                </Tooltip>
+              )}
+              {hasUrn(Perm.todo.create) && (
+                <Button onClick={() => void act('todo', '已转待办')}>转待办</Button>
+              )}
+              <Button onClick={() => void openRunbook()}>Runbook</Button>
+              {hasUrn(Perm.copilot.chat) && (
+                <Button onClick={() => { setCopilotAns(''); void openCopilot() }}>助手</Button>
+              )}
+            </Space>
+            <Typography.Title level={5} style={{ marginTop: 0 }}>{detail.alert.title}</Typography.Title>
             <Space wrap style={{ marginBottom: 16 }}>
               {detail.alert.service && <Tag>{detail.alert.service}</Tag>}
               {detail.alert.cluster && <Tag>{detail.alert.cluster}</Tag>}
@@ -419,6 +416,11 @@ export default function ActiveAlerts() {
               ))}
             </Space>
             <Descriptions size="small" bordered column={2}>
+              <Descriptions.Item label="告警 ID" span={2}>
+                <Typography.Text copyable ellipsis={{ tooltip: detail.alert.id }} style={{ maxWidth: '100%' }}>
+                  {detail.alert.id}
+                </Typography.Text>
+              </Descriptions.Item>
               <Descriptions.Item label="负责人">{detail.alert.owner || '待认领'}</Descriptions.Item>
               <Descriptions.Item label="状态">{detail.alert.status}</Descriptions.Item>
               <Descriptions.Item label="当前值">{detail.alert.cur_value || '—'}</Descriptions.Item>

@@ -140,19 +140,55 @@ func dispatchAlert(db *store.DB, encKey string, p AlertPayload, opts *AlertDispa
 	text := FormatAlertText(p)
 	md := FormatAlertMarkdown(p)
 
+	title := fmt.Sprintf("[%s] %s", p.Severity, p.Title)
+	if p.Event == "resolve" {
+		title = fmt.Sprintf("[%s] 告警已恢复 · %s", p.Severity, p.Title)
+	}
 	for _, ch := range channels {
 		switch ch {
 		case "webhook":
 			postAlertWebhook(ncfg, p)
 		case "wecom":
-			postAlertWecom(ncfg, md, opts)
+			postAlertWecom(db, ncfg, md, p, opts)
 		case "phone":
-			postAlertPhone(ncfg, p)
+			postAlertPhone(db, ncfg, p, opts, text)
 		case "email":
 			postAlertEmail(db, encKey, ncfg, p, opts)
+		case "lark":
+			postAlertLark(db, ChannelLark, title, text, md, p, opts)
+		case "lark_alert":
+			postAlertLark(db, ChannelLarkAlert, title, text, md, p, opts)
+		case "sms":
+			postAlertSMS(db, ncfg, p, opts, text)
+		case "dingtalk":
+			SendVia(ChannelRobot, robotAlertMessage(ncfg, title, text, md, "dingtalk"))
+		case "robot_lark":
+			SendVia(ChannelRobot, robotAlertMessage(ncfg, title, text, md, "lark"))
 		}
 	}
 	log.Printf("alert-notify: dispatched event=%s alert=%s channels=%v text=%s", p.Event, p.AlertID, channels, text)
+}
+
+func robotURLs(ncfg *store.NotifyConfig) []string {
+	if ncfg == nil {
+		return nil
+	}
+	u := strings.TrimSpace(ncfg.WebhookURL)
+	if u == "" {
+		return nil
+	}
+	return []string{u}
+}
+
+func robotAlertMessage(ncfg *store.NotifyConfig, title, text, md, kind string) Message {
+	msg := Message{
+		Title: title, Text: text, Markdown: md,
+		RobotKind: kind, RobotFor: "alert", RobotURLs: robotURLs(ncfg),
+	}
+	if ncfg != nil {
+		msg.RobotRoutes = ncfg.RobotRoutes
+	}
+	return msg
 }
 
 func resolveChannels(ncfg *store.NotifyConfig, opts *AlertDispatchOpts) []string {
@@ -170,14 +206,30 @@ func resolveChannels(ncfg *store.NotifyConfig, opts *AlertDispatchOpts) []string
 	if ncfg.WebhookEnabled && ncfg.WebhookOnAlert && strings.TrimSpace(ncfg.WebhookURL) != "" {
 		out = append(out, "webhook")
 	}
-	if ncfg.WecomEnabled && ncfg.WecomOnAlert {
+	if (ncfg.WecomEnabled || NotifyModule().WechatConfigured()) && ncfg.WecomOnAlert {
 		out = append(out, "wecom")
 	}
-	if ncfg.PhoneEnabled && ncfg.PhoneOnAlert && strings.TrimSpace(ncfg.PhoneAPIURL) != "" {
+	callReady := ProviderStatus()["call_ready"] == true
+	if (ncfg.PhoneEnabled && (strings.TrimSpace(ncfg.PhoneAPIURL) != "" || callReady)) && ncfg.PhoneOnAlert {
 		out = append(out, "phone")
 	}
 	if ncfg.EmailOnAlert {
 		out = append(out, "email")
+	}
+	if ncfg.LarkOnAlert {
+		out = append(out, "lark")
+	}
+	if ncfg.LarkAlertOnAlert {
+		out = append(out, "lark_alert")
+	}
+	if ncfg.SMSOnAlert {
+		out = append(out, "sms")
+	}
+	if ncfg.DingtalkOnAlert {
+		out = append(out, "dingtalk")
+	}
+	if ncfg.RobotLarkOnAlert {
+		out = append(out, "robot_lark")
 	}
 	return out
 }
@@ -220,17 +272,111 @@ func postAlertWebhook(ncfg *store.NotifyConfig, payload AlertPayload) {
 	log.Printf("alert-notify: webhook ok event=%s alert=%s", payload.Event, payload.AlertID)
 }
 
-func postAlertWecom(ncfg *store.NotifyConfig, md string, opts *AlertDispatchOpts) {
-	to := strings.TrimSpace(ncfg.WecomToUser)
-	if opts != nil && len(opts.ToUsers) > 0 {
-		to = strings.Join(opts.ToUsers, "|")
+func postAlertWecom(db *store.DB, ncfg *store.NotifyConfig, md string, p AlertPayload, opts *AlertDispatchOpts) {
+	ids := collectWecomIDs(db, collectAlertRecipients(db, p, opts))
+	to := strings.Join(ids, "|")
+	party := NotifyModule().Provider.Wechat.PartyIDs.JoinWecomParty()
+	if to == "" && party == "" {
+		log.Printf("alert-notify: wecom skip no userid and no party_ids alert=%s", p.AlertID)
+		return
 	}
-	if err := sendWecomMarkdown(ncfg.WecomCorpID, ncfg.WecomSecret, ncfg.WecomAgentID, to, md); err != nil {
+	if NotifyModule().WechatConfigured() {
+		SendVia(ChannelWecom, Message{Markdown: md, Text: md, WecomToUser: to, WecomToParty: party})
+		return
+	}
+	if err := sendWecomMarkdown(ncfg.WecomCorpID, ncfg.WecomSecret, ncfg.WecomAgentID, to, party, md); err != nil {
 		log.Printf("alert-notify: wecom: %v", err)
 	}
 }
 
-func postAlertPhone(ncfg *store.NotifyConfig, p AlertPayload) {
+func collectWecomIDs(db *store.DB, usernames []string) []string {
+	if db == nil {
+		return nil
+	}
+	var ids []string
+	seen := map[string]bool{}
+	for _, uname := range usernames {
+		u, _ := db.GetUserByUsername(strings.TrimSpace(uname))
+		if u == nil {
+			continue
+		}
+		id := ResolveWecomUserID(u.IMType, u.IMAccount)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+func postAlertLark(db *store.DB, ch Channel, title, text, md string, p AlertPayload, opts *AlertDispatchOpts) {
+	ids := collectLarkIDs(db, collectAlertRecipients(db, p, opts))
+	if len(ids) == 0 {
+		log.Printf("alert-notify: %s skip no lark ids", ch)
+		return
+	}
+	SendVia(ch, Message{Title: title, Text: text, Markdown: md, LarkUserIDs: ids})
+}
+
+func collectLarkIDs(db *store.DB, usernames []string) []string {
+	if db == nil {
+		return nil
+	}
+	var ids []string
+	seen := map[string]bool{}
+	for _, uname := range usernames {
+		u, _ := db.GetUserByUsername(strings.TrimSpace(uname))
+		if u == nil {
+			continue
+		}
+		id := ResolveLarkUserID(u.IMType, u.IMAccount)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+func collectPhones(db *store.DB, usernames []string) []string {
+	if db == nil {
+		return nil
+	}
+	var phones []string
+	seen := map[string]bool{}
+	for _, uname := range usernames {
+		u, _ := db.GetUserByUsername(strings.TrimSpace(uname))
+		if u == nil {
+			continue
+		}
+		p := strings.TrimSpace(u.Phone)
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		phones = append(phones, p)
+	}
+	return phones
+}
+
+func postAlertSMS(db *store.DB, ncfg *store.NotifyConfig, p AlertPayload, opts *AlertDispatchOpts, text string) {
+	_ = ncfg
+	phones := collectPhones(db, collectAlertRecipients(db, p, opts))
+	if len(phones) == 0 {
+		log.Printf("alert-notify: sms skip no phones alert=%s", p.AlertID)
+		return
+	}
+	SendVia(ChannelSMS, Message{Title: p.Title, Text: text, Phones: phones})
+}
+
+func postAlertPhone(db *store.DB, ncfg *store.NotifyConfig, p AlertPayload, opts *AlertDispatchOpts, text string) {
+	phones := collectPhones(db, collectAlertRecipients(db, p, opts))
+	if len(phones) > 0 && ProviderStatus()["call_ready"] == true {
+		SendVia(ChannelCall, Message{Title: p.Title, Text: text, Phones: phones})
+		return
+	}
 	url := strings.TrimSpace(ncfg.PhoneAPIURL)
 	if url == "" {
 		return
@@ -324,6 +470,10 @@ func FormatAlertText(p AlertPayload) string {
 	} else if s := strings.TrimSpace(p.ImpactSummary); s != "" {
 		ctx = " | " + s
 	}
+	if p.Event == "resolve" {
+		return fmt.Sprintf("[%s] 告警已恢复 %s value=%s thr=%s%s%s",
+			p.Severity, p.Title, p.CurValue, p.Threshold, extra, ctx)
+	}
 	return fmt.Sprintf("[%s] %s %s value=%s thr=%s handle=%s%s%s",
 		p.Severity, p.Event, p.Title, p.CurValue, p.Threshold, p.Handle, extra, ctx)
 }
@@ -337,6 +487,9 @@ func FormatAlertMarkdown(p AlertPayload) string {
 	case "P1":
 		color = "warning"
 	}
+	if p.Event == "resolve" {
+		color = "info"
+	}
 	group := ""
 	if p.GroupSize > 1 {
 		group = fmt.Sprintf("\n> 聚合: <font color=\"comment\">%d</font>", p.GroupSize)
@@ -347,8 +500,16 @@ func FormatAlertMarkdown(p AlertPayload) string {
 	} else if s := strings.TrimSpace(p.ImpactSummary); s != "" {
 		ctxLine = fmt.Sprintf("\n> 影响: <font color=\"comment\">%s</font>", s)
 	}
+	eventLabel := p.Event
+	if p.Event == "resolve" {
+		eventLabel = "告警已恢复"
+	}
+	title := p.Title
+	if p.Event == "resolve" {
+		title = "已恢复 · " + p.Title
+	}
 	return fmt.Sprintf("## [%s] %s\n> 事件: <font color=\"%s\">%s</font>\n> 服务: %s · 集群: %s\n> 当前值: %s / 阈值: %s\n> 处理: %s%s%s",
-		p.Severity, p.Title, color, p.Event, nz(p.Service, "-"), nz(p.Cluster, "-"),
+		p.Severity, title, color, eventLabel, nz(p.Service, "-"), nz(p.Cluster, "-"),
 		nz(p.CurValue, "-"), nz(p.Threshold, "-"), nz(p.Handle, "-"), group, ctxLine)
 }
 

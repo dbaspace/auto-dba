@@ -181,6 +181,7 @@ func Init(e *gin.Engine, d Deps) {
 	if d.Notify != nil {
 		secured.GET("/settings/notify", d.Notify.Get)
 		secured.PUT("/settings/notify", d.Notify.Update)
+		secured.POST("/settings/notify/test", d.Notify.Test)
 	}
 
 	secured.GET("/menus/mine", d.RBAC.MineMenus)
@@ -252,6 +253,11 @@ func Init(e *gin.Engine, d Deps) {
 	secured.POST("/databases/:id/assign-tenant", requireURN(store.URNTenantsImpersonate), d.DB.AssignTenant)
 	secured.DELETE("/databases/:id", requireURN(store.URNDatabasesDelete), d.DB.Delete)
 	secured.POST("/query", d.DB.Query)
+	secured.POST("/query/table-info", d.DB.TableInfo)
+	secured.GET("/query/favorites", d.DB.ListQueryFavorites)
+	secured.POST("/query/favorites", d.DB.CreateQueryFavorite)
+	secured.DELETE("/query/favorites/:id", d.DB.DeleteQueryFavorite)
+	secured.GET("/query/history", d.DB.ListMyQueryHistory)
 
 	secured.GET("/regions", d.Region.List)
 	secured.POST("/regions", requireURN(store.URNRegionsCreate), d.Region.Create)

@@ -82,10 +82,11 @@ type Alert struct {
 	StartedAt      string            `json:"started_at"`
 	ResolvedAt     string            `json:"resolved_at"`
 	PendingSince   string            `json:"pending_since"`
-	LastNotifiedAt string            `json:"last_notified_at,omitempty"`
-	NotifyCount    int               `json:"notify_count,omitempty"`
-	CreatedAt      string            `json:"created_at"`
-	UpdatedAt      string            `json:"updated_at"`
+	LastNotifiedAt  string `json:"last_notified_at,omitempty"`
+	NotifyCount     int    `json:"notify_count,omitempty"`
+	ResolveNotified bool   `json:"resolve_notified,omitempty"` // 本生命周期是否已外发恢复通知
+	CreatedAt       string `json:"created_at"`
+	UpdatedAt       string `json:"updated_at"`
 }
 
 type AlertEvent struct {
@@ -176,6 +177,7 @@ func (d *DB) ensureAlertTables() error {
 			pending_since TEXT NOT NULL DEFAULT '',
 			last_notified_at TEXT NOT NULL DEFAULT '',
 			notify_count INTEGER NOT NULL DEFAULT 0,
+			resolve_notified INTEGER NOT NULL DEFAULT 0,
 			created_at TEXT NOT NULL DEFAULT '',
 			updated_at TEXT NOT NULL DEFAULT ''
 		)`,
@@ -218,10 +220,14 @@ func (d *DB) ensureAlertTables() error {
 		`ALTER TABLE tbl_alert_rules ADD COLUMN IF NOT EXISTS notify_json TEXT NOT NULL DEFAULT '{}'`,
 		`ALTER TABLE tbl_alerts ADD COLUMN IF NOT EXISTS last_notified_at TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE tbl_alerts ADD COLUMN IF NOT EXISTS notify_count INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE tbl_alerts ADD COLUMN IF NOT EXISTS resolve_notified INTEGER NOT NULL DEFAULT 0`,
 	} {
 		if _, err := d.Exec(ddl); err != nil {
 			return err
 		}
+	}
+	if err := d.ensureAlertNotifyBudgetTable(); err != nil {
+		return err
 	}
 	return d.ensureAlertOpsTables()
 }
@@ -552,18 +558,20 @@ func (d *DB) DeleteAlertRule(id string) error {
 func scanAlert(sc interface{ Scan(dest ...any) error }) (*Alert, error) {
 	var a Alert
 	var labels, ann string
+	var resolveNotified int
 	if err := sc.Scan(&a.ID, &a.Fingerprint, &a.RuleID, &a.Severity, &a.Title, &a.Service, &a.Cluster,
 		&labels, &ann, &a.Status, &a.Handle, &a.Owner, &a.CurValue, &a.Threshold, &a.AggregateCount,
-		&a.StartedAt, &a.ResolvedAt, &a.PendingSince, &a.LastNotifiedAt, &a.NotifyCount,
+		&a.StartedAt, &a.ResolvedAt, &a.PendingSince, &a.LastNotifiedAt, &a.NotifyCount, &resolveNotified,
 		&a.CreatedAt, &a.UpdatedAt); err != nil {
 		return nil, err
 	}
+	a.ResolveNotified = resolveNotified != 0
 	a.Labels = decodeJSONMap(labels)
 	a.Annotations = decodeJSONMap(ann)
 	return &a, nil
 }
 
-const alertCols = `id, fingerprint, rule_id, severity, title, service, cluster, labels, annotations, status, handle, owner, cur_value, threshold, aggregate_count, started_at, resolved_at, pending_since, last_notified_at, notify_count, created_at, updated_at`
+const alertCols = `id, fingerprint, rule_id, severity, title, service, cluster, labels, annotations, status, handle, owner, cur_value, threshold, aggregate_count, started_at, resolved_at, pending_since, last_notified_at, notify_count, resolve_notified, created_at, updated_at`
 
 func (d *DB) GetAlert(id string) (*Alert, error) {
 	row := d.QueryRow(`SELECT `+alertCols+` FROM tbl_alerts WHERE id=?`, id)
@@ -720,18 +728,22 @@ func (d *DB) UpsertAlert(a *Alert) error {
 	if a.AggregateCount <= 0 {
 		a.AggregateCount = 1
 	}
-	_, err := d.Exec(`INSERT INTO tbl_alerts (`+alertCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+	rn := 0
+	if a.ResolveNotified {
+		rn = 1
+	}
+	_, err := d.Exec(`INSERT INTO tbl_alerts (`+alertCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET
 			severity=EXCLUDED.severity, title=EXCLUDED.title, service=EXCLUDED.service, cluster=EXCLUDED.cluster,
 			labels=EXCLUDED.labels, annotations=EXCLUDED.annotations, status=EXCLUDED.status, handle=EXCLUDED.handle,
 			owner=EXCLUDED.owner, cur_value=EXCLUDED.cur_value, threshold=EXCLUDED.threshold,
 			aggregate_count=EXCLUDED.aggregate_count, started_at=EXCLUDED.started_at, resolved_at=EXCLUDED.resolved_at,
 			pending_since=EXCLUDED.pending_since, last_notified_at=EXCLUDED.last_notified_at, notify_count=EXCLUDED.notify_count,
-			updated_at=EXCLUDED.updated_at`,
+			resolve_notified=EXCLUDED.resolve_notified, updated_at=EXCLUDED.updated_at`,
 		a.ID, a.Fingerprint, a.RuleID, a.Severity, a.Title, a.Service, a.Cluster,
 		encodeJSONMap(a.Labels), encodeJSONMap(a.Annotations), a.Status, a.Handle, a.Owner,
 		a.CurValue, a.Threshold, a.AggregateCount, a.StartedAt, a.ResolvedAt, a.PendingSince,
-		a.LastNotifiedAt, a.NotifyCount, a.CreatedAt, a.UpdatedAt)
+		a.LastNotifiedAt, a.NotifyCount, rn, a.CreatedAt, a.UpdatedAt)
 	if err != nil {
 		return err
 	}
@@ -748,12 +760,16 @@ func (d *DB) UpsertAlert(a *Alert) error {
 
 func (d *DB) SaveAlert(a *Alert) error {
 	a.UpdatedAt = nowRFC3339(time.Now())
+	rn := 0
+	if a.ResolveNotified {
+		rn = 1
+	}
 	_, err := d.Exec(`UPDATE tbl_alerts SET severity=?, title=?, service=?, cluster=?, labels=?, annotations=?,
 		status=?, handle=?, owner=?, cur_value=?, threshold=?, aggregate_count=?, started_at=?, resolved_at=?,
-		pending_since=?, last_notified_at=?, notify_count=?, updated_at=? WHERE id=?`,
+		pending_since=?, last_notified_at=?, notify_count=?, resolve_notified=?, updated_at=? WHERE id=?`,
 		a.Severity, a.Title, a.Service, a.Cluster, encodeJSONMap(a.Labels), encodeJSONMap(a.Annotations),
 		a.Status, a.Handle, a.Owner, a.CurValue, a.Threshold, a.AggregateCount, a.StartedAt, a.ResolvedAt,
-		a.PendingSince, a.LastNotifiedAt, a.NotifyCount, a.UpdatedAt, a.ID)
+		a.PendingSince, a.LastNotifiedAt, a.NotifyCount, rn, a.UpdatedAt, a.ID)
 	return err
 }
 

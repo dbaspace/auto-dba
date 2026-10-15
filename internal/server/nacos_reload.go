@@ -11,6 +11,7 @@ import (
 	"auto-dba/internal/config"
 	"auto-dba/internal/dbdeploy"
 	"auto-dba/internal/flashback"
+	"auto-dba/internal/notify"
 	"auto-dba/internal/srcluster"
 	"auto-dba/internal/sshx"
 	"auto-dba/internal/store"
@@ -156,5 +157,13 @@ func (t *hotReloadTargets) apply(diff config.ReloadDiff) {
 	}
 	if diff.Services {
 		log.Printf("nacos reload: services 已更新；db_monitor 模式/端口变更请重启相关进程")
+	}
+	if diff.Notify {
+		notify.InitProviders(t.cfg.Notify)
+		log.Printf("nacos reload: notify providers 已重建 lark=%v wecom=%v",
+			t.cfg.Notify.LarkConfigured(), t.cfg.Notify.WechatConfigured())
+	}
+	if diff.Copilot {
+		log.Printf("nacos reload: copilot 已更新")
 	}
 }

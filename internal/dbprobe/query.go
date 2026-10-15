@@ -18,16 +18,17 @@ import (
 	"auto-dba/internal/store"
 )
 
-const DefaultQueryLimit = 200
-const MaxQueryLimit = 1000
 const DefaultExportLimit = 5000
 const MaxExportLimit = 20000
 
 type QueryResult struct {
-	Columns   []string `json:"columns"`
-	Rows      [][]any  `json:"rows"`
-	Truncated bool     `json:"truncated"`
-	ElapsedMS int64    `json:"elapsed_ms"`
+	Columns      []string `json:"columns"`
+	Rows         [][]any  `json:"rows"`
+	Truncated    bool     `json:"truncated"`
+	ElapsedMS    int64    `json:"elapsed_ms"`
+	Limit        int      `json:"limit,omitempty"`         // 最大查询（硬顶，文案 M）
+	AppliedLimit int      `json:"applied_limit,omitempty"` // 本语句实际 limit
+	ValidSQL     string   `json:"valid_sql,omitempty"`     // 改写后 SQL
 }
 
 func instConn(inst *store.Instance) (host, user, dbType string, err error) {
@@ -61,8 +62,16 @@ func IsReadOnlySQL(raw string) error {
 	switch kw {
 	case "SELECT", "WITH", "SHOW", "EXPLAIN", "DESC", "DESCRIBE":
 		return nil
+	case "TRUNCATE", "INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE",
+		"REPLACE", "MERGE", "GRANT", "REVOKE", "CALL", "DO", "LOAD", "COPY",
+		"VACUUM", "ANALYZE", "REINDEX", "CLUSTER", "COMMENT", "SET", "RESET",
+		"BEGIN", "COMMIT", "ROLLBACK", "LOCK", "UNLOCK", "PURGE", "RENAME":
+		return fmt.Errorf("查询接口仅允许只读语句，禁止 %s/DDL/DML", kw)
 	default:
-		return fmt.Errorf("仅允许 SELECT / WITH / SHOW / EXPLAIN 类查询")
+		if kw == "" {
+			return fmt.Errorf("查询接口仅允许只读语句，禁止 DDL/DML")
+		}
+		return fmt.Errorf("查询接口仅允许只读语句，禁止 %s/DDL/DML", kw)
 	}
 }
 

@@ -23,9 +23,10 @@ const defaultExpr = `mysql_global_status_threads_connected{__SCOPE__} / clamp_mi
 const defaultMetric = `max by (d_b_instance_name) (qce_postgres_storagerate_max{__SCOPE__}) / 100`
 const defaultNotify: AlertNotifyPolicy = {
   max_fire_per_window: 3,
-  window: '1h',
-  repeat_interval: '30m',
+  window: '15m',
+  repeat_interval: '5m',
   repeat_on_handles: ['unclaimed'],
+  inherit_global: true,
 }
 
 function buildScope(v: Record<string, unknown>): AlertScope {
@@ -126,6 +127,7 @@ export default function AlertRules() {
       severity: 'P2', for_duration: '5m', enabled: true, scope_mode: 'global',
       scope_matcher_key: 'auto', use_tiers: false,
       expr: defaultExpr, labels_text: 'service=mysql, team=DBA',
+      notify_inherit: true,
       notify_max_fire: defaultNotify.max_fire_per_window,
       notify_window: defaultNotify.window,
       notify_repeat: defaultNotify.repeat_interval,
@@ -184,9 +186,10 @@ export default function AlertRules() {
       scope_idc: scope.cluster?.idc || '',
       scope_domain: scope.cluster?.domain || '',
       scope_tags_text: scope.tags || [],
+      notify_inherit: np.inherit_global === true || (!np.window && !np.repeat_interval && !np.max_fire_per_window),
       notify_max_fire: np.max_fire_per_window ?? 3,
-      notify_window: np.window || '1h',
-      notify_repeat: np.repeat_interval || '',
+      notify_window: np.window || '15m',
+      notify_repeat: np.repeat_interval || '5m',
       notify_handles: np.repeat_on_handles?.length ? np.repeat_on_handles : ['unclaimed'],
     })
     setTestResult('')
@@ -208,12 +211,25 @@ export default function AlertRules() {
     return out
   }
 
-  const buildNotifyPolicy = (v: Record<string, unknown>): AlertNotifyPolicy => ({
-    max_fire_per_window: Number(v.notify_max_fire ?? 3),
-    window: String(v.notify_window || '1h'),
-    repeat_interval: String(v.notify_repeat || ''),
-    repeat_on_handles: Array.isArray(v.notify_handles) ? v.notify_handles as string[] : ['unclaimed'],
-  })
+  const buildNotifyPolicy = (v: Record<string, unknown>): AlertNotifyPolicy => {
+    const inherit = !!v.notify_inherit
+    if (inherit) {
+      return {
+        inherit_global: true,
+        max_fire_per_window: 0,
+        window: '',
+        repeat_interval: '',
+        repeat_on_handles: Array.isArray(v.notify_handles) ? v.notify_handles as string[] : ['unclaimed'],
+      }
+    }
+    return {
+      inherit_global: false,
+      max_fire_per_window: Number(v.notify_max_fire ?? 3),
+      window: String(v.notify_window || '15m'),
+      repeat_interval: String(v.notify_repeat || ''),
+      repeat_on_handles: Array.isArray(v.notify_handles) ? v.notify_handles as string[] : ['unclaimed'],
+    }
+  }
 
   const submit = async () => {
     const v = await form.validateFields()
@@ -657,23 +673,35 @@ export default function AlertRules() {
           )}
 
           <Typography.Text strong style={{ display: 'block', marginBottom: 8 }}>通知频控</Typography.Text>
-          <Row gutter={12}>
-            <Col span={8}>
-              <Form.Item name="notify_max_fire" label="窗口内最多通知" extra="0=不限制">
-                <InputNumber min={0} style={{ width: '100%' }} />
-              </Form.Item>
-            </Col>
-            <Col span={8}>
-              <Form.Item name="notify_window" label="计数窗口">
-                <Input placeholder="1h" />
-              </Form.Item>
-            </Col>
-            <Col span={8}>
-              <Form.Item name="notify_repeat" label="未处理续报间隔" extra="空=关闭">
-                <Input placeholder="30m" />
-              </Form.Item>
-            </Col>
-          </Row>
+          <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 8 }}>
+            默认跟随「认证配置 → 通知 → 告警发送频率」（如 15m 内最多 3 次）。满额后停发触发/续报；告警恢复仍会通知一条。
+          </Typography.Paragraph>
+          <Form.Item name="notify_inherit" label="使用全局默认" valuePropName="checked">
+            <Switch />
+          </Form.Item>
+          <Form.Item noStyle shouldUpdate={(p, c) => p.notify_inherit !== c.notify_inherit}>
+            {() =>
+              form.getFieldValue('notify_inherit') ? null : (
+                <Row gutter={12}>
+                  <Col span={8}>
+                    <Form.Item name="notify_max_fire" label="窗口内最多通知" extra="0=不限制">
+                      <InputNumber min={0} style={{ width: '100%' }} />
+                    </Form.Item>
+                  </Col>
+                  <Col span={8}>
+                    <Form.Item name="notify_window" label="计数窗口">
+                      <Input placeholder="15m" />
+                    </Form.Item>
+                  </Col>
+                  <Col span={8}>
+                    <Form.Item name="notify_repeat" label="未处理续报间隔" extra="空=关闭">
+                      <Input placeholder="5m" />
+                    </Form.Item>
+                  </Col>
+                </Row>
+              )
+            }
+          </Form.Item>
           <Form.Item name="notify_handles" label="续报处理态" extra="默认仅待认领时续报">
             <Select
               mode="multiple"

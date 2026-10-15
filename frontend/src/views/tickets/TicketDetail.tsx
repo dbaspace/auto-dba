@@ -1,8 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { Alert, Avatar, Button, Descriptions, Input, Modal, Select, Tag, message } from 'antd'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import api from '../../api/request'
+import { useAppDispatch, useAppSelector } from '../../store'
+import { closeTab, openTab, tabKey } from '../../store/tabsSlice'
 import DdlExecImpact from './DdlExecImpact'
 import './TicketDetail.css'
 
@@ -58,7 +60,17 @@ interface ApplyField {
 
 export default function TicketDetail() {
   const navigate = useNavigate()
+  const location = useLocation()
   const params = useParams()
+  const dispatch = useAppDispatch()
+  const menus = useAppSelector((s) => s.auth.menus)
+
+  const backToTicketList = () => {
+    const detailKey = tabKey(location.pathname, location.search)
+    dispatch(openTab({ path: '/ops/tickets', menus, title: '工单列表' }))
+    dispatch(closeTab(detailKey))
+    navigate('/ops/tickets')
+  }
 
   const [item, setItem] = useState<any>(null)
   const [canApproveFlag, setCanApproveFlag] = useState(false)
@@ -257,8 +269,14 @@ export default function TicketDetail() {
         fields.push({ key: 'dba', label: 'DBA审批人', value: dqlExtra.dba_assigned_to })
       if (dqlExtra.security_assigned_to)
         fields.push({ key: 'sec', label: '安全审批人', value: dqlExtra.security_assigned_to })
+      fields.push({
+        key: 'approver',
+        label: '指定审批人',
+        value: dqlExtra.export_assigned_to || it.assigned_to || '-',
+      })
+    } else {
+      fields.push({ key: 'approver', label: '指定审批人', value: it.assigned_to || '-' })
     }
-    fields.push({ key: 'approver', label: '指定审批人', value: it.assigned_to || '-' })
     fields.push({ key: 'created', label: '申请时间', value: fmtTime(it.created_at) })
     return fields
   }, [item, dbType, dbPath, createdbExtra, dqlExtra, resourceApplyExtra])
@@ -285,6 +303,88 @@ export default function TicketDetail() {
   }, [item, canTransferFlag])
 
   const isDQL = useMemo(() => item?.issue_type === 'dql', [item])
+  const dqlMultiStep = useMemo(
+    () =>
+      !!(
+        isDQL &&
+        dqlExtra?.dba_assigned_to &&
+        dqlExtra?.security_assigned_to
+      ),
+    [isDQL, dqlExtra],
+  )
+  const dqlPhase = useMemo(() => {
+    if (!dqlMultiStep) return 'done'
+    const s = String(item?.status || '')
+    // 终态已通过/执行：各审批关均视为完成
+    if (s && s !== 'pending' && s !== 'rejected' && s !== 'canceled') return 'done'
+    // 驳回/取消：优先用记录的驳回关，避免误标到最后一关
+    const rejectedPhase = String(dqlExtra?.rejected_phase || '').toLowerCase()
+    if ((s === 'rejected' || s === 'canceled') &&
+      (rejectedPhase === 'assignee' || rejectedPhase === 'dba' || rejectedPhase === 'security')) {
+      return rejectedPhase
+    }
+    const p = String(dqlExtra?.dql_approval_phase || '').toLowerCase()
+    if (p === 'assignee' || p === 'dba' || p === 'security') return p
+    if (p === 'done') return 'done'
+    // 多人相同时不能靠 assigned_to 推断；有 approved_by 则推到下一关
+    if (dqlExtra?.security_approved_by) return s === 'pending' ? 'done' : 'security'
+    if (dqlExtra?.dba_approved_by) return s === 'pending' ? 'security' : 'dba'
+    if (dqlExtra?.assignee_approved_by) return s === 'pending' ? 'dba' : 'assignee'
+    return 'assignee'
+  }, [dqlMultiStep, dqlExtra, item])
+  const dqlApprovalSteps = useMemo(() => {
+    type Step = { key: string; title: string; user: string; approvedBy: string; rejectedBy?: string }
+    if (!isDQL) return [] as Step[]
+    const rejectedBy = String(dqlExtra?.rejected_by || '')
+    const steps: Step[] = [
+      {
+        key: 'assignee',
+        title: '指定人员审批',
+        user: String(dqlExtra?.export_assigned_to || item?.assigned_to || ''),
+        approvedBy: String(dqlExtra?.assignee_approved_by || ''),
+        rejectedBy: dqlPhase === 'assignee' ? rejectedBy : '',
+      },
+    ]
+    if (dqlMultiStep) {
+      steps.push(
+        {
+          key: 'dba',
+          title: 'DBA审批',
+          user: String(dqlExtra?.dba_assigned_to || ''),
+          approvedBy: String(dqlExtra?.dba_approved_by || ''),
+          rejectedBy: dqlPhase === 'dba' ? rejectedBy : '',
+        },
+        {
+          key: 'security',
+          title: '安全审批',
+          user: String(dqlExtra?.security_assigned_to || ''),
+          approvedBy: String(dqlExtra?.security_approved_by || ''),
+          rejectedBy: dqlPhase === 'security' ? rejectedBy : '',
+        },
+      )
+    }
+    return steps
+  }, [isDQL, dqlMultiStep, dqlExtra, item, dqlPhase])
+  const dqlStepState = (key: string): 'done' | 'active' | 'wait' | 'danger' => {
+    const order = ['assignee', 'dba', 'security']
+    const s = item?.status
+    if (s === 'rejected' || s === 'canceled') {
+      const phase = dqlPhase === 'done' ? 'assignee' : dqlPhase
+      const pi = order.indexOf(phase)
+      const ki = order.indexOf(key)
+      if (ki === pi) return 'danger'
+      if (ki >= 0 && pi >= 0 && ki < pi) return 'done'
+      return 'wait'
+    }
+    if (s && s !== 'pending') return 'done'
+    if (!dqlMultiStep) return s === 'pending' ? 'active' : 'done'
+    if (dqlPhase === 'done') return 'done'
+    const ki = order.indexOf(key)
+    const pi = order.indexOf(dqlPhase)
+    if (ki < pi) return 'done'
+    if (ki === pi) return 'active'
+    return 'wait'
+  }
   const isFlashback = useMemo(() => item?.issue_type === 'flashback', [item])
   const flashbackTaskID = useMemo(() => {
     const m = String(item?.sql_content || '').match(/^flashback\s+([0-9a-fA-F-]{36})/i)
@@ -406,13 +506,6 @@ export default function TicketDetail() {
     [isDQL, isSubmitter, item],
   )
 
-  const approveCardClass = useMemo(() => {
-    const s = item?.status
-    if (s === 'pending') return 'is-active'
-    if (s === 'rejected') return 'is-danger'
-    return 'is-done'
-  }, [item])
-
   const execCardClass = useMemo(() => {
     const s = item?.status
     if (s === 'executed') return 'is-done'
@@ -421,27 +514,12 @@ export default function TicketDetail() {
     return 'is-wait'
   }, [item])
 
-  const wfApproveClass = useMemo(() => {
-    const s = item?.status
-    if (s === 'pending') return 'is-current'
-    if (s === 'rejected' || s === 'canceled') return 'is-fail'
-    return 'is-ok'
-  }, [item])
-
   const wfExecClass = useMemo(() => {
     const s = item?.status
     if (s === 'approved' || s === 'running') return 'is-current'
     if (s === 'executed') return 'is-ok'
     if (s === 'failed') return 'is-fail'
     return 'is-idle'
-  }, [item])
-
-  const wfApproveSub = useMemo(() => {
-    const s = item?.status
-    if (s === 'pending') return '待审批'
-    if (s === 'rejected') return '已驳回'
-    if (s === 'canceled') return '已取消'
-    return '已通过'
   }, [item])
 
   const wfExecSub = useMemo(() => {
@@ -648,6 +726,7 @@ export default function TicketDetail() {
     try {
       const it = itemRef.current
       let currentComment = comment
+      let okMsg = '已处理'
       if (kind === 'reject') {
         if (!currentComment.trim()) {
           const value = await promptRejectReason()
@@ -659,7 +738,8 @@ export default function TicketDetail() {
         }
         await api.put(`/tickets/${it.id}/reject`, { reason: currentComment })
       } else if (kind === 'approve') {
-        await api.put(`/tickets/${it.id}/approve`)
+        const { data } = await api.put(`/tickets/${it.id}/approve`)
+        if (data?.message) okMsg = String(data.message)
       } else if (kind === 'cancel') {
         const ok = await confirmCancel()
         if (!ok) {
@@ -669,7 +749,7 @@ export default function TicketDetail() {
       } else if (kind === 'execute') {
         await api.post(`/tickets/${it.id}/execute`)
       }
-      message.success('已处理')
+      message.success(okMsg)
       setComment('')
       await load()
     } catch (err: any) {
@@ -769,6 +849,11 @@ export default function TicketDetail() {
 
   return (
     <div className="review-page">
+      <div className="back-row">
+        <button type="button" className="back-link" onClick={backToTicketList}>
+          ← 返回工单列表
+        </button>
+      </div>
       {item && (
         <div className="review-split">
           <aside className="review-aside">
@@ -799,72 +884,92 @@ export default function TicketDetail() {
             </div>
 
             <div className="meta-label">执行流程</div>
-            <div className={`flow-card ${approveCardClass}`}>
-              <div className="flow-card-head">指定人员审批</div>
-              <div className="flow-card-body">
-                {item.status === 'pending' ? (
-                  <>
-                    <div className="approver-line">
-                      审批人员：{item.assigned_to || '-'}
-                      {canTransfer && (
-                        <Button type="link" size="small" style={{ padding: '0 0 0 8px' }} onClick={() => { void openTransfer() }}>
-                          更换审核人
-                        </Button>
-                      )}
-                    </div>
-                    <div className="timeout-hint">提交后超过 8 小时未审核完成，系统将自动取消</div>
-                    <div className="remark-box">
-                      <div className="remark-label">附言：</div>
-                      <Input.TextArea
-                        value={comment}
-                        onChange={(e) => setComment(e.target.value)}
-                        rows={3}
-                        placeholder="请输入附言"
-                      />
-                      <div className="remark-actions">
-                        <Button
-                          danger
-                          size="small"
-                          disabled={!canApprove}
-                          loading={acting}
-                          onClick={() => act('reject')}
-                        >
-                          驳回
-                        </Button>
-                        <Button
-                          type="primary"
-                          size="small"
-                          disabled={!canApprove}
-                          loading={acting}
-                          onClick={() => act('approve')}
-                        >
-                          通过
-                        </Button>
-                      </div>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <div className="approve-result">
-                      <div className="user-card compact">
-                        <Avatar size={28}>{userInitial(item.assigned_to)}</Avatar>
-                        <span>{item.assigned_to || '-'}</span>
-                      </div>
-                      {item.status === 'rejected' ? (
-                        <span className="status-text danger">已驳回</span>
-                      ) : item.status === 'canceled' ? (
-                        <span className="status-text muted">已取消</span>
-                      ) : (
-                        <span className="status-text success">已通过</span>
-                      )}
-                    </div>
-                    {item.reject_reason && (
-                      <div className="remark-text">附言：{item.reject_reason}</div>
+            {(dqlApprovalSteps.length > 0 ? dqlApprovalSteps : [{
+              key: 'assignee',
+              title: '指定人员审批',
+              user: String(item.assigned_to || ''),
+              approvedBy: '',
+            }]).map((step) => {
+              const state = isDQL ? dqlStepState(step.key) : (
+                item.status === 'pending' ? 'active' : item.status === 'rejected' || item.status === 'canceled' ? 'danger' : 'done'
+              )
+              const cardClass =
+                state === 'active' ? 'is-active' : state === 'danger' ? 'is-danger' : state === 'done' ? 'is-done' : 'is-wait'
+              const isCurrent = state === 'active' && item.status === 'pending'
+              const displayUser = isCurrent
+                ? (item.assigned_to || step.user)
+                : (step.rejectedBy || step.approvedBy || step.user)
+              return (
+                <div key={step.key} className={`flow-card ${cardClass}`}>
+                  <div className="flow-card-head">{step.title}</div>
+                  <div className="flow-card-body">
+                    {isCurrent ? (
+                      <>
+                        <div className="approver-line">
+                          审批人员：{item.assigned_to || step.user || '-'}
+                          {canTransfer && (
+                            <Button type="link" size="small" style={{ padding: '0 0 0 8px' }} onClick={() => { void openTransfer() }}>
+                              更换审核人
+                            </Button>
+                          )}
+                        </div>
+                        <div className="timeout-hint">提交后超过 8 小时未审核完成，系统将自动取消</div>
+                        <div className="remark-box">
+                          <div className="remark-label">附言：</div>
+                          <Input.TextArea
+                            value={comment}
+                            onChange={(e) => setComment(e.target.value)}
+                            rows={3}
+                            placeholder="请输入附言"
+                          />
+                          <div className="remark-actions">
+                            <Button
+                              danger
+                              size="small"
+                              disabled={!canApprove}
+                              loading={acting}
+                              onClick={() => act('reject')}
+                            >
+                              驳回
+                            </Button>
+                            <Button
+                              type="primary"
+                              size="small"
+                              disabled={!canApprove}
+                              loading={acting}
+                              onClick={() => act('approve')}
+                            >
+                              通过
+                            </Button>
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="approve-result">
+                          <div className="user-card compact">
+                            <Avatar size={28}>{userInitial(displayUser)}</Avatar>
+                            <span>{displayUser || '-'}</span>
+                          </div>
+                          {state === 'danger' ? (
+                            <span className="status-text danger">
+                              {item.status === 'canceled' ? '已取消' : '已驳回'}
+                            </span>
+                          ) : state === 'done' ? (
+                            <span className="status-text success">已通过</span>
+                          ) : (
+                            <span className="status-text muted">待审批</span>
+                          )}
+                        </div>
+                        {state === 'danger' && item.reject_reason && (
+                          <div className="remark-text">附言：{item.reject_reason}</div>
+                        )}
+                      </>
                     )}
-                  </>
-                )}
-              </div>
-            </div>
+                  </div>
+                </div>
+              )
+            })}
 
             {showExecCard && (
               <div className={`flow-card ${execCardClass}`}>
@@ -985,21 +1090,46 @@ export default function TicketDetail() {
 
             <div className="wf-title">工作流</div>
             <div className="wf-graph">
-              <div className={`wf-node ${wfApproveClass}`}>
-                <div className="wf-dot" />
-                <div>
-                  <div className="wf-name">指定人员审批</div>
-                  <div className="wf-sub">{wfApproveSub}</div>
-                </div>
-              </div>
-              <div className="wf-line" />
-              <div className={`wf-node ${wfExecClass}`}>
-                <div className="wf-dot" />
-                <div>
-                  <div className="wf-name">执行操作</div>
-                  <div className="wf-sub">{wfExecSub}</div>
-                </div>
-              </div>
+              {(dqlApprovalSteps.length > 0 ? dqlApprovalSteps : [{
+                key: 'assignee',
+                title: '指定人员审批',
+                user: '',
+                approvedBy: '',
+              }]).map((step, idx, arr) => {
+                const state = isDQL ? dqlStepState(step.key) : (
+                  item.status === 'pending' ? 'active' : item.status === 'rejected' || item.status === 'canceled' ? 'danger' : 'done'
+                )
+                const nodeClass =
+                  state === 'active' ? 'is-current' : state === 'danger' ? 'is-fail' : state === 'done' ? 'is-ok' : 'is-idle'
+                const sub =
+                  state === 'active' ? '待审批' : state === 'danger'
+                    ? (item.status === 'canceled' ? '已取消' : '已驳回')
+                    : state === 'done' ? '已通过' : '未开始'
+                return (
+                  <React.Fragment key={step.key}>
+                    {idx > 0 ? <div className="wf-line" /> : null}
+                    <div className={`wf-node ${nodeClass}`}>
+                      <div className="wf-dot" />
+                      <div>
+                        <div className="wf-name">{step.title}</div>
+                        <div className="wf-sub">{sub}</div>
+                      </div>
+                    </div>
+                    {idx === arr.length - 1 ? (
+                      <>
+                        <div className="wf-line" />
+                        <div className={`wf-node ${wfExecClass}`}>
+                          <div className="wf-dot" />
+                          <div>
+                            <div className="wf-name">执行操作</div>
+                            <div className="wf-sub">{wfExecSub}</div>
+                          </div>
+                        </div>
+                      </>
+                    ) : null}
+                  </React.Fragment>
+                )
+              })}
             </div>
           </aside>
 

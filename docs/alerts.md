@@ -43,12 +43,21 @@
 |------|------|
 | `metric_expr`（多档时的 `expr`） | **无比较符**的指标表达式，编译进 `compiled_expr` |
 | `tiers[]` | `{op, value, severity, for?}`；命中多档时取级别最高者 |
-| `notify_policy.max_fire_per_window` | 计数窗口内最多外发次数，`0`=不限制 |
-| `notify_policy.window` | 计数窗口，如 `1h` |
-| `notify_policy.repeat_interval` | 未处理续报间隔；空 / `0` 关闭 |
+| `notify_policy.max_fire_per_window` | 计数窗口内最多外发次数（仅 trigger/续报），`0`=不限制 |
+| `notify_policy.window` | 计数窗口，默认跟随全局 `15m` |
+| `notify_policy.repeat_interval` | 未处理续报间隔；空 / `0` 关闭；默认跟随全局 `5m` |
 | `notify_policy.repeat_on_handles` | 默认可续报处理态，默认 `["unclaimed"]` |
+| `notify_policy.inherit_global` | `true` 时用通知页全局默认，规则不单独覆盖窗口/次数 |
 
-告警行记录 `last_notified_at` / `notify_count`；事件 `action=notify|inhibit|trigger|resolve`。
+**全局默认**（认证配置 → 通知 → 告警发送频率）：`alert_notify_max_fire`（默认 3）、`alert_notify_window`（默认 `15m`）、`alert_notify_repeat`（默认 `5m`）。
+
+**频控语义**：
+
+- 同一 `fingerprint` 在滑动窗口内最多 N 次 trigger/repeat（指纹预算跨 resolve 重建仍累计，避免抖动刷屏）。
+- 满额后持续异常不再外发触发/续报，窗口过期后再发。
+- **告警最终恢复必发一条**「告警已恢复」通知，**不占用**也不受上述 N 次限制；同一告警生命周期至多一条 resolve 外发。
+
+告警行记录 `last_notified_at` / `notify_count` / `resolve_notified`；指纹预算表 `tbl_alert_notify_budget`；事件 `action=notify|inhibit|trigger|resolve`。
 
 **约定**：同一指标只保留 **一条规则 + 多档**，不再拆「过高 / 危急」两条。
 
@@ -103,7 +112,7 @@ Ruler **每规则只查 1 次** Prom，不做按实例 N+1。
 | 开关 | 行为 |
 |------|------|
 | `webhook_enabled` + `webhook_on_alert` | POST JSON；若 URL 为企微群机器人则自动改发 markdown |
-| `wecom_enabled` + `wecom_on_alert` | 企业微信应用消息（CorpID / AgentID / Secret）；`wecom_to_user` 默认 `@all` |
+| `wecom_enabled` + `wecom_on_alert` | 企业微信应用消息（凭证在 Nacos）；接收人为值班/用户 `im_account`（企微 userid），不使用 `@all` |
 | `phone_enabled` + `phone_on_alert` | POST JSON 到 `phone_api_url`（severity/title/text 等） |
 | `email_on_alert` | SMTP 邮件给值班人、`labels.owner` / `labels.notify` |
 
@@ -134,7 +143,7 @@ Ruler **每规则只查 1 次** Prom，不做按实例 N+1。
 
 ### 值班排班
 
-按 `weekday`（0=周日）+ `start_hm`/`end_hm`（支持跨午夜）指定 `usernames`。当前时段值班人作为邮件收件人，并优先覆盖企微 `touser`（用户名需与企微账号一致，否则用全局 `wecom_to_user`）。
+按 `weekday`（0=周日）+ `start_hm`/`end_hm`（支持跨午夜）指定 `usernames`。当前时段值班人作为邮件收件人；企微通知使用对应用户档案的 `im_account`（企微 userid）。
 
 ## 页面
 
@@ -170,7 +179,8 @@ Ruler **每规则只查 1 次** Prom，不做按实例 N+1。
 | 表 | 要点 |
 |----|------|
 | `tbl_alert_rules` | `scope_json`、`tiers_json`、`notify_json`、`metric_expr`、`compiled_*` |
-| `tbl_alerts` | 含 `last_notified_at`、`notify_count`、`aggregate_count` |
+| `tbl_alerts` | 含 `last_notified_at`、`notify_count`、`resolve_notified`、`aggregate_count` |
+| `tbl_alert_notify_budget` | 指纹级 trigger/续报窗口预算 |
 | `tbl_alert_events` | 生命周期与 notify/inhibit |
 | `tbl_alert_silences` | 静默 |
 | `tbl_alert_inhibitions` | 抑制 |
@@ -179,9 +189,25 @@ Ruler **每规则只查 1 次** Prom，不做按实例 N+1。
 
 多租户：告警规则 / 告警 / 静默按租户隔离，见 [tenancy.md](tenancy.md)。抑制 / 路由 / 值班表当前为平台级（未挂 `tenant_id`），各租户共享配置。
 
+### 升级补丁 SQL（v1.12.0）
+
+启动 migrate 会自动加列/建表；若仍报缺列，可手工执行：
+
+```sql
+ALTER TABLE tbl_alerts
+  ADD COLUMN IF NOT EXISTS resolve_notified INTEGER NOT NULL DEFAULT 0;
+
+CREATE TABLE IF NOT EXISTS tbl_alert_notify_budget (
+  fingerprint TEXT PRIMARY KEY,
+  notify_count INTEGER NOT NULL DEFAULT 0,
+  last_notified_at TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT ''
+);
+```
+
 ## 依赖与运维
 
 - Prometheus：`awr_prometheus_base_url`（可选 token）；SQL 洞察设置中配置。
-- 通知：认证配置 → 通知 Tab；邮件另需 SMTP。
+- 通知：认证配置 → 通知 Tab（含告警发送频率）；邮件另需 SMTP；飞书/企微/群机器人等凭证见 Nacos `notify`。
 - 引导版本：修改 migrate/seed 后递增 `SchemaVersion` / `SeedVersion`（见 `internal/store/bootstrap.go`）。
 - 菜单由 seed `ensureAlertMenus` 写入；规则由 `EnsureDefaultAlertRules` 幂等保证。

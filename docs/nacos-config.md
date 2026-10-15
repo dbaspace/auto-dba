@@ -175,6 +175,78 @@ copilot:
 
 **Copilot 401 排查**：`Invalid User API Key` 表示上游拒绝密钥——检查 Nacos `copilot.api_key` 是否为有效 Cursor User API Key（`crsr_…`），或改用 OpenAI 兼容网关的 `sk-…`；前端选「通义」时必须配置 `provider: openai` 与对应 `base_url`，不能仍指向 `api.cursor.com`。
 
+### 通知渠道（飞书 / 企微 / 短信 / 电话 / 群机器人）
+
+邮件 SMTP 仍走库表「邮件」配置与 `email_on_*` 开关，**不在本段配置**。
+
+**页面不再录入密钥 / Webhook URL / 电话 API**：企微 CorpID·Secret、群机器人 URL、短信/电话凭证等**仅写在本 `notify` 段**。认证配置 → 通知 Tab 按渠道分块，只提供事件开关与「发送测试」（`POST /settings/notify/test`）。默认全部 `enabled: false`，按使用再开。
+
+```yaml
+notify:
+  provider:
+    wechat:
+      enabled: false
+      corp_id: ""
+      agent_id: ""
+      api_secret: ""          # 勿写入仓库 / 聊天
+      api_url: "https://qyapi.weixin.qq.com/cgi-bin/"
+      # 告警默认发往这些部门（toparty）；部门须在应用「可见范围」内。支持 "15" 或 ["15","16"]
+      party_ids: "15"
+    lark:                    # 飞书私聊（工单审批人）
+      enabled: false
+      app_id: "cli_xxx"
+      app_secret: "xxx"      # 泄露后须在开放平台轮换
+    alert_lark:              # 飞书告警独立应用
+      enabled: false
+      app_id: ""
+      app_secret: ""
+    call: "cloopen"          # cloopen | huawei | yjzy
+    sms: "cloopen"           # cloopen | yjzy
+  tele_provider:
+    cloopen:
+      enabled: false
+      api_account: ""
+      api_token: ""
+      app_id: ""
+      template_id: ""
+      singer: "【KeePlus】"
+    cloopen_call:
+      enabled: false
+      api_account: ""
+      api_token: ""
+      app_id: ""
+      display_num: ""
+      media_name: ""
+      tts: true
+    huawei:
+      enabled: false
+      base_url: "https://rtccall.cn-north-1.myhuaweicloud.cn:443"
+      api_key: ""
+      api_secret: ""
+      display_numbers: []
+      template_id: ""
+      status_url: ""
+    yjzy_call:
+      base_url: ""
+      cid: ""
+      pwd: ""
+      product_id: ""
+    yjzy_sms:
+      base_url: ""
+      cid: ""
+      pwd: ""
+      product_id: ""
+      singer: "【KeePlus】"
+  robots:
+    - kind: lark             # lark | wechat | dingtalk
+      url: ""
+```
+
+- **群机器人方向（告警 / 工单）不在 Nacos**：只在「认证配置 → 通知 → 群机器人」按条选择并保存到库（`robot_routes` + `robots_on_ticket_create`）。未配置方向时默认仅告警。
+- 热更：`notify` 段变更会重建 Provider（与 Copilot 相同 Listen 路径）。
+- 用户绑定飞书：`im_type=lark`，`im_account` 填飞书 **user_id**；短信/电话用用户档案 `phone`。
+- API `GET /settings/notify` 返回 `providers` 只读状态（`lark_ready` 等），不含密钥。
+
 ### 服务端口从 Nacos 绑定
 
 启动顺序已经是：**读本地引导 → 拉 Nacos 合并 → `Listen(host:port)`**，无需再写一套绑定逻辑。

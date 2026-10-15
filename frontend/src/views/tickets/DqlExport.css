@@ -115,13 +115,13 @@
 }
 
 .dql-page .order-main {
-  overflow: hidden;
+  overflow: auto;
+  align-items: stretch;
 }
 
 .dql-sql-item {
-  flex: 1 1 0;
-  min-height: 0;
-  margin-bottom: 0 !important;
+  flex: 0 0 auto;
+  margin-bottom: 8px !important;
   max-width: none !important;
   width: 100%;
 }
@@ -130,25 +130,21 @@
 .dql-sql-item .ant-form-item-control,
 .dql-sql-item .ant-form-item-control-input,
 .dql-sql-item .ant-form-item-control-input-content {
-  height: 100%;
+  height: auto;
   min-height: 0;
 }
 
-.dql-sql-item .ant-form-item-control-input-content {
-  display: flex;
-  flex-direction: column;
-}
-
 .dql-sql-editor {
-  flex: 1 1 0 !important;
-  min-height: 240px !important;
-  height: 100% !important;
-  resize: none;
+  min-height: 200px !important;
+  height: 280px !important;
+  max-height: min(420px, 50vh) !important;
+  resize: vertical;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 13px;
   line-height: 1.6;
 }
 
 .dql-sql-editor.ant-input {
-  height: 100% !important;
+  height: 280px !important;
+  max-height: min(420px, 50vh) !important;
 }

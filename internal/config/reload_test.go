@@ -18,6 +18,7 @@ func TestDiffConfigAllSections(t *testing.T) {
 		External: ExternalConfig{StarRocksFEURL: ""},
 		Backup:   BackupConfig{WorkDir: "/tmp/a"},
 		Copilot:  CopilotConfig{BaseURL: "https://api.cursor.com", APIKey: "old"},
+		Notify:   NotifyModuleConfig{Provider: NotifyProviderConfig{Lark: LarkNotifyConfig{Enabled: false}}},
 	}
 	next := &Config{
 		App:      AppConfig{JWTSecret: "b", Name: "x"},
@@ -30,13 +31,14 @@ func TestDiffConfigAllSections(t *testing.T) {
 		External: ExternalConfig{StarRocksFEURL: "http://fe"},
 		Backup:   BackupConfig{WorkDir: "/tmp/b"},
 		Copilot:  CopilotConfig{BaseURL: "https://api.cursor.com", APIKey: "new"},
+		Notify:   NotifyModuleConfig{Provider: NotifyProviderConfig{Lark: LarkNotifyConfig{Enabled: true, AppID: "cli_x"}}},
 	}
 	d := DiffConfig(old, next)
 	if !d.Any() {
 		t.Fatal("expected Any")
 	}
 	if !d.App || !d.JWTSecret || !d.HTTP || !d.ListenAddr || !d.Frontend || !d.FrontendDev ||
-		!d.Log || !d.DB || !d.DBPool || !d.CDC || !d.Terminal || !d.External || !d.Backup || !d.Copilot {
+		!d.Log || !d.DB || !d.DBPool || !d.CDC || !d.Terminal || !d.External || !d.Backup || !d.Copilot || !d.Notify {
 		t.Fatalf("diff=%+v sections=%v", d, d.Sections())
 	}
 	// 仅改 http.read_timeout，也应命中 http 段（整段比较）
