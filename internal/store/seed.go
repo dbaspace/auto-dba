@@ -182,6 +182,9 @@ func (d *DB) seedRBAC(now string) error {
 	if err := d.ensureRedisTicketMenu(now); err != nil {
 		return err
 	}
+	if err := d.ensureResourceApplyMenu(now); err != nil {
+		return err
+	}
 	if err := d.ensureSchemaCompareMenu(now); err != nil {
 		return err
 	}
@@ -331,6 +334,8 @@ func defaultMenuIcon(id, path string) string {
 		return "share"
 	case "m-tickets-redis":
 		return "coin"
+	case "m-tickets-resource-apply":
+		return "appstore"
 	case "m-tickets-dcl":
 		return "key"
 	case "m-tickets-createdb":
@@ -559,6 +564,7 @@ func (d *DB) seedMenus(now string) error {
 		{"m-tickets-kafka", "m-tickets", "Kafka 工单", "/ops/kafka", "um.sidebar.ops-kafka", "查看 Kafka 工单", "share", 14},
 		{"m-tickets-redis", "m-tickets", "Redis 工单", "/ops/redis", "um.sidebar.ops-redis", "查看 Redis 工单", "coin", 15},
 		{"m-tickets-dcl", "m-tickets", "权限申请", "/ops/dcl", "um.sidebar.ops-dcl", "查看权限申请", "key", 16},
+		{"m-tickets-resource-apply", "m-tickets", "平台资源申请", "/ops/resource-apply", "um.sidebar.ops-resource-apply", "查看平台资源申请", "appstore", 18},
 		{"m-tickets-createdb", "m-tickets", "新增数据库", "/ops/createdb", "um.sidebar.ops-createdb", "查看新增数据库", "plus", 17},
 		{"m-sync", "", "同步与迁移", "", "um.sidebar.sync", "查看同步与迁移", "refresh", 20},
 		{"m-sync-slots", "m-sync", "同步列表", "/ops/slots", "um.sidebar.ops-slots", "查看同步列表", "connection", 21},
@@ -713,6 +719,30 @@ func (d *DB) ensureRedisTicketMenu(now string) error {
 		return err
 	}
 	return d.GrantMenuFollowingParent(m.ID, m.ParentID)
+}
+
+func (d *DB) ensureResourceApplyMenu(now string) error {
+	m := &Menu{
+		ID: "m-tickets-resource-apply", ParentID: "m-tickets", Title: "平台资源申请", Path: "/ops/resource-apply",
+		URN: "um.sidebar.ops-resource-apply", PermissionDesc: "查看平台资源申请", Icon: "appstore",
+		SortOrder: 18, Enabled: true, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := d.EnsureMenu(m); err != nil {
+		return err
+	}
+	// 已有「工单申请」的角色跟进授权；内置角色再兜底灌入，避免侧栏缺失 / 403
+	if err := d.GrantMenuFollowingParent(m.ID, m.ParentID); err != nil {
+		return err
+	}
+	return d.GrantMenuToAllRoles(m.ID)
+}
+
+// EnsureResourceApplyMenu 供运维/启动补菜单（幂等）。
+func (d *DB) EnsureResourceApplyMenu(now string) error {
+	if now == "" {
+		now = time.Now().UTC().Format(time.RFC3339)
+	}
+	return d.ensureResourceApplyMenu(now)
 }
 
 func (d *DB) ensureSchemaCompareMenu(now string) error {

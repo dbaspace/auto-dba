@@ -10,6 +10,7 @@ const TYPES = [
   { value: 'dml', label: '数据库操作' },
   { value: 'dql', label: '数据导出' },
   { value: 'dcl', label: '账号权限' },
+  { value: 'resource_apply', label: '平台资源申请' },
   { value: 'kafka', label: 'Kafka' },
   { value: 'cdc_sync', label: 'CDC' },
   { value: 'archive', label: '数据归档' },
@@ -49,6 +50,7 @@ function typeText(t: string) {
       redis: 'Redis',
       sr_cluster: 'StarRocks 集群变更',
       db_deploy: '数据库集群部署',
+      resource_apply: '平台资源申请',
     }[t] ||
     t ||
     '-'
@@ -173,6 +175,12 @@ export default function TicketList() {
         columns={[
           { title: '单号', dataIndex: 'ticket_no', width: 160 },
           { title: '类型', width: 110, render: (_, r) => typeText(r.issue_type) },
+          {
+            title: '租户',
+            width: 120,
+            ellipsis: true,
+            render: (_, r) => r.tenant_name || r.tenant_id || '-',
+          },
           { title: '库', dataIndex: 'db_name', ellipsis: true },
           { title: '提交人', dataIndex: 'submitter_name', width: 120 },
           { title: '审批人', dataIndex: 'assigned_to', width: 120 },

@@ -29,10 +29,18 @@
 
 名单用户：
 
-- 可在待办看到全部 pending 工单（不依赖 `assigned_to`）
+- 可在待办看到全部 pending 工单（不依赖 `assigned_to`；本租范围内；**平台资源申请**额外见下）
 - 可通过/驳回任意 pending 工单与迁移审批
 - **不能**代提交者做「更换审核人」
 - 审批时不改写 `assigned_to`；history 可记 `approved_by_whitelist=...`
+
+### 平台资源申请的跨租特权
+
+对 `issue_type=resource_apply`，**平台管理员**与本白名单用户：
+
+- 无视当前 JWT 租户，可在工单列表与首页待办看到**全平台**该类 pending/历史（列表过滤仍尊重 type/status/q）
+- 可打开详情并通过/驳回，无需加入申请人业务租户、无需 impersonate
+- **不**扩大到 DDL/DML 等其它工单类型的跨租可见性
 
 配置入口：配置中心 → 全局参数。
 

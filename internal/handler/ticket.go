@@ -431,6 +431,10 @@ func (h *TicketHandler) Submit(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "不支持的工单类型: " + req.Type})
 		return
 	}
+	if req.Type == store.IssueTypeResourceApply {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "请使用 POST /resource-apply 提交平台资源申请"})
+		return
+	}
 	username := middleware.Username(c)
 	if req.Type == store.IssueTypeDQL {
 		if err := h.prepareDQLSubmit(c, &req); err != nil {
@@ -616,7 +620,9 @@ func (h *TicketHandler) prepareDQLSubmit(c *gin.Context, req *ticketSubmitReq) e
 
 func (h *TicketHandler) List(c *gin.Context) {
 	role := middleware.Role(c)
-	list, err := h.Store.ListIssuesInTenant(effectiveListTenantID(h.Store, c), c.Query("type"), c.Query("status"), c.Query("q"), middleware.Username(c), middleware.IsPrivileged(role))
+	user := middleware.Username(c)
+	tid := effectiveListTenantID(h.Store, c)
+	list, err := h.Store.ListIssuesInTenant(tid, c.Query("type"), c.Query("status"), c.Query("q"), user, middleware.IsPrivileged(role))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -624,11 +630,37 @@ func (h *TicketHandler) List(c *gin.Context) {
 	if list == nil {
 		list = []store.Issue{}
 	}
+	// 平台资源申请：平台管理员/白名单可看全平台该类工单（不影响其它类型）
+	typeQ := c.Query("type")
+	if h.isPlatformResourceApplyReviewer(c) && (typeQ == "" || typeQ == store.IssueTypeResourceApply) {
+		extra, e2 := h.Store.ListResourceApplyAcrossTenants(c.Query("status"), c.Query("q"))
+		if e2 == nil {
+			seen := map[string]struct{}{}
+			for _, it := range list {
+				seen[it.ID] = struct{}{}
+			}
+			for _, it := range extra {
+				if tid != "" && strings.TrimSpace(it.TenantID) == tid {
+					continue
+				}
+				if _, ok := seen[it.ID]; ok {
+					continue
+				}
+				list = append(list, it)
+			}
+		}
+	}
+	names := tenantNameMap(h.Store)
+	for i := range list {
+		if n := names[list[i].TenantID]; n != "" {
+			list[i].TenantName = n
+		}
+	}
 	c.JSON(http.StatusOK, gin.H{"data": list})
 }
 
 func (h *TicketHandler) GetDetail(c *gin.Context) {
-	it, err := h.Store.GetIssueInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
+	it, err := h.loadIssueForActor(c, c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -638,10 +670,11 @@ func (h *TicketHandler) GetDetail(c *gin.Context) {
 		return
 	}
 	it = h.maybeFinishApprovedCreateDB(c.Request.Context(), it)
-	user := middleware.Username(c)
-	priv := middleware.IsPrivileged(middleware.Role(c))
-	canApprove := it.Status == store.StatusPending && h.Store.CanApproveIssue(it, user, priv)
-	canTransfer := it.Status == store.StatusPending && strings.EqualFold(it.Submitter, user)
+	if n := tenantNameMap(h.Store)[it.TenantID]; n != "" {
+		it.TenantName = n
+	}
+	canApprove := it.Status == store.StatusPending && h.actorCanApproveIssue(c, it)
+	canTransfer := it.Status == store.StatusPending && strings.EqualFold(it.Submitter, middleware.Username(c))
 	c.JSON(http.StatusOK, gin.H{
 		"data":         it,
 		"can_approve":  canApprove,
@@ -650,7 +683,7 @@ func (h *TicketHandler) GetDetail(c *gin.Context) {
 }
 
 func (h *TicketHandler) Approve(c *gin.Context) {
-	it, err := h.Store.GetIssueInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
+	it, err := h.loadIssueForActor(c, c.Param("id"))
 	if err != nil || it == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "工单不存在"})
 		return
@@ -661,7 +694,7 @@ func (h *TicketHandler) Approve(c *gin.Context) {
 	}
 	user := middleware.Username(c)
 	priv := middleware.IsPrivileged(middleware.Role(c))
-	if !h.Store.CanApproveIssue(it, user, priv) {
+	if !h.actorCanApproveIssue(c, it) {
 		c.JSON(http.StatusForbidden, gin.H{"message": "仅指定审批人、超级审核白名单或管理员可批准"})
 		return
 	}
@@ -718,7 +751,7 @@ func (h *TicketHandler) Reject(c *gin.Context) {
 		Reason string `json:"reason"`
 	}
 	_ = c.ShouldBindJSON(&req)
-	it, err := h.Store.GetIssueInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
+	it, err := h.loadIssueForActor(c, c.Param("id"))
 	if err != nil || it == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "工单不存在"})
 		return
@@ -729,7 +762,7 @@ func (h *TicketHandler) Reject(c *gin.Context) {
 	}
 	user := middleware.Username(c)
 	priv := middleware.IsPrivileged(middleware.Role(c))
-	if !h.Store.CanApproveIssue(it, user, priv) {
+	if !h.actorCanApproveIssue(c, it) {
 		c.JSON(http.StatusForbidden, gin.H{"message": "仅指定审批人、超级审核白名单或管理员可驳回"})
 		return
 	}
@@ -1213,6 +1246,9 @@ func (h *TicketHandler) executeTicket(ctx context.Context, it *store.Issue) erro
 	if it.IssueType == store.IssueTypeDbDeploy {
 		return h.executeDbDeployTicket(ctx, it)
 	}
+	if it.IssueType == store.IssueTypeResourceApply {
+		return h.executeResourceApplyTicket(ctx, it)
+	}
 	inst, err := h.Store.GetInstanceUsableInTenant(it.InstanceID, it.TenantID)
 	if err != nil {
 		return err
@@ -1448,6 +1484,58 @@ func (h *TicketHandler) executeDbDeployTicket(ctx context.Context, it *store.Iss
 	return h.persistExec(it, res)
 }
 
+func (h *TicketHandler) executeResourceApplyTicket(ctx context.Context, it *store.Issue) error {
+	raH := &ResourceApplyHandler{Store: h.Store, Secret: h.Secret}
+	res, err := raH.ExecuteResourceApplyTicket(ctx, it)
+	if err != nil {
+		return err
+	}
+	return h.persistExec(it, res)
+}
+
+func (h *TicketHandler) isPlatformResourceApplyReviewer(c *gin.Context) bool {
+	if h == nil || h.Store == nil || c == nil {
+		return false
+	}
+	return h.Store.IsPlatformResourceApplyReviewer(middleware.UserID(c), middleware.Username(c))
+}
+
+func (h *TicketHandler) actorCanApproveIssue(c *gin.Context, it *store.Issue) bool {
+	if it == nil {
+		return false
+	}
+	user := middleware.Username(c)
+	priv := middleware.IsPrivileged(middleware.Role(c))
+	if it.IssueType == store.IssueTypeResourceApply {
+		return h.Store.CanApproveResourceApply(it, user, middleware.UserID(c), priv)
+	}
+	return h.Store.CanApproveIssue(it, user, priv)
+}
+
+// loadIssueForActor 本租可见；平台资源申请额外允许：提交人/指定审批人，或平台管理员/白名单跨租打开。
+func (h *TicketHandler) loadIssueForActor(c *gin.Context, id string) (*store.Issue, error) {
+	tid := effectiveListTenantID(h.Store, c)
+	it, err := h.Store.GetIssueInTenant(id, tid)
+	if err != nil {
+		return nil, err
+	}
+	if it != nil {
+		return it, nil
+	}
+	raw, err := h.Store.GetIssue(id)
+	if err != nil || raw == nil {
+		return raw, err
+	}
+	if raw.IssueType != store.IssueTypeResourceApply {
+		return nil, nil
+	}
+	user := middleware.Username(c)
+	if strings.EqualFold(raw.Submitter, user) || strings.EqualFold(raw.AssignedTo, user) || h.isPlatformResourceApplyReviewer(c) {
+		return raw, nil
+	}
+	return nil, nil
+}
+
 func (h *TicketHandler) executeRedisTicket(ctx context.Context, it *store.Issue) error {
 	inst, err := h.Store.GetInstanceUsableInTenant(it.InstanceID, it.TenantID)
 	if err != nil {
@@ -1638,13 +1726,20 @@ func (h *TicketHandler) DashboardStats(c *gin.Context) {
 
 func (h *TicketHandler) Todos(c *gin.Context) {
 	page, size := store.ParsePage(c.Query("current"), c.Query("page_size"))
-	list, total, err := h.Store.DashboardTodos(dashboardFilterFromQuery(c, ""), middleware.Username(c), page, size)
+	seeAllRA := h.isPlatformResourceApplyReviewer(c)
+	list, total, err := h.Store.DashboardTodos(dashboardFilterFromQuery(c, ""), middleware.Username(c), page, size, seeAllRA)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
 	if list == nil {
 		list = []store.DashboardTodo{}
+	}
+	names := tenantNameMap(h.Store)
+	for i := range list {
+		if n := names[list[i].TenantID]; n != "" {
+			list[i].TenantName = n
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{"pending_count": total, "list": list, "pagination": gin.H{"total": total, "current": page, "page_size": size}}})
 }

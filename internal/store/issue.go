@@ -15,7 +15,8 @@ func ValidIssueType(t string) bool {
 	switch t {
 	case IssueTypeDDL, IssueTypeDML, IssueTypeDCL, IssueTypeDQL, IssueTypeKafka,
 		IssueTypeCDC, IssueTypeArchive, IssueTypeFlashback, IssueTypeMigration, IssueTypeMullang, IssueTypeCreateDB,
-		IssueTypeHA, IssueTypeRedis, IssueTypeBackupRestore, IssueTypeSrCluster, IssueTypeDbDeploy:
+		IssueTypeHA, IssueTypeRedis, IssueTypeBackupRestore, IssueTypeSrCluster, IssueTypeDbDeploy,
+		IssueTypeResourceApply:
 		return true
 	default:
 		return false
@@ -56,12 +57,13 @@ func (d *DB) GetIssue(id string) (*Issue, error) {
 	it := &Issue{}
 	var exec sql.NullString
 	var hist sql.NullString
+	var tid sql.NullString
 	err := d.QueryRow(
-		`SELECT id, ticket_no, issue_type, instance_id, COALESCE(domain,''), database_id, db_name, sql_content, description, status, submitter, assigned_to, reject_reason, need_rollback, scheduled_at, execute_result, COALESCE(assignee_transfer_history,'[]'), created_at, updated_at
+		`SELECT id, ticket_no, issue_type, instance_id, COALESCE(domain,''), database_id, db_name, sql_content, description, status, submitter, assigned_to, reject_reason, need_rollback, scheduled_at, execute_result, COALESCE(assignee_transfer_history,'[]'), created_at, updated_at, COALESCE(tenant_id,'')
 		 FROM tbl_issues WHERE id=?`, id,
 	).Scan(
 		&it.ID, &it.TicketNo, &it.IssueType, &it.InstanceID, &it.Domain, &it.DatabaseID, &it.DBName, &it.SQLContent, &it.Description,
-		&it.Status, &it.Submitter, &it.AssignedTo, &it.RejectReason, &it.NeedRollback, &it.ScheduledAt, &exec, &hist, &it.CreatedAt, &it.UpdatedAt,
+		&it.Status, &it.Submitter, &it.AssignedTo, &it.RejectReason, &it.NeedRollback, &it.ScheduledAt, &exec, &hist, &it.CreatedAt, &it.UpdatedAt, &tid,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -74,6 +76,7 @@ func (d *DB) GetIssue(id string) (*Issue, error) {
 	if it.AssigneeTransferHistory == "" {
 		it.AssigneeTransferHistory = "[]"
 	}
+	it.TenantID = strings.TrimSpace(tid.String)
 	it.Type = it.IssueType
 	attachIssueExec(it)
 	return it, nil
@@ -88,7 +91,9 @@ func (d *DB) GetIssueInTenant(id, tenantID string) (*Issue, error) {
 	if err != nil || !ok {
 		return nil, err
 	}
-	it.TenantID = strings.TrimSpace(tenantID)
+	if strings.TrimSpace(it.TenantID) == "" {
+		it.TenantID = strings.TrimSpace(tenantID)
+	}
 	return it, nil
 }
 
@@ -97,7 +102,7 @@ func (d *DB) ListIssues(issueType, status, q, viewer string, viewAll bool) ([]Is
 }
 
 func (d *DB) ListIssuesInTenant(tenantID, issueType, status, q, viewer string, viewAll bool) ([]Issue, error) {
-	query := `SELECT id, ticket_no, issue_type, instance_id, COALESCE(domain,''), database_id, db_name, sql_content, description, status, submitter, assigned_to, reject_reason, need_rollback, scheduled_at, created_at, updated_at FROM tbl_issues WHERE 1=1`
+	query := `SELECT id, ticket_no, issue_type, instance_id, COALESCE(domain,''), database_id, db_name, sql_content, description, status, submitter, assigned_to, reject_reason, need_rollback, scheduled_at, created_at, updated_at, COALESCE(tenant_id,'') FROM tbl_issues WHERE 1=1`
 	var args []any
 	if tid := strings.TrimSpace(tenantID); tid != "" {
 		query += ` AND COALESCE(tenant_id,'')=?`
@@ -132,16 +137,23 @@ func (d *DB) ListIssuesInTenant(tenantID, issueType, status, q, viewer string, v
 	var out []Issue
 	for rows.Next() {
 		var it Issue
+		var tid string
 		if err := rows.Scan(
 			&it.ID, &it.TicketNo, &it.IssueType, &it.InstanceID, &it.Domain, &it.DatabaseID, &it.DBName, &it.SQLContent, &it.Description,
-			&it.Status, &it.Submitter, &it.AssignedTo, &it.RejectReason, &it.NeedRollback, &it.ScheduledAt, &it.CreatedAt, &it.UpdatedAt,
+			&it.Status, &it.Submitter, &it.AssignedTo, &it.RejectReason, &it.NeedRollback, &it.ScheduledAt, &it.CreatedAt, &it.UpdatedAt, &tid,
 		); err != nil {
 			return nil, err
 		}
+		it.TenantID = strings.TrimSpace(tid)
 		it.Type = it.IssueType
 		out = append(out, it)
 	}
 	return out, rows.Err()
+}
+
+// ListResourceApplyAcrossTenants 全平台平台资源申请（不按 tenant_id 过滤），供平台管理员/白名单审核。
+func (d *DB) ListResourceApplyAcrossTenants(status, q string) ([]Issue, error) {
+	return d.ListIssuesInTenant("", IssueTypeResourceApply, status, q, "", true)
 }
 
 func (d *DB) UpdateIssueStatus(id, status, reason string) error {

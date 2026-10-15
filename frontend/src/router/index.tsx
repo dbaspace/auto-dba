@@ -14,6 +14,7 @@ import CdcCreate from '../views/ops/CdcCreate'
 import TicketList from '../views/tickets/TicketList'
 import TicketDetail from '../views/tickets/TicketDetail'
 import DclGrants from '../views/tickets/DclGrants'
+import ResourceApply from '../views/tickets/ResourceApply'
 import CreateDb from '../views/tickets/CreateDb'
 import DdlOrder from '../views/tickets/DdlOrder'
 import DmlOrder from '../views/tickets/DmlOrder'
@@ -128,6 +129,7 @@ const router = createHashRouter([
       { path: 'metadata/database/search/serviceOperations/createdb', element: <Navigate to="/ops/createdb" replace /> },
       { path: 'database/search/serviceOperations/createdb', element: <Navigate to="/ops/createdb" replace /> },
       { path: 'ops/dcl', element: <DclGrants /> },
+      { path: 'ops/resource-apply', element: <ResourceApply /> },
       { path: 'ops/kafka', element: <KafkaOrder /> },
       { path: 'ops/redis', element: <RedisOrder /> },
       { path: 'ops/slots', element: <SlotList /> },

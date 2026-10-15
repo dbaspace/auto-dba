@@ -32,7 +32,26 @@ func (u *User) ComputeStatus() string {
 	if u.FailedLoginCount >= MaxFailedLogins || strings.TrimSpace(u.LockedAt) != "" {
 		return UserStatusLocked
 	}
+	if u.ExternalCooldownActive() {
+		return UserStatusLocked
+	}
 	return UserStatusActive
+}
+
+// ExternalCooldownActive LDAP/SSO 冷却未到期。
+func (u *User) ExternalCooldownActive() bool {
+	if u == nil {
+		return false
+	}
+	raw := strings.TrimSpace(u.ExternalCooldownUntil)
+	if raw == "" {
+		return false
+	}
+	until, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return false
+	}
+	return time.Now().UTC().Before(until.UTC())
 }
 
 func (u *User) IsLoginBlocked() bool {
@@ -75,6 +94,7 @@ func (d *DB) GetUserByUsername(username string) (*User, error) {
 	scanUserLoginCols(disabled, failed, lockedAt, u)
 	d.attachUserProfile(u)
 	d.AttachUserRoleIDs(u)
+	d.attachExternalLoginAttempt(u)
 	return u, nil
 }
 
@@ -102,6 +122,7 @@ func (d *DB) GetUserByID(id string) (*User, error) {
 	scanUserLoginCols(disabled, failed, lockedAt, u)
 	d.attachUserProfile(u)
 	d.AttachUserRoleIDs(u)
+	d.attachExternalLoginAttempt(u)
 	return u, nil
 }
 
@@ -138,6 +159,7 @@ func (d *DB) ListUsers() ([]User, error) {
 		scanUserLoginCols(disabled, failed, lockedAt, &u)
 		d.attachUserProfile(&u)
 		d.AttachUserRoleIDs(&u)
+		d.attachExternalLoginAttempt(&u)
 		out = append(out, u)
 	}
 	return out, rows.Err()
@@ -230,8 +252,33 @@ func (d *DB) SetUserLoginDisabled(id string, disabled bool) error {
 }
 
 func (d *DB) UnlockUser(id string) error {
-	_, err := d.Exec(`UPDATE tbl_users SET failed_login_count=0, locked_at='' WHERE id=?`, id)
+	u, err := d.GetUserByID(id)
+	if err != nil {
+		return err
+	}
+	if u == nil {
+		return errors.New("用户不存在")
+	}
+	if _, err := d.Exec(`UPDATE tbl_users SET failed_login_count=0, locked_at='' WHERE id=?`, id); err != nil {
+		return err
+	}
+	_, err = d.ClearExternalLoginFailure(u.Username)
 	return err
+}
+
+// attachExternalLoginAttempt 填充外部认证失败/冷却，并刷新 status。
+func (d *DB) attachExternalLoginAttempt(u *User) {
+	if d == nil || u == nil || strings.TrimSpace(u.Username) == "" {
+		return
+	}
+	a, err := d.EnsureLoginAttemptReady(u.Username)
+	if err != nil || a == nil {
+		u.Status = u.ComputeStatus()
+		return
+	}
+	u.ExternalFailCount = a.FailCount
+	u.ExternalCooldownUntil = strings.TrimSpace(a.CooldownUntil)
+	u.Status = u.ComputeStatus()
 }
 
 func (d *DB) RecordLoginFailure(id string) (locked bool, err error) {

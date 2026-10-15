@@ -95,6 +95,7 @@ export default function Databases() {
   const [dbLoading, setDbLoading] = useState(false)
   const [liveHint, setLiveHint] = useState('')
   const [showSystemDb, setShowSystemDb] = useState(false)
+  const [dbSearch, setDbSearch] = useState('')
   const [userOptions, setUserOptions] = useState<string[]>(['admin'])
   const [roles, setRoles] = useState<RoleRow[]>([])
   const [usedTags, setUsedTags] = useState<string[]>([])
@@ -122,6 +123,20 @@ export default function Databases() {
     if (showSystemDb) return liveDbs
     return liveDbs.filter((d) => !d.system || d.registered)
   }, [liveDbs, showSystemDb])
+
+  const matchedSelectable = useMemo(() => {
+    const q = dbSearch.trim().toLowerCase()
+    return visibleDbs.filter((d) => {
+      if (d.registered) return false
+      if (!q) return true
+      return d.name.toLowerCase().includes(q)
+    })
+  }, [visibleDbs, dbSearch])
+
+  const selectedDbNames = useMemo(() => new Set(form.db_names || []), [form.db_names])
+  const matchedSelectedCount = matchedSelectable.filter((d) => selectedDbNames.has(d.name)).length
+  const matchedAllChecked = matchedSelectable.length > 0 && matchedSelectedCount === matchedSelectable.length
+  const matchedIndeterminate = matchedSelectedCount > 0 && matchedSelectedCount < matchedSelectable.length
 
   const instanceDomains = useMemo(() => {
     const inst = instances.find((i) => i.id === form.instance_id)
@@ -244,6 +259,7 @@ export default function Databases() {
 
   function onInstanceChange(id?: string) {
     const inst = instances.find((i) => i.id === id)
+    setDbSearch('')
     setForm((f) => ({
       ...f,
       instance_id: id,
@@ -255,7 +271,18 @@ export default function Databases() {
     loadLiveDbs(id)
   }
 
+  function selectMatchedDbs() {
+    const names = matchedSelectable.map((d) => d.name)
+    setForm((f) => ({ ...f, db_names: [...new Set([...(f.db_names || []), ...names])] }))
+  }
+
+  function deselectMatchedDbs() {
+    const remove = new Set(matchedSelectable.map((d) => d.name))
+    setForm((f) => ({ ...f, db_names: (f.db_names || []).filter((n) => !remove.has(n)) }))
+  }
+
   function open(row?: DatabaseRow) {
+    setDbSearch('')
     if (row) {
       setForm({
         ...emptyMeta(),
@@ -712,6 +739,29 @@ export default function Databases() {
                   placeholder="输入关键字搜索库名，可多选，也可输入后回车"
                   style={{ width: '100%' }}
                   optionFilterProp="label"
+                  searchValue={dbSearch}
+                  onSearch={setDbSearch}
+                  onDropdownVisibleChange={(open) => {
+                    if (!open) setDbSearch('')
+                  }}
+                  dropdownRender={(menu) => (
+                    <>
+                      <div className="db-select-match-bar" onMouseDown={(e) => e.preventDefault()}>
+                        <Checkbox
+                          checked={matchedAllChecked}
+                          indeterminate={matchedIndeterminate}
+                          disabled={!form.instance_id || matchedSelectable.length === 0}
+                          onChange={(e) => {
+                            if (e.target.checked) selectMatchedDbs()
+                            else deselectMatchedDbs()
+                          }}
+                        >
+                          全选当前匹配 ({matchedSelectable.length})
+                        </Checkbox>
+                      </div>
+                      {menu}
+                    </>
+                  )}
                   options={visibleDbs.map((d) => ({
                     value: d.name,
                     label: d.registered ? `${d.name}（已登记）` : d.name,
@@ -723,6 +773,7 @@ export default function Databases() {
                   <Checkbox checked={showSystemDb} onChange={(e) => setShowSystemDb(e.target.checked)}>
                     显示系统库
                   </Checkbox>
+                  <span>下拉内可全选当前搜索结果</span>
                   {liveHint && <span className="live-hint">{liveHint}</span>}
                 </div>
               </div>

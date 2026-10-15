@@ -12,6 +12,7 @@ export const PAGE_ROUTES = [
   { path: '/ops/kafka', title: 'Kafka 工单' },
   { path: '/ops/dcl', title: '权限申请' },
   { path: '/ops/createdb', title: '新增数据库' },
+  { path: '/ops/resource-apply', title: '平台资源申请' },
   { path: '/ops/slots', title: '同步列表' },
   { path: '/ops/cdc', title: 'CDC 同步任务' },
   { path: '/ops/cdc/create', title: '创建 CDC' },
@@ -137,6 +138,7 @@ export function pathAllowed(path: string, allowed: string[]): boolean {
   if (path === '/ops/kafka-query' || path === '/query/kafka') return true
   if (path === '/ops/redis-query' || path === '/query/redis') return true
   if (path === '/ops/dql' || path.includes('/work-order/dql')) return true
+  if (path === '/ops/resource-apply') return true
   if (path.includes('/serviceOperations/ddl-order')) return true
   if (path.includes('/serviceOperations/dml-order')) return true
   if (path.includes('/serviceOperations/createdb')) return true

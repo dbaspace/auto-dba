@@ -26,7 +26,8 @@ import {
 import './Dashboard.css'
 
 const TYPE_LABEL: Record<string, string> = {
-  dql: '数据导出', dml: 'DML', ddl: 'DDL', dcl: '权限申请', kafka: 'Kafka', redis: 'Redis',
+  dql: '数据导出', dml: 'DML', ddl: 'DDL', dcl: '权限申请', resource_apply: '平台资源申请',
+  kafka: 'Kafka', redis: 'Redis',
   mullang: '多语模版', cdc_sync: 'CDC同步', cdc: 'CDC同步', migration: '数据迁移',
   archive: '数据归档', flashback: '闪回', createdb: '新增数据库',
 }
@@ -472,6 +473,9 @@ export default function Dashboard() {
           <span className="todo-id">{shortId(row.id)}</span>
           {row.name || '-'}
           {row.source === 'migration' && <Tag color="blue" style={{ marginLeft: 6 }}>数据迁移</Tag>}
+          {row.issue_type === 'resource_apply' && (row.tenant_name || row.tenant_id) ? (
+            <Tag style={{ marginLeft: 6 }}>{row.tenant_name || row.tenant_id}</Tag>
+          ) : null}
         </span>
       ),
     },

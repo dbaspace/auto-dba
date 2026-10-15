@@ -12,7 +12,7 @@ import (
 // 启动引导版本：修改 migrate.go / seed.go 后请递增对应常量，否则已初始化库会跳过重跑。
 const (
 	SchemaVersion = "2026-10-14.access-domains"
-	SeedVersion   = "2026-10-14.access-domains-menu"
+	SeedVersion   = "2026-10-14.resource-apply-menu"
 )
 
 const (
@@ -123,6 +123,10 @@ func (d *DB) seedFast() error {
 				return err
 			}
 			if err := d.ensureAccessDomainsMenu(now); err != nil {
+				return err
+			}
+			// 平台资源申请菜单须在 skip 路径幂等补齐（否则仅升 SeedVersion 才写入）
+			if err := d.ensureResourceApplyMenu(now); err != nil {
 				return err
 			}
 			if err := d.SyncDefaultTenantMemberships(); err != nil {

@@ -25,10 +25,22 @@ function currentUserId(): string {
   }
 }
 
+function externalCooldownActive(row: any): boolean {
+  const until = String(row?.external_cooldown_until || '').trim()
+  if (!until) return false
+  const t = Date.parse(until)
+  return Number.isFinite(t) && t > Date.now()
+}
+
 function statusMeta(row: any): { text: string; color: string } {
   const st = String(row?.status || '').toLowerCase()
   if (st === 'disabled' || row?.login_disabled) return { text: '已禁用', color: 'default' }
-  if (st === 'locked' || (row?.failed_login_count || 0) >= 3 || row?.locked_at) {
+  if (
+    st === 'locked' ||
+    (row?.failed_login_count || 0) >= 3 ||
+    row?.locked_at ||
+    externalCooldownActive(row)
+  ) {
     return { text: '已锁定', color: 'error' }
   }
   return { text: '正常', color: 'success' }

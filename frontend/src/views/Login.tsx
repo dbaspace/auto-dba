@@ -323,6 +323,19 @@ export default function Login() {
     }, 1000)
   }, [])
 
+  const clearCooldown = useCallback(() => {
+    if (timerRef.current) {
+      window.clearInterval(timerRef.current)
+      timerRef.current = 0
+    }
+    setRetryAfter(0)
+    setError('')
+    setRequireCaptcha(false)
+    setCaptchaId('')
+    setCaptchaImg('')
+    setCaptchaCode('')
+  }, [])
+
   async function loadCaptcha() {
     try {
       const { data } = await api.get('/auth/captcha')
@@ -405,7 +418,7 @@ export default function Login() {
 
   const cooldownHint =
     retryAfter > 0
-      ? `认证失败次数过多，请 ${Math.ceil(retryAfter / 60)} 分钟后再试（剩余 ${retryAfter} 秒）`
+      ? `当前账号认证失败次数过多，请 ${Math.ceil(retryAfter / 60)} 分钟后再试（剩余 ${retryAfter} 秒）。可更换其它账号登录，或联系管理员在用户管理中解锁。`
       : ''
 
   return (
@@ -440,6 +453,7 @@ export default function Login() {
                 if (username.trim()) {
                   upsertAccount(authMode, username, password, rememberPassword)
                 }
+                clearCooldown()
                 setAuthMode(v)
                 const creds = credentialsForMode(v)
                 setUsername(creds.username)
@@ -447,16 +461,22 @@ export default function Login() {
                 setRememberPassword(creds.rememberPassword)
                 refreshAccountOptions(v)
               }}
-              disabled={retryAfter > 0 || ssoLoading}
+              disabled={ssoLoading}
             />
           ) : null}
           <AutoComplete
             style={{ width: '100%', marginBottom: 12 }}
             options={accountOptions}
             value={username}
-            onChange={(v) => setUsername(v)}
-            onSelect={(v) => applyAccount(authMode, v)}
-            disabled={retryAfter > 0 || ssoLoading}
+            onChange={(v) => {
+              clearCooldown()
+              setUsername(v)
+            }}
+            onSelect={(v) => {
+              clearCooldown()
+              applyAccount(authMode, v)
+            }}
+            disabled={ssoLoading}
             allowClear
             filterOption={(input, option) =>
               String(option?.value || '')
@@ -464,20 +484,20 @@ export default function Login() {
                 .includes(String(input || '').toLowerCase())
             }
           >
-            <Input placeholder="用户名（可从历史账号选择）" disabled={retryAfter > 0 || ssoLoading} />
+            <Input placeholder="用户名（可从历史账号选择）" disabled={ssoLoading} />
           </AutoComplete>
           <Input.Password
             style={{ marginBottom: 8 }}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             placeholder="密码"
-            disabled={retryAfter > 0 || ssoLoading}
+            disabled={ssoLoading}
           />
           <div style={{ marginBottom: 12 }}>
             <Checkbox
               checked={rememberPassword}
               onChange={(e) => setRememberPassword(e.target.checked)}
-              disabled={retryAfter > 0 || ssoLoading}
+              disabled={ssoLoading}
             >
               记住密码
             </Checkbox>
@@ -489,12 +509,10 @@ export default function Login() {
                   value={captchaCode}
                   onChange={(e) => setCaptchaCode(e.target.value)}
                   placeholder="请输入验证码"
-                  disabled={retryAfter > 0}
                 />
                 <Button
                   style={{ width: 150, padding: 0, height: 32 }}
                   onClick={loadCaptcha}
-                  disabled={retryAfter > 0}
                   title="点击刷新验证码"
                 >
                   {captchaImg ? (
@@ -525,7 +543,7 @@ export default function Login() {
               type="link"
               block
               style={{ marginTop: 4 }}
-              disabled={retryAfter > 0 || loading || ssoLoading}
+              disabled={loading || ssoLoading}
               onClick={startSSOAuthorize}
             >
               跳转 SSO 授权登录

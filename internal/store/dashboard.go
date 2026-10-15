@@ -58,6 +58,8 @@ type DashboardTodo struct {
 	CreatorName string `json:"creator_name"`
 	Status      string `json:"status"`
 	IssueType   string `json:"issue_type"`
+	TenantID    string `json:"tenant_id,omitempty"`
+	TenantName  string `json:"tenant_name,omitempty"`
 	CreatedAt   string `json:"created_at"`
 	UpdatedAt   string `json:"updated_at,omitempty"`
 	Source      string `json:"source,omitempty"`
@@ -105,7 +107,7 @@ func parseIssueTime(s string) time.Time {
 func (d *DB) listIssueDashRows(f DashboardFilter) ([]issueDashRow, error) {
 	q := `SELECT i.id, i.ticket_no, i.issue_type, i.instance_id, i.database_id, i.db_name, i.sql_content, i.description,
 		i.status, i.submitter, i.assigned_to, i.reject_reason, i.need_rollback, i.scheduled_at, i.created_at, i.updated_at,
-		COALESCE(inst.idc,''), COALESCE(inst.db_type,'')
+		COALESCE(inst.idc,''), COALESCE(inst.db_type,''), COALESCE(i.tenant_id,'')
 		FROM tbl_issues i LEFT JOIN tbl_instances inst ON inst.id = i.instance_id WHERE 1=1`
 	var args []any
 	if tid := strings.TrimSpace(f.TenantID); tid != "" {
@@ -142,13 +144,15 @@ func (d *DB) listIssueDashRows(f DashboardFilter) ([]issueDashRow, error) {
 	var out []issueDashRow
 	for rows.Next() {
 		var r issueDashRow
+		var tid string
 		if err := rows.Scan(
 			&r.ID, &r.TicketNo, &r.IssueType, &r.InstanceID, &r.DatabaseID, &r.DBName, &r.SQLContent, &r.Description,
 			&r.Status, &r.Submitter, &r.AssignedTo, &r.RejectReason, &r.NeedRollback, &r.ScheduledAt, &r.CreatedAt, &r.UpdatedAt,
-			&r.IDC, &r.DBType,
+			&r.IDC, &r.DBType, &tid,
 		); err != nil {
 			return nil, err
 		}
+		r.TenantID = strings.TrimSpace(tid)
 		r.Type = r.IssueType
 		if f.IDCScope != "" && idcScopeOf(r.IDC) != f.IDCScope {
 			continue
@@ -280,7 +284,7 @@ func (d *DB) DashboardStats(f DashboardFilter) (*DashboardStats, error) {
 	return st, nil
 }
 
-func (d *DB) DashboardTodos(f DashboardFilter, viewer string, page, pageSize int) ([]DashboardTodo, int, error) {
+func (d *DB) DashboardTodos(f DashboardFilter, viewer string, page, pageSize int, seeAllResourceApply bool) ([]DashboardTodo, int, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -293,6 +297,17 @@ func (d *DB) DashboardTodos(f DashboardFilter, viewer string, page, pageSize int
 	}
 	seeAllPending := viewer != "" && d.IsGlobalApprover(viewer)
 	var todos []DashboardTodo
+	seen := map[string]struct{}{}
+	appendTodo := func(t DashboardTodo) {
+		if t.ID == "" {
+			return
+		}
+		if _, ok := seen[t.ID]; ok {
+			return
+		}
+		seen[t.ID] = struct{}{}
+		todos = append(todos, t)
+	}
 	for _, r := range rows {
 		if r.Status != StatusPending {
 			continue
@@ -304,10 +319,31 @@ func (d *DB) DashboardTodos(f DashboardFilter, viewer string, page, pageSize int
 		if name == "" {
 			name = r.TicketNo + " " + r.DBName
 		}
-		todos = append(todos, DashboardTodo{
+		appendTodo(DashboardTodo{
 			ID: r.ID, Name: strings.TrimSpace(name), CreatedBy: r.Submitter, CreatorName: r.Submitter,
-			Status: r.Status, IssueType: r.IssueType, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt, Source: "issue",
+			Status: r.Status, IssueType: r.IssueType, TenantID: r.TenantID,
+			CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt, Source: "issue",
 		})
+	}
+	// 平台资源申请：平台管理员/白名单可看全平台 pending（不影响其它工单类型）
+	if seeAllResourceApply && (f.IssueType == "" || f.IssueType == IssueTypeResourceApply) {
+		extra, e2 := d.ListResourceApplyAcrossTenants(StatusPending, f.Q)
+		if e2 == nil {
+			for _, r := range extra {
+				if r.Status != StatusPending {
+					continue
+				}
+				name := r.Description
+				if name == "" {
+					name = r.TicketNo + " " + r.DBName
+				}
+				appendTodo(DashboardTodo{
+					ID: r.ID, Name: strings.TrimSpace(name), CreatedBy: r.Submitter, CreatorName: r.Submitter,
+					Status: r.Status, IssueType: r.IssueType, TenantID: r.TenantID,
+					CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt, Source: "issue",
+				})
+			}
+		}
 	}
 	migs, err := d.ListMigrations()
 	if err != nil {
@@ -320,7 +356,7 @@ func (d *DB) DashboardTodos(f DashboardFilter, viewer string, page, pageSize int
 		if f.IssueType != "" && f.IssueType != "migration" {
 			continue
 		}
-		todos = append(todos, DashboardTodo{
+		appendTodo(DashboardTodo{
 			ID: m.ID, Name: m.Name, CreatedBy: m.CreatedBy, CreatorName: m.CreatedBy,
 			Status: StatusPending, IssueType: "migration", CreatedAt: m.CreatedAt, UpdatedAt: m.UpdatedAt, Source: "migration",
 		})
@@ -439,6 +475,8 @@ func issueTypeLabel(t string) string {
 		return "StarRocks 集群变更"
 	case IssueTypeDbDeploy:
 		return "数据库集群部署"
+	case IssueTypeResourceApply:
+		return "平台资源申请"
 	default:
 		return t
 	}

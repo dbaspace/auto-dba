@@ -59,6 +59,24 @@ func TestCanApproveIssue(t *testing.T) {
 	}
 }
 
+func TestCanApproveResourceApply(t *testing.T) {
+	it := &Issue{IssueType: IssueTypeResourceApply, AssignedTo: "alice", Status: StatusPending}
+	d := &DB{}
+	if !d.CanApproveResourceApply(it, "alice", "", false) {
+		t.Fatal("assignee")
+	}
+	if d.CanApproveResourceApply(it, "bob", "", false) {
+		t.Fatal("stranger without platform role")
+	}
+	if !d.CanApproveResourceApply(it, "bob", "", true) {
+		t.Fatal("privileged")
+	}
+	ddl := &Issue{IssueType: IssueTypeDDL, AssignedTo: "alice"}
+	if d.CanApproveResourceApply(ddl, "alice", "", true) {
+		t.Fatal("non resource_apply must be false")
+	}
+}
+
 func TestFormatAssigneeTransferLine(t *testing.T) {
 	s := FormatAssigneeTransferLine("a", "b", "a")
 	if !strings.Contains(s, "a->b") || !strings.Contains(s, "by=a") {

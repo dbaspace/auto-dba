@@ -122,15 +122,82 @@ export default function TicketDetail() {
     }
   }, [item])
 
+  const resourceApplyExtra = useMemo(() => {
+    const raw = item?.sql_content
+    if (!raw || item?.issue_type !== 'resource_apply') return null
+    try {
+      const parsed = JSON.parse(raw)
+      return parsed && typeof parsed === 'object' ? parsed : null
+    } catch {
+      return null
+    }
+  }, [item])
+
   const applyFields = useMemo<ApplyField[]>(() => {
     const it = item
     if (!it) return []
+    const isResourceApply = it.issue_type === 'resource_apply'
     const fields: ApplyField[] = [
-      { key: 'reason', label: '原因', value: it.description || '-' },
-      { key: 'db_type', label: '数据库类型', kind: 'type-tag', value: dbType || '-' },
-      { key: 'db', label: '数据库', kind: 'db-tag', value: dbPath },
+      { key: 'reason', label: '原因', value: it.description || resourceApplyExtra?.reason || '-' },
     ]
-    if (it.sql_content) {
+    if (!isResourceApply) {
+      fields.push(
+        { key: 'db_type', label: '数据库类型', kind: 'type-tag', value: dbType || '-' },
+        { key: 'db', label: '数据库', kind: 'db-tag', value: dbPath },
+      )
+    } else if (resourceApplyExtra?.items?.length) {
+      const actionMap: Record<string, string> = {
+        acl: '同租ACL',
+        grant: '跨租授权',
+        assign: '划拨',
+        approver: '加入库审核人',
+      }
+      const typeMap: Record<string, string> = {
+        database: '库',
+        domain: '域名',
+        host: '主机',
+        sr_cluster: 'SR集群',
+        db_deploy_cluster: '部署集群',
+      }
+      const intentLabel =
+        resourceApplyExtra.intent === 'approver' ? '库审核人' : resourceApplyExtra.intent === 'visibility' ? '资源可见' : ''
+      if (intentLabel) {
+        fields.push({ key: 'ra_intent', label: '申请意图', value: intentLabel })
+      }
+      const lines = resourceApplyExtra.items
+        .map(
+          (x: any) =>
+            `${typeMap[x.resource_type] || x.resource_type} ${x.display_name || x.resource_id} → ${actionMap[x.action] || x.action}`,
+        )
+        .join('\n')
+      fields.push({ key: 'ra_items', label: '申请资源', kind: 'sql', value: lines })
+      const hasApprover = resourceApplyExtra.items.some((x: any) => x.action === 'approver')
+      if (hasApprover) {
+        const users = Array.from(
+          new Set(
+            (resourceApplyExtra.items || []).flatMap((x: any) =>
+              Array.isArray(x.target_users) ? x.target_users.map(String).filter(Boolean) : [],
+            ),
+          ),
+        )
+        fields.push({
+          key: 'ra_target_users',
+          label: '库审核人',
+          value: users.length
+            ? users.join('、')
+            : '（历史工单未记录目标用户；旧逻辑仅写入提交人）',
+        })
+      }
+      fields.push({
+        key: 'schedule',
+        label: '执行方式',
+        kind: 'schedule',
+        value: hasApprover
+          ? '审批通过后将指定用户写入库审核人名单（私有库同步开通可见）'
+          : '审批通过后自动写入 ACL / grant / 划拨',
+      })
+    }
+    if (it.sql_content && !isResourceApply) {
       const clusterOp =
         it.issue_type === 'sr_cluster' || it.issue_type === 'db_deploy' || it.issue_type === 'ha'
       fields.push({
@@ -194,7 +261,7 @@ export default function TicketDetail() {
     fields.push({ key: 'approver', label: '指定审批人', value: it.assigned_to || '-' })
     fields.push({ key: 'created', label: '申请时间', value: fmtTime(it.created_at) })
     return fields
-  }, [item, dbType, dbPath, createdbExtra, dqlExtra])
+  }, [item, dbType, dbPath, createdbExtra, dqlExtra, resourceApplyExtra])
 
   const canApprove = useMemo(() => {
     if (item?.status !== 'pending') return false
@@ -310,6 +377,7 @@ export default function TicketDetail() {
   }, [item])
 
   const neededInstanceIds = useMemo(() => {
+    if (item?.issue_type === 'resource_apply') return [] as string[]
     const set = new Set<string>()
     const primary = String(item?.instance_id || '').trim()
     if (primary) set.add(primary)
@@ -643,6 +711,8 @@ export default function TicketDetail() {
   useEffect(() => {
     let cancelled = false
     async function fillEnvByInstance() {
+      // 平台资源申请执行记录里的 id 可能是库/资源 ID，勿按实例去拉
+      if (item?.issue_type === 'resource_apply') return
       if (!neededInstanceIds.length) return
 
       const nextSeed: Record<string, string> = {}

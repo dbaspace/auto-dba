@@ -5,6 +5,40 @@
   flex-shrink: 0;
 }
 
+.ga-value-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.ga-value-cell.has-view {
+  gap: 2px;
+}
+
+.ga-value-view {
+  padding: 0 4px;
+  height: 22px;
+  color: #1677ff;
+}
+
+.ga-value-preview {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  line-height: 1.4;
+  color: #374151;
+}
+
+.ga-value-full {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+}
+
 /* 表格占满剩余高度，表体内部滚动，避免盖住底部分页 */
 .ops-page .ops-table .ant-table-wrapper,
 .ops-page .ops-table .ant-spin-nested-loading,

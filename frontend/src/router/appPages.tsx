@@ -7,6 +7,7 @@ import CdcCreate from '../views/ops/CdcCreate'
 import TicketList from '../views/tickets/TicketList'
 import TicketDetail from '../views/tickets/TicketDetail'
 import DclGrants from '../views/tickets/DclGrants'
+import ResourceApply from '../views/tickets/ResourceApply'
 import CreateDb from '../views/tickets/CreateDb'
 import DdlOrder from '../views/tickets/DdlOrder'
 import DmlOrder from '../views/tickets/DmlOrder'
@@ -132,6 +133,7 @@ export function TabPagePanel({ pathname, search }: { pathname: string; search?: 
       <Route path="/metadata/database/search/serviceOperations/createdb" element={<Navigate to="/ops/createdb" replace />} />
       <Route path="/database/search/serviceOperations/createdb" element={<Navigate to="/ops/createdb" replace />} />
       <Route path="/ops/dcl" element={<DclGrants />} />
+      <Route path="/ops/resource-apply" element={<ResourceApply />} />
       <Route path="/ops/kafka" element={<KafkaOrder />} />
       <Route path="/ops/redis" element={<RedisOrder />} />
       <Route path="/ops/slots" element={<SlotList />} />

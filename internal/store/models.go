@@ -13,7 +13,10 @@ type User struct {
 	LoginDisabled    bool     `json:"login_disabled"`
 	FailedLoginCount int      `json:"failed_login_count"`
 	LockedAt         string   `json:"locked_at,omitempty"`
-	Status           string   `json:"status"`
+	// LDAP/SSO 外部认证失败计数与冷却（来自 tbl_login_attempt）
+	ExternalFailCount    int    `json:"external_fail_count,omitempty"`
+	ExternalCooldownUntil string `json:"external_cooldown_until,omitempty"`
+	Status               string `json:"status"`
 	Avatar           string   `json:"avatar,omitempty"`
 	Gender           string   `json:"gender,omitempty"`
 	Email            string   `json:"email,omitempty"`
@@ -138,6 +141,7 @@ type Connector struct {
 type Issue struct {
 	ID           string `json:"id"`
 	TenantID     string `json:"tenant_id,omitempty"`
+	TenantName   string `json:"tenant_name,omitempty"`
 	TicketNo     string `json:"ticket_no"`
 	IssueType    string `json:"issue_type"`
 	Type         string `json:"type"`
@@ -728,6 +732,7 @@ const (
 	IssueTypeBackupRestore = "backup_restore"
 	IssueTypeSrCluster     = "sr_cluster"
 	IssueTypeDbDeploy      = "db_deploy"
+	IssueTypeResourceApply = "resource_apply" // 平台资源申请（库/域名/主机/集群）
 
 	StatusPending        = "pending"
 	StatusApproved       = "approved"

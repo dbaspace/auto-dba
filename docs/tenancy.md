@@ -91,6 +91,7 @@ PLATFORM 资源（全局共享）：用户/角色/菜单、LDAP/SSO/SMTP、区�
 - `POST /access-domains/:id/assign-tenant`：单条指定域名归属（需审计会话；前端单条划拨走此路径）
 - `POST /access-domains/assign-tenant`：批量指定域名归属（body `tenant_id` + `ids`；需审计会话）
 - `POST /sr-cluster/clusters/:id/assign-tenant`、`POST /db-deploy/clusters/:id/assign-tenant`、`POST /proxy/services/:id/assign-tenant`：审计会话下划拨 StarRocks / MySQL·PG·Redis 等部署集群 / HAProxy·Nginx·LVS
+- `GET /resource-apply/candidates`、`GET /resource-apply/approvers`、`GET /resource-apply/target-users`、`POST /resource-apply`：平台资源申请工单（`intent=visibility|approver`；可见性写 ACL / grant / 划拨；库审核人用 `target_users` 写库 `approvers`，工单审批人为平台管理员 ∪ `issue_global_approver_whitelist`）。**仅 resource_apply**：平台管理员与白名单可跨租 List/Todos/详情/审批全平台该类工单，无需业务租户成员或 impersonate；其它工单类型仍严格按 `tid`。纯增量，不改手工 grant 与审计划拨语义
 
 前端：请求带 `X-Tenant-Id`；无活跃租户进入业务页会跳转 `/select-tenant`。审计中实例/库/域名页可用「指定租户」或批量划拨。
 

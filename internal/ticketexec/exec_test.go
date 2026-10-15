@@ -11,8 +11,8 @@ import (
 
 func TestShouldAutoRun(t *testing.T) {
 	if !ShouldAutoRun(store.IssueTypeDDL) || !ShouldAutoRun("dml") || !ShouldAutoRun(store.IssueTypeCreateDB) || !ShouldAutoRun(store.IssueTypeHA) ||
-		!ShouldAutoRun(store.IssueTypeSrCluster) || !ShouldAutoRun(store.IssueTypeDbDeploy) {
-		t.Fatal("ddl/dml/createdb/ha/sr_cluster/db_deploy should auto run")
+		!ShouldAutoRun(store.IssueTypeSrCluster) || !ShouldAutoRun(store.IssueTypeDbDeploy) || !ShouldAutoRun(store.IssueTypeResourceApply) {
+		t.Fatal("ddl/dml/createdb/ha/sr_cluster/db_deploy/resource_apply should auto run")
 	}
 	if ShouldAutoRun(store.IssueTypeDQL) {
 		t.Fatal("dql should not auto run")

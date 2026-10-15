@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Button, Form, Input, Modal, Pagination, Space, message } from 'antd'
+import { Button, Form, Input, Modal, Pagination, Space, Tooltip, message } from 'antd'
+import { EyeOutlined } from '@ant-design/icons'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import api from '../../api/request'
 import './GlobalArgs.css'
@@ -12,6 +13,14 @@ interface ArgRow {
 }
 
 const PAGE_SIZE = 10
+const VALUE_PREVIEW_LEN = 48
+
+function truncateValue(raw?: string): string {
+  const v = String(raw ?? '')
+  if (!v) return '-'
+  if (v.length <= VALUE_PREVIEW_LEN) return v
+  return v.slice(0, VALUE_PREVIEW_LEN) + '…'
+}
 
 export default function GlobalArgs() {
   const [rows, setRows] = useState<ArgRow[]>([])
@@ -20,6 +29,7 @@ export default function GlobalArgs() {
   const [visible, setVisible] = useState(false)
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [viewRow, setViewRow] = useState<ArgRow | null>(null)
   const [form] = Form.useForm()
 
   const filtered = useMemo(() => {
@@ -108,7 +118,34 @@ export default function GlobalArgs() {
           style={{ height: '100%' }}
           columns={[
             { title: '键', dataIndex: 'key', width: 260, ellipsis: true },
-            { title: '值', dataIndex: 'value', width: 240, ellipsis: true },
+            {
+              title: '值',
+              dataIndex: 'value',
+              width: 240,
+              render: (v: string | undefined, row) => {
+                const full = String(v ?? '')
+                const needView = full.length > VALUE_PREVIEW_LEN
+                return (
+                  <div className={`ga-value-cell${needView ? ' has-view' : ''}`}>
+                    {needView ? (
+                      <Tooltip title="查看完整值">
+                        <Button
+                          type="text"
+                          size="small"
+                          className="ga-value-view"
+                          icon={<EyeOutlined />}
+                          onClick={() => setViewRow(row)}
+                          aria-label="查看完整值"
+                        />
+                      </Tooltip>
+                    ) : null}
+                    <div className="ga-value-preview" title={needView ? full : undefined}>
+                      {truncateValue(v)}
+                    </div>
+                  </div>
+                )
+              },
+            },
             { title: '说明', dataIndex: 'description', width: 200, ellipsis: true },
             { title: '更新时间', dataIndex: 'updated_at', width: 180 },
             {
@@ -166,6 +203,25 @@ export default function GlobalArgs() {
             <Input.TextArea rows={2} placeholder="可选" />
           </Form.Item>
         </Form>
+      </Modal>
+      <Modal
+        open={!!viewRow}
+        title={viewRow?.key ? `参数值 · ${viewRow.key}` : '参数值'}
+        width={640}
+        destroyOnClose
+        onCancel={() => setViewRow(null)}
+        footer={[
+          <Button key="close" type="primary" onClick={() => setViewRow(null)}>
+            关闭
+          </Button>,
+        ]}
+      >
+        <Input.TextArea
+          className="ga-value-full"
+          readOnly
+          autoSize={{ minRows: 6, maxRows: 18 }}
+          value={viewRow?.value || ''}
+        />
       </Modal>
     </div>
   )

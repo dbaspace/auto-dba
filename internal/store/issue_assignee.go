@@ -93,6 +93,34 @@ func (d *DB) CanApproveIssue(it *Issue, username string, privileged bool) bool {
 	return d.IsGlobalApprover(username)
 }
 
+// IsPlatformResourceApplyReviewer 平台管理员或超级审核白名单：可跨租审核平台资源申请。
+func (d *DB) IsPlatformResourceApplyReviewer(userID, username string) bool {
+	if d == nil {
+		return false
+	}
+	if d.IsGlobalApprover(username) {
+		return true
+	}
+	userID = strings.TrimSpace(userID)
+	if userID == "" || d.db == nil {
+		return false
+	}
+	ok, err := d.UserIsPlatformAdmin(userID)
+	return err == nil && ok
+}
+
+// CanApproveResourceApply 平台资源申请审批：指定审批人 / 白名单 / 平台管理员 / privileged。
+// 其它工单类型请继续用 CanApproveIssue。
+func (d *DB) CanApproveResourceApply(it *Issue, username, userID string, privileged bool) bool {
+	if it == nil || it.IssueType != IssueTypeResourceApply {
+		return false
+	}
+	if d.CanApproveIssue(it, username, privileged) {
+		return true
+	}
+	return d.IsPlatformResourceApplyReviewer(userID, username)
+}
+
 // AppendAssigneeTransferHistory 追加审计行并返回 JSON 数组字符串。
 func AppendAssigneeTransferHistory(prevJSON, line string) string {
 	line = strings.TrimSpace(line)

@@ -179,6 +179,7 @@ func Run(cfg *config.Config, configPath string) {
 		Copilot:            &handler.CopilotHandler{Svc: copilot.New(db)},
 		Runbook:            &handler.RunbookHandler{Svc: runbook.New(db)},
 		DCL:                &handler.DCLHandler{Store: db, Secret: fieldCrypto},
+		ResourceApply:      &handler.ResourceApplyHandler{Store: db, Secret: fieldCrypto},
 		RBAC:               &handler.RBACHandler{Store: db, Secret: fieldCrypto},
 		Tenant: &handler.TenantHandler{
 			Store: db,

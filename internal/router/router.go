@@ -66,6 +66,7 @@ type Deps struct {
 	Copilot            *handler.CopilotHandler
 	Runbook            *handler.RunbookHandler
 	DCL                *handler.DCLHandler
+	ResourceApply      *handler.ResourceApplyHandler
 	RBAC               *handler.RBACHandler
 	Tenant             *handler.TenantHandler
 	Ldap               *handler.LdapHandler
@@ -456,6 +457,14 @@ func Init(e *gin.Engine, d Deps) {
 	rr.PUT("", requireURN(store.URNReviewRulesEdit), d.Review.Update)
 
 	secured.POST("/dcl-grants", d.DCL.Submit)
+
+	if d.ResourceApply != nil {
+		ra := secured.Group("/resource-apply")
+		ra.GET("/candidates", d.ResourceApply.Candidates)
+		ra.GET("/approvers", d.ResourceApply.Approvers)
+		ra.GET("/target-users", d.ResourceApply.TargetUsers)
+		ra.POST("", d.ResourceApply.Submit)
+	}
 
 	cdc := secured.Group("/cdc-sync")
 	cdc.GET("/instances", d.CDC.ListInstances)

@@ -1,0 +1,50 @@
+.resource-apply-page .ra-intent-tabs {
+  margin-bottom: 4px;
+}
+
+.resource-apply-page .ra-capability {
+  margin-bottom: 12px;
+  border-radius: 8px;
+}
+
+.resource-apply-page .ra-capability .ant-alert-message {
+  font-weight: 600;
+}
+
+.resource-apply-page .ra-capability .ant-alert-description {
+  font-size: 13px;
+  line-height: 1.6;
+  color: #4b5563;
+}
+
+.resource-apply-form {
+  background: #fff;
+  padding: 16px 20px 24px;
+  border-radius: 8px;
+}
+
+.ra-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 12px;
+  align-items: center;
+}
+
+.ra-selected {
+  margin: 12px 0 16px;
+  padding: 12px;
+  background: #f9fafb;
+  border-radius: 6px;
+}
+
+.ra-selected-title {
+  margin-bottom: 8px;
+  font-weight: 500;
+}
+
+.resource-apply-page .hint {
+  color: #9ca3af;
+  font-size: 12px;
+  margin: 0 0 12px;
+}
