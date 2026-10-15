@@ -34,6 +34,27 @@ STAMP=v1.11.0 ./scripts/pack_release.sh frontend
 IMAGE_TAG=auto-dba:v1.11.0 ./scripts/pack_release.sh docker
 ```
 
+## 发布到 GitHub Release（固定流程）
+
+用 [`scripts/publish_github_release.sh`](../scripts/publish_github_release.sh)，**不要**依赖交互式 `gh auth login`（浏览器 OAuth 易超时）。
+
+凭据来源与 `git push https://github.com/...` 相同：从本机 **git credential / Keychain** 取出 token，临时注入 `GH_TOKEN` 再调 `gh`（与 v2.3.7、v1.11.0 发版成功路径一致）。
+
+```bash
+# 已 push 的提交 + 写好 docs/changelog-vX.Y.Z.md 后：
+
+# 推荐：打包 + 打 tag + 创建 Release（一体包）
+PACK=1 ./scripts/publish_github_release.sh v1.12.0
+
+# 已有 dist/*-v1.12.0.tgz 时只发版
+./scripts/publish_github_release.sh v1.12.0
+
+# 发版前顺带删若干旧 Release（不删受仓库 Rules 保护的 tag）
+DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12.0
+```
+
+前提：本机能 `git push origin HEAD`；已安装 `gh`。若 Keychain 无凭据，先手动 push 一次或导出 `GH_TOKEN=...`。
+
 ### 已发布版本（摘要）
 
 | 版本 | 要点 |

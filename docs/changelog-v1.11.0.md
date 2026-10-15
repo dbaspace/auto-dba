@@ -28,10 +28,11 @@
 
 - 全局参数长值截断与「眼睛」查看；库审核人相关详情提示等体验优化。
 
-## 打包
+## 打包与发版
 
 ```bash
 STAMP=v1.11.0 ./scripts/pack_release.sh all
+# 或：PACK=1 ./scripts/publish_github_release.sh v1.11.0
 ```
 
-部署见 [deploy.md](deploy.md)。
+以后发版统一用 [`scripts/publish_github_release.sh`](../scripts/publish_github_release.sh)（git credential → `GH_TOKEN` → `gh release create`）。部署见 [deploy.md](deploy.md)。
