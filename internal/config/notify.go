@@ -14,7 +14,7 @@ type NotifyModuleConfig struct {
 	Robots       []NotifyRobotConfig  `yaml:"robots"`
 }
 
-// NotifyProviderConfig 对齐 neptune-notify provider（无 email）。
+// NotifyProviderConfig 通知渠道 Provider 配置（不含邮件；邮件走库表 SMTP）。
 type NotifyProviderConfig struct {
 	Wechat    WechatNotifyConfig `yaml:"wechat"`
 	Lark      LarkNotifyConfig   `yaml:"lark"`
