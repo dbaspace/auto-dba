@@ -99,7 +99,7 @@
 
 `deploy/db-agent` API：`/v1/db/*`（`precheck`、`artifact/install`、`file/*`、`fs/ensure`、`systemd/*`、`exec`、`repl/verify`、`jobs/:id`）。
 
-工作台 **DB Agent** Tab 支持 **SSH 下发**（对齐 StarRocks Node Agent）与手工登记。云托管单入口无需 Agent。下发前：`cd deploy/db-agent && ./build.sh`。
+工作台 **DB Agent** Tab 支持 **SSH 下发**（对齐 StarRocks Node Agent）与手工登记。云托管单入口无需 Agent。一体/后端发布包与 Docker 镜像已含 `deploy/db-agent/bin/db-agent`；从源码跑控制面时再执行 `cd deploy/db-agent && ./build.sh`。
 
 **对已有集群安全**：SSH 下发 / 重新下发 **仅**安装或重启 Agent 自身（默认 `:8092`），不启停 MySQL/PG/Redis 等已运行服务、不改业务 systemd/二进制/数据盘；禁止将业务端口配为 Agent 监听；`fuser -k` 仅在约定端口带 8090–8199。
 

@@ -152,7 +152,7 @@ flowchart TB
 | 能力 | 备份 / HA / capabilities 等 | StarRocks `/v1/sr/*`（预检、盘、装包、systemd） |
 | 集群登记下拉 | **不会**出现 | **仅**本表可选 |
 
-下发前在控制面执行 `cd deploy/node-agent && ./build.sh`。登记/新建集群时若下拉「暂无数据」，请先在本 Tab SSH 下发或手工登记（仅下发 8090 平台 Agent 不够）。
+一体/后端发布包与 Docker 镜像已含 `deploy/node-agent/bin/node-agent`；从源码跑控制面时再执行 `cd deploy/node-agent && ./build.sh`。登记/新建集群时若下拉「暂无数据」，请先在本 Tab SSH 下发或手工登记（仅下发 8090 平台 Agent 不够）。
 
 ### 3.3 HTTP API（控制面 → Agent）
 
@@ -788,7 +788,7 @@ log4j / 一致性巡检为后续项。
 | 不满足，且 OSS 没有范围内的包 | 阻断 |
 | conf 中 `JAVA_HOME` 指向不满足的 JDK | 阻断（update-alternatives 管不到，须人工修改或删除该行） |
 | 旧版 Node Agent（无 `/v1/sr/java/*`） | 阻断，重新 SSH 下发 Agent |
-| Node Agent 未返回系统 java 信息（旧版本） | 阻断（未停服）：无法确认 systemd 启动实际使用的 `/usr/bin/java`，须先在「Node Agent」页重新下发。下发前确认已执行 `deploy/node-agent/build.sh`，否则下发的仍是旧制品 |
+| Node Agent 未返回系统 java 信息（旧版本） | 阻断（未停服）：无法确认 systemd 启动实际使用的 `/usr/bin/java`，须先在「Node Agent」页重新下发。请确认控制面工作目录下 `deploy/node-agent/bin/node-agent` 为新制品（发布包已含；源码环境需先 `deploy/node-agent/build.sh`） |
 
 `/home/jdk` 约定为本机满足 StarRocks 要求的最新 JDK，候选排序最前；切换时等价于：
 

@@ -20,18 +20,20 @@ KeePlus（进程 `auto-dba`）支持多种打包方式。**构建在有 Node 18+
 
 | 模式 | 命令 | 产物 | 适用 |
 |------|------|------|------|
-| **一体**（默认） | `./scripts/pack_release.sh` 或 `… all` | `dist/auto-dba-release-linux-amd64-*.tgz` | CentOS 手工部署，一进程托管页面+API |
-| **仅后端** | `./scripts/pack_release.sh backend` | `dist/auto-dba-backend-linux-amd64-*.tgz` | 只要 API；前端仍用开发 Vite 或另外部署 |
-| **仅前端** | `./scripts/pack_release.sh frontend` | `dist/auto-dba-frontend-*.tgz` | Nginx/CDN 托管静态资源 |
-| **Docker** | `./scripts/pack_release.sh docker` | 镜像 `auto-dba:<时间戳>`（可用 `IMAGE_TAG=` 覆盖） | 容器环境 |
+| **一体**（默认） | `./scripts/pack_release.sh` 或 `… all` | `dist/auto-dba-release-linux-amd64-*.tgz` | CentOS 手工部署，一进程托管页面+API；**含** Node/DB/Platform Agent |
+| **仅后端** | `./scripts/pack_release.sh backend` | `dist/auto-dba-backend-linux-amd64-*.tgz` | 前后端分离时的 API；**含**三类 Agent（SSH 下发用） |
+| **仅前端** | `./scripts/pack_release.sh frontend` | `dist/auto-dba-frontend-*.tgz` | Nginx/CDN 静态资源；**不含** Agent |
+| **Docker** | `./scripts/pack_release.sh docker` | 镜像 `auto-dba:<时间戳>`（可用 `IMAGE_TAG=` 覆盖） | 容器环境；镜像内 **含** Agent |
 
-可选环境变量：`GOOS` `GOARCH`（默认 `linux`/`amd64`）、`STAMP`（默认时间戳；发版用 `STAMP=v1.12.3`）、`IMAGE_TAG`、`SKIP_PNPM_INSTALL=1`（已有 `node_modules` 时）。
+一体包与后端包解压后工作目录须为**包根**（存在 `deploy/node-agent/bin/node-agent` 等），集群部署 SSH 下发无需再本机构建 Agent。
+
+可选环境变量：`GOOS` `GOARCH`（默认 `linux`/`amd64`）、`STAMP`（默认时间戳；发版用 `STAMP=v1.12.4`）、`IMAGE_TAG`、`SKIP_PNPM_INSTALL=1`（已有 `node_modules` 时）。
 
 ```bash
-STAMP=v1.12.3 ./scripts/pack_release.sh all
-STAMP=v1.12.3 ./scripts/pack_release.sh backend
-STAMP=v1.12.3 ./scripts/pack_release.sh frontend
-IMAGE_TAG=auto-dba:v1.12.3 ./scripts/pack_release.sh docker
+STAMP=v1.12.4 ./scripts/pack_release.sh all
+STAMP=v1.12.4 ./scripts/pack_release.sh backend
+STAMP=v1.12.4 ./scripts/pack_release.sh frontend
+IMAGE_TAG=auto-dba:v1.12.4 ./scripts/pack_release.sh docker
 ```
 
 ## 发布到 GitHub Release（固定流程）
@@ -44,13 +46,13 @@ IMAGE_TAG=auto-dba:v1.12.3 ./scripts/pack_release.sh docker
 # 已 push 的提交 + 写好 docs/changelog-vX.Y.Z.md 后：
 
 # 推荐：打包 + 打 tag + 创建 Release（一体包）
-PACK=1 ./scripts/publish_github_release.sh v1.12.3
+PACK=1 ./scripts/publish_github_release.sh v1.12.4
 
-# 已有 dist/*-v1.12.3.tgz 时只发版
-./scripts/publish_github_release.sh v1.12.3
+# 已有 dist/*-v1.12.4.tgz 时只发版
+./scripts/publish_github_release.sh v1.12.4
 
 # 发版前顺带删若干旧 Release（不删受仓库 Rules 保护的 tag）
-DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12.3
+DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12.4
 ```
 
 前提：本机能 `git push origin HEAD`；已安装 `gh`。若 Keychain 无凭据，先手动 push 一次或导出 `GH_TOKEN=...`。
@@ -59,7 +61,8 @@ DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12
 
 | 版本 | 要点 |
 |------|------|
-| [v1.12.3](changelog-v1.12.3.md) | **当前推荐**。侧栏收窄；查询 alias 去括号；类型 Tab 固定 6 个 +「…」 |
+| [v1.12.4](changelog-v1.12.4.md) | **当前推荐**。一体/后端包与 Docker 镜像打入 Node/DB/Platform Agent |
+| [v1.12.3](changelog-v1.12.3.md) | 侧栏收窄；查询 alias 去括号；类型 Tab 固定 6 个 +「…」 |
 | [v1.12.2](changelog-v1.12.2.md) | 查询树只显示 tags 的 `alias=`（兼容 `label=`）；登记页标签说明 |
 | [v1.12.1](changelog-v1.12.1.md) | 已登记库环境/域名筛选；域名按库明细展示 |
 | [v1.12.0](changelog-v1.12.0.md) | Nacos 通知渠道 + 群机器人方向页配；告警全局频控与恢复必达；查询收藏/脱敏等 |
@@ -151,7 +154,7 @@ docker run --rm -p 8800:8800 \
   auto-dba:latest
 ```
 
-镜像内已含 `frontend/dist`；请保证配置中 `http.serve_static: true`（Dockerfile 会在示例 config 末尾追加提示）。密钥、DSN 建议走 Nacos 或挂载配置，勿打进镜像。
+镜像内已含 `frontend/dist` 与 `deploy/*/bin` 三类 Agent；请保证配置中 `http.serve_static: true`（Dockerfile 会在示例 config 末尾追加提示）。密钥、DSN 建议走 Nacos 或挂载配置，勿打进镜像。工作目录为 `/app`，与 SSH 下发解析路径一致。
 
 当前镜像基于 Alpine，适合较新内核环境；若必须在极老主机跑容器，优先用方式 A 的静态二进制 + `CGO_ENABLED=0`。
 

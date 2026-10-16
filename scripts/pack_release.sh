@@ -10,6 +10,7 @@
 #
 # 环境变量：GOOS GOARCH STAMP IMAGE_TAG SKIP_PNPM_INSTALL=1
 #   STAMP 默认时间戳；发版可设 STAMP=v1.0.0
+# all / backend 会交叉编译并打入 Node/DB/Platform Agent（frontend 不含）
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -41,6 +42,9 @@ usage() {
 
 环境变量：GOOS GOARCH STAMP IMAGE_TAG SKIP_PNPM_INSTALL=1
   STAMP 默认时间戳；发版示例：STAMP=v1.0.0 ./scripts/pack_release.sh all
+
+all / backend 含 Node Agent(:8091)、DB Agent(:8092)、Platform Agent(:8090)；
+frontend 仅静态资源，不含 Agent。
 EOF
   exit "${1:-0}"
 }
@@ -73,6 +77,49 @@ build_backend() {
   echo "[pack] go build GOOS=${GOOS} GOARCH=${GOARCH}"
   mkdir -p bin
   CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" go build -o "bin/auto-dba" ./cmd/auto-dba
+}
+
+# SSH 下发用 Agent（相对包根路径与 Resolve*Artifact 一致）
+build_agents() {
+  need_cmd go
+  echo "[pack] agents: GOOS=${GOOS} GOARCH=${GOARCH}"
+  (
+    export GOOS GOARCH CGO_ENABLED=0
+    ./deploy/node-agent/build.sh
+    ./deploy/db-agent/build.sh
+    ./deploy/backup-agent/build.sh
+  )
+  local need=(
+    deploy/node-agent/bin/node-agent
+    deploy/db-agent/bin/db-agent
+    deploy/backup-agent/bin/platform-agent
+  )
+  local p
+  for p in "${need[@]}"; do
+    if [[ ! -f "$p" ]]; then
+      echo "Agent 制品缺失: $p" >&2
+      exit 1
+    fi
+  done
+}
+
+copy_agents() {
+  local stage="$1"
+  mkdir -p \
+    "$stage/deploy/node-agent/bin" \
+    "$stage/deploy/db-agent/bin" \
+    "$stage/deploy/backup-agent/bin"
+  cp -a deploy/node-agent/bin/node-agent "$stage/deploy/node-agent/bin/"
+  cp -a deploy/db-agent/bin/db-agent "$stage/deploy/db-agent/bin/"
+  cp -a deploy/backup-agent/bin/platform-agent "$stage/deploy/backup-agent/bin/"
+  # 兼容旧路径名
+  if [[ -f deploy/backup-agent/bin/backup-agent ]]; then
+    cp -a deploy/backup-agent/bin/backup-agent "$stage/deploy/backup-agent/bin/"
+  fi
+  chmod a+x \
+    "$stage/deploy/node-agent/bin/node-agent" \
+    "$stage/deploy/db-agent/bin/db-agent" \
+    "$stage/deploy/backup-agent/bin/"* 2>/dev/null || true
 }
 
 copy_config_examples() {
@@ -112,11 +159,11 @@ pack_tgz() {
 # ── docker ─────────────────────────────────────────────
 if [[ "$MODE" == "docker" ]]; then
   need_cmd docker
-  echo "[pack] docker build -f deploy/Dockerfile -t ${IMAGE_TAG}"
+  echo "[pack] docker build -f deploy/Dockerfile -t ${IMAGE_TAG}（含三类 Agent）"
   docker build -f deploy/Dockerfile -t "$IMAGE_TAG" .
   echo "[pack] 镜像: $IMAGE_TAG"
   echo "[pack] 运行示例: docker run --rm -p 8800:8800 -v \$PWD/config:/app/config $IMAGE_TAG"
-  echo "        需在挂载的 config 中设 http.serve_static: true（镜像内已含 frontend/dist）"
+  echo "        需在挂载的 config 中设 http.serve_static: true（镜像内已含 frontend/dist 与 deploy/*/bin Agent）"
   exit 0
 fi
 
@@ -156,21 +203,25 @@ if [[ "$MODE" == "backend" ]]; then
   rm -rf "$STAGE"
   mkdir -p "$STAGE/bin"
   build_backend
+  build_agents
   cp -a bin/auto-dba "$STAGE/bin/auto-dba"
   copy_config_examples "$STAGE/config"
   copy_terminal_runtime "$STAGE"
+  copy_agents "$STAGE"
   cat >"$STAGE/README-RELEASE.txt" <<EOF
 KeePlus 后端 API 包
 ==================
-含二进制与主机终端运行文件（scripts/terminal、assets/terminal），无前端。
+含二进制、主机终端运行文件（scripts/terminal、assets/terminal），以及
+Node/DB/Platform Agent（deploy/*/bin），无前端。
 
 1. 配置 Nacos / config/config.yaml
 2. http.serve_static: false（页面由 Vite:5174 或 Nginx 提供）
 3. cd 本目录后：./bin/auto-dba -config config/config.yaml
 4. API：http://服务器:8800/api/v1/...
 5. 主机终端需本包根下 scripts/terminal/node-terminal.sh，并配置 terminal.ssh_identity_file
+6. 集群/库部署 SSH 下发 Agent：工作目录须为本包根（已含 deploy/node-agent 等制品）
 
-说明：docs/deploy.md、docs/terminal.md
+说明：docs/deploy.md、docs/terminal.md、docs/db-cluster.md
 EOF
   pack_tgz "$OUT_NAME"
   exit 0
@@ -184,10 +235,12 @@ mkdir -p "$STAGE/bin" "$STAGE/frontend" "$STAGE/config"
 
 build_frontend
 build_backend
+build_agents
 cp -a frontend/dist "$STAGE/frontend/dist"
 cp -a bin/auto-dba "$STAGE/bin/auto-dba"
 copy_config_examples "$STAGE/config"
 copy_terminal_runtime "$STAGE"
+copy_agents "$STAGE"
 if [[ -f deploy/nginx.conf.example ]]; then
   cp -a deploy/nginx.conf.example "$STAGE/config/"
 fi
@@ -195,7 +248,8 @@ fi
 cat >"$STAGE/README-RELEASE.txt" <<EOF
 KeePlus 一体发布包（推荐 CentOS 手工部署）
 ========================================
-工作目录必须为本包根（含 frontend/dist、scripts/terminal、assets/terminal）。
+工作目录必须为本包根（含 frontend/dist、scripts/terminal、assets/terminal、
+deploy/*/bin Agent 制品）。
 
 1. 配置 Nacos 或 config/config.yaml
 2. 开启静态托管（页面与 API 同端口，无需 5174）：
@@ -205,8 +259,9 @@ KeePlus 一体发布包（推荐 CentOS 手工部署）
 3. 启动：./bin/auto-dba
 4. 浏览器：http://服务器:8800/
 5. 主机 Web 终端依赖 scripts/terminal/node-terminal.sh（已打入本包）与 terminal.ssh_identity_file
+6. Node/DB/Platform Agent 已打入 deploy/*/bin，SSH 下发无需再本机构建
 
-运行机无需 Node/pnpm。说明：docs/deploy.md、docs/terminal.md
+运行机无需 Node/pnpm。说明：docs/deploy.md、docs/terminal.md、docs/db-cluster.md
 EOF
 
 pack_tgz "$OUT_NAME"
