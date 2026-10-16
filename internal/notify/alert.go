@@ -311,33 +311,12 @@ func collectWecomIDs(db *store.DB, usernames []string) []string {
 }
 
 func postAlertLark(db *store.DB, ch Channel, title, text, md string, p AlertPayload, opts *AlertDispatchOpts) {
-	ids := collectLarkIDs(db, collectAlertRecipients(db, p, opts))
-	if len(ids) == 0 {
+	recips := CollectLarkRecipients(db, collectAlertRecipients(db, p, opts), "alert")
+	if len(recips) == 0 {
 		log.Printf("alert-notify: %s skip no lark ids", ch)
 		return
 	}
-	SendVia(ch, Message{Title: title, Text: text, Markdown: md, LarkUserIDs: ids})
-}
-
-func collectLarkIDs(db *store.DB, usernames []string) []string {
-	if db == nil {
-		return nil
-	}
-	var ids []string
-	seen := map[string]bool{}
-	for _, uname := range usernames {
-		u, _ := db.GetUserByUsername(strings.TrimSpace(uname))
-		if u == nil {
-			continue
-		}
-		id := ResolveLarkUserID(u.IMType, u.IMAccount)
-		if id == "" || seen[id] {
-			continue
-		}
-		seen[id] = true
-		ids = append(ids, id)
-	}
-	return ids
+	SendVia(ch, Message{Title: title, Text: text, Markdown: md, LarkRecipients: recips})
 }
 
 func collectPhones(db *store.DB, usernames []string) []string {

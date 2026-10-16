@@ -9,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"auto-dba/internal/middleware"
+	"auto-dba/internal/notify"
 	"auto-dba/internal/secret"
 	"auto-dba/internal/sqlcheck"
 	"auto-dba/internal/store"
@@ -351,10 +352,78 @@ func (h *TicketHandler) finishCreateDBAfterExec(ctx context.Context, it *store.I
 	if err := materializeCreateDBAccounts(h.Store, h.Secret, it); err != nil {
 		return err
 	}
-	if warn := provisionCreateDBAccounts(ctx, h, it); warn != "" {
+	warn := provisionCreateDBAccounts(ctx, h, it)
+	if warn != "" {
 		appendCreateDBWarn(it, h, warn)
 	}
+	if items := h.createDBNotifyItems(it); len(items) > 0 {
+		cp := *it
+		go notify.CreateDBDone(h.Store, &cp, items, warn)
+	}
 	return nil
+}
+
+// createDBNotifyItems 按实例汇总建库结果（地址/库/账号/密码），供通知申请人。
+func (h *TicketHandler) createDBNotifyItems(it *store.Issue) []notify.CreateDBNotifyItem {
+	extra := parseCreateDBExtra(it)
+	if extra == nil {
+		return nil
+	}
+	ids := createDBInstanceIDs(it)
+	accs, _ := h.Store.ListAccountsByTicket(it.ID)
+	names := sqlcheck.ParseCreateDBNames(it.SQLContent)
+	if len(names) == 0 {
+		for _, n := range strings.Split(it.DBName, ",") {
+			if s := strings.TrimSpace(n); s != "" {
+				names = append(names, s)
+			}
+		}
+	}
+	username := strings.TrimSpace(extra.Username)
+	var out []notify.CreateDBNotifyItem
+	for _, id := range ids {
+		inst, _ := h.Store.GetInstance(id)
+		if inst == nil {
+			continue
+		}
+		host := ddlDomainForInstance(it.NeedRollback, id, it.Domain)
+		if host == "" {
+			host = strings.TrimSpace(inst.DomainName)
+		}
+		if host == "" {
+			host = inst.Host
+		}
+		addr := host
+		if !strings.Contains(host, ":") && inst.Port > 0 {
+			addr = fmt.Sprintf("%s:%d", host, inst.Port)
+		}
+		item := notify.CreateDBNotifyItem{
+			Address:     addr,
+			DBNames:     names,
+			Permissions: extra.Permissions,
+		}
+		if username != "" {
+			item.Username = username
+			if prev, _ := h.Store.FindAccountByInstanceUser(id, username, it.ID); prev != nil {
+				item.Reused = true
+			} else {
+				for _, acc := range accs {
+					if acc.InstanceID != id || acc.Username != username {
+						continue
+					}
+					if pwd, err := secret.Decrypt(h.Secret, acc.Password); err == nil {
+						item.Password = pwd
+					}
+					break
+				}
+				if item.Password == "" {
+					item.Reused = true
+				}
+			}
+		}
+		out = append(out, item)
+	}
+	return out
 }
 
 func appendCreateDBWarn(it *store.Issue, h *TicketHandler, warn string) {

@@ -258,7 +258,10 @@ notify:
 
 - **群机器人方向（告警 / 工单）不在 Nacos**：只在「认证配置 → 通知 → 群机器人」按条选择并保存到库（`robot_routes` + `robots_on_ticket_create`）。未配置方向时默认仅告警。
 - 热更：`notify` 段变更会重建 Provider（与 Copilot 相同 Listen 路径）。
-- 用户绑定飞书：`im_type=lark`，`im_account` 填飞书 **user_id**；短信/电话用用户档案 `phone`。
+- 用户绑定飞书：`im_type=lark`（或留空），`im_account` 可填飞书 **user_id**（企业内用户 ID，非登录名）、`open_id`（`ou_`）、`union_id`（`on_`）、群 `chat_id`（`oc_`）、邮箱或手机号；也可加显式前缀 `email:` / `mobile:` / `user_id:` / `open_id:`。短信/电话用用户档案 `phone`。
+- 飞书接收人回退顺序：`im_account` → 用户档案 `email` → 用户档案 `phone`；某个身份被飞书判为无效（如 `99992360`）时自动尝试下一个，单人失败不影响其他接收人。邮箱 / 手机号必须与飞书通讯录登记的一致（未绑定飞书的个人邮箱如 qq 邮箱无法匹配）。
+- 飞书应用权限：`im:message`（发送消息）；按手机号发送需 `contact:user.id:readonly`（`batch_get_id` 换 user_id）；应用「可用范围」须覆盖所有接收人。
+- 开启「工单创建通知审批人」（`lark_on_ticket_create`）后：所有工单提交 / 转移时通知审核人（当前审核人、DBA 审核人、安全审核人；DQL 逐关通知）；**建库工单**执行成功并授权后，另向申请人私聊发送地址、库名、账号、密码（账号已存在时为「沿用原密码」）、权限与说明；其他工单不向申请人发送飞书结果。
 - API `GET /settings/notify` 返回 `providers` 只读状态（`lark_ready` 等），不含密钥。
 
 ### 服务端口从 Nacos 绑定

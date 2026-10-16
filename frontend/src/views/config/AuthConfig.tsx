@@ -1008,14 +1008,18 @@ function NotifyPanel() {
               label: panelLabel('飞书私聊', !!providers.lark_ready),
               children: (
                 <>
-                  <p className="field-hint">Nacos：notify.provider.lark；用户 im_type=lark + im_account=user_id</p>
+                  <p className="field-hint">
+                    Nacos：notify.provider.lark。接收人按 im_account（飞书 user_id / open_id / 邮箱 / 手机号）→ 用户邮箱 → 用户手机号依次尝试；
+                    邮箱、手机号须与飞书通讯录一致。应用需开通 im:message，按手机号发送另需 contact:user.id:readonly，且可用范围覆盖接收人。
+                    开启后：所有工单通知审核人；建库工单执行成功后另通知申请人（含账号密码）。
+                  </p>
                   <Form.Item label="工单创建通知审批人" name="lark_on_ticket_create" valuePropName="checked">
                     <Switch />
                   </Form.Item>
                   <Form.Item label="告警私聊" name="lark_on_alert" valuePropName="checked">
                     <Switch />
                   </Form.Item>
-                  {testRow('lark', '飞书 user_id（空=当前用户 im_account）')}
+                  {testRow('lark', '飞书 user_id / 邮箱 / 手机号 / open_id（空=当前用户 im_account）')}
                 </>
               ),
             },
@@ -1028,7 +1032,7 @@ function NotifyPanel() {
                   <Form.Item label="告警通知" name="lark_alert_on_alert" valuePropName="checked">
                     <Switch />
                   </Form.Item>
-                  {testRow('lark_alert', '飞书 user_id')}
+                  {testRow('lark_alert', '飞书 user_id / 邮箱 / 手机号 / open_id')}
                 </>
               ),
             },

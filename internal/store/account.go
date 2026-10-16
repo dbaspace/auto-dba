@@ -105,6 +105,18 @@ func (d *DB) FindAccount(instanceID, username, dbName string) (*DBAccount, error
 	return it, err
 }
 
+// FindAccountByInstanceUser 同实例同用户名、且非指定工单创建的最早一条账号记录（判断「账号已存在」）。
+func (d *DB) FindAccountByInstanceUser(instanceID, username, excludeTicketID string) (*DBAccount, error) {
+	it, err := scanAccount(d.QueryRow(
+		`SELECT `+accountCols+` FROM tbl_db_accounts WHERE instance_id=? AND username=? AND COALESCE(ticket_id,'')<>? ORDER BY created_at ASC LIMIT 1`,
+		instanceID, username, excludeTicketID,
+	))
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return it, err
+}
+
 func (d *DB) ListAccountsByTicket(ticketID string) ([]DBAccount, error) {
 	rows, err := d.Query(`SELECT `+accountCols+` FROM tbl_db_accounts WHERE ticket_id=?`, ticketID)
 	if err != nil {

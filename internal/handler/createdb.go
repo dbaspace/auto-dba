@@ -406,6 +406,11 @@ func materializeCreateDBAccounts(st *store.DB, secretKey string, it *store.Issue
 		if inst == nil {
 			continue
 		}
+		pwdEnc := enc
+		if prev, _ := st.FindAccountByInstanceUser(instanceID, username, it.ID); prev != nil && strings.TrimSpace(prev.Password) != "" {
+			// 实例上账号已存在时 CREATE USER 会被跳过，实际密码仍是旧的
+			pwdEnc = prev.Password
+		}
 		for _, dbName := range names {
 			if found, _ := st.FindAccount(instanceID, username, dbName); found != nil {
 				continue
@@ -430,7 +435,7 @@ func materializeCreateDBAccounts(st *store.DB, secretKey string, it *store.Issue
 				DBType:      inst.DBType,
 				IDC:         inst.IDC,
 				Username:    username,
-				Password:    enc,
+				Password:    pwdEnc,
 				Permissions: extra.Permissions,
 				Description: strings.TrimSpace(it.Description),
 				TicketID:    it.ID,

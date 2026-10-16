@@ -80,20 +80,9 @@ func sendApproverChannels(db *store.DB, ncfg *store.NotifyConfig, usernames []st
 	md := fmt.Sprintf("**%s**\n\n%s\n\n[打开工单](%s)", subject, body, link)
 
 	if ncfg.LarkOnTicketCreate {
-		var ids []string
-		for _, uname := range usernames {
-			u, _ := db.GetUserByUsername(strings.TrimSpace(uname))
-			if u == nil {
-				continue
-			}
-			if id := ResolveLarkUserID(u.IMType, u.IMAccount); id != "" {
-				ids = append(ids, id)
-			} else {
-				log.Printf("notify lark: user %q has no im_account ticket=%s", uname, ticketNo)
-			}
-		}
-		if len(ids) > 0 {
-			SendVia(ChannelLark, Message{Title: subject, Text: text, Markdown: md, LarkUserIDs: ids})
+		recips := CollectLarkRecipients(db, usernames, "ticket="+ticketNo)
+		if len(recips) > 0 {
+			SendVia(ChannelLark, Message{Title: subject, Text: text, Markdown: md, LarkRecipients: recips})
 		}
 	}
 
@@ -155,6 +144,72 @@ func sendApproverChannels(db *store.DB, ncfg *store.NotifyConfig, usernames []st
 			log.Printf("notify robot ticket: sent to %d robot(s) ticket=%s", matched, ticketNo)
 		}
 	}
+}
+
+// CreateDBNotifyItem 建库结果中一个实例的信息。
+type CreateDBNotifyItem struct {
+	Address     string
+	DBNames     []string
+	Username    string
+	Password    string // 明文；Reused=true 时忽略
+	Reused      bool   // 账号已存在，沿用原密码
+	Permissions []string
+}
+
+// CreateDBDone 建库工单执行成功后飞书私聊申请人（唯一给申请人发结果的工单类型）。
+func CreateDBDone(db *store.DB, issue *store.Issue, items []CreateDBNotifyItem, warn string) {
+	if db == nil || issue == nil || len(items) == 0 {
+		return
+	}
+	ncfg, err := db.GetNotifyConfig()
+	if err != nil || ncfg == nil || !ncfg.LarkOnTicketCreate {
+		return
+	}
+	recips := CollectLarkRecipients(db, []string{issue.Submitter}, "createdb ticket="+issue.TicketNo)
+	if len(recips) == 0 {
+		return
+	}
+	desc := strings.TrimSpace(issue.Description)
+	var blocks []string
+	for _, it := range items {
+		lines := []string{
+			"地址：" + it.Address,
+			"数据库：" + strings.Join(it.DBNames, ","),
+		}
+		note := desc
+		if strings.TrimSpace(it.Username) != "" {
+			lines = append(lines, "账号："+it.Username)
+			if it.Reused {
+				lines = append(lines, "密码：沿用原密码")
+				note = joinNote(note, "账号已存在，仅授权新库")
+			} else {
+				lines = append(lines, "密码："+it.Password)
+			}
+			if len(it.Permissions) > 0 {
+				lines = append(lines, "权限："+strings.Join(it.Permissions, ","))
+			}
+		}
+		if w := strings.TrimSpace(warn); w != "" {
+			note = joinNote(note, "授权提示："+w)
+		}
+		if note != "" {
+			lines = append(lines, "说明："+note)
+		}
+		blocks = append(blocks, strings.Join(lines, "\n"))
+	}
+	text := fmt.Sprintf("工单 %s 已执行完成\n\n%s", issue.TicketNo, strings.Join(blocks, "\n\n"))
+	if err := SendViaErr(ChannelLark, Message{Title: "建库工单完成", Text: text, LarkRecipients: recips}); err != nil {
+		log.Printf("notify createdb done ticket=%s: %v", issue.TicketNo, err)
+		return
+	}
+	log.Printf("notify createdb done: sent to submitter=%s ticket=%s", issue.Submitter, issue.TicketNo)
+}
+
+func joinNote(a, b string) string {
+	if a == "" {
+		return b
+	}
+	return a + "；" + b
 }
 
 // IssueExecFailed 工单执行失败通知提交人。

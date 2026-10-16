@@ -29,6 +29,8 @@ type Message struct {
 	Markdown string
 	// LarkUserIDs 飞书 user_id 列表
 	LarkUserIDs []string
+	// LarkRecipients 每人一组候选身份（见 ResolveLarkRecipient），按顺序尝试直至成功
+	LarkRecipients [][]string
 	// WecomToUser 企微 touser（| 分隔 userid）
 	WecomToUser string
 	// WecomToParty 企微 toparty（| 分隔部门 ID）
