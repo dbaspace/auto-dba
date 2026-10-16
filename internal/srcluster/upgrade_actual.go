@@ -16,6 +16,8 @@ type procVersionRow struct {
 	Version string
 	Role    string
 	Alive   string
+	// HTTPPort BE 的 HttpPort（探测 /varz）；FE 也可能有，缺省 0
+	HTTPPort int
 	// 以下仅 FE：ReplayedJournalId、LastHeartbeat、StartTime 列
 	ReplayedJournalID string
 	LastHeartbeat     string
@@ -107,6 +109,7 @@ func queryProcRowsDB(ctx context.Context, db *sql.DB, path string, requireVersio
 	roleIdx, aliveIdx := col("role"), col("alive")
 	journalIdx, heartbeatIdx, startIdx := col("replayedjournalid"), col("lastheartbeat"), col("starttime")
 	decomIdx, tabletIdx := col("systemdecommissioned"), col("tabletnum")
+	httpPortIdx := col("httpport")
 	res := backendResourceCols(cols)
 	if verIdx < 0 && requireVersion {
 		return nil, fmt.Errorf("SHOW PROC '%s' 无 Version 列", path)
@@ -132,11 +135,16 @@ func queryProcRowsDB(ctx context.Context, db *sql.DB, path string, requireVersio
 			// FE Name 形如 10.100.113.151_9010_1790435392900
 			host, _, _ = strings.Cut(cell(nameIdx), "_")
 		}
+		httpPort := 0
+		if s := cell(httpPortIdx); s != "" {
+			fmt.Sscanf(s, "%d", &httpPort)
+		}
 		out = append(out, procVersionRow{
-			Host:    host,
-			Version: cell(verIdx),
-			Role:    strings.ToUpper(cell(roleIdx)),
-			Alive:   strings.ToLower(cell(aliveIdx)),
+			Host:     host,
+			Version:  cell(verIdx),
+			Role:     strings.ToUpper(cell(roleIdx)),
+			Alive:    strings.ToLower(cell(aliveIdx)),
+			HTTPPort: httpPort,
 
 			ReplayedJournalID: cell(journalIdx),
 			LastHeartbeat:     cell(heartbeatIdx),
@@ -244,7 +252,28 @@ func (e *Engine) ClusterLive(ctx context.Context, cl *store.SrCluster) (map[stri
 			nodes = withoutNodes(nodes, removed)
 		}
 	}
-	return mapNodeLive(nodes, fe, be), removed, nil
+	live := mapNodeLive(nodes, fe, be)
+	reconcileNodeReadyFromAlive(e.Store, nodes, live)
+	return live, removed, nil
+}
+
+// reconcileNodeReadyFromAlive：SHOW PROC Alive=true 且库状态为 stopped（非下线中）时写回 ready，避免详情误显「已停止」。
+func reconcileNodeReadyFromAlive(st *store.DB, nodes []store.SrNode, live map[string]NodeLive) {
+	if st == nil || live == nil {
+		return
+	}
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Status != store.SrNodeStopped {
+			continue
+		}
+		lv, ok := live[n.ID]
+		if !ok || !procTruthy(lv.Alive) || lv.Decommissioned {
+			continue
+		}
+		n.Status = store.SrNodeReady
+		_ = st.UpdateSrNode(n)
+	}
 }
 
 func withoutNodes(nodes, drop []store.SrNode) []store.SrNode {

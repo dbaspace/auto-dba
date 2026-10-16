@@ -95,9 +95,13 @@
   white-space: nowrap;
 }
 .tree-tag {
-  color: #6b7280;
+  color: #9ca3af;
   flex-shrink: 0;
-  font-size: 12px;
+  font-size: 11px;
+  max-width: 42%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .muted { color: #9ca3af; }
 .tree-empty {

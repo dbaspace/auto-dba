@@ -11,6 +11,9 @@
 .redis-query .inst-item.open { background: #f8fafc; }
 .redis-query .inst-item .caret { width: 12px; flex-shrink: 0; color: #9ca3af; font-size: 12px; line-height: 1; transition: transform .15s; display: inline-block; }
 .redis-query .inst-item .caret.open { color: #1677ff; transform: rotate(90deg); }
+.redis-query .node-ico { flex-shrink: 0; line-height: 0; display: inline-flex; align-items: center; }
+.redis-query .inst-item .env-ico { color: #9ca3af; font-size: 14px; }
+.redis-query .inst-item .env-ico.open { color: #1677ff; }
 .redis-query .inst-item .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
 .redis-query .inst-item .env { color: #9ca3af; flex-shrink: 0; font-size: 12px; }
 .redis-query .domain-list { padding: 2px 0 6px 14px; }
@@ -19,6 +22,7 @@
   width: 100%;
   display: flex;
   align-items: center;
+  gap: 6px;
   border: 0;
   background: transparent;
   border-radius: 6px;
@@ -34,6 +38,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 .redis-query .db-list { padding: 2px 0 8px 12px; }
@@ -42,7 +47,7 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   border: 0;
   background: transparent;
   border-radius: 6px;
@@ -54,7 +59,16 @@
 }
 .redis-query .db-item:hover { background: #f3f4f6; }
 .redis-query .db-item.active { background: #e6f4ff; color: #1677ff; }
-.redis-query .db-item .db-name { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.redis-query .db-item .db-ico { color: #9ca3af; font-size: 13px; }
+.redis-query .db-item.active .db-ico { color: #1677ff; }
+.redis-query .db-item .db-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
 .redis-query .db-item .keys { color: #9ca3af; flex-shrink: 0; }
 .redis-query .db-item.active .keys { color: #69b1ff; }
 .redis-query .main { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 12px; overflow: auto; }

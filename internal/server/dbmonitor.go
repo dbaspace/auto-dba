@@ -87,7 +87,7 @@ func RunDbMonitor(cfg *config.Config, configPath string) {
 		c.JSON(http.StatusOK, gin.H{"status": "ready", "service": "db-monitor"})
 	})
 
-	auth := middleware.Auth(&cfg.App.JWTSecret, db, "/healthz", "/readyz")
+	auth := middleware.Auth(&cfg.App.JWTSecret, db, nil, "/healthz", "/readyz")
 	api := engine.Group("/api/v1")
 	api.Use(auth)
 	dm := api.Group("/db-monitor")

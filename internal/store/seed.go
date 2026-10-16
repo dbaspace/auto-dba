@@ -257,6 +257,9 @@ func (d *DB) seedRBAC(now string) error {
 	if err := d.ensureLoginLogsMenu(now); err != nil {
 		return err
 	}
+	if err := d.ensureLoginSessionsMenu(now); err != nil {
+		return err
+	}
 	if err := d.ensureQueryAuditsMenu(now); err != nil {
 		return err
 	}
@@ -511,6 +514,8 @@ func defaultMenuIcon(id, path string) string {
 		return "user"
 	case "m-cfg-login-logs":
 		return "login"
+	case "m-cfg-login-sessions":
+		return "team"
 	case "m-cfg-ldap":
 		return "safety"
 	case "m-cfg-query-audits":
@@ -625,6 +630,7 @@ func (d *DB) seedMenus(now string) error {
 		{"m-cfg-users", "m-rbac", "用户管理", "/config/users", "um.sidebar.config-users", "查看用户管理", "user", 56},
 		{"m-cfg-roles", "m-rbac", "角色授权", "/config/roles", "um.sidebar.config-roles", "查看角色授权", "team", 57},
 		{"m-cfg-menus", "m-rbac", "菜单管理", "/config/menus", "um.sidebar.config-menus", "查看菜单管理", "menu", 58},
+		{"m-cfg-login-sessions", "m-rbac", "登录会话", "/config/login-sessions", "um.sidebar.config-login-sessions", "查看登录会话并强制下线", "team", 58},
 		{"m-cfg-login-logs", "m-rbac", "登录日志", "/config/login-logs", "um.sidebar.config-login-logs", "查看登录日志", "login", 59},
 		{"m-cfg-ldap", "m-rbac", "认证配置", "/config/ldap", "um.sidebar.config-ldap", "查看认证配置", "safety", 60},
 		{"m-cfg-query-audits", "m-rbac", "查询审计", "/config/query-audits", "um.sidebar.config-query-audits", "查看查询审计", "audit", 61},
@@ -1372,6 +1378,22 @@ func (d *DB) ensureLoginLogsMenu(now string) error {
 	return d.grantMenuToRoleCode(m.ID, "admin")
 }
 
+func (d *DB) ensureLoginSessionsMenu(now string) error {
+	m := &Menu{
+		ID: "m-cfg-login-sessions", ParentID: "m-rbac", Title: "登录会话", Path: "/config/login-sessions",
+		URN: "um.sidebar.config-login-sessions", PermissionDesc: "查看登录会话并强制下线", Icon: "team",
+		SortOrder: 58, Enabled: true, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := d.EnsureMenu(m); err != nil {
+		return err
+	}
+	// 跟父菜单「用户权限」已授权的角色一并开通；并保证 admin 有权
+	if err := d.GrantMenuFollowingParent(m.ID, m.ParentID); err != nil {
+		return err
+	}
+	return d.grantMenuToRoleCode(m.ID, "admin")
+}
+
 func (d *DB) ensureQueryAuditsMenu(now string) error {
 	m := &Menu{
 		ID: "m-cfg-query-audits", ParentID: "m-rbac", Title: "查询审计", Path: "/config/query-audits",
@@ -1413,6 +1435,7 @@ func (d *DB) ensureUserPermissionMenus(now string) error {
 		{"m-cfg-users", "m-rbac", "用户管理", "/config/users", "um.sidebar.config-users", "查看用户管理", "user", 56},
 		{"m-cfg-roles", "m-rbac", "角色授权", "/config/roles", "um.sidebar.config-roles", "查看角色授权", "team", 57},
 		{"m-cfg-menus", "m-rbac", "菜单管理", "/config/menus", "um.sidebar.config-menus", "查看菜单管理", "menu", 58},
+		{"m-cfg-login-sessions", "m-rbac", "登录会话", "/config/login-sessions", "um.sidebar.config-login-sessions", "查看登录会话并强制下线", "team", 58},
 		{"m-cfg-login-logs", "m-rbac", "登录日志", "/config/login-logs", "um.sidebar.config-login-logs", "查看登录日志", "login", 59},
 		{"m-cfg-ldap", "m-rbac", "认证配置", "/config/ldap", "um.sidebar.config-ldap", "查看认证配置", "safety", 60},
 		{"m-cfg-query-audits", "m-rbac", "查询审计", "/config/query-audits", "um.sidebar.config-query-audits", "查看查询审计", "audit", 61},

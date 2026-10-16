@@ -43,12 +43,19 @@ client.interceptors.response.use(
       }
     }
     if (status === 401) {
+      const code = err.response?.data?.code
+      if (code === 'session_revoked') {
+        msg = err.response?.data?.message || '会话已失效，请重新登录'
+      } else if (/idle|未操作|idle timeout/i.test(String(msg))) {
+        msg = msg || '长时间未操作，请重新登录'
+      }
       localStorage.removeItem('token')
       localStorage.removeItem('user')
       sessionStorage.removeItem('auto-dba-query-workspace')
       if (location.hash.includes('/login')) {
         message.error(msg)
       } else {
+        message.error(msg)
         location.hash = '#/login'
       }
     } else if (!(err.config as AxiosRequestConfig)?.silent && !isBenignCdcMiss(err.config?.url, status)) {

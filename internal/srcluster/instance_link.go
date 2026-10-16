@@ -243,6 +243,11 @@ func (e *Engine) LookupFeAdminCredForProbe(cl *store.SrCluster, nodes []store.Sr
 	return e.lookupFeAdminCred(cl, nodes)
 }
 
+// ExportFeCredentials 供 handler 取 FE 账号密码（实例 → FeAdmin → 集群密码）。
+func (e *Engine) ExportFeCredentials(cl *store.SrCluster, nodes []store.SrNode) (user, pass string, err error) {
+	return e.feCredentials(cl, nodes, false)
+}
+
 // lookupFeAdminCred 按 FE 节点主机匹配配置中心 FE 管理凭据。
 func (e *Engine) lookupFeAdminCred(cl *store.SrCluster, nodes []store.SrNode) (user, pass string, ok bool) {
 	if e.Store == nil {

@@ -409,16 +409,13 @@ export default function MonitorTargets() {
     setTargets(
       (it.target_groups || []).map((g) => ({
         endpoints: g.endpoints,
-        labels: g.labels || {},
+        // 深拷贝，避免多组共享同一 labels 引用
+        labels: { ...(g.labels || {}) },
         description: g.description,
       })),
     )
-    // 任务级 + 各目标组标签合并进「标签管理」，避免只改任务标签时卡片上看不见
-    const merged: Record<string, string> = { ...(it.labels || {}) }
-    for (const g of it.target_groups || []) {
-      Object.assign(merged, g.labels || {})
-    }
-    setJobLabels(labelsToPairs(merged))
+    // 标签管理仅反映任务级 labels，不与各组混并（各组可有不同 app 等）
+    setJobLabels(labelsToPairs(it.labels || {}))
     resetAdvanced()
     setVisible(true)
   }
@@ -431,7 +428,8 @@ export default function MonitorTargets() {
   function openAddTarget() {
     setTgEditingIdx(null)
     tgForm.setFieldsValue({ endpoints: '', description: '' })
-    setTgLabels([])
+    // 新建目标用当前任务级标签作默认值，可再单独改
+    setTgLabels(labelsToPairs(pairsToLabels(jobLabels)))
     setTgVisible(true)
   }
 
@@ -439,7 +437,8 @@ export default function MonitorTargets() {
     const t = targets[idx]
     setTgEditingIdx(idx)
     tgForm.setFieldsValue({ endpoints: t.endpoints || '', description: t.description || '' })
-    setTgLabels(labelsToPairs(t.labels))
+    // 编辑区展示「任务基底 + 本组覆盖」，保存时写回该组完整 labels
+    setTgLabels(labelsToPairs({ ...pairsToLabels(jobLabels), ...(t.labels || {}) }))
     setTgVisible(true)
   }
 
@@ -464,12 +463,7 @@ export default function MonitorTargets() {
     } else {
       setTargets((prev) => prev.map((t, i) => (i === tgEditingIdx ? next : t)))
     }
-    // 同步回任务级标签编辑区，保证主表单「标签管理」与目标组一致
-    setJobLabels((prev) => {
-      const map = pairsToLabels(prev)
-      Object.assign(map, next.labels || {})
-      return labelsToPairs(map)
-    })
+    // 不回写 jobLabels，避免牵连其它目标组
     setTgVisible(false)
   }
 
@@ -495,10 +489,10 @@ export default function MonitorTargets() {
         scrape_timeout: values.scrape_timeout,
         labels: jobL,
         description: values.description || '',
-        // 与「标签管理」保持一致，写入每个目标组，避免只改任务标签时目标组未落库
+        // 任务级为基底，各组自有 labels 覆盖；互不影响
         target_groups: targets.map((g) => ({
           endpoints: g.endpoints,
-          labels: { ...jobL },
+          labels: { ...jobL, ...(g.labels || {}) },
           description: g.description || '',
         })),
       }
@@ -531,10 +525,8 @@ export default function MonitorTargets() {
   const jobLabelMap = useMemo(() => pairsToLabels(jobLabels), [jobLabels])
 
   function onJobLabelsChange(next: LabelPair[]) {
+    // 只改任务级，不整表覆盖各目标组
     setJobLabels(next)
-    const L = pairsToLabels(next)
-    // 与目标卡片实时同步，避免「标签管理已添加但监控label 仍旧」
-    setTargets((prev) => prev.map((t) => ({ ...t, labels: { ...L } })))
   }
 
   const columns = useMemo(
@@ -659,7 +651,8 @@ export default function MonitorTargets() {
           <Form.Item label="监控目标设置" className="mt-target-field">
             <div className="mt-target-list">
               {targets.map((t, idx) => {
-                const shown = { ...(t.labels || {}), ...jobLabelMap }
+                // 任务级为默认，本组 labels 覆盖（如 FE/BE 不同 app）
+                const shown = { ...jobLabelMap, ...(t.labels || {}) }
                 return (
                 <div className="mt-target-card" key={idx}>
                   <div className="mt-target-actions">
@@ -764,7 +757,7 @@ export default function MonitorTargets() {
 
           <Form.Item
             label="标签管理"
-            extra="此处标签会写入任务并同步到各监控目标；添加后请点击底部「更新监控/新建监控」落库。"
+            extra="任务级默认标签（新建目标时预填、展示基底）。各监控目标可单独编辑 label（如 FE/BE 不同 app），互不影响；改完后点底部「更新监控/新建监控」落库。"
           >
             <TagManager value={jobLabels} onChange={onJobLabelsChange} presetKeys={presetTagKeys} />
           </Form.Item>

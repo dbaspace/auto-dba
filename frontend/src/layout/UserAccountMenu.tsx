@@ -8,6 +8,8 @@ import {
   Input,
   Modal,
   Select,
+  Table,
+  Tag,
   message,
 } from 'antd'
 import {
@@ -17,6 +19,7 @@ import {
   LockOutlined,
   UserOutlined,
   PoweroffOutlined,
+  LaptopOutlined,
 } from '@ant-design/icons'
 import api from '../api/request'
 import { useAppDispatch } from '../store'
@@ -38,6 +41,9 @@ export default function UserAccountMenu({ user }: Props) {
   const [securityOpen, setSecurityOpen] = useState(false)
   const [pwdOpen, setPwdOpen] = useState(false)
   const [pwdSaving, setPwdSaving] = useState(false)
+  const [sessionsOpen, setSessionsOpen] = useState(false)
+  const [sessions, setSessions] = useState<any[]>([])
+  const [sessionsLoading, setSessionsLoading] = useState(false)
   const [profileForm] = Form.useForm()
   const [pwdForm] = Form.useForm()
   const [avatar, setAvatar] = useState('')
@@ -119,13 +125,42 @@ export default function UserAccountMenu({ user }: Props) {
     }
   }
 
+  async function openMySessions() {
+    setSessionsOpen(true)
+    setSessionsLoading(true)
+    try {
+      const { data } = await api.get('/auth/sessions/mine', { silent: true })
+      setSessions(data.data || [])
+    } catch (e: any) {
+      message.warning(e?.response?.data?.message || '暂无法加载登录会话（可能未启用 Redis）')
+      setSessions([])
+    } finally {
+      setSessionsLoading(false)
+    }
+  }
+
+  async function revokeOthers() {
+    try {
+      const { data } = await api.post('/auth/sessions/revoke-others')
+      message.success(`已下线其他终端 ${data.revoked || 0} 个`)
+      openMySessions()
+    } catch (e: any) {
+      message.error(e?.response?.data?.message || '操作失败')
+    }
+  }
+
   function logout() {
     Modal.confirm({
       title: '退出登陆',
       content: '请确定退出登陆',
       okText: '确定',
       cancelText: '取消',
-      onOk() {
+      async onOk() {
+        try {
+          await api.post('/auth/logout', {}, { silent: true })
+        } catch {
+          /* 仍清理本地 */
+        }
         clearLastActivity()
         dispatch(clearAuth())
         dispatch(resetTabs({}))
@@ -145,12 +180,14 @@ export default function UserAccountMenu({ user }: Props) {
           items: [
             { key: 'profile', icon: <UserOutlined />, label: '个人设置' },
             { key: 'security', icon: <LockOutlined />, label: '安全设置' },
+            { key: 'sessions', icon: <LaptopOutlined />, label: '我的登录' },
             { type: 'divider' },
             { key: 'logout', icon: <PoweroffOutlined />, label: '退出登录' },
           ],
           onClick: ({ key }) => {
             if (key === 'profile') openProfile()
             else if (key === 'security') setSecurityOpen(true)
+            else if (key === 'sessions') openMySessions()
             else if (key === 'logout') logout()
           },
         }}
@@ -299,6 +336,51 @@ export default function UserAccountMenu({ user }: Props) {
             管理 API Key
           </Button>
         </div>
+      </Modal>
+
+      <Modal
+        title="我的登录"
+        open={sessionsOpen}
+        onCancel={() => setSessionsOpen(false)}
+        width={720}
+        footer={[
+          <Button key="revoke" danger onClick={revokeOthers}>
+            下线其他终端
+          </Button>,
+          <Button key="close" type="primary" onClick={() => setSessionsOpen(false)}>
+            关闭
+          </Button>,
+        ]}
+        destroyOnClose
+      >
+        <p style={{ color: '#909399', marginBottom: 12, fontSize: 13 }}>
+          状态为「会话有效」表示登录未过期；关闭浏览器不会自动登出。闲置超时与会话 TTL 同时生效，先到先失效。
+        </p>
+        <Table
+          size="small"
+          loading={sessionsLoading}
+          rowKey="jti"
+          dataSource={sessions}
+          pagination={false}
+          columns={[
+            {
+              title: '状态',
+              dataIndex: 'status',
+              width: 100,
+              render: (v: string, r: any) => (
+                <Tag color={r.current ? 'blue' : 'green'}>{r.current ? '本机' : v || '会话有效'}</Tag>
+              ),
+            },
+            {
+              title: '过期时间',
+              dataIndex: 'expire_at',
+              width: 170,
+              render: (v: string) => (v ? new Date(v).toLocaleString() : '-'),
+            },
+            { title: 'IP', dataIndex: 'ip', width: 120 },
+            { title: 'UA', dataIndex: 'user_agent', ellipsis: true },
+          ]}
+        />
       </Modal>
     </div>
   )

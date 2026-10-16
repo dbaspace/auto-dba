@@ -487,7 +487,10 @@ func (d *DB) ensureIssueExecResultColumn() error {
 	if err := d.ensureIssueDomainColumn(); err != nil {
 		return err
 	}
-	return d.ensureLoginLogsTable()
+	if err := d.ensureLoginLogsTable(); err != nil {
+		return err
+	}
+	return d.ensureUserSessionsTable()
 }
 
 func (d *DB) ensureIssueDomainColumn() error {

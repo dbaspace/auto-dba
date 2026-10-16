@@ -155,6 +155,30 @@ func EffectiveConfTemplate(st *store.DB, clusterID, role, nodeID string) (conten
 	return BuiltinConfTemplate(role), "builtin", nil
 }
 
+// softwareBaseForRole 按组件选 FE/BE 软件根。
+func softwareBaseForRole(cl *store.SrCluster, role string) string {
+	if cl == nil {
+		return ""
+	}
+	if strings.ToLower(role) == "be" {
+		return strings.TrimRight(cl.EffectiveBeSoftwareBase(), "/")
+	}
+	return strings.TrimRight(strings.TrimSpace(cl.SoftwareBase), "/")
+}
+
+// resolveStorageRoot：data_root 已是完整 storage_root_path（以 /storage 结尾）则原样使用；否则拼 {data_root}/be/storage。
+func resolveStorageRoot(dataRoot string) string {
+	dr := filepath.ToSlash(strings.TrimSpace(dataRoot))
+	if dr == "" {
+		dr = "/data"
+	}
+	trim := strings.TrimRight(dr, "/")
+	if strings.HasSuffix(strings.ToLower(trim), "/storage") || strings.EqualFold(filepath.Base(trim), "storage") {
+		return trim
+	}
+	return filepath.ToSlash(filepath.Join(trim, "be", "storage"))
+}
+
 // BuildConfVars 从集群/节点推导端口与锁定路径。
 func BuildConfVars(cl *store.SrCluster, n *store.SrNode) ConfVars {
 	role := "fe"
@@ -168,7 +192,7 @@ func BuildConfVars(cl *store.SrCluster, n *store.SrNode) ConfVars {
 			soft = strings.TrimSpace(n.SoftwarePath)
 		} else if n != nil {
 			role = strings.ToLower(n.Component)
-			soft = strings.TrimRight(cl.SoftwareBase, "/") + "/" + role
+			soft = softwareBaseForRole(cl, role) + "/" + role
 		}
 	}
 	if n != nil {
@@ -177,15 +201,15 @@ func BuildConfVars(cl *store.SrCluster, n *store.SrNode) ConfVars {
 			dataRoot = dr
 		}
 		if soft == "" && cl != nil {
-			soft = strings.TrimRight(cl.SoftwareBase, "/") + "/" + role
+			soft = softwareBaseForRole(cl, role) + "/" + role
 		}
 	}
 	v := ConfVars{
 		LogDir: filepath.ToSlash(filepath.Join(soft, "log")),
 		// FE meta 落在软件目录（现网：/home/dorisdb_base/fe/meta）
 		MetaDir: filepath.ToSlash(filepath.Join(soft, "meta")),
-		// BE storage 落在数据盘（现网：{data_root}/be/storage）
-		StorageRoot: filepath.ToSlash(filepath.Join(dataRoot, "be", "storage")),
+		// BE storage：登记探测常写入完整 storage_root_path；新建仍用 {data_root}/be/storage
+		StorageRoot: resolveStorageRoot(dataRoot),
 		BEPort:      9060,
 		BRPCPort:    8060,
 		StarletPort: 9070,
@@ -348,7 +372,7 @@ func MaterializeConf(st *store.DB, cl *store.SrCluster, n *store.SrNode) (remote
 	content = AppendLockedDataPaths(role, rendered, vars)
 	soft := strings.TrimSpace(n.SoftwarePath)
 	if soft == "" {
-		soft = strings.TrimRight(cl.SoftwareBase, "/") + "/" + role
+		soft = softwareBaseForRole(cl, role) + "/" + role
 	}
 	remotePath = filepath.ToSlash(filepath.Join(soft, "conf", role+".conf"))
 	return remotePath, content, source, nil

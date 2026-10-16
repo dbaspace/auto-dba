@@ -12,6 +12,7 @@ import (
 	"auto-dba/internal/dbdeploy"
 	"auto-dba/internal/flashback"
 	"auto-dba/internal/notify"
+	"auto-dba/internal/sessionstore"
 	"auto-dba/internal/srcluster"
 	"auto-dba/internal/sshx"
 	"auto-dba/internal/store"
@@ -21,6 +22,7 @@ import (
 type hotReloadTargets struct {
 	cfg      *config.Config
 	db       *store.DB
+	sessions *sessionstore.Store
 	secrets  []*string
 	backup   *backup.Engine
 	cdc      *cdc.Orchestrator
@@ -165,5 +167,10 @@ func (t *hotReloadTargets) apply(diff config.ReloadDiff) {
 	}
 	if diff.Copilot {
 		log.Printf("nacos reload: copilot 已更新")
+	}
+	if diff.Redis && t.sessions != nil {
+		t.sessions.Reconfigure(t.cfg.Redis, t.cfg.App.JWTTTLHours, diff.RedisConn)
+		log.Printf("nacos reload: redis session store 已同步 enabled=%v addr=%s",
+			t.cfg.Redis.Enabled, t.cfg.Redis.Addr)
 	}
 }

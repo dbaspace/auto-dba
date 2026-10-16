@@ -392,6 +392,105 @@ func (h *SrClusterHandler) GetClusterLive(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{"nodes": live, "removed_nodes": removedOut}})
 }
 
+// ProbeLayout POST /sr-cluster/probe-layout — 登记前自动发现 FE/BE software_base 与 BE storage_root_path（不写库）。
+func (h *SrClusterHandler) ProbeLayout(c *gin.Context) {
+	var req struct {
+		FeHost      string `json:"fe_host"`
+		FePassword  string `json:"fe_password"`
+		FeUser      string `json:"fe_user"`
+		FeQueryPort int    `json:"fe_query_port"`
+		Hosts       []string `json:"hosts"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	host := strings.TrimSpace(req.FeHost)
+	if host == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "fe_host 必填"})
+		return
+	}
+	user := strings.TrimSpace(req.FeUser)
+	pass := req.FePassword
+	if strings.TrimSpace(pass) == "" {
+		cl := &store.SrCluster{FeHost: host, FeUser: user}
+		nodes := []store.SrNode{{Component: "fe", Host: host}}
+		for _, hst := range req.Hosts {
+			hst = strings.TrimSpace(hst)
+			if hst != "" && !strings.EqualFold(hst, host) {
+				nodes = append(nodes, store.SrNode{Component: "fe", Host: hst})
+			}
+		}
+		if u, p, ok := h.eng().LookupFeAdminCredForProbe(cl, nodes); ok {
+			user, pass = u, p
+		}
+	}
+	res, err := h.eng().ProbeLayout(c.Request.Context(), host, user, pass, req.FeQueryPort)
+	if err != nil {
+		port := req.FeQueryPort
+		if port <= 0 {
+			port = 9030
+		}
+		c.JSON(http.StatusBadRequest, gin.H{"message": fmt.Sprintf("无法探测布局 %s:%d（%v）", host, port, err)})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": res})
+}
+
+// ProbeClusterLayout POST /sr-cluster/clusters/:id/probe-layout — 用已存凭据探测并可选写回路径（apply=true）。
+func (h *SrClusterHandler) ProbeClusterLayout(c *gin.Context) {
+	cl, err := h.Store.GetSrClusterInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
+	if err != nil || cl == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "集群不存在"})
+		return
+	}
+	apply := c.Query("apply") == "1" || c.Query("apply") == "true"
+	var body struct {
+		Apply bool `json:"apply"`
+	}
+	_ = c.ShouldBindJSON(&body)
+	if body.Apply {
+		apply = true
+	}
+	nodes, _ := h.Store.ListSrNodes(cl.ID)
+	user, pass, err := h.eng().ExportFeCredentials(cl, nodes)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "无法取得 FE 凭据: " + err.Error()})
+		return
+	}
+	host := strings.TrimSpace(cl.FeHost)
+	if host == "" {
+		for _, n := range nodes {
+			if n.Component == "fe" && n.IsPrimaryFE {
+				host = n.Host
+				break
+			}
+		}
+	}
+	if host == "" {
+		for _, n := range nodes {
+			if n.Component == "fe" {
+				host = n.Host
+				break
+			}
+		}
+	}
+	res, err := h.eng().ProbeLayout(c.Request.Context(), host, user, pass, cl.FeQueryPort)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	if apply {
+		if err := h.eng().ApplyLayoutProbe(cl, nodes, res, middleware.Username(c)); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+			return
+		}
+		cl, _ = h.Store.GetSrCluster(cl.ID)
+		nodes, _ = h.Store.ListSrNodes(cl.ID)
+	}
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"layout": res, "cluster": cl, "nodes": nodes, "applied": apply}})
+}
+
 // ProbeFERoles POST /sr-cluster/probe-fe-roles — 登记前探测 SHOW PROC '/frontends' 实时角色（不写库）。
 func (h *SrClusterHandler) ProbeFERoles(c *gin.Context) {
 	var req struct {
@@ -562,6 +661,7 @@ func (h *SrClusterHandler) CreateCluster(c *gin.Context) {
 		warnings = append(warnings, diffs...)
 	}
 	if req.RegisterExisting {
+		cl.Source = store.SrSourceRegister
 		cl.Status = store.SrClusterReady
 		note := "登记已有集群"
 		if t := strings.TrimSpace(req.SourceMonitorTask); t != "" {
@@ -572,12 +672,16 @@ func (h *SrClusterHandler) CreateCluster(c *gin.Context) {
 		} else if !strings.Contains(cl.Remark, "登记已有集群") {
 			cl.Remark = cl.Remark + "；" + note
 		}
+	} else {
+		cl.Source = store.SrSourceDeploy
 	}
 	stampTenantID(c, func(tid string) { cl.TenantID = tid })
 	if err := h.Store.CreateSrCluster(&cl); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
+	feSoftBase := strings.TrimRight(strings.TrimSpace(cl.SoftwareBase), "/")
+	beSoftBase := strings.TrimRight(cl.EffectiveBeSoftwareBase(), "/")
 	for i := range req.Nodes {
 		n := req.Nodes[i]
 		n.ClusterID = cl.ID
@@ -592,7 +696,7 @@ func (h *SrClusterHandler) CreateCluster(c *gin.Context) {
 				n.SystemdUnit = "fe-" + strconv.Itoa(cl.FeQueryPort)
 			}
 			if n.SoftwarePath == "" {
-				n.SoftwarePath = strings.TrimRight(cl.SoftwareBase, "/") + "/fe"
+				n.SoftwarePath = feSoftBase + "/fe"
 			}
 		} else {
 			if n.HeartbeatPort <= 0 {
@@ -602,7 +706,7 @@ func (h *SrClusterHandler) CreateCluster(c *gin.Context) {
 				n.SystemdUnit = "be-" + strconv.Itoa(n.HeartbeatPort)
 			}
 			if n.SoftwarePath == "" {
-				n.SoftwarePath = strings.TrimRight(cl.SoftwareBase, "/") + "/be"
+				n.SoftwarePath = beSoftBase + "/be"
 			}
 			if strings.TrimSpace(n.DataRoot) == "" {
 				n.DataRoot = strings.TrimSpace(cl.DataRoot)
@@ -671,6 +775,9 @@ func (h *SrClusterHandler) UpdateCluster(c *gin.Context) {
 	if req.SoftwareBase != "" {
 		cl.SoftwareBase = req.SoftwareBase
 	}
+	if req.BeSoftwareBase != "" {
+		cl.BeSoftwareBase = req.BeSoftwareBase
+	}
 	if req.DataRoot != "" {
 		cl.DataRoot = req.DataRoot
 	}
@@ -718,11 +825,12 @@ func (h *SrClusterHandler) DeleteCluster(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"message": "集群不存在"})
 		return
 	}
+	// 仅删平台登记（集群/节点/变更/配置）；不停 FE/BE、不删 Node Agent、不删资源配置实例
 	if err := h.Store.DeleteSrCluster(exist.ID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"ok": true})
+	c.JSON(http.StatusOK, gin.H{"ok": true, "message": "已注销登记（未影响远程服务与 Agent）"})
 }
 
 // --- Nodes ---
@@ -772,7 +880,11 @@ func (h *SrClusterHandler) CreateNode(c *gin.Context) {
 	}
 	softBase := strings.TrimSpace(req.SoftwareBase)
 	if softBase == "" {
-		softBase = strings.TrimSpace(cl.SoftwareBase)
+		if n.Component == "be" {
+			softBase = cl.EffectiveBeSoftwareBase()
+		} else {
+			softBase = strings.TrimSpace(cl.SoftwareBase)
+		}
 	}
 	if softBase == "" {
 		softBase = "/home/dorisdb_base"

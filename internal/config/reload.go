@@ -17,6 +17,7 @@ type ReloadDiff struct {
 	Frontend  bool
 	Log       bool
 	DB        bool
+	Redis     bool
 	CDC       bool
 	Migration bool
 	Flashback bool
@@ -35,6 +36,7 @@ type ReloadDiff struct {
 	SSHKey       bool // terminal 内 SSH 相关
 	ListenAddr   bool // http.host / http.port
 	FrontendDev  bool // frontend.dev_*
+	RedisConn    bool // redis addr/password/db/enabled 变更需重连
 
 	OldListen      string
 	NewListen      string
@@ -44,7 +46,7 @@ type ReloadDiff struct {
 
 // Any 任一业务段有变更即为 true。
 func (d ReloadDiff) Any() bool {
-	return d.App || d.HTTP || d.Frontend || d.Log || d.DB || d.CDC ||
+	return d.App || d.HTTP || d.Frontend || d.Log || d.DB || d.Redis || d.CDC ||
 		d.Migration || d.Flashback || d.Backup || d.External || d.Terminal || d.Services || d.Copilot || d.Notify
 }
 
@@ -61,6 +63,7 @@ func (d ReloadDiff) Sections() []string {
 	add("frontend", d.Frontend)
 	add("log", d.Log)
 	add("db", d.DB)
+	add("redis", d.Redis)
 	add("cdc", d.CDC)
 	add("migration", d.Migration)
 	add("flashback", d.Flashback)
@@ -123,6 +126,11 @@ func DiffConfig(old, next *Config) ReloadDiff {
 	d.Frontend = old.Frontend != next.Frontend
 	d.Log = old.Log != next.Log
 	d.DB = old.DB != next.DB
+	d.Redis = !reflect.DeepEqual(old.Redis, next.Redis)
+	d.RedisConn = old.Redis.Enabled != next.Redis.Enabled ||
+		old.Redis.Addr != next.Redis.Addr ||
+		old.Redis.Password != next.Redis.Password ||
+		old.Redis.DB != next.Redis.DB
 	d.CDC = old.CDC != next.CDC
 	d.Migration = old.Migration != next.Migration
 	d.Flashback = old.Flashback != next.Flashback

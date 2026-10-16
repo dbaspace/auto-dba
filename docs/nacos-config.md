@@ -140,6 +140,20 @@ db:
   driver: postgres
   dsn: "postgres://USER:PASSWORD@HOST:5432/db_autosql?sslmode=disable"
 
+# 平台登录会话 Redis（与实例 Redis 工单无关；默认可不配=关闭）
+# 启用后：登录按用户维度写入 Hash user:{uid}；管理端「登录会话」以 Redis 为准
+redis:
+  enabled: true
+  addr: "10.x.x.x:6379"
+  password: "***"            # 敏感，仅 Nacos
+  db: 0
+  key_prefix: "autodba:"
+  session_ttl_hours: 24      # 空则回退 app.jwt_ttl_hours
+  sliding_expire: false
+  fail_mode: closed          # closed=有 jti 时必须 Redis 命中；open=仅验 JWT
+  max_sessions_per_user: 0   # 0=允许多端；1=新登录踢旧
+  reconcile_interval_min: 5
+
 # 服务监听（启动时 Load 合并后再 Listen；改端口后需重启）
 http:
   host: "0.0.0.0"
@@ -352,6 +366,7 @@ DataId 内全部业务顶层段参与 diff。段内任意字段都会写入内�
 | `http.host` / `http.port` | 日志提示；`restart_on_listen_change: true` 时 Exec 自重启 |
 | `frontend.dev_*` | 写入 cfg；**须重启 Vite** |
 | `services.db_monitor` | 写入 cfg；模式/端口 **须重启**相关进程 |
+| `redis.*` | 写入 cfg；`enabled/addr/password/db` 变更时重连会话 Redis；关闭后鉴权回退为纯 JWT（与改造前一致） |
 
 本地引导：
 

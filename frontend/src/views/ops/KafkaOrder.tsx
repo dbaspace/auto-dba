@@ -106,7 +106,7 @@ export default function KafkaOrder() {
     let inst = instById[parsed.instance_id]
     if (!inst) {
       try {
-        const { data } = await api.get(`/instances/${parsed.instance_id}`)
+        const { data } = await api.get(`/instances/${parsed.instance_id}`, { silent: true })
         inst = data.data
         if (inst) setInstById((m) => ({ ...m, [parsed.instance_id]: inst }))
       } catch {

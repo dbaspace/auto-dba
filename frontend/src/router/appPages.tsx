@@ -39,6 +39,7 @@ import Roles from '../views/config/Roles'
 import GlobalArgs from '../views/config/GlobalArgs'
 import SqlInsightSettings from '../views/config/SqlInsightSettings'
 import LoginLogs from '../views/config/LoginLogs'
+import LoginSessions from '../views/config/LoginSessions'
 import QueryAudits from '../views/config/QueryAudits'
 import Connectors from '../views/config/Connectors'
 import MonitorTargets from '../views/config/MonitorTargets'
@@ -261,6 +262,7 @@ export function TabPagePanel({ pathname, search }: { pathname: string; search?: 
       <Route path="/config/users" element={<Users />} />
       <Route path="/config/tenants" element={<Tenants />} />
       <Route path="/config/login-logs" element={<LoginLogs />} />
+      <Route path="/config/login-sessions" element={<LoginSessions />} />
       <Route path="/config/query-audits" element={<QueryAudits />} />
       <Route path="/config/ldap" element={<AuthConfig />} />
 

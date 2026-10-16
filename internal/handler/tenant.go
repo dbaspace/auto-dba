@@ -2,6 +2,7 @@ package handler
 
 import (
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -9,13 +10,47 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"auto-dba/internal/middleware"
+	"auto-dba/internal/sessionstore"
 	"auto-dba/internal/store"
 )
 
 type TenantHandler struct {
-	Store  *store.DB
-	CfgTTL func() time.Duration
-	Secret func() string
+	Store    *store.DB
+	CfgTTL   func() time.Duration
+	Secret   func() string
+	Sessions *sessionstore.Store
+}
+
+func (h *TenantHandler) bindSession(c *gin.Context, u *store.User, tid, jti string, impersonate bool, ttl time.Duration) error {
+	if h.Sessions == nil || !h.Sessions.Enabled() || jti == "" {
+		return nil
+	}
+	if old := middleware.JTI(c); old != "" {
+		_ = h.Sessions.RevokeJTI(c.Request.Context(), u.ID, old)
+		_ = h.Store.MarkUserSessionOffline(old, "tenant_reissue", u.ID)
+	}
+	now := time.Now().UTC()
+	kind := "normal"
+	if impersonate {
+		kind = "impersonate"
+	}
+	sess := sessionstore.Session{
+		JTI: jti, UserID: u.ID, TenantID: tid, Username: u.Username,
+		IP: clientLoginIP(c), UA: truncateUA(c.Request.UserAgent()),
+		OnlineAt: now.Format(time.RFC3339), ExpireAt: now.Add(ttl).Format(time.RFC3339),
+		Kind: kind,
+	}
+	if err := h.Sessions.Create(c.Request.Context(), sess); err != nil {
+		return err
+	}
+	if err := h.Store.UpsertUserSessionOnline(&store.UserSession{
+		UserID: u.ID, Username: u.Username, TenantID: tid, JTI: jti,
+		IP: sess.IP, UserAgent: sess.UA, Kind: kind,
+		OnlineAt: sess.OnlineAt, ExpireAt: sess.ExpireAt,
+	}); err != nil {
+		log.Printf("tenant session db mirror: %v", err)
+	}
+	return nil
 }
 
 func (h *TenantHandler) List(c *gin.Context) {
@@ -263,9 +298,13 @@ func (h *TenantHandler) Switch(c *gin.Context) {
 	if h.Secret != nil {
 		secret = h.Secret()
 	}
-	tok, err := middleware.SignToken(secret, u.ID, u.Username, u.Role, t.ID, t.Code, ttl)
+	tok, jti, err := middleware.SignSessionToken(secret, u.ID, u.Username, u.Role, t.ID, t.Code, false, ttl)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	if err := h.bindSession(c, u, t.ID, jti, false, ttl); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "写入登录会话失败: " + err.Error()})
 		return
 	}
 	_ = h.Store.AppendTenantAudit(t.ID, u.ID, "tenant.switch", t.Code)
@@ -308,9 +347,13 @@ func (h *TenantHandler) Impersonate(c *gin.Context) {
 	if h.Secret != nil {
 		secret = h.Secret()
 	}
-	tok, err := middleware.SignTokenFull(secret, u.ID, u.Username, u.Role, t.ID, t.Code, true, ttl)
+	tok, jti, err := middleware.SignSessionToken(secret, u.ID, u.Username, u.Role, t.ID, t.Code, true, ttl)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	if err := h.bindSession(c, u, t.ID, jti, true, ttl); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "写入登录会话失败: " + err.Error()})
 		return
 	}
 	_ = h.Store.AppendTenantAudit(t.ID, u.ID, "tenant.impersonate", t.Code)

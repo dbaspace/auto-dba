@@ -1,26 +1,36 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 
 	"auto-dba/internal/config"
 	"auto-dba/internal/store"
 )
 
 const (
-	CtxUserID       = "user_id"
-	CtxUsername     = "username"
-	CtxRole         = "role"
-	CtxTenantID     = "tenant_id"
-	CtxTenantCode   = "tenant_code"
-	CtxImpersonate  = "tenant_impersonate"
-	HeaderTenantID  = "X-Tenant-Id"
+	CtxUserID      = "user_id"
+	CtxUsername    = "username"
+	CtxRole        = "role"
+	CtxTenantID    = "tenant_id"
+	CtxTenantCode  = "tenant_code"
+	CtxImpersonate = "tenant_impersonate"
+	CtxJTI         = "jti"
+	HeaderTenantID = "X-Tenant-Id"
 )
+
+// SessionGate 可选 Redis 会话校验；nil 或不启用时鉴权与改造前一致。
+type SessionGate interface {
+	Enabled() bool
+	FailOpen() bool
+	Valid(ctx context.Context, userID, jti string) (bool, error)
+}
 
 type Claims struct {
 	UserID      string `json:"uid"`
@@ -33,11 +43,19 @@ type Claims struct {
 }
 
 func SignToken(secret, userID, username, role, tenantID, tenantCode string, ttl time.Duration) (string, error) {
-	return SignTokenFull(secret, userID, username, role, tenantID, tenantCode, false, ttl)
+	tok, _, err := SignSessionToken(secret, userID, username, role, tenantID, tenantCode, false, ttl)
+	return tok, err
 }
 
 func SignTokenFull(secret, userID, username, role, tenantID, tenantCode string, impersonate bool, ttl time.Duration) (string, error) {
+	tok, _, err := SignSessionToken(secret, userID, username, role, tenantID, tenantCode, impersonate, ttl)
+	return tok, err
+}
+
+// SignSessionToken 签发带 jti 的 JWT，返回 token 与 jti。
+func SignSessionToken(secret, userID, username, role, tenantID, tenantCode string, impersonate bool, ttl time.Duration) (token, jti string, err error) {
 	now := time.Now()
+	jti = uuid.NewString()
 	c := Claims{
 		UserID:      userID,
 		Username:    username,
@@ -46,16 +64,19 @@ func SignTokenFull(secret, userID, username, role, tenantID, tenantCode string, 
 		TenantCode:  strings.TrimSpace(tenantCode),
 		Impersonate: impersonate,
 		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        jti,
 			Subject:   username,
 			ExpiresAt: jwt.NewNumericDate(now.Add(ttl)),
 			IssuedAt:  jwt.NewNumericDate(now),
 		},
 	}
-	return jwt.NewWithClaims(jwt.SigningMethodHS256, c).SignedString([]byte(secret))
+	token, err = jwt.NewWithClaims(jwt.SigningMethodHS256, c).SignedString([]byte(secret))
+	return token, jti, err
 }
 
 // Auth 使用 config.CurrentJWT()（atomic，热更安全）；secret 参数保留兼容，优先 CurrentJWT。
-func Auth(secret *string, db *store.DB, skipPrefixes ...string) gin.HandlerFunc {
+// sessions 可为 nil：不启用 Redis 会话校验（默认，不影响现网）。
+func Auth(secret *string, db *store.DB, sessions SessionGate, skipPrefixes ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		path := c.Request.URL.Path
 		for _, p := range skipPrefixes {
@@ -103,14 +124,41 @@ func Auth(secret *string, db *store.DB, skipPrefixes ...string) gin.HandlerFunc 
 				return
 			}
 		}
+		jti := strings.TrimSpace(claims.ID)
+		if sessions != nil && sessions.Enabled() && jti != "" && !sessions.FailOpen() {
+			ok, verr := sessions.Valid(c.Request.Context(), claims.UserID, jti)
+			if verr != nil {
+				c.JSON(http.StatusUnauthorized, gin.H{
+					"message": "会话服务暂不可用，请稍后重试", "code": "session_unavailable",
+					"diagnostic_message": verr.Error(),
+				})
+				c.Abort()
+				return
+			}
+			if !ok {
+				c.JSON(http.StatusUnauthorized, gin.H{
+					"message": "会话已失效，请重新登录", "code": "session_revoked",
+					"diagnostic_message": "redis session missing or expired",
+				})
+				c.Abort()
+				return
+			}
+		}
 		c.Set(CtxUserID, claims.UserID)
 		c.Set(CtxUsername, claims.Username)
 		c.Set(CtxRole, claims.Role)
 		c.Set(CtxTenantID, strings.TrimSpace(claims.TenantID))
 		c.Set(CtxTenantCode, strings.TrimSpace(claims.TenantCode))
 		c.Set(CtxImpersonate, claims.Impersonate)
+		c.Set(CtxJTI, jti)
 		c.Next()
 	}
+}
+
+func JTI(c *gin.Context) string {
+	v, _ := c.Get(CtxJTI)
+	s, _ := v.(string)
+	return strings.TrimSpace(s)
 }
 
 func Username(c *gin.Context) string {

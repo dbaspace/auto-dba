@@ -20,6 +20,7 @@ import (
 type Deps struct {
 	Cfg                *config.Config
 	Auth               *handler.AuthHandler
+	LoginSession       *handler.LoginSessionHandler
 	Inst               *handler.InstanceHandler
 	DB                 *handler.DatabaseHandler
 	AccessDomain       *handler.AccessDomainHandler
@@ -101,7 +102,11 @@ func Init(e *gin.Engine, d Deps) {
 	api.POST("/auth/sso/exchange", d.Auth.SSOExchange)
 	api.GET("/auth/sso/ticket", d.Auth.SSOTicket)
 
-	auth := middleware.Auth(&d.Cfg.App.JWTSecret, d.Auth.Store,
+	var sessGate middleware.SessionGate
+	if d.Auth != nil && d.Auth.Sessions != nil {
+		sessGate = d.Auth.Sessions
+	}
+	auth := middleware.Auth(&d.Cfg.App.JWTSecret, d.Auth.Store, sessGate,
 		"/healthz", "/readyz",
 		"/api/v1/auth/login", "/api/v1/auth/captcha", "/api/v1/info",
 		"/api/v1/auth/sso/",
@@ -116,6 +121,7 @@ func Init(e *gin.Engine, d Deps) {
 		"/api/v1/auth/password",
 		"/api/v1/auth/profile",
 		"/api/v1/auth/select-tenant",
+		"/api/v1/auth/sessions",
 		"/api/v1/tenants",
 	))
 
@@ -142,6 +148,14 @@ func Init(e *gin.Engine, d Deps) {
 	secured.POST("/auth/logout", d.Auth.Logout)
 	secured.PUT("/auth/password", d.Auth.ChangePassword)
 	secured.PUT("/auth/profile", d.Auth.UpdateProfile)
+
+	if d.LoginSession != nil {
+		secured.GET("/auth/sessions/mine", d.LoginSession.Mine)
+		secured.POST("/auth/sessions/revoke-others", d.LoginSession.RevokeOther)
+		secured.GET("/auth/sessions/stats", d.LoginSession.Stats)
+		secured.GET("/auth/sessions", d.LoginSession.List)
+		secured.POST("/auth/sessions/kick", d.LoginSession.Kick)
+	}
 
 	if d.Tenant != nil {
 		secured.GET("/tenants/mine", d.Tenant.Mine)
@@ -770,12 +784,14 @@ func Init(e *gin.Engine, d Deps) {
 		sg.POST("/conf-templates/reset", d.SrCluster.ResetConfTemplates)
 		sg.GET("/clusters", d.SrCluster.ListClusters)
 		sg.POST("/probe-fe-roles", d.SrCluster.ProbeFERoles)
+		sg.POST("/probe-layout", d.SrCluster.ProbeLayout)
 		sg.POST("/clusters", d.SrCluster.CreateCluster)
 		sg.POST("/clusters/:id/assign-tenant", requireURN(store.URNTenantsImpersonate), gSrCl, d.SrCluster.AssignTenant)
 		sg.POST("/tickets", d.SrCluster.CreateTicket)
 		sg.GET("/clusters/:id", gSrCl, d.SrCluster.GetCluster)
 		sg.GET("/clusters/:id/live", gSrCl, d.SrCluster.GetClusterLive)
 		sg.POST("/clusters/:id/sync-registry", gSrCl, d.SrCluster.SyncRegistry)
+		sg.POST("/clusters/:id/probe-layout", gSrCl, d.SrCluster.ProbeClusterLayout)
 		sg.PATCH("/clusters/:id", gSrCl, d.SrCluster.UpdateCluster)
 		sg.DELETE("/clusters/:id", gSrCl, d.SrCluster.DeleteCluster)
 		sg.GET("/clusters/:id/nodes", gSrCl, d.SrCluster.ListNodes)

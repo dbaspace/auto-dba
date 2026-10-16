@@ -27,13 +27,13 @@ KeePlus（进程 `auto-dba`）支持多种打包方式。**构建在有 Node 18+
 
 一体包与后端包解压后工作目录须为**包根**（存在 `deploy/node-agent/bin/node-agent` 等），集群部署 SSH 下发无需再本机构建 Agent。
 
-可选环境变量：`GOOS` `GOARCH`（默认 `linux`/`amd64`）、`STAMP`（默认时间戳；发版用 `STAMP=v1.12.4`）、`IMAGE_TAG`、`SKIP_PNPM_INSTALL=1`（已有 `node_modules` 时）。
+可选环境变量：`GOOS` `GOARCH`（默认 `linux`/`amd64`）、`STAMP`（默认时间戳；发版用 `STAMP=v1.12.5`）、`IMAGE_TAG`、`SKIP_PNPM_INSTALL=1`（已有 `node_modules` 时）。
 
 ```bash
-STAMP=v1.12.4 ./scripts/pack_release.sh all
-STAMP=v1.12.4 ./scripts/pack_release.sh backend
-STAMP=v1.12.4 ./scripts/pack_release.sh frontend
-IMAGE_TAG=auto-dba:v1.12.4 ./scripts/pack_release.sh docker
+STAMP=v1.12.5 ./scripts/pack_release.sh all
+STAMP=v1.12.5 ./scripts/pack_release.sh backend
+STAMP=v1.12.5 ./scripts/pack_release.sh frontend
+IMAGE_TAG=auto-dba:v1.12.5 ./scripts/pack_release.sh docker
 ```
 
 ## 发布到 GitHub Release（固定流程）
@@ -46,13 +46,13 @@ IMAGE_TAG=auto-dba:v1.12.4 ./scripts/pack_release.sh docker
 # 已 push 的提交 + 写好 docs/changelog-vX.Y.Z.md 后：
 
 # 推荐：打包 + 打 tag + 创建 Release（一体包）
-PACK=1 ./scripts/publish_github_release.sh v1.12.4
+PACK=1 ./scripts/publish_github_release.sh v1.12.5
 
-# 已有 dist/*-v1.12.4.tgz 时只发版
-./scripts/publish_github_release.sh v1.12.4
+# 已有 dist/*-v1.12.5.tgz 时只发版
+./scripts/publish_github_release.sh v1.12.5
 
 # 发版前顺带删若干旧 Release（不删受仓库 Rules 保护的 tag）
-DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12.4
+DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12.5
 ```
 
 前提：本机能 `git push origin HEAD`；已安装 `gh`。若 Keychain 无凭据，先手动 push 一次或导出 `GH_TOKEN=...`。
@@ -61,7 +61,8 @@ DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12
 
 | 版本 | 要点 |
 |------|------|
-| [v1.12.4](changelog-v1.12.4.md) | **当前推荐**。一体/后端包与 Docker 镜像打入 Node/DB/Platform Agent |
+| [v1.12.5](changelog-v1.12.5.md) | **当前推荐**。SR 登记路径探测/注销；Alive 状态；监控标签隔离；可选登录会话 |
+| [v1.12.4](changelog-v1.12.4.md) | 一体/后端包与 Docker 镜像打入 Node/DB/Platform Agent |
 | [v1.12.3](changelog-v1.12.3.md) | 侧栏收窄；查询 alias 去括号；类型 Tab 固定 6 个 +「…」 |
 | [v1.12.2](changelog-v1.12.2.md) | 查询树只显示 tags 的 `alias=`（兼容 `label=`）；登记页标签说明 |
 | [v1.12.1](changelog-v1.12.1.md) | 已登记库环境/域名筛选；域名按库明细展示 |

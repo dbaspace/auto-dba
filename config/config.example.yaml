@@ -52,6 +52,19 @@ db:
   conn_max_lifetime_sec: 1800
   conn_max_idle_time_sec: 300
 
+# 平台登录会话（生产放 Nacos；默认关闭，不影响现网 JWT 行为）
+redis:
+  enabled: false
+  addr: "127.0.0.1:6379"
+  password: ""
+  db: 0
+  key_prefix: "autodba:"
+  # session_ttl_hours: 24   # 空则回退 app.jwt_ttl_hours
+  sliding_expire: false
+  fail_mode: closed         # closed=鉴权要求 Redis 会话；open=仅验 JWT
+  max_sessions_per_user: 0  # 0=多端；1=新登录踢旧
+  reconcile_interval_min: 5
+
 cdc:
   enabled: false
   debezium_url: ""

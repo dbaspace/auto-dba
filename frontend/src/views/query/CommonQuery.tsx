@@ -171,6 +171,19 @@ function dbTags(db: any): string[] {
   return []
 }
 
+/** 与已登记库 resolveRowEnv 一致：tags 的 idc= 优先，回退实例 idc。 */
+function resolveDbEnv(db: any, inst?: any): string {
+  for (const raw of dbTags(db)) {
+    const i = raw.indexOf('=')
+    if (i <= 0) continue
+    if (raw.slice(0, i).trim().toLowerCase() === 'idc') {
+      const v = raw.slice(i + 1).trim()
+      if (v) return v
+    }
+  }
+  return String(inst?.idc || '').trim()
+}
+
 /** 查询树短展示名：优先 alias=，兼容 label=；无则空（不拼接整段 tags）。 */
 function dbAliasFromTags(db: any): string {
   let fromLabel = ''
@@ -315,7 +328,7 @@ export default function CommonQuery() {
   }, [instances])
 
   const dbTypeOf = useCallback((db: any) => normalizeType(instMap[db.instance_id]?.db_type), [instMap])
-  const dbEnv = useCallback((db: any) => instMap[db.instance_id]?.idc || '未分组', [instMap])
+  const dbEnv = useCallback((db: any) => resolveDbEnv(db, instMap[db.instance_id]) || '未分组', [instMap])
 
   const instanceHint = useCallback((db: any) => {
     const inst = instMap[db?.instance_id] || {}
@@ -334,9 +347,11 @@ export default function CommonQuery() {
       const ta = dbTypeOf(a)
       const tb = dbTypeOf(b)
       if (ta !== tb) return ta.localeCompare(tb)
-      const byName = cmpName(a.db_name, b.db_name)
-      if (byName) return byName
-      return cmpName(dbTagText(a), dbTagText(b))
+      const dispA = dbTagText(a) || a.db_name
+      const dispB = dbTagText(b) || b.db_name
+      const byDisp = cmpName(dispA, dispB)
+      if (byDisp) return byDisp
+      return cmpName(a.db_name, b.db_name)
     })
   }, [dbTypeOf, dbTagText])
 
@@ -352,6 +367,8 @@ export default function CommonQuery() {
   const groupedDbs = useCallback(() => {
     const groups = new Map<string, any[]>()
     for (const db of databases) {
+      const t = dbTypeOf(db)
+      if (t === 'kafka' || t === 'redis') continue
       const envName = dbEnv(db)
       if (envFilter && envName !== envFilter) continue
       if (!matchKeyword(db)) continue
@@ -362,7 +379,7 @@ export default function CommonQuery() {
       groups.set(name, sortDbs(list))
     }
     return groups
-  }, [databases, envFilter, matchKeyword, dbEnv, sortDbs])
+  }, [databases, envFilter, matchKeyword, dbEnv, dbTypeOf, sortDbs])
 
   function highlightLabel(text: any): React.ReactNode {
     const kw = keyword.trim()
@@ -382,8 +399,11 @@ export default function CommonQuery() {
   const renderNodeTitle = useCallback((node: any): React.ReactNode => {
     const data = node.raw || {}
     if (data.type === 'db') {
+      const tip = data.dbName && data.dbName !== data.label
+        ? `${data.label}（${data.dbName}）`
+        : data.label
       return (
-        <span className="tree-node" title={data.tag ? `${data.label} ${data.tag}` : data.label}>
+        <span className="tree-node" title={tip}>
           <DbTypeIcon type={data.dbType} size={16} />
           <span className="tree-label">{highlightLabel(data.label)}</span>
           {data.tag ? <span className="tree-tag">{data.tag}</span> : null}
@@ -448,14 +468,19 @@ export default function CommonQuery() {
     return entries.map(([name, dbs]) => {
       const dbChildren = dbs.map((db) => {
         const inst = instMap[db.instance_id] || {}
+        const alias = dbTagText(db)
+        const dbName = String(db.db_name || '')
+        // 主标题优先 alias/label（登记库约定）；有短名时 tag 展示真实库名
+        const label = alias || dbName
         return buildNode({
           id: db.id,
-          label: db.db_name,
+          label,
+          dbName,
           type: 'db',
           dbId: db.id,
-          env: inst.idc || '未分组',
+          env: resolveDbEnv(db, inst) || '未分组',
           dbType: inst.db_type,
-          tag: dbTagText(db),
+          tag: alias && alias !== dbName ? dbName : '',
         }, false)
       })
       return buildNode(
@@ -788,7 +813,7 @@ export default function CommonQuery() {
       dbId: db.id,
       dbName: db.db_name,
       dbType: inst.db_type || '',
-      env: inst.idc || '',
+      env: resolveDbEnv(db, inst),
       instanceId: db.instance_id,
       tag: dbTag(db),
       table: opt.table || '',
@@ -862,7 +887,7 @@ export default function CommonQuery() {
       dbName: next.db_name,
       instanceId: next.instance_id,
       dbType: inst.db_type || current.dbType,
-      env: inst.idc || '',
+      env: resolveDbEnv(next, inst),
       tag: dbTag(next),
       result: null,
       error: '',
@@ -1065,11 +1090,26 @@ export default function CommonQuery() {
   const loadTree = useCallback(async () => {
     setTreeLoading(true)
     try {
-      const [dbRes, instRes] = await Promise.all([api.get('/databases'), api.get('/instances')])
-      setDatabases(dbRes.data.data || [])
-      setInstances(instRes.data.data || [])
-      const envs = [...new Set((instRes.data.data || []).map((i: any) => i.idc).filter(Boolean))].sort(cmpName) as string[]
-      setEnvOptions(envs)
+      const scope = { scope: 'tenant' }
+      const [dbRes, instRes] = await Promise.all([
+        api.get('/databases', { params: scope }),
+        api.get('/instances', { params: scope }),
+      ])
+      const instList: any[] = instRes.data.data || []
+      const instById: Record<string, any> = {}
+      for (const i of instList) instById[i.id] = i
+      const dbs = (dbRes.data.data || []).filter((db: any) => {
+        const t = normalizeType(instById[db.instance_id]?.db_type)
+        return t !== 'kafka' && t !== 'redis'
+      })
+      setDatabases(dbs)
+      setInstances(instList)
+      const envSet = new Set<string>()
+      for (const db of dbs) {
+        const env = resolveDbEnv(db, instById[db.instance_id])
+        if (env) envSet.add(env)
+      }
+      setEnvOptions([...envSet].sort(cmpName))
     } finally {
       setTreeLoading(false)
     }

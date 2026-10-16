@@ -270,7 +270,11 @@ func parseSrAddNodePayload(cl *store.SrCluster, body map[string]any) (*store.SrN
 	softBase, _ := body["software_base"].(string)
 	softBase = strings.TrimSpace(softBase)
 	if softBase == "" {
-		softBase = strings.TrimSpace(cl.SoftwareBase)
+		if comp == "be" {
+			softBase = cl.EffectiveBeSoftwareBase()
+		} else {
+			softBase = strings.TrimSpace(cl.SoftwareBase)
+		}
 	}
 	if softBase == "" {
 		softBase = "/home/dorisdb_base"

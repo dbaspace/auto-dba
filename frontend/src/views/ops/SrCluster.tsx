@@ -27,7 +27,9 @@ import './SrCluster.css'
 type SrAgent = { id: string; name?: string; base_url: string; username?: string; password_set?: boolean; host_instance_id?: string }
 type SrCluster = {
   id: string; name: string; environment?: string; version?: string; release_id?: string
-  software_base?: string; data_root?: string; fe_host?: string; fe_query_port?: number; status?: string
+  software_base?: string; be_software_base?: string; data_root?: string
+  fe_host?: string; fe_query_port?: number; status?: string
+  source?: string // deploy | register
   tenant_id?: string; tenant_name?: string
 }
 type SrNode = {
@@ -611,6 +613,50 @@ export default function SrClusterPage() {
     }
   }, [])
 
+  /** 仅删平台登记；不停 FE/BE、不删 Agent、不删资源配置实例；可再「登记已有」 */
+  function unregisterCluster(row: SrCluster) {
+    Modal.confirm({
+      title: `注销登记「${row.name}」？`,
+      width: 520,
+      content: (
+        <div>
+          <p style={{ marginBottom: 8 }}>将删除本页集群/节点拓扑、变更单与配置草稿。</p>
+          <p style={{ marginBottom: 8, color: '#389e0d' }}>
+            不会停止远程 FE/BE、不会删除 Node Agent、不会删除资源配置中的 StarRocks 实例与监控目标。
+          </p>
+          <p style={{ marginBottom: 0, color: '#666' }}>注销后可用「登记已有集群」按主机重新登记。</p>
+        </div>
+      ),
+      okText: '确认注销',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        await api.delete(`/sr-cluster/clusters/${row.id}`)
+        message.success('已注销登记（远程服务与 Agent 未改动）')
+        if (selected?.id === row.id) {
+          setSelected(null)
+          setNodes([])
+        }
+        await loadClusters()
+      },
+    })
+  }
+
+  const reprobeClusterLayout = useCallback(async (cluster: SrCluster) => {
+    try {
+      const res = await api.post(`/sr-cluster/clusters/${cluster.id}/probe-layout`, { apply: true })
+      const d = res.data?.data || {}
+      const layout = d.layout || {}
+      if (d.cluster) setSelected(d.cluster)
+      if (d.nodes) setNodes(d.nodes)
+      message.success(`已更新路径：FE=${layout.fe_software_base || d.cluster?.software_base || '—'} BE=${layout.be_software_base || d.cluster?.be_software_base || '—'}`)
+      const warns: string[] = layout.warnings || []
+      if (warns.length) message.warning(warns.join('；'), 8)
+      await loadClusters()
+    } catch (e: any) {
+      message.error(e?.response?.data?.message || e.message || '探测失败')
+    }
+  }, [loadClusters])
+
   const bindClusterNodeAgent = useCallback(async (list: 'fe_nodes' | 'be_nodes', index: number, hostRaw: string) => {
     const host = endpointHost(hostRaw) || String(hostRaw || '').trim()
     if (!host) return
@@ -662,6 +708,32 @@ export default function SrClusterPage() {
     return ''
   }, [clusterForm, monitorDomain, monitorTask])
 
+  const probeRegisterLayout = useCallback(async (hosts: string[], password: string) => {
+    if (!hosts.length) return
+    try {
+      const { data } = await api.post('/sr-cluster/probe-layout', {
+        fe_host: hosts[0],
+        fe_password: password,
+        fe_user: clusterForm.getFieldValue('fe_user') || 'root',
+        fe_query_port: 9030,
+        hosts,
+      })
+      const layout = data?.data || {}
+      const patch: Record<string, string> = {}
+      if (layout.fe_software_base) patch.software_base = layout.fe_software_base
+      if (layout.be_software_base) patch.be_software_base = layout.be_software_base
+      if (layout.be_data_root) patch.data_root = layout.be_data_root
+      if (Object.keys(patch).length) {
+        clusterForm.setFieldsValue(patch)
+        message.success(`已回填路径：FE=${patch.software_base || '—'} BE=${patch.be_software_base || '—'} 数据=${patch.data_root || '—'}`)
+      }
+      const warns: string[] = layout.warnings || []
+      if (warns.length) message.warning(warns.join('；'), 8)
+    } catch (e: any) {
+      message.warning(e?.response?.data?.message || e.message || '目录探测失败（可手填）')
+    }
+  }, [clusterForm])
+
   const probeRegisterFERoles = useCallback(async () => {
     const feNodes: { host?: string }[] = clusterForm.getFieldValue('fe_nodes') || []
     const hosts = feNodes.map((n) => endpointHost(n.host || '') || String(n.host || '').trim()).filter(Boolean)
@@ -711,12 +783,13 @@ export default function SrClusterPage() {
       clusterForm.setFieldsValue({ fe_nodes: next })
       const leader = roles.find((r) => String(r.role).toUpperCase() === 'LEADER')
       message.success(leader ? `已探测：Leader=${leader.host}` : `已探测 ${roles.length} 个 FE 角色`)
+      await probeRegisterLayout(hosts, password)
     } catch (e: any) {
       message.error(e?.response?.data?.message || e.message || '探测失败')
     } finally {
       setFeProbeBusy(false)
     }
-  }, [clusterForm, resolveFePasswordFromAdmin])
+  }, [clusterForm, resolveFePasswordFromAdmin, probeRegisterLayout])
   const loadHosts = useCallback(async () => {
     try {
       const res = await api.get('/instances', { params: { db_type: 'host' } })
@@ -1495,16 +1568,21 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                       title: '名称',
                       dataIndex: 'name',
                       render: (name: string, row: SrCluster) => (
-                        <Button
-                          type="link"
-                          style={{ padding: 0, height: 'auto', fontWeight: 500 }}
-                          onClick={(e) => { e.stopPropagation(); void openCluster(row) }}
-                        >
-                          {name}
-                          <span style={{ marginLeft: 4, opacity: 0.55, fontSize: 12 }}>
-                            {selected?.id === row.id ? '收起' : '详情'}
-                          </span>
-                        </Button>
+                        <Space size={6} wrap>
+                          <Button
+                            type="link"
+                            style={{ padding: 0, height: 'auto', fontWeight: 500 }}
+                            onClick={(e) => { e.stopPropagation(); void openCluster(row) }}
+                          >
+                            {name}
+                            <span style={{ marginLeft: 4, opacity: 0.55, fontSize: 12 }}>
+                              {selected?.id === row.id ? '收起' : '详情'}
+                            </span>
+                          </Button>
+                          <Tag color={row.source === 'register' ? 'blue' : 'default'}>
+                            {row.source === 'register' ? '登记' : '新建'}
+                          </Tag>
+                        </Space>
                       ),
                     },
                     ...(impersonating
@@ -1522,21 +1600,24 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                     { title: '版本', dataIndex: 'version' },
                     { title: '状态', dataIndex: 'status', render: (s: string) => renderClusterStatus(s) },
                     { title: 'FE', dataIndex: 'fe_host' },
-                    ...(impersonating
-                      ? [{
-                          title: '操作',
-                          width: 140,
-                          render: (_: unknown, row: SrCluster) => (
-                            row.tenant_id && row.tenant_id !== currentTenantId ? (
-                              <Auth urn={Perm.tenants.impersonate}>
-                                <Button type="link" onClick={(e) => assignClusterToCurrentTenant(row, e)}>
-                                  划拨到当前租户
-                                </Button>
-                              </Auth>
-                            ) : null
-                          ),
-                        } as ColumnType<SrCluster>]
-                      : []),
+                    {
+                      title: '操作',
+                      width: impersonating ? 220 : 100,
+                      render: (_: unknown, row: SrCluster) => (
+                        <Space size={0} onClick={(e) => e.stopPropagation()}>
+                          {impersonating && row.tenant_id && row.tenant_id !== currentTenantId ? (
+                            <Auth urn={Perm.tenants.impersonate}>
+                              <Button type="link" onClick={(e) => assignClusterToCurrentTenant(row, e)}>
+                                划拨到当前租户
+                              </Button>
+                            </Auth>
+                          ) : null}
+                          <Button type="link" danger onClick={(e) => { e.stopPropagation(); void unregisterCluster(row) }}>
+                            注销登记
+                          </Button>
+                        </Space>
+                      ),
+                    },
                   ]}
                 />
                 {selected && (
@@ -1591,15 +1672,28 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                         <Tooltip title="登记/关联「资源配置 → 实例管理」中的 StarRocks 实例，并同步「配置中心 → 监控目标注册」">
                           <Button loading={registrySyncing} onClick={() => { void syncRegistry(selected.id) }}>同步到配置中心</Button>
                         </Tooltip>
+                        <Tooltip title="从 FE CONFIG / BE /varz 重新发现并写回 FE/BE software_base 与数据目录">
+                          <Button onClick={() => { void reprobeClusterLayout(selected) }}>重新探测目录</Button>
+                        </Tooltip>
+                        <Button danger onClick={() => { void unregisterCluster(selected) }}>注销登记</Button>
                         <Button type="link" onClick={() => { setSelected(null); setNodes([]) }}>关闭</Button>
                       </Space>
                     )}
                   >
                     <Descriptions size="small" column={2}>
                       <Descriptions.Item label="版本">{selected.version} ({selected.release_id || '-'})</Descriptions.Item>
-                      <Descriptions.Item label="状态">{renderClusterStatus(selected.status)}</Descriptions.Item>
+                      <Descriptions.Item label="状态">
+                        <Space size={6}>
+                          {renderClusterStatus(selected.status)}
+                          <Tag color={selected.source === 'register' ? 'blue' : 'default'}>
+                            {selected.source === 'register' ? '登记' : '新建'}
+                          </Tag>
+                        </Space>
+                      </Descriptions.Item>
                       <Descriptions.Item label="环境">{selected.environment}</Descriptions.Item>
-                      <Descriptions.Item label="software_base">{selected.software_base}</Descriptions.Item>
+                      <Descriptions.Item label="FE software_base">{selected.software_base}</Descriptions.Item>
+                      <Descriptions.Item label="BE software_base">{selected.be_software_base || selected.software_base || '—'}</Descriptions.Item>
+                      <Descriptions.Item label="BE 数据目录">{selected.data_root || '—'}</Descriptions.Item>
                       <Descriptions.Item label="资源实例">
                         {clusterInst ? (
                           <Space size={4} wrap>
@@ -1728,7 +1822,7 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                         render: (_: unknown, row: SrNode) => nodeLive[row.id]?.start_time || '—',
                       }
                       const dataRootCol: ColumnType<SrNode> = {
-                        title: '数据目录',
+                        title: <Tooltip title="BE storage_root_path 或数据盘挂载点">数据目录</Tooltip>,
                         dataIndex: 'data_root',
                         ellipsis: true,
                         render: (v: string) => v || selected?.data_root || '/data',
@@ -1770,7 +1864,6 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                         width: 170,
                         render: (s: string, row: SrNode) => {
                           const live = nodeLive[row.id]
-                          const offline = live?.alive === 'false' ? <Tag color="error">离线</Tag> : null
                           if (live?.decommissioned || s === 'decommissioning') {
                             const tablets = live?.tablet_num
                             return (
@@ -1779,8 +1872,16 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                                   <Tag color="orange">下线中</Tag>
                                 </Tooltip>
                                 {tablets && <span style={{ color: '#999', fontSize: 12 }}>剩余 tablet {tablets}</span>}
-                                {offline}
                               </Space>
+                            )
+                          }
+                          // 有 SHOW PROC 实时数据时以 Alive 为准，避免库里 stopped 误显「已停止」
+                          if (live?.alive != null && live.alive !== '') {
+                            const alive = String(live.alive).toLowerCase() === 'true'
+                            return (
+                              <Tooltip title={`SHOW PROC Alive=${live.alive}；库状态=${s || '—'}`}>
+                                <Tag color={alive ? 'success' : 'default'}>{alive ? '运行中' : '已停止'}</Tag>
+                              </Tooltip>
                             )
                           }
                           const map: Record<string, { color: string; text: string }> = {
@@ -1790,12 +1891,7 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                             failed: { color: 'error', text: '失败' },
                           }
                           const m = map[s] || { color: 'default', text: s || '—' }
-                          return (
-                            <Space size={4}>
-                              <Tag color={m.color}>{m.text}</Tag>
-                              {offline}
-                            </Space>
-                          )
+                          return <Tag color={m.color}>{m.text}</Tag>
                         },
                       }
                       const actionCol: ColumnType<SrNode> = {
@@ -1850,10 +1946,19 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                               <Button
                                 size="small"
                                 type="link"
-                                danger={row.status === 'ready'}
+                                danger={(() => {
+                                  const live = nodeLive[row.id]
+                                  if (live?.alive != null && live.alive !== '') {
+                                    return String(live.alive).toLowerCase() === 'true'
+                                  }
+                                  return row.status === 'ready'
+                                })()}
                                 onClick={async () => {
                                   if (!selected) return
-                                  const running = row.status === 'ready'
+                                  const live = nodeLive[row.id]
+                                  const running = (live?.alive != null && live.alive !== '')
+                                    ? String(live.alive).toLowerCase() === 'true'
+                                    : row.status === 'ready'
                                   try {
                                     const res = await api.post(
                                       `/sr-cluster/clusters/${selected.id}/nodes/${row.id}/${running ? 'stop' : 'start'}`,
@@ -1865,7 +1970,13 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                                   }
                                 }}
                               >
-                                {row.status === 'ready' ? '停止' : '启动'}
+                                {(() => {
+                                  const live = nodeLive[row.id]
+                                  if (live?.alive != null && live.alive !== '') {
+                                    return String(live.alive).toLowerCase() === 'true' ? '停止' : '启动'
+                                  }
+                                  return row.status === 'ready' ? '停止' : '启动'
+                                })()}
                               </Button>
                               <Button size="small" type="link" onClick={async () => {
                                 try {
@@ -2740,6 +2851,7 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
               version: String(v.version || matched?.version || '').trim(),
               release_id: matched?.id || v.release_id || undefined,
               software_base: v.software_base,
+              be_software_base: v.be_software_base || v.software_base,
               data_root: v.data_root,
               fe_password: v.fe_password,
               nodes,
@@ -2837,6 +2949,7 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
           layout="vertical"
           initialValues={{
             software_base: '/home/dorisdb_base',
+            be_software_base: '/home/dorisdb_base',
             data_root: '/data',
             fe_user: 'root',
             init_now: false,
@@ -2905,8 +3018,29 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
               />
             </Form.Item>
           )}
-          <Form.Item name="software_base" label="software_base"><Input /></Form.Item>
-          <Form.Item name="data_root" label="BE 数据盘挂载点" extra="不存在时自动选用未使用磁盘格式化挂载；已存在时须位于非系统盘"><Input /></Form.Item>
+          <Form.Item
+            name="software_base"
+            label="FE software_base"
+            extra={clusterModalMode === 'register' ? '可由探测从 internal_log_dir 推断（如 /data1/dorisdb_base）' : '装包根目录；FE 路径为 {software_base}/fe'}
+          >
+            <Input placeholder="/home/dorisdb_base" />
+          </Form.Item>
+          <Form.Item
+            name="be_software_base"
+            label="BE software_base"
+            extra={clusterModalMode === 'register' ? '可由探测从 BE /varz 的 sys_minidump_dir 推断；可与 FE 不同' : '装包根目录；BE 路径为 {be_software_base}/be'}
+          >
+            <Input placeholder="/home/dorisdb_base" />
+          </Form.Item>
+          <Form.Item
+            name="data_root"
+            label={clusterModalMode === 'register' ? 'BE 数据目录（storage_root_path）' : 'BE 数据盘挂载点'}
+            extra={clusterModalMode === 'register'
+              ? '登记时填完整 storage_root_path（如 /data1/dorisdb/be/storage），可由 BE :8040/varz 探测'
+              : '不存在时自动选用未使用磁盘格式化挂载；已存在时须位于非系统盘'}
+          >
+            <Input placeholder={clusterModalMode === 'register' ? '/data1/dorisdb/be/storage' : '/data'} />
+          </Form.Item>
           <Form.Item
             name="fe_password"
             label={clusterModalMode === 'register' ? 'FE 密码' : 'FE 密码（初装可空）'}
@@ -2921,11 +3055,30 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
               <Space wrap>
                 <Button onClick={() => void resolveFePasswordFromAdmin()}>从 FE 管理获取密码</Button>
                 <Button loading={feProbeBusy} onClick={() => void probeRegisterFERoles()}>
-                  探测 FE 角色
+                  探测 FE 角色与目录
+                </Button>
+                <Button loading={feProbeBusy} onClick={async () => {
+                  const feNodes: { host?: string }[] = clusterForm.getFieldValue('fe_nodes') || []
+                  const hosts = feNodes.map((n) => endpointHost(n.host || '') || String(n.host || '').trim()).filter(Boolean)
+                  if (!hosts.length) {
+                    message.warning('请先填写 FE Host')
+                    return
+                  }
+                  let password = String(clusterForm.getFieldValue('fe_password') || '')
+                  if (!password) password = await resolveFePasswordFromAdmin({ silent: true })
+                  setFeProbeBusy(true)
+                  try {
+                    await probeRegisterLayout(hosts, password)
+                  } finally {
+                    setFeProbeBusy(false)
+                  }
+                }}
+                >
+                  仅探测目录
                 </Button>
               </Space>
               <div className="muted" style={{ marginTop: 4 }}>
-                探测将连接首个 FE（:9030），标出 LEADER/FOLLOWER/OBSERVER，并将 Leader 设为首 FE
+                连接首个 FE（:9030）探测角色，并从 ADMIN SHOW FRONTEND CONFIG / BE :8040/varz 回填 software_base 与数据目录
               </div>
             </div>
           ) : null}

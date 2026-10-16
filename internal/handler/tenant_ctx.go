@@ -49,6 +49,14 @@ func auditScope(db *store.DB, c *gin.Context) bool {
 	return platformAdminAuditing(db, c)
 }
 
+// listScopeTenant：查询参数 scope=tenant 时强制按当前租户列表（含 grant），即使平台管理员审计会话也不返回全平台。
+func listScopeTenant(c *gin.Context) bool {
+	if c == nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(c.Query("scope")), "tenant")
+}
+
 func tenantNameMap(db *store.DB) map[string]string {
 	out := map[string]string{}
 	if db == nil {

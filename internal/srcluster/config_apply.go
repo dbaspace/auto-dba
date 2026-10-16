@@ -44,7 +44,7 @@ func (e *Engine) ApplyConfToNode(ctx context.Context, cl *store.SrCluster, n *st
 	soft := strings.TrimSpace(n.SoftwarePath)
 	role := strings.ToLower(n.Component)
 	if soft == "" && cl != nil {
-		soft = strings.TrimRight(cl.SoftwareBase, "/") + "/" + role
+		soft = softwareBaseForRole(cl, role) + "/" + role
 	}
 	confDir := filepath.ToSlash(filepath.Join(soft, "conf"))
 	vars := BuildConfVars(cl, n)

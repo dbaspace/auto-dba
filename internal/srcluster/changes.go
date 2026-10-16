@@ -585,7 +585,7 @@ func (e *Engine) stepUpgradeNode(ctx context.Context, cl *store.SrCluster, n *st
 	soft := n.SoftwarePath
 	role := n.Component
 	if soft == "" {
-		soft = strings.TrimRight(cl.SoftwareBase, "/") + "/" + role
+		soft = softwareBaseForRole(cl, role) + "/" + role
 	}
 	if unit == "" {
 		return fmt.Errorf("节点未配置 systemd_unit，无法启服（未停服、未替换）")
@@ -717,7 +717,7 @@ func (e *Engine) stepBackupNodeDirs(ctx context.Context, cl *store.SrCluster, n 
 		if n.Component == "be" {
 			role = "be"
 		}
-		soft = strings.TrimRight(cl.SoftwareBase, "/") + "/" + role
+		soft = softwareBaseForRole(cl, role) + "/" + role
 	}
 	paths := []string{soft}
 	if n.Component == "be" {

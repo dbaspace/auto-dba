@@ -138,9 +138,11 @@ func (h *InstanceHandler) mergeHostedInstances(list []store.Instance, tid, dbTyp
 
 func (h *InstanceHandler) List(c *gin.Context) {
 	tid := middleware.TenantID(c)
+	forceTenant := listScopeTenant(c)
+	auditing := platformAdminAuditing(h.Store, c)
 	var list []store.Instance
 	var err error
-	if platformAdminAuditing(h.Store, c) {
+	if auditing && !forceTenant {
 		list, err = h.Store.ListInstances(c.Query("db_type"), c.Query("q"))
 	} else {
 		list, err = h.Store.ListInstancesInTenant(tid, c.Query("db_type"), c.Query("q"))
@@ -160,7 +162,7 @@ func (h *InstanceHandler) List(c *gin.Context) {
 	for i := range list {
 		redactInstance(&list[i])
 	}
-	c.JSON(http.StatusOK, gin.H{"data": list, "audit_scope": platformAdminAuditing(h.Store, c)})
+	c.JSON(http.StatusOK, gin.H{"data": list, "audit_scope": auditing && !forceTenant})
 }
 
 func (h *InstanceHandler) Get(c *gin.Context) {
@@ -927,13 +929,35 @@ func (h *InstanceHandler) ExecuteRedis(c *gin.Context) {
 	if cmd == "" {
 		cmd = strings.TrimSpace(req.SQLContent)
 	}
+	dbName := strings.TrimSpace(req.DBName)
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
 	defer cancel()
-	res, err := redisquery.Execute(ctx, inst, redisquery.Options{Username: inst.Username, Password: password, Host: host}, req.DBName, cmd)
+	res, err := redisquery.Execute(ctx, inst, redisquery.Options{Username: inst.Username, Password: password, Host: host}, dbName, cmd)
 	if err != nil {
+		it := &store.QueryAudit{
+			Kind: "redis", Target: dbName, Statement: cmd,
+			Success: false, Message: err.Error(),
+		}
+		fillInstanceAudit(it, inst)
+		if respondInteractiveQueryErr(c, err) {
+			it.Message = "查询已终止"
+			recordQueryAudit(h.Store, c, it)
+			return
+		}
+		recordQueryAudit(h.Store, c, it)
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
+	it := &store.QueryAudit{
+		Kind: "redis", Target: dbName, Statement: cmd,
+		Success: true,
+	}
+	if res != nil {
+		it.RowCount = res.RowCount
+		it.ElapsedMS = res.TimeMs
+	}
+	fillInstanceAudit(it, inst)
+	recordQueryAudit(h.Store, c, it)
 	c.JSON(http.StatusOK, res)
 }
 
@@ -1038,9 +1062,11 @@ func (h *DatabaseHandler) enrichDatabaseTenants(list []store.Database) {
 
 func (h *DatabaseHandler) List(c *gin.Context) {
 	tid := middleware.TenantID(c)
+	forceTenant := listScopeTenant(c)
+	auditing := platformAdminAuditing(h.Store, c)
 	var list []store.Database
 	var err error
-	if platformAdminAuditing(h.Store, c) {
+	if auditing && !forceTenant {
 		list, err = h.Store.ListDatabases(c.Query("instance_id"), c.Query("q"))
 	} else {
 		list, err = h.Store.ListDatabasesInTenant(tid, c.Query("instance_id"), c.Query("q"))
@@ -1050,7 +1076,7 @@ func (h *DatabaseHandler) List(c *gin.Context) {
 		return
 	}
 	list = store.FilterVisibleDatabasesByTenant(list, viewerForRequest(h.Store, c))
-	if !platformAdminAuditing(h.Store, c) {
+	if !auditing || forceTenant {
 		extra, gerr := h.Store.ListGrantedDatabases(tid, middleware.UserID(c), c.Query("instance_id"), c.Query("q"))
 		if gerr != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"message": gerr.Error()})
@@ -1068,7 +1094,7 @@ func (h *DatabaseHandler) List(c *gin.Context) {
 		}
 	}
 	h.enrichDatabaseTenants(list)
-	c.JSON(http.StatusOK, gin.H{"data": list, "audit_scope": platformAdminAuditing(h.Store, c)})
+	c.JSON(http.StatusOK, gin.H{"data": list, "audit_scope": auditing && !forceTenant})
 }
 
 // AssignTenant POST /databases/:id/assign-tenant — 只改库归属，实例地址可留在原租户。

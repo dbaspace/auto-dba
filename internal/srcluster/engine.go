@@ -873,7 +873,7 @@ func (e *Engine) stepBootstrapFE(ctx context.Context, cl *store.SrCluster, n *st
 	}
 	soft := n.SoftwarePath
 	if soft == "" {
-		soft = strings.TrimRight(cl.SoftwareBase, "/") + "/fe"
+		soft = softwareBaseForRole(cl, "fe") + "/fe"
 	}
 	unit := n.SystemdUnit
 	if unit == "" {
@@ -1044,7 +1044,7 @@ func (e *Engine) stepStartFollower(ctx context.Context, cl *store.SrCluster, n *
 	}
 	soft := n.SoftwarePath
 	if soft == "" {
-		soft = strings.TrimRight(cl.SoftwareBase, "/") + "/fe"
+		soft = softwareBaseForRole(cl, "fe") + "/fe"
 	}
 	helperHost := cl.FeHost
 	helperPort := cl.FeEditPort
@@ -1100,7 +1100,7 @@ func (e *Engine) stepInitBE(ctx context.Context, cl *store.SrCluster, n *store.S
 	}
 	soft := n.SoftwarePath
 	if soft == "" {
-		soft = strings.TrimRight(cl.SoftwareBase, "/") + "/be"
+		soft = softwareBaseForRole(cl, "be") + "/be"
 	}
 	dataRoot := beDataRoot(cl, n)
 	diskResp, err := e.Agent.DiskInit(ctx, auth, DiskInitReq{

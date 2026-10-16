@@ -34,6 +34,7 @@ import (
 	"auto-dba/internal/router"
 	"auto-dba/internal/runbook"
 	"auto-dba/internal/secret"
+	"auto-dba/internal/sessionstore"
 	"auto-dba/internal/sqlinsight"
 	"auto-dba/internal/srcluster"
 	"auto-dba/internal/sshx"
@@ -133,9 +134,16 @@ func Run(cfg *config.Config, configPath string) {
 		SSHIdentityFile:    cfg.Terminal.SSHIdentityFile,
 		SSHInsecureHostKey: cfg.Terminal.SSHInsecureHostKey,
 	})
+	sessStore := sessionstore.New(cfg.Redis, cfg.App.JWTTTLHours)
+	if cfg.Redis.Enabled {
+		sessStore.Reconfigure(cfg.Redis, cfg.App.JWTTTLHours, true)
+	}
+	authH := &handler.AuthHandler{Store: db, Cfg: cfg, Sessions: sessStore}
+	loginSessH := &handler.LoginSessionHandler{Store: db, Sessions: sessStore}
 	deps := router.Deps{
 		Cfg:                cfg,
-		Auth:               &handler.AuthHandler{Store: db, Cfg: cfg},
+		Auth:               authH,
+		LoginSession:       loginSessH,
 		Inst:               &handler.InstanceHandler{Store: db, Secret: fieldCrypto},
 		DB:                 &handler.DatabaseHandler{Store: db, Secret: fieldCrypto},
 		AccessDomain:       &handler.AccessDomainHandler{Store: db},
@@ -187,7 +195,8 @@ func Run(cfg *config.Config, configPath string) {
 			CfgTTL: func() time.Duration {
 				return time.Duration(cfg.App.JWTTTLHours) * time.Hour
 			},
-			Secret: func() string { return cfg.App.JWTSecret },
+			Secret:   func() string { return cfg.App.JWTSecret },
+			Sessions: sessStore,
 		},
 		Ldap:               &handler.LdapHandler{Store: db, Cfg: cfg},
 		Sso:                &handler.SsoHandler{Store: db, Cfg: cfg},
@@ -234,6 +243,7 @@ func Run(cfg *config.Config, configPath string) {
 	hot := &hotReloadTargets{
 		cfg:      cfg,
 		db:       db,
+		sessions: sessStore,
 		backup:   bakEngine,
 		cdc:      cdcOrch,
 		sr:       srEng,
@@ -267,6 +277,7 @@ func Run(cfg *config.Config, configPath string) {
 
 	collectCtx, collectCancel := context.WithCancel(context.Background())
 	defer collectCancel()
+	sessionstore.StartReconcile(collectCtx, sessStore, db)
 	go pgdiag.StartCollector(collectCtx, db, &cryptoLive)
 	pgspace.StartDailyCron(collectCtx, pgSpaceSvc)
 	awr.StartDailyCron(collectCtx, awrSvc)

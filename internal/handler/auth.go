@@ -20,13 +20,15 @@ import (
 	"auto-dba/internal/ldapauth"
 	"auto-dba/internal/mail"
 	"auto-dba/internal/middleware"
+	"auto-dba/internal/sessionstore"
 	"auto-dba/internal/ssoauth"
 	"auto-dba/internal/store"
 )
 
 type AuthHandler struct {
-	Store *store.DB
-	Cfg   *config.Config
+	Store    *store.DB
+	Cfg      *config.Config
+	Sessions *sessionstore.Store // 可选；未启用时登录/鉴权与改造前一致
 }
 
 type loginReq struct {
@@ -724,7 +726,7 @@ func (h *AuthHandler) finishSSOCodeExchange(c *gin.Context, cfg *store.SsoConfig
 	_, _ = h.Store.ClearExternalLoginFailure(u.Username)
 	ttl := time.Duration(h.Cfg.App.JWTTTLHours) * time.Hour
 	tid, tcode := h.resolveLoginTenantIDs(u.ID, "")
-	tok, err := middleware.SignToken(h.Cfg.App.JWTSecret, u.ID, u.Username, u.Role, tid, tcode, ttl)
+	tok, err := h.issueLoginToken(c, u, tid, tcode, false, ttl)
 	if err != nil {
 		return "", "", "", err.Error(), http.StatusInternalServerError
 	}
@@ -881,7 +883,7 @@ func (h *AuthHandler) respondLoginWithTenant(c *gin.Context, u *store.User, logM
 		return
 	}
 	if t == nil && len(tenants) > 1 {
-		tok, err := middleware.SignToken(h.Cfg.App.JWTSecret, u.ID, u.Username, u.Role, "", "", ttl)
+		tok, err := h.issueLoginToken(c, u, "", "", false, ttl)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 			return
@@ -903,7 +905,7 @@ func (h *AuthHandler) respondLoginWithTenant(c *gin.Context, u *store.User, logM
 		tid, tcode = tenants[0].ID, tenants[0].Code
 		t = &tenants[0]
 	}
-	tok, err := middleware.SignToken(h.Cfg.App.JWTSecret, u.ID, u.Username, u.Role, tid, tcode, ttl)
+	tok, err := h.issueLoginToken(c, u, tid, tcode, false, ttl)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -1225,7 +1227,12 @@ func (h *AuthHandler) SelectTenant(c *gin.Context) {
 		return
 	}
 	ttl := time.Duration(h.Cfg.App.JWTTTLHours) * time.Hour
-	tok, err := middleware.SignToken(h.Cfg.App.JWTSecret, u.ID, u.Username, u.Role, t.ID, t.Code, ttl)
+	// 选租户重签：先吊销旧 jti（若有），再签发新会话
+	if old := middleware.JTI(c); old != "" && h.Sessions != nil && h.Sessions.Enabled() {
+		_ = h.Sessions.RevokeJTI(c.Request.Context(), u.ID, old)
+		_ = h.Store.MarkUserSessionOffline(old, "select_tenant", u.ID)
+	}
+	tok, err := h.issueLoginToken(c, u, t.ID, t.Code, false, ttl)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -1329,9 +1336,19 @@ func (h *AuthHandler) UpdateProfile(c *gin.Context) {
 }
 
 func (h *AuthHandler) Logout(c *gin.Context) {
-	if uid, ok := c.Get(middleware.CtxUserID); ok {
-		if s, _ := uid.(string); s != "" {
-			middleware.ClearIdle(s)
+	uid := middleware.UserID(c)
+	jti := middleware.JTI(c)
+	if uid != "" {
+		middleware.ClearIdle(uid)
+	}
+	if uid != "" && jti != "" && h.Sessions != nil && h.Sessions.Enabled() {
+		if err := h.Sessions.RevokeJTI(c.Request.Context(), uid, jti); err != nil {
+			log.Printf("logout revoke redis session uid=%s jti=%s: %v", uid, jti, err)
+		}
+		if h.Store != nil {
+			if err := h.Store.MarkUserSessionOffline(jti, "logout", uid); err != nil {
+				log.Printf("logout mirror offline jti=%s: %v", jti, err)
+			}
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
@@ -1573,4 +1590,57 @@ func (h *AuthHandler) ResetPassword(c *gin.Context) {
 	}
 	_ = h.Store.ClearLoginFailures(u.ID)
 	c.JSON(http.StatusOK, gin.H{"ok": true, "message": "密码已重置，请使用新密码登录"})
+}
+
+// issueLoginToken 签发 JWT；若启用 Redis 会话则先写 Redis 再镜像元库。
+func (h *AuthHandler) issueLoginToken(c *gin.Context, u *store.User, tid, tcode string, impersonate bool, ttl time.Duration) (token string, err error) {
+	secret := h.Cfg.App.JWTSecret
+	tok, jti, err := middleware.SignSessionToken(secret, u.ID, u.Username, u.Role, tid, tcode, impersonate, ttl)
+	if err != nil {
+		return "", err
+	}
+	if h.Sessions == nil || !h.Sessions.Enabled() {
+		return tok, nil
+	}
+	now := time.Now().UTC()
+	exp := now.Add(ttl)
+	if h.Cfg.Redis.SessionTTLHours > 0 {
+		exp = now.Add(time.Duration(h.Cfg.Redis.SessionTTLHours) * time.Hour)
+	}
+	kind := "normal"
+	if impersonate {
+		kind = "impersonate"
+	}
+	sess := sessionstore.Session{
+		JTI:      jti,
+		UserID:   u.ID,
+		TenantID: tid,
+		Username: u.Username,
+		IP:       clientLoginIP(c),
+		UA:       truncateUA(c.Request.UserAgent()),
+		OnlineAt: now.Format(time.RFC3339),
+		ExpireAt: exp.Format(time.RFC3339),
+		Kind:     kind,
+	}
+	if err := h.Sessions.Create(c.Request.Context(), sess); err != nil {
+		return "", fmt.Errorf("写入登录会话失败: %w", err)
+	}
+	if h.Store != nil {
+		if err := h.Store.UpsertUserSessionOnline(&store.UserSession{
+			UserID: u.ID, Username: u.Username, TenantID: tid, JTI: jti,
+			IP: sess.IP, UserAgent: sess.UA, Kind: kind,
+			OnlineAt: sess.OnlineAt, ExpireAt: sess.ExpireAt,
+		}); err != nil {
+			log.Printf("login session db mirror online jti=%s: %v", jti, err)
+		}
+	}
+	return tok, nil
+}
+
+func truncateUA(ua string) string {
+	ua = strings.TrimSpace(ua)
+	if len(ua) > 512 {
+		return ua[:512]
+	}
+	return ua
 }

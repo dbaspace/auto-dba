@@ -102,6 +102,7 @@ export const PAGE_ROUTES = [
   { path: '/config/users', title: '用户管理' },
   { path: '/config/tenants', title: '租户管理' },
   { path: '/config/login-logs', title: '登录日志' },
+  { path: '/config/login-sessions', title: '登录会话' },
   { path: '/config/ldap', title: '认证配置' },
 ]
 

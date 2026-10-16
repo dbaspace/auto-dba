@@ -20,6 +20,7 @@ type Config struct {
 	Frontend  FrontendConfig  `yaml:"frontend"` // 开发态 Vite；可放 Nacos，与后端端口一并管理
 	Log       LogConfig       `yaml:"log"`
 	DB        DBConfig        `yaml:"db"`
+	Redis     RedisConfig     `yaml:"redis"` // 平台登录会话；生产放 Nacos，默认关闭不影响现网
 	CDC       CDCConfig       `yaml:"cdc"`
 	Migration MigrationConfig `yaml:"migration"`
 	Flashback FlashbackConfig `yaml:"flashback"`
@@ -29,6 +30,20 @@ type Config struct {
 	Services  ServicesConfig  `yaml:"services"`
 	Copilot   CopilotConfig       `yaml:"copilot"` // DBA Copilot；密钥放 Nacos，不读库表全局参数
 	Notify    NotifyModuleConfig  `yaml:"notify"`  // 通知渠道能力（飞书/企微/短信/电话/机器人）；密钥放 Nacos；不含邮件
+}
+
+// RedisConfig 平台登录会话 Redis（与实例 Redis 工单无关）。enabled=false 时行为与改造前一致。
+type RedisConfig struct {
+	Enabled              bool   `yaml:"enabled"`
+	Addr                 string `yaml:"addr"`
+	Password             string `yaml:"password"`
+	DB                   int    `yaml:"db"`
+	KeyPrefix            string `yaml:"key_prefix"`
+	SessionTTLHours      int    `yaml:"session_ttl_hours"` // 0 = 回退 app.jwt_ttl_hours
+	SlidingExpire        bool   `yaml:"sliding_expire"`
+	FailMode             string `yaml:"fail_mode"`               // closed | open；open=鉴权不强制 Redis（不推荐生产）
+	MaxSessionsPerUser   int    `yaml:"max_sessions_per_user"`   // 0=不限制；1=新登录踢旧
+	ReconcileIntervalMin int    `yaml:"reconcile_interval_min"` // 默认 5
 }
 
 // CopilotConfig DBA Copilot 上游（Cursor / OpenAI 兼容）。仅来自 YAML/Nacos。
@@ -273,6 +288,21 @@ func applyDefaults(cfg *Config, path string) {
 	}
 	if cfg.App.JWTSecret == "" {
 		cfg.App.JWTSecret = "auto-dba-dev-secret"
+	}
+	if strings.TrimSpace(cfg.Redis.KeyPrefix) == "" {
+		cfg.Redis.KeyPrefix = "autodba:"
+	}
+	if !strings.HasSuffix(cfg.Redis.KeyPrefix, ":") {
+		cfg.Redis.KeyPrefix += ":"
+	}
+	fm := strings.ToLower(strings.TrimSpace(cfg.Redis.FailMode))
+	if fm != "open" && fm != "closed" {
+		cfg.Redis.FailMode = "closed"
+	} else {
+		cfg.Redis.FailMode = fm
+	}
+	if cfg.Redis.ReconcileIntervalMin <= 0 {
+		cfg.Redis.ReconcileIntervalMin = 5
 	}
 	if strings.TrimSpace(cfg.App.CryptoKeyID) == "" {
 		cfg.App.CryptoKeyID = "k1"

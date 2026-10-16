@@ -78,6 +78,7 @@ export default function TicketDetail() {
   const [inst, setInst] = useState<any>(null)
   const [envByInstanceId, setEnvByInstanceId] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(false)
+  const [loadError, setLoadError] = useState('')
   const [acting, setActing] = useState(false)
   const [downloading, setDownloading] = useState(false)
   const [comment, setComment] = useState('')
@@ -556,12 +557,11 @@ export default function TicketDetail() {
     [item],
   )
 
-  const precheckRows = useMemo<any[]>(() => [], [])
-
   async function load() {
     setLoading(true)
+    setLoadError('')
     try {
-      const { data } = await api.get('/tickets/' + params.id)
+      const { data } = await api.get('/tickets/' + params.id, { silent: true })
       setItem(data.data)
       setCanApproveFlag(Boolean(data.can_approve))
       setCanTransferFlag(Boolean(data.can_transfer))
@@ -570,12 +570,17 @@ export default function TicketDetail() {
       envFetchedRef.current = new Set()
       if (data.data?.instance_id) {
         try {
-          const instRes = await api.get('/instances/' + data.data.instance_id)
+          const instRes = await api.get('/instances/' + data.data.instance_id, { silent: true })
           setInst(instRes.data.data || null)
         } catch {
           /* keep empty */
         }
       }
+    } catch (err: any) {
+      setItem(null)
+      const status = err?.response?.status
+      const msg = err?.response?.data?.message || err?.message || '加载失败'
+      setLoadError(status === 404 ? '工单不存在或已删除' : msg)
     } finally {
       setLoading(false)
     }
@@ -771,7 +776,7 @@ export default function TicketDetail() {
     if (item?.status !== 'running' || !params.id) return
     const timer = window.setInterval(async () => {
       try {
-        const { data } = await api.get('/tickets/' + params.id)
+        const { data } = await api.get('/tickets/' + params.id, { silent: true })
         const next = data.data
         if (!next) return
         setItem(next)
@@ -811,7 +816,7 @@ export default function TicketDetail() {
       const fetched = await Promise.all(
         missing.map(async (id) => {
           try {
-            const res = await api.get('/instances/' + id)
+            const res = await api.get('/instances/' + id, { silent: true })
             const idc = String(res.data?.data?.idc || '').trim()
             return idc ? ([id, idc] as const) : null
           } catch {
@@ -854,6 +859,19 @@ export default function TicketDetail() {
           ← 返回工单列表
         </button>
       </div>
+      {!item && !loading && loadError ? (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ margin: '16px 0' }}
+          message={loadError}
+          action={
+            <Button size="small" type="link" onClick={backToTicketList}>
+              关闭并返回列表
+            </Button>
+          }
+        />
+      ) : null}
       {item && (
         <div className="review-split">
           <aside className="review-aside">
@@ -1202,32 +1220,6 @@ export default function TicketDetail() {
 
             {showSqlImpact && (
               <>
-                <div className="sec-title mt">预检测SQL影响</div>
-                <div className="impact-card">
-                  <div className="impact-head">
-                    <span className="db-pill">数据库</span>
-                    <span className="db-path">{dbPath}</span>
-                  </div>
-                  <ResponsiveTable
-                    dataSource={precheckRows}
-                    bordered
-                    size="small"
-                    rowKey={(_r, i) => String(i)}
-                    pagination={false}
-                    locale={{ emptyText: '暂无数据' }}
-                    columns={[
-                      {
-                        title: 'SQL语句',
-                        dataIndex: 'sql',
-                        width: undefined,
-                        ellipsis: { showTitle: true },
-                        onCell: () => ({ style: { minWidth: 280 } }),
-                      },
-                      { title: '影响行数', dataIndex: 'affected', width: 120 },
-                    ]}
-                  />
-                </div>
-
                 <div className="sec-title mt">执行SQL影响</div>
                 <div className="impact-card">
                   <DdlExecImpact

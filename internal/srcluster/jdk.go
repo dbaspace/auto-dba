@@ -278,7 +278,7 @@ func nodeSoftwarePath(cl *store.SrCluster, n *store.SrNode) string {
 	if sp := strings.TrimSpace(n.SoftwarePath); sp != "" {
 		return sp
 	}
-	return strings.TrimRight(cl.SoftwareBase, "/") + "/" + n.Component
+	return softwareBaseForRole(cl, n.Component) + "/" + strings.ToLower(n.Component)
 }
 
 // jdkNodeResult 某节点的 JDK 判定（Err 非空表示 Agent 调用失败）。

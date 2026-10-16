@@ -30,7 +30,7 @@ import { shouldRemountOnTabActivate } from '../hooks/useReloadOnTabActive'
 import { readSiderCollapsed, writeSiderCollapsed } from '../theme/appearance'
 import './NavFlyout.css'
 
-/** 列表/看板类 Tab：从后台切回时重挂载以刷新数据；表单页保持保活 */
+/** 列表/详情：非 active 懒挂载（切回即重挂载刷新）；查询/表单：首次激活后后台保活 */
 function KeepAliveTabPanel({
   tabKey: key,
   path,
@@ -43,17 +43,14 @@ function KeepAliveTabPanel({
   active: boolean
 }) {
   const remount = shouldRemountOnTabActivate(path)
-  const [gen, setGen] = useState(0)
-  const prevActive = useRef<boolean | null>(null)
+  const [keptAlive, setKeptAlive] = useState(active)
   useEffect(() => {
-    if (prevActive.current === false && active && remount) {
-      setGen((g) => g + 1)
-    }
-    prevActive.current = active
-  }, [active, remount])
+    if (active) setKeptAlive(true)
+  }, [active])
+  const show = remount ? active : keptAlive
   return (
     <div className={`app-tab-panel${active ? ' active' : ''}`}>
-      <TabPagePanel key={`${key}:${gen}`} pathname={path} search={search} />
+      {show ? <TabPagePanel key={key} pathname={path} search={search} /> : null}
     </div>
   )
 }

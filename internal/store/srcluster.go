@@ -51,6 +51,10 @@ const (
 	// SrNodeDecommissioning 已执行 DECOMMISSION、FE 尚在迁移 tablet；迁完后由 FE 移除，平台随后删除登记
 	SrNodeDecommissioning = "decommissioning"
 
+	// SrSourceDeploy 平台新建装机；SrSourceRegister 登记已有（仅纳管，可注销后重登记）
+	SrSourceDeploy   = "deploy"
+	SrSourceRegister = "register"
+
 	SrDeployPending = "pending"
 	SrDeployRunning = "running"
 	SrDeploySuccess = "success"
@@ -98,8 +102,9 @@ type SrCluster struct {
 	Environment     string `json:"environment"`
 	Version         string `json:"version"`
 	ReleaseID       string `json:"release_id,omitempty"`
-	SoftwareBase    string `json:"software_base"`
-	DataRoot        string `json:"data_root"`
+	SoftwareBase    string `json:"software_base"`                 // FE 软件根（…/dorisdb_base）
+	BeSoftwareBase  string `json:"be_software_base,omitempty"`    // BE 软件根；空则同 SoftwareBase
+	DataRoot        string `json:"data_root"`                     // BE 数据目录：挂载点或完整 storage_root_path
 	FeHTTPPort      int    `json:"fe_http_port"`
 	FeEditPort      int    `json:"fe_edit_port"`
 	FeQueryPort     int    `json:"fe_query_port"`
@@ -108,12 +113,24 @@ type SrCluster struct {
 	FeUser          string `json:"fe_user,omitempty"`
 	FePasswordEnc   string `json:"-"`
 	FePasswordSet   bool   `json:"fe_password_set"`
+	Source          string `json:"source,omitempty"` // deploy | register
 	Status          string `json:"status"`
 	Remark          string `json:"remark,omitempty"`
 	CreatedBy       string `json:"created_by,omitempty"`
 	UpdatedBy       string `json:"updated_by,omitempty"`
 	CreatedAt       string `json:"created_at"`
 	UpdatedAt       string `json:"updated_at"`
+}
+
+// EffectiveBeSoftwareBase BE 软件根；未单独配置时回退到 SoftwareBase。
+func (c *SrCluster) EffectiveBeSoftwareBase() string {
+	if c == nil {
+		return ""
+	}
+	if s := strings.TrimSpace(c.BeSoftwareBase); s != "" {
+		return s
+	}
+	return strings.TrimSpace(c.SoftwareBase)
 }
 
 // SrNode 集群节点。
@@ -372,9 +389,15 @@ func (d *DB) ensureSrClusterTables() error {
 		}
 	}
 	_, _ = d.Exec(`ALTER TABLE tbl_sr_clusters ADD COLUMN IF NOT EXISTS release_id TEXT NOT NULL DEFAULT ''`)
+	_, _ = d.Exec(`ALTER TABLE tbl_sr_clusters ADD COLUMN IF NOT EXISTS be_software_base TEXT NOT NULL DEFAULT ''`)
+	_, _ = d.Exec(`ALTER TABLE tbl_sr_clusters ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT ''`)
 	_, _ = d.Exec(`ALTER TABLE tbl_sr_oss_settings ADD COLUMN IF NOT EXISTS oss_setting_id TEXT NOT NULL DEFAULT ''`)
 	_, _ = d.Exec(`ALTER TABLE tbl_sr_nodes ADD COLUMN IF NOT EXISTS data_root TEXT NOT NULL DEFAULT ''`)
 	_, _ = d.Exec(`ALTER TABLE tbl_sr_releases ADD COLUMN IF NOT EXISTS jdk_max TEXT NOT NULL DEFAULT ''`)
+	// 历史数据：remark 含「登记已有」视为 register，其余 deploy
+	_, _ = d.Exec(`UPDATE tbl_sr_clusters SET source=? WHERE (source='' OR source IS NULL) AND remark LIKE ?`,
+		SrSourceRegister, "%登记已有%")
+	_, _ = d.Exec(`UPDATE tbl_sr_clusters SET source=? WHERE source='' OR source IS NULL`, SrSourceDeploy)
 	return nil
 }
 
@@ -633,15 +656,18 @@ func (d *DB) CreateSrCluster(c *SrCluster) error {
 	if c.Status == "" {
 		c.Status = SrClusterDraft
 	}
+	if c.Source != SrSourceRegister {
+		c.Source = SrSourceDeploy
+	}
 	now := nowSR()
 	c.CreatedAt, c.UpdatedAt = now, now
 	_, err := d.Exec(`INSERT INTO tbl_sr_clusters
-		(id,name,environment,version,release_id,software_base,data_root,fe_http_port,fe_edit_port,fe_query_port,be_heartbeat_port,
-		 fe_host,fe_user,fe_password_enc,status,remark,created_by,updated_by,created_at,updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		c.ID, c.Name, c.Environment, c.Version, c.ReleaseID, c.SoftwareBase, c.DataRoot,
+		(id,name,environment,version,release_id,software_base,be_software_base,data_root,fe_http_port,fe_edit_port,fe_query_port,be_heartbeat_port,
+		 fe_host,fe_user,fe_password_enc,source,status,remark,created_by,updated_by,created_at,updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		c.ID, c.Name, c.Environment, c.Version, c.ReleaseID, c.SoftwareBase, c.BeSoftwareBase, c.DataRoot,
 		c.FeHTTPPort, c.FeEditPort, c.FeQueryPort, c.BeHeartbeatPort,
-		c.FeHost, c.FeUser, c.FePasswordEnc, c.Status, c.Remark,
+		c.FeHost, c.FeUser, c.FePasswordEnc, c.Source, c.Status, c.Remark,
 		c.CreatedBy, c.UpdatedBy, c.CreatedAt, c.UpdatedAt)
 	if err != nil {
 		return err
@@ -651,12 +677,15 @@ func (d *DB) CreateSrCluster(c *SrCluster) error {
 
 func (d *DB) UpdateSrCluster(c *SrCluster) error {
 	c.UpdatedAt = nowSR()
-	_, err := d.Exec(`UPDATE tbl_sr_clusters SET name=?, environment=?, version=?, release_id=?, software_base=?, data_root=?,
+	if c.Source != SrSourceRegister && c.Source != SrSourceDeploy {
+		c.Source = SrSourceDeploy
+	}
+	_, err := d.Exec(`UPDATE tbl_sr_clusters SET name=?, environment=?, version=?, release_id=?, software_base=?, be_software_base=?, data_root=?,
 		fe_http_port=?, fe_edit_port=?, fe_query_port=?, be_heartbeat_port=?, fe_host=?, fe_user=?, fe_password_enc=?,
-		status=?, remark=?, updated_by=?, updated_at=? WHERE id=?`,
-		c.Name, c.Environment, c.Version, c.ReleaseID, c.SoftwareBase, c.DataRoot,
+		source=?, status=?, remark=?, updated_by=?, updated_at=? WHERE id=?`,
+		c.Name, c.Environment, c.Version, c.ReleaseID, c.SoftwareBase, c.BeSoftwareBase, c.DataRoot,
 		c.FeHTTPPort, c.FeEditPort, c.FeQueryPort, c.BeHeartbeatPort,
-		c.FeHost, c.FeUser, c.FePasswordEnc, c.Status, c.Remark, c.UpdatedBy, c.UpdatedAt, c.ID)
+		c.FeHost, c.FeUser, c.FePasswordEnc, c.Source, c.Status, c.Remark, c.UpdatedBy, c.UpdatedAt, c.ID)
 	return err
 }
 
@@ -692,20 +721,23 @@ func (d *DB) DeleteSrCluster(id string) error {
 	return nil
 }
 
-const srClusterSelectCols = `id, COALESCE(tenant_id,''), name, environment, version, release_id, software_base, data_root, fe_http_port, fe_edit_port, fe_query_port, be_heartbeat_port,
-		fe_host, fe_user, fe_password_enc, status, remark, created_by, updated_by, created_at, updated_at`
+const srClusterSelectCols = `id, COALESCE(tenant_id,''), name, environment, version, release_id, software_base, COALESCE(be_software_base,''), data_root, fe_http_port, fe_edit_port, fe_query_port, be_heartbeat_port,
+		fe_host, fe_user, fe_password_enc, COALESCE(source,''), status, remark, created_by, updated_by, created_at, updated_at`
 
 func scanSrCluster(sc interface{ Scan(dest ...any) error }) (*SrCluster, error) {
 	var c SrCluster
 	var enc string
-	if err := sc.Scan(&c.ID, &c.TenantID, &c.Name, &c.Environment, &c.Version, &c.ReleaseID, &c.SoftwareBase, &c.DataRoot,
+	if err := sc.Scan(&c.ID, &c.TenantID, &c.Name, &c.Environment, &c.Version, &c.ReleaseID, &c.SoftwareBase, &c.BeSoftwareBase, &c.DataRoot,
 		&c.FeHTTPPort, &c.FeEditPort, &c.FeQueryPort, &c.BeHeartbeatPort,
-		&c.FeHost, &c.FeUser, &enc, &c.Status, &c.Remark,
+		&c.FeHost, &c.FeUser, &enc, &c.Source, &c.Status, &c.Remark,
 		&c.CreatedBy, &c.UpdatedBy, &c.CreatedAt, &c.UpdatedAt); err != nil {
 		return nil, err
 	}
 	c.FePasswordEnc = enc
 	c.FePasswordSet = strings.TrimSpace(enc) != ""
+	if c.Source != SrSourceRegister {
+		c.Source = SrSourceDeploy
+	}
 	return &c, nil
 }
 

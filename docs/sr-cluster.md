@@ -833,7 +833,7 @@ update-alternatives --set javac /home/jdk-21.0.4/bin/javac
 
 | Tab | 内容 |
 |-----|------|
-| 集群 | 列表；**新建集群** / **登记已有集群**；详情：添加节点、初始化（仅非 ready）、**配置**（fe/be.conf 草稿与下发）、升级 / 重启 / 下线 |
+| 集群 | 列表（来源 Tag：新建/登记）；**新建集群** / **登记已有集群**；详情：添加节点、初始化（仅非 ready）、**配置**、**重新探测目录**、**注销登记**、升级 / 重启 / 下线 |
 | 变更 | cluster_init / upgrade / add_* / remove_* / restart / decommission / **config_apply**；步骤条与重试/取消 |
 | 设置 | 选择配置中心 OSS + 制品 prefix、版本目录、环境白名单、**FE/BE 平台默认 conf 模板** |
 | Node Agent | 本引擎节点 Agent 登记与探活 |
@@ -843,21 +843,25 @@ update-alternatives --set javac /home/jdk-21.0.4/bin/javac
 | 入口 | 场景 | 结果 |
 |------|------|------|
 | **新建集群** | 从零装包 | `draft` → 可选提交 `cluster_init` → `ready` |
-| **登记已有集群** | 现场已在跑 | `register_existing=true`，集群与节点直接 `ready`，**不**提交 init |
+| **登记已有集群** | 现场已在跑 | `register_existing=true`，`source=register`，集群与节点直接 `ready`，**不**提交 init |
 
 登记数据来源：
 
-1. **手工**填写 FE/BE host、版本、路径；FE 密码优先从「配置中心 · FE 管理」按主机匹配（`POST /feadmin/resolve-credential`），亦可留空由服务端回退。登记时 **Node Agent 可暂空**，运维前再到 Node Agent Tab 补绑。登记前可 `POST /sr-cluster/probe-fe-roles` 探测实时角色。  
-2. **从监控目标导入**（推荐）：`GET /monitor-targets/preview?kind=starrocks-fe|starrocks-be`，预填 host / 环境 / version；导入后尝试自动填 FE 管理密码；Agent 有匹配则自动选中，无匹配可暂空。可点「探测 FE 角色」对齐 LEADER/FOLLOWER。  
+1. **手工**填写 FE/BE host、版本、路径；FE 密码优先从「配置中心 · FE 管理」按主机匹配（`POST /feadmin/resolve-credential`），亦可留空由服务端回退。登记时 **Node Agent 可暂空**，运维前再到 Node Agent Tab 补绑。登记前可 `POST /sr-cluster/probe-fe-roles` 探测实时角色，并可 `POST /sr-cluster/probe-layout` 自动发现 FE/BE `software_base` 与 BE `storage_root_path`（FE：`ADMIN SHOW FRONTEND CONFIG` 的 `internal_log_dir`；BE：`:HttpPort/varz`）。  
+2. **从监控目标导入**（推荐）：`GET /monitor-targets/preview?kind=starrocks-fe|starrocks-be`，预填 host / 环境 / version；导入后尝试自动填 FE 管理密码；Agent 有匹配则自动选中，无匹配可暂空。可点「探测 FE 角色与目录」对齐 LEADER/FOLLOWER 并回填路径。  
 3. **批量下发 Node Agent**：工作台「Node Agent」→ SSH 下发 → 选「从监控目标」，勾选任务下 FE/BE 主机（须已在实例管理登记为 host），`POST /sr-cluster/agents/deploy-batch` 批量下发。
 
-登记后维护：添加节点 / 加入 / 重启 / 下线 / 升级；`ready` 集群不再显示「集群初始化」。
+登记后维护：添加节点 / 加入 / 重启 / 下线 / 升级；`ready` 集群不再显示「集群初始化」。节点状态以 `SHOW PROC` **Alive** 为准。详情可「重新探测目录」（`POST .../probe-layout` + apply）修正路径。
+
+**注销登记**：`DELETE /sr-cluster/clusters/:id` 仅删平台集群/节点/变更/配置草稿，**不停**远程 FE/BE、**不删** Node Agent 与资源配置实例；之后可再「登记已有」纳管。
 
 **登记时的 FE 校验**：
 - 保存前先连接 FE，执行 `SHOW PROC '/frontends'`（只读）。表单填了 FE 密码就用表单的；留空则用资源配置中按主机匹配到的 StarRocks 实例的账号密码。
 - 连不上时拒绝保存，并提示填写密码或先到实例管理登记。
 - 连上后按实际角色写入各 FE 的 `fe_role`：OBSERVER 记为 observer，LEADER 和 FOLLOWER 记为 follower（与平台初始化一致，leader 由选举产生）。登记的 FE 与现场不一致时以 warning 提示。
 - 保存成功后自动「同步到配置中心」（见下节）。
+
+集群字段：`software_base`（FE 软件根）、`be_software_base`（BE 软件根，空则同 FE）、`data_root`（BE 挂载点或完整 `storage_root_path`）、`source`（`deploy`|`register`）。
 
 #### 同步到配置中心（资源实例 + 监控目标注册）
 
@@ -921,7 +925,7 @@ update-alternatives --set javac /home/jdk-21.0.4/bin/javac
 | 对象 | 要点字段 |
 |------|----------|
 | `SrAgent` | Node Agent：base_url、BasicAuth |
-| `SrCluster` | environment、**release_id**/version、software_base、数据根、fe 凭据 |
+| `SrCluster` | environment、**release_id**/version、software_base、be_software_base、data_root、source、fe 凭据 |
 | `SrNode` | component、ports、路径、unit、**agent_id**、is_primary_fe |
 | `SrRelease` / `SrReleaseArtifact` | 版本 + FE/BE OSS 分包（object_key、sha256） |
 | `SrEnvVersionPolicy` | 环境白名单 |

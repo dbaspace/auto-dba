@@ -196,6 +196,31 @@
   font-size: 13px;
   line-height: 1.5;
 }
+.sql-snippet-cell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.sql-snippet-preview {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+}
+.sql-snippet-view {
+  flex-shrink: 0;
+  padding: 0 4px;
+  height: auto;
+  line-height: 1.4;
+}
+.sql-snippet-full {
+  max-height: min(60vh, 480px);
+  overflow: auto;
+}
 .impact-card {
   border: 1px solid #e5e7eb;
   border-radius: 6px;

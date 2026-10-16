@@ -8,6 +8,7 @@ import {
   type DdlExecStats,
   type DdlExecTab,
 } from './ddlExecGroups'
+import SqlSnippetCell from './SqlSnippetCell'
 
 export type { DdlExecGroup, DdlExecStats, DdlExecTab }
 export { buildDdlExecGroups }
@@ -23,8 +24,8 @@ const tableColumns = [
   {
     title: 'SQL语句',
     dataIndex: 'sql',
-    ellipsis: { showTitle: true },
-    onCell: () => ({ style: { minWidth: 220 } }),
+    width: 360,
+    render: (v: string) => <SqlSnippetCell sql={v} />,
   },
   {
     title: '状态',
@@ -38,7 +39,8 @@ const tableColumns = [
   {
     title: '错误信息',
     dataIndex: 'error',
-    onCell: () => ({ style: { minWidth: 160 } }),
+    width: 200,
+    ellipsis: true,
     render: (v: string) => <span className="exec-cell-error">{v}</span>,
   },
   { title: '开始执行时间', dataIndex: 'start', width: 190 },

@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Input, Select, Spin, Tag, message } from 'antd'
 import ResponsiveTable from '../../components/ResponsiveTable'
-import { StopOutlined } from '@ant-design/icons'
+import { DatabaseOutlined, EnvironmentOutlined, StopOutlined } from '@ant-design/icons'
 import axios from 'axios'
 import api from '../../api/request'
 import CollapsibleSide from '../../components/CollapsibleSide'
+import DbTypeIcon from '../../components/DbTypeIcon'
 import './RedisQuery.css'
 
 const HIST_KEY = 'auto-dba-redis-history'
@@ -329,6 +330,9 @@ export default function RedisQuery() {
                 <div key={env} className="inst-block">
                   <div className={`inst-item${open ? ' open' : ''}`} onClick={() => toggleEnv(env)}>
                     <span className={`caret${open ? ' open' : ''}`}>▸</span>
+                    <span className={`node-ico env-ico${open ? ' open' : ''}`}>
+                      <EnvironmentOutlined />
+                    </span>
                     <span className="name">{env}</span>
                     <span className="env">{list.length}</span>
                   </div>
@@ -348,6 +352,9 @@ export default function RedisQuery() {
                                 selectDomain(entry)
                               }}
                             >
+                              <span className="node-ico">
+                                <DbTypeIcon type="redis" size={14} />
+                              </span>
                               <span className="domain-name">{entry.domain}</span>
                             </button>
                             {domActive ? (
@@ -362,6 +369,9 @@ export default function RedisQuery() {
                                       selectDB(d.name)
                                     }}
                                   >
+                                    <span className="node-ico db-ico">
+                                      <DatabaseOutlined />
+                                    </span>
                                     <span className="db-name">{d.name}</span>
                                     <span className="keys">{formatKeys(d.keys)}</span>
                                   </button>
