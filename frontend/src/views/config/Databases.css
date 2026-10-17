@@ -1,6 +1,38 @@
 /* 筛选区固定宽度，避免环境/域名 Select 被 flex 拉得过宽 */
 .db-filters .filter-item-fixed {
   flex: 0 0 auto;
+  margin-right: 8px;
+}
+
+.db-filters.ops-filters {
+  gap: 0;
+}
+
+.db-filters .filter-item .label {
+  min-width: 0;
+  padding-right: 4px;
+}
+
+.db-filters .toolbar {
+  margin-left: 4px;
+}
+
+.db-col-setting-btn {
+  width: 32px;
+  padding: 0;
+}
+
+.db-col-setting {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 160px;
+}
+
+.db-col-setting-footer {
+  border-top: 1px solid #f0f0f0;
+  padding-top: 8px;
+  text-align: right;
 }
 
 .db-filters .filter-item-fixed .ant-select,

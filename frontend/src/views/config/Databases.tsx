@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Alert, Button, Checkbox, Dropdown, Input, Modal, Pagination, Radio, Select, Space, Tabs, Tag, message } from 'antd'
+import { Alert, Button, Checkbox, Dropdown, Input, Modal, Pagination, Popover, Radio, Select, Space, Tabs, Tag, message } from 'antd'
+import { SettingOutlined } from '@ant-design/icons'
+import type { ColumnsType } from 'antd/es/table'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import api from '../../api/request'
 import Auth from '../../components/Auth'
@@ -124,6 +126,37 @@ function resolveRowDomains(row: DatabaseRow, inst?: InstanceRow): string[] {
   return out
 }
 
+const COLUMN_STORAGE_KEY = 'auto-dba-databases-visible-columns'
+const FIXED_COLUMNS = new Set(['db_name', 'actions'])
+const COLUMN_OPTIONS: { key: string; label: string; auditOnly?: boolean }[] = [
+  { key: 'env', label: '环境' },
+  { key: 'domains', label: '绑定域名' },
+  { key: 'db_name', label: '库名' },
+  { key: 'tenant', label: '所属租户', auditOnly: true },
+  { key: 'tags', label: '标签' },
+  { key: 'visibility', label: '范围' },
+  { key: 'access_users', label: '可访问用户' },
+  { key: 'role_ids', label: '绑定角色' },
+  { key: 'instance', label: '实例' },
+  { key: 'approvers', label: '审批人' },
+  { key: 'actions', label: '操作' },
+]
+const DEFAULT_COLUMNS = COLUMN_OPTIONS.map((c) => c.key)
+
+function loadVisibleColumns(): string[] {
+  try {
+    const arr = JSON.parse(localStorage.getItem(COLUMN_STORAGE_KEY) || 'null')
+    if (Array.isArray(arr)) {
+      const known = new Set(DEFAULT_COLUMNS)
+      const keys = arr.map(String).filter((k) => known.has(k))
+      return [...new Set([...keys, ...FIXED_COLUMNS])]
+    }
+  } catch {
+    /* ignore */
+  }
+  return DEFAULT_COLUMNS
+}
+
 export default function Databases() {
   const user = useAppSelector((s) => s.auth.user)
   const impersonating = Boolean((user as { impersonating?: boolean })?.impersonating)
@@ -133,6 +166,7 @@ export default function Databases() {
   const [activeType, setActiveType] = useState('')
   const [instances, setInstances] = useState<InstanceRow[]>([])
   const [rows, setRows] = useState<DatabaseRow[]>([])
+  const [initLoading, setInitLoading] = useState(true)
   const [dbNameQ, setDbNameQ] = useState('')
   const [domainFilter, setDomainFilter] = useState('')
   const [envFilter, setEnvFilter] = useState('')
@@ -162,6 +196,13 @@ export default function Databases() {
   const [batchUsers, setBatchUsers] = useState<string[]>([])
   const [batchOptions, setBatchOptions] = useState<string[]>([])
   const [batchSaving, setBatchSaving] = useState(false)
+  const [visibleColumns, setVisibleColumns] = useState<string[]>(loadVisibleColumns)
+
+  function updateVisibleColumns(keys: string[]) {
+    const next = [...new Set([...keys, ...FIXED_COLUMNS])]
+    setVisibleColumns(next)
+    localStorage.setItem(COLUMN_STORAGE_KEY, JSON.stringify(next))
+  }
 
   const knownTypes = useMemo(() => new Set(typeOptions.map((t) => t.value)), [typeOptions])
 
@@ -302,20 +343,29 @@ export default function Databases() {
     return (ids || []).map((id) => roles.find((r) => r.id === id)?.name || id).join(',')
   }
 
-  async function loadAclOptions(tenantId?: string) {
+  function aclParams(tenantId?: string) {
     const tid = tenantId || currentTenantId
-    const { data } = await api.get('/tenant-acl-options', { params: tid ? { tenant_id: tid } : {} })
-    const payload = data.data || {}
-    const names = (payload.users || []).map((u: any) => u.username || u.name).filter(Boolean)
-    setUserOptions([...new Set(names as string[])])
-    setRoles(payload.roles || [])
+    return { params: tid ? { tenant_id: tid } : {} }
   }
 
-  async function loadMeta() {
-    const [instRes, argRes, envRes] = await Promise.all([
+  function applyAclOptions(payload: any) {
+    const names = (payload?.users || []).map((u: any) => u.username || u.name).filter(Boolean)
+    setUserOptions([...new Set(names as string[])])
+    setRoles(payload?.roles || [])
+  }
+
+  async function loadAclOptions(tenantId?: string) {
+    const { data } = await api.get('/tenant-acl-options', aclParams(tenantId))
+    applyAclOptions(data.data || {})
+  }
+
+  async function loadInitial() {
+    const [instRes, argRes, envRes, aclRes, dbRes] = await Promise.all([
       api.get('/instances'),
       api.get('/global-args'),
       api.get('/environments').catch(() => ({ data: { data: [] } })),
+      api.get('/tenant-acl-options', aclParams()).catch(() => ({ data: { data: {} } })),
+      api.get('/databases'),
     ])
     setInstances(instRes.data.data || [])
     setEnvCatalog(
@@ -323,14 +373,18 @@ export default function Databases() {
         .map((e: any) => ({ code: String(e.code || '').trim(), name: String(e.name || e.code || '').trim() }))
         .filter((e: { code: string }) => e.code),
     )
-    await loadAclOptions(currentTenantId)
+    applyAclOptions(aclRes.data.data || {})
     const raw = (argRes.data.data || []).find((a: any) => a.key === 'ticket_instance_types')?.value || ''
     setTypeOptions(parseInstanceTypes(raw))
+    applyRows(dbRes.data.data || [])
   }
 
   async function load() {
     const { data } = await api.get('/databases')
-    const list: DatabaseRow[] = data.data || []
+    applyRows(data.data || [])
+  }
+
+  function applyRows(list: DatabaseRow[]) {
     setRows(list)
     setUsedTags((prev) => {
       const tags = new Set(prev)
@@ -512,8 +566,7 @@ export default function Databases() {
       }
       setAssignRows([])
       setSelectedKeys([])
-      await load()
-      await loadMeta()
+      await loadInitial()
     } finally {
       setAssigning(false)
     }
@@ -629,28 +682,24 @@ export default function Databases() {
   }
 
   useEffect(() => {
-    ;(async () => {
-      await loadMeta()
-      await load()
-      if (impersonating) {
-        try {
-          const { data } = await api.get('/tenants')
-          setTenants((data.data || []).filter((t: { status?: string }) => t.status !== 'disabled'))
-        } catch {
-          setTenants([])
-        }
-      }
-    })()
+    loadInitial().finally(() => setInitLoading(false))
+    if (impersonating) {
+      api
+        .get('/tenants')
+        .then(({ data }) => setTenants((data.data || []).filter((t: { status?: string }) => t.status !== 'disabled')))
+        .catch(() => setTenants([]))
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
+    if (initLoading) return
     setActiveType((cur) => {
       if (tabs.some((t) => t.value === cur)) return cur
       return visibleTypeTabs[0]?.value || tabs[0]?.value || ''
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tabs, visibleTypeTabs])
+  }, [initLoading, tabs, visibleTypeTabs])
 
   const visibility = form.visibility === 'private' ? 'private' : 'global'
 
@@ -728,6 +777,42 @@ export default function Databases() {
               </Button>
             </>
           ) : null}
+          <Popover
+            trigger="click"
+            placement="bottomRight"
+            content={
+              <div className="db-col-setting">
+                {COLUMN_OPTIONS.filter((c) => !c.auditOnly || impersonating).map((c) => (
+                  <Checkbox
+                    key={c.key}
+                    checked={visibleColumns.includes(c.key)}
+                    disabled={FIXED_COLUMNS.has(c.key)}
+                    onChange={(e) =>
+                      updateVisibleColumns(
+                        e.target.checked
+                          ? [...visibleColumns, c.key]
+                          : visibleColumns.filter((k) => k !== c.key),
+                      )
+                    }
+                  >
+                    {c.label}
+                  </Checkbox>
+                ))}
+                <div className="db-col-setting-footer">
+                  <Button size="small" type="link" onClick={() => updateVisibleColumns(DEFAULT_COLUMNS)}>
+                    恢复默认
+                  </Button>
+                </div>
+              </div>
+            }
+          >
+            <Button
+              className="db-col-setting-btn"
+              icon={<SettingOutlined />}
+              title="自定义列表字段"
+              aria-label="自定义列表字段"
+            />
+          </Popover>
         </div>
       </div>
       {impersonating ? (
@@ -738,6 +823,7 @@ export default function Databases() {
           message={`审计中：可指定库的归属租户（单一归属）。实例地址可留在原租户；跨租户共用请用授权（只读），不要多租户共编同一行。`}
         />
       ) : null}
+      {initLoading ? null : (
       <Tabs
         className="inst-tabs inst-tabs-fixed6"
         activeKey={activeType}
@@ -788,10 +874,12 @@ export default function Databases() {
           ),
         }))}
       />
+      )}
       <div className="ops-table">
         <ResponsiveTable
           rowKey={(r) => r.id || r.db_name || ''}
           dataSource={pagedRows}
+          loading={initLoading}
           bordered
           pagination={false}
           scroll={{ y: 'calc(100% - 47px)' }}
@@ -805,28 +893,33 @@ export default function Databases() {
                 }
               : undefined
           }
-          columns={[
+          columns={([
             {
+              key: 'env',
               title: '环境',
               width: 110,
+              ellipsis: true,
               render: (_, row) => {
                 const inst = instances.find((i) => i.id === row.instance_id)
                 return resolveRowEnv(row, inst) || '—'
               },
             },
             {
+              key: 'domains',
               title: '绑定域名',
               width: 200,
+              ellipsis: true,
               render: (_, row) => {
                 const inst = instances.find((i) => i.id === row.instance_id)
                 const list = resolveRowDomains(row, inst)
                 return list.length ? list.join(', ') : '—'
               },
             },
-            { title: '库名', dataIndex: 'db_name', width: 140 },
+            { key: 'db_name', title: '库名', dataIndex: 'db_name', width: 140, ellipsis: true },
             ...(impersonating
               ? [
                   {
+                    key: 'tenant',
                     title: '所属租户',
                     width: 120,
                     render: (_: unknown, row: DatabaseRow) => {
@@ -838,41 +931,49 @@ export default function Databases() {
                 ]
               : []),
             {
+              key: 'tags',
               title: '标签',
               width: 140,
-              render: (_, row) => {
-                const list = row.tags || []
-                if (!list.length) return '—'
-                return list.map((t) => (
-                  <Tag key={t} className="cell-tag">
-                    {t}
-                  </Tag>
-                ))
-              },
+              ellipsis: true,
+              render: (_, row) => (row.tags || []).join(', ') || '—',
             },
             {
+              key: 'visibility',
               title: '范围',
               width: 80,
               render: (_, row) => (row.visibility === 'private' ? '私有' : '全局'),
             },
             {
+              key: 'access_users',
               title: '可访问用户',
               width: 140,
+              ellipsis: true,
               render: (_, row) =>
                 row.visibility === 'private' ? (row.access_users || []).join(',') || '—' : '全部',
             },
             {
+              key: 'role_ids',
               title: '绑定角色',
               width: 140,
+              ellipsis: true,
               render: (_, row) => (row.visibility === 'private' ? roleNames(row.role_ids) || '—' : '—'),
             },
-            { title: '实例', width: 120, render: (_, row) => instanceName(row.instance_id, row.instance_name) },
             {
+              key: 'instance',
+              title: '实例',
+              width: 120,
+              ellipsis: true,
+              render: (_, row) => instanceName(row.instance_id, row.instance_name),
+            },
+            {
+              key: 'approvers',
               title: '审批人',
               width: 120,
+              ellipsis: true,
               render: (_, row) => (row.approvers || []).join(','),
             },
             {
+              key: 'actions',
               title: '操作',
               width: impersonating ? 280 : 160,
               fixed: 'right',
@@ -894,7 +995,7 @@ export default function Databases() {
                 </Space>
               ),
             },
-          ]}
+          ] as ColumnsType<DatabaseRow>).filter((c) => visibleColumns.includes(String(c.key)))}
         />
       </div>
       <div className="pager">
