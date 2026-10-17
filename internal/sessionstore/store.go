@@ -155,7 +155,7 @@ func (s *Store) sessionTTL() time.Duration {
 	return time.Duration(h) * time.Hour
 }
 
-// Create 登录：先写 Redis。max_sessions=1 时清空旧会话。
+// Create 登录：同一账号只保留最新会话，写入前清空该用户旧 Hash。
 func (s *Store) Create(ctx context.Context, sess Session) error {
 	cli := s.client()
 	if cli == nil {
@@ -177,9 +177,7 @@ func (s *Store) Create(ctx context.Context, sess Session) error {
 		sess.ExpireAt = now.Add(ttl).UTC().Format(time.RFC3339)
 	}
 	uk := s.userKey(sess.UserID)
-	if s.MaxSessionsPerUser() == 1 {
-		_ = cli.Del(ctx, uk).Err()
-	}
+	_ = cli.Del(ctx, uk).Err()
 	b, err := json.Marshal(sess)
 	if err != nil {
 		return err

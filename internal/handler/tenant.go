@@ -43,6 +43,7 @@ func (h *TenantHandler) bindSession(c *gin.Context, u *store.User, tid, jti stri
 	if err := h.Sessions.Create(c.Request.Context(), sess); err != nil {
 		return err
 	}
+	_ = h.Store.MarkUserSessionsOfflineAll(u.ID, "replaced_by_login", u.ID)
 	if err := h.Store.UpsertUserSessionOnline(&store.UserSession{
 		UserID: u.ID, Username: u.Username, TenantID: tid, JTI: jti,
 		IP: sess.IP, UserAgent: sess.UA, Kind: kind,

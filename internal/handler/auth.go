@@ -1626,6 +1626,7 @@ func (h *AuthHandler) issueLoginToken(c *gin.Context, u *store.User, tid, tcode 
 		return "", fmt.Errorf("写入登录会话失败: %w", err)
 	}
 	if h.Store != nil {
+		_ = h.Store.MarkUserSessionsOfflineAll(u.ID, "replaced_by_login", u.ID)
 		if err := h.Store.UpsertUserSessionOnline(&store.UserSession{
 			UserID: u.ID, Username: u.Username, TenantID: tid, JTI: jti,
 			IP: sess.IP, UserAgent: sess.UA, Kind: kind,

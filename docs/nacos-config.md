@@ -141,7 +141,8 @@ db:
   dsn: "postgres://USER:PASSWORD@HOST:5432/db_autosql?sslmode=disable"
 
 # 平台登录会话 Redis（与实例 Redis 工单无关；默认可不配=关闭）
-# 启用后：登录按用户维度写入 Hash user:{uid}；管理端「登录会话」以 Redis 为准
+# 启用后：登录按用户维度写入 Hash user:{uid}；管理端「登录会话」以 Redis 为准。
+# 同一账号同时只保留最新一次登录：新登录会清空该用户旧会话，旧 token 下次请求返回会话失效。
 redis:
   enabled: true
   addr: "10.x.x.x:6379"
@@ -151,7 +152,7 @@ redis:
   session_ttl_hours: 24      # 空则回退 app.jwt_ttl_hours
   sliding_expire: false
   fail_mode: closed          # closed=有 jti 时必须 Redis 命中；open=仅验 JWT
-  max_sessions_per_user: 0   # 0=允许多端；1=新登录踢旧
+  max_sessions_per_user: 1   # 已固定为同一账号只保留最新登录（配置项保留兼容，运行时始终踢旧）
   reconcile_interval_min: 5
 
 # 服务监听（启动时 Load 合并后再 Listen；改端口后需重启）

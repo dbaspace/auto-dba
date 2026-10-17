@@ -62,7 +62,7 @@ redis:
   # session_ttl_hours: 24   # 空则回退 app.jwt_ttl_hours
   sliding_expire: false
   fail_mode: closed         # closed=鉴权要求 Redis 会话；open=仅验 JWT
-  max_sessions_per_user: 0  # 0=多端；1=新登录踢旧
+  max_sessions_per_user: 1  # 同一账号只保留最新登录；新登录踢掉该账号其它会话
   reconcile_interval_min: 5
 
 cdc:
