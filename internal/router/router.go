@@ -262,6 +262,8 @@ func Init(e *gin.Engine, d Deps) {
 	secured.POST("/databases", requireURN(store.URNDatabasesCreate), d.DB.Create)
 	secured.POST("/databases/batch", requireURN(store.URNDatabasesCreate), d.DB.CreateBatch)
 	secured.POST("/databases/assign-tenant", requireURN(store.URNTenantsImpersonate), d.DB.AssignTenantBatch)
+	secured.POST("/databases/batch-approvers", requireURN(store.URNDatabasesEdit), d.DB.BatchApprovers)
+	secured.POST("/databases/batch-access-users", requireURN(store.URNDatabasesEdit), d.DB.BatchAccessUsers)
 	secured.GET("/databases/:id/tables", d.DB.ListTables)
 	secured.PUT("/databases/:id", requireURN(store.URNDatabasesEdit), d.DB.Update)
 	secured.POST("/databases/:id/assign-tenant", requireURN(store.URNTenantsImpersonate), d.DB.AssignTenant)

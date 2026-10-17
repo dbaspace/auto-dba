@@ -3,7 +3,7 @@ import { Alert, Button, Checkbox, Dropdown, Input, Modal, Pagination, Radio, Sel
 import ResponsiveTable from '../../components/ResponsiveTable'
 import api from '../../api/request'
 import Auth from '../../components/Auth'
-import { Perm } from '../../hooks/usePermission'
+import { Perm, usePermission } from '../../hooks/usePermission'
 import DbTypeIcon from '../../components/DbTypeIcon'
 import { useAppSelector } from '../../store'
 import { splitTypeTabsByDataCount } from '../../utils/typeTabs'
@@ -155,6 +155,13 @@ export default function Databases() {
   const [assignTid, setAssignTid] = useState('')
   const [assigning, setAssigning] = useState(false)
   const [selectedKeys, setSelectedKeys] = useState<React.Key[]>([])
+  const { hasUrn } = usePermission()
+  const canEdit = hasUrn(Perm.databases.edit)
+  const [batchMode, setBatchMode] = useState<'approvers' | 'access' | null>(null)
+  const [batchRows, setBatchRows] = useState<DatabaseRow[]>([])
+  const [batchUsers, setBatchUsers] = useState<string[]>([])
+  const [batchOptions, setBatchOptions] = useState<string[]>([])
+  const [batchSaving, setBatchSaving] = useState(false)
 
   const knownTypes = useMemo(() => new Set(typeOptions.map((t) => t.value)), [typeOptions])
 
@@ -512,6 +519,103 @@ export default function Databases() {
     }
   }
 
+  function rowTenantId(row: DatabaseRow) {
+    const inst = instances.find((i) => i.id === row.instance_id)
+    return String(row.tenant_id || inst?.tenant_id || currentTenantId || '')
+  }
+
+  function sameList(lists: string[][]) {
+    if (!lists.length) return [] as string[]
+    const key = (l: string[]) => [...l].sort().join('\u0000')
+    const first = key(lists[0])
+    return lists.every((l) => key(l) === first) ? [...lists[0]] : []
+  }
+
+  async function openBatch(mode: 'approvers' | 'access') {
+    const set = new Set(selectedKeys.map(String))
+    const list = filteredRows.filter((r) => r.id && set.has(r.id))
+    if (!list.length) {
+      message.warning('请先勾选库')
+      return
+    }
+    const tids = new Set(list.map(rowTenantId))
+    if (tids.size > 1) {
+      message.warning('请选择同一租户下的库')
+      return
+    }
+    if (mode === 'access') {
+      const globals = list.filter((r) => r.visibility !== 'private')
+      if (globals.length) {
+        message.warning(`仅可对私有库批量设置可访问用户，所选含全局库：${globals.map((r) => r.db_name).join('、')}`)
+        return
+      }
+    }
+    const tid = [...tids][0]
+    try {
+      const { data } = await api.get('/tenant-acl-options', { params: tid ? { tenant_id: tid } : {} })
+      const names = ((data.data || {}).users || []).map((u: any) => u.username || u.name).filter(Boolean)
+      setBatchOptions([...new Set(names as string[])])
+    } catch {
+      return
+    }
+    setBatchUsers(sameList(list.map((r) => (mode === 'approvers' ? r.approvers : r.access_users) || [])))
+    setBatchRows(list)
+    setBatchMode(mode)
+  }
+
+  function closeBatch() {
+    if (batchSaving) return
+    setBatchMode(null)
+    setBatchRows([])
+    setBatchUsers([])
+  }
+
+  async function confirmBatch() {
+    if (!batchMode || !batchRows.length) return
+    const users = batchUsers.map((s) => String(s).trim()).filter(Boolean)
+    if (batchMode === 'access' && !users.length) {
+      const noRole = batchRows.filter((r) => !(r.role_ids || []).length)
+      if (noRole.length) {
+        message.warning(`私有库须至少保留一个可访问用户或角色：${noRole.map((r) => r.db_name).join('、')}`)
+        return
+      }
+    }
+    const ids = batchRows.map((r) => r.id!).filter(Boolean)
+    const url = batchMode === 'approvers' ? '/databases/batch-approvers' : '/databases/batch-access-users'
+    const body = batchMode === 'approvers' ? { ids, approvers: users } : { ids, access_users: users }
+    const label = batchMode === 'approvers' ? '审核人' : '可访问用户'
+    setBatchSaving(true)
+    try {
+      const { data } = await api.post(url, body)
+      const okCount = Number(data.ok_count || 0)
+      const failCount = Number(data.fail_count || 0)
+      const failed: { id?: string; db_name?: string; message?: string }[] = data.failed || []
+      if (failCount === 0) {
+        message.success(`已为 ${okCount} 个库设置${label}`)
+      } else {
+        Modal.warning({
+          title: `设置${label}完成：成功 ${okCount}，失败 ${failCount}`,
+          content: (
+            <ul style={{ margin: 0, paddingLeft: 18, maxHeight: 240, overflow: 'auto' }}>
+              {failed.map((f) => (
+                <li key={f.id || f.db_name}>
+                  {f.db_name || f.id}：{f.message || '失败'}
+                </li>
+              ))}
+            </ul>
+          ),
+        })
+      }
+      setBatchMode(null)
+      setBatchRows([])
+      setBatchUsers([])
+      setSelectedKeys([])
+      await load()
+    } finally {
+      setBatchSaving(false)
+    }
+  }
+
   function remove(row: DatabaseRow) {
     Modal.confirm({
       title: '提示',
@@ -614,6 +718,16 @@ export default function Databases() {
               </Button>
             </Auth>
           ) : null}
+          {canEdit ? (
+            <>
+              <Button disabled={!selectedKeys.length} onClick={() => openBatch('approvers')}>
+                批量设置审核人{selectedKeys.length ? `（${selectedKeys.length}）` : ''}
+              </Button>
+              <Button disabled={!selectedKeys.length} onClick={() => openBatch('access')}>
+                批量设置可访问用户{selectedKeys.length ? `（${selectedKeys.length}）` : ''}
+              </Button>
+            </>
+          ) : null}
         </div>
       </div>
       {impersonating ? (
@@ -683,7 +797,7 @@ export default function Databases() {
           scroll={{ y: 'calc(100% - 47px)' }}
           style={{ height: '100%' }}
           rowSelection={
-            impersonating
+            impersonating || canEdit
               ? {
                   selectedRowKeys: selectedKeys,
                   onChange: (keys) => setSelectedKeys(keys),
@@ -832,6 +946,37 @@ export default function Databases() {
             value: t.id,
             label: `${t.name || t.code || t.id}${t.id === currentTenantId ? '（当前审计）' : ''}`,
           }))}
+        />
+      </Modal>
+      <Modal
+        open={!!batchMode}
+        title={`${batchMode === 'approvers' ? '批量设置审核人' : '批量设置可访问用户'}（${batchRows.length}）`}
+        okText="保存"
+        confirmLoading={batchSaving}
+        onCancel={closeBatch}
+        onOk={confirmBatch}
+        destroyOnClose
+      >
+        <p style={{ marginBottom: 8 }}>
+          以下库的{batchMode === 'approvers' ? '审核人' : '可访问用户'}将被<strong>覆盖</strong>为所选名单，候选人仅限该租户成员。
+          {batchMode === 'approvers' ? '留空则清空库级审核人，工单回退使用实例审核人。' : '库的可见范围与绑定角色不变。'}
+        </p>
+        <ul style={{ margin: '0 0 12px', paddingLeft: 18, maxHeight: 160, overflow: 'auto' }}>
+          {batchRows.map((r) => (
+            <li key={r.id}>
+              {r.db_name}（{instanceName(r.instance_id, r.instance_name)}）
+            </li>
+          ))}
+        </ul>
+        <Select
+          mode="multiple"
+          style={{ width: '100%' }}
+          placeholder={batchMode === 'approvers' ? '选择审核人' : '选择可访问用户'}
+          value={batchUsers}
+          onChange={(v) => setBatchUsers(v)}
+          options={batchOptions.map((u) => ({ value: u, label: u }))}
+          showSearch
+          optionFilterProp="label"
         />
       </Modal>
       <Modal

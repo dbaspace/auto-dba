@@ -1328,6 +1328,139 @@ func (h *DatabaseHandler) Update(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": it})
 }
 
+type batchDBACLReq struct {
+	IDs         []string `json:"ids"`
+	Approvers   []string `json:"approvers"`
+	AccessUsers []string `json:"access_users"`
+}
+
+type batchDBFail struct {
+	ID      string `json:"id"`
+	DBName  string `json:"db_name,omitempty"`
+	Message string `json:"message"`
+}
+
+// loadBatchDatabases 加载勾选库并确认同属一个租户，返回库列表与该租户 ID。
+func (h *DatabaseHandler) loadBatchDatabases(c *gin.Context, rawIDs []string) ([]store.Database, string, bool) {
+	ids := uniqueTrimmedNames(rawIDs)
+	if len(ids) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "请先勾选库"})
+		return nil, "", false
+	}
+	auditing := platformAdminAuditing(h.Store, c)
+	scope := effectiveListTenantID(h.Store, c)
+	out := make([]store.Database, 0, len(ids))
+	tenant := ""
+	for _, id := range ids {
+		var it *store.Database
+		var err error
+		if auditing {
+			it, err = h.Store.GetDatabase(id)
+		} else {
+			it, err = h.Store.GetDatabaseInTenant(id, scope)
+		}
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+			return nil, "", false
+		}
+		if it == nil {
+			c.JSON(http.StatusNotFound, gin.H{"message": "库未登记或无权限: " + id})
+			return nil, "", false
+		}
+		tid := strings.TrimSpace(it.TenantID)
+		if tid == "" {
+			if inst, _ := h.Store.GetInstance(it.InstanceID); inst != nil {
+				tid = strings.TrimSpace(inst.TenantID)
+			}
+		}
+		if tid == "" {
+			tid = middleware.TenantID(c)
+		}
+		if tenant == "" {
+			tenant = tid
+		} else if tid != tenant {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "请选择同一租户下的库"})
+			return nil, "", false
+		}
+		out = append(out, *it)
+	}
+	return out, tenant, true
+}
+
+func (h *DatabaseHandler) saveBatch(c *gin.Context, list []store.Database, apply func(it *store.Database) string) {
+	okCount := 0
+	failed := make([]batchDBFail, 0)
+	user := c.GetString(middleware.CtxUsername)
+	for i := range list {
+		before := list[i]
+		it := list[i]
+		if msg := apply(&it); msg != "" {
+			failed = append(failed, batchDBFail{ID: it.ID, DBName: it.DBName, Message: msg})
+			continue
+		}
+		if err := h.Store.UpdateDatabase(&it); err != nil {
+			failed = append(failed, batchDBFail{ID: it.ID, DBName: it.DBName, Message: err.Error()})
+			continue
+		}
+		okCount++
+		_ = h.Store.AppendCmdbAudit(user, "update", "database", it.ID, "api", before, it)
+	}
+	c.JSON(http.StatusOK, gin.H{"ok_count": okCount, "fail_count": len(failed), "failed": failed})
+}
+
+// BatchApprovers POST /databases/batch-approvers — 覆盖所选库的审核人（须为同一租户成员）。
+func (h *DatabaseHandler) BatchApprovers(c *gin.Context) {
+	var req batchDBACLReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "参数无效"})
+		return
+	}
+	list, tid, ok := h.loadBatchDatabases(c, req.IDs)
+	if !ok {
+		return
+	}
+	approvers := uniqueTrimmedNames(req.Approvers)
+	if err := requireTenantMemberUsernames(h.Store, tid, approvers); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	h.saveBatch(c, list, func(it *store.Database) string {
+		it.Approvers = approvers
+		return ""
+	})
+}
+
+// BatchAccessUsers POST /databases/batch-access-users — 覆盖所选私有库的可访问用户（须为同一租户成员）。
+func (h *DatabaseHandler) BatchAccessUsers(c *gin.Context) {
+	var req batchDBACLReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "参数无效"})
+		return
+	}
+	list, tid, ok := h.loadBatchDatabases(c, req.IDs)
+	if !ok {
+		return
+	}
+	for _, it := range list {
+		if !strings.EqualFold(strings.TrimSpace(it.Visibility), "private") {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "仅可对私有库批量设置可访问用户：" + it.DBName + " 为全局库"})
+			return
+		}
+	}
+	users := uniqueTrimmedNames(req.AccessUsers)
+	if err := requireTenantMemberUsernames(h.Store, tid, users); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	h.saveBatch(c, list, func(it *store.Database) string {
+		if len(users) == 0 && len(uniqueTrimmedNames(it.RoleIDs)) == 0 {
+			return "私有库须至少保留一个可访问用户或角色"
+		}
+		it.AccessUsers = users
+		return ""
+	})
+}
+
 func (h *DatabaseHandler) Delete(c *gin.Context) {
 	id := c.Param("id")
 	exist, err := h.Store.GetDatabaseInTenant(id, effectiveListTenantID(h.Store, c))
