@@ -21,7 +21,7 @@ import {
   PoweroffOutlined,
   LaptopOutlined,
 } from '@ant-design/icons'
-import api from '../api/request'
+import api, { beginLogout } from '../api/request'
 import { useAppDispatch } from '../store'
 import { patchUser, clearAuth, CurrentUser } from '../store/authSlice'
 import { resetTabs } from '../store/tabsSlice'
@@ -156,6 +156,7 @@ export default function UserAccountMenu({ user }: Props) {
       okText: '确定',
       cancelText: '取消',
       async onOk() {
+        beginLogout()
         try {
           await api.post('/auth/logout', {}, { silent: true })
         } catch {

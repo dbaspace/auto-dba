@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import { useAppDispatch } from '../store'
 import { clearAuth } from '../store/authSlice'
 import { resetTabs } from '../store/tabsSlice'
+import { beginLogout } from '../api/request'
 
 const LAST_ACTIVITY_KEY = 'last_activity_at'
 const CHECK_MS = 15_000
@@ -44,6 +45,7 @@ export default function useIdleLogout(timeoutMin: number | undefined | null) {
     const logout = () => {
       if (loggingOut.current) return
       loggingOut.current = true
+      beginLogout()
       clearLastActivity()
       dispatch(clearAuth())
       dispatch(resetTabs({}))

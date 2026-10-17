@@ -10,6 +10,17 @@ declare module 'axios' {
 
 const client = axios.create({ baseURL: '/api/v1', timeout: 30000 })
 
+// 主动退出或已提示过会话失效后，后续并发 401 不再弹窗
+let authEnded = false
+
+export function beginLogout() {
+  authEnded = true
+}
+
+function onLoginPage() {
+  return location.hash.startsWith('#/login') || location.hash === '' || location.hash === '#/'
+}
+
 function isBenignCdcMiss(url: string | undefined, status: number | undefined): boolean {
   if (status !== 404) return false
   return /\/cdc-sync\/tasks\/(undefined|null|create)(\/|$)/.test(String(url || ''))
@@ -17,7 +28,10 @@ function isBenignCdcMiss(url: string | undefined, status: number | undefined): b
 
 client.interceptors.request.use((cfg) => {
   const token = localStorage.getItem('token')
-  if (token) cfg.headers.Authorization = `Bearer ${token}`
+  if (token) {
+    cfg.headers.Authorization = `Bearer ${token}`
+    if (authEnded && !onLoginPage()) authEnded = false
+  }
   try {
     const u = JSON.parse(localStorage.getItem('user') || '{}')
     const tid = u?.current_tenant?.id || u?.tenant_id
@@ -52,9 +66,11 @@ client.interceptors.response.use(
       localStorage.removeItem('token')
       localStorage.removeItem('user')
       sessionStorage.removeItem('auto-dba-query-workspace')
-      if (location.hash.includes('/login')) {
+      const isLoginCall = /\/auth\/login/.test(String(err.config?.url || ''))
+      if (isLoginCall) {
         message.error(msg)
-      } else {
+      } else if (!authEnded && !onLoginPage()) {
+        authEnded = true
         message.error(msg)
         location.hash = '#/login'
       }
