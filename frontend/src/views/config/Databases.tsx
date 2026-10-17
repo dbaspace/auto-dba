@@ -360,11 +360,10 @@ export default function Databases() {
   }
 
   async function loadInitial() {
-    const [instRes, argRes, envRes, aclRes, dbRes] = await Promise.all([
+    const [instRes, argRes, envRes, dbRes] = await Promise.all([
       api.get('/instances'),
       api.get('/global-args'),
       api.get('/environments').catch(() => ({ data: { data: [] } })),
-      api.get('/tenant-acl-options', aclParams()).catch(() => ({ data: { data: {} } })),
       api.get('/databases'),
     ])
     setInstances(instRes.data.data || [])
@@ -373,7 +372,6 @@ export default function Databases() {
         .map((e: any) => ({ code: String(e.code || '').trim(), name: String(e.name || e.code || '').trim() }))
         .filter((e: { code: string }) => e.code),
     )
-    applyAclOptions(aclRes.data.data || {})
     const raw = (argRes.data.data || []).find((a: any) => a.key === 'ticket_instance_types')?.value || ''
     setTypeOptions(parseInstanceTypes(raw))
     applyRows(dbRes.data.data || [])

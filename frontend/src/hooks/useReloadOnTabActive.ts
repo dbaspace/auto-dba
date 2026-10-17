@@ -47,6 +47,8 @@ export function shouldRemountOnTabActivate(path: string): boolean {
   ) {
     return false
   }
+  // 已登记库：元数据列表保活，避免顶栏切 Tab 反复 loadInitial
+  if (p === '/config/databases') return false
   // 工作台、工单、配置、CMDB、告警、运维列表等
   if (p === '/ops/dashboard' || p === '/metadata/database/search/dashboard') return true
   if (p === '/ops/tickets' || /^\/ops\/tickets\/[^/]+$/.test(p)) return true

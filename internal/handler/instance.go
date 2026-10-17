@@ -1039,15 +1039,15 @@ func (h *DatabaseHandler) enrichDatabaseTenants(list []store.Database) {
 		}
 	}
 	instCache := map[string]*store.Instance{}
+	if all, err := h.Store.ListInstances("", ""); err == nil {
+		for i := range all {
+			it := &all[i]
+			instCache[it.ID] = it
+		}
+	}
 	for i := range list {
 		iid := list[i].InstanceID
 		inst := instCache[iid]
-		if inst == nil && iid != "" {
-			inst, _ = h.Store.GetInstance(iid)
-			if inst != nil {
-				instCache[iid] = inst
-			}
-		}
 		if list[i].TenantID == "" && inst != nil {
 			list[i].TenantID = inst.TenantID
 		}
