@@ -1625,8 +1625,11 @@ func (h *TicketHandler) executeRedisTicket(ctx context.Context, it *store.Issue)
 		}
 		password = plain
 	}
-	host := resolveInstanceHost(inst, it.Domain)
-	opt := redisquery.Options{Username: inst.Username, Password: password}
+	host, err := redisquery.ResolveHost(inst, it.Domain)
+	if err != nil {
+		return h.persistExec(it, &ticketexec.Result{Success: false, Message: err.Error()})
+	}
+	opt := redisquery.Options{Username: inst.Username, Password: password, Host: host}
 	started := time.Now().UTC().Format(time.RFC3339)
 	res := &ticketexec.Result{StartedAt: started, Engine: "redis", Success: true}
 	for i, cmd := range cmds {

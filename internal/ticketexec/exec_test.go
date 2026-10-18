@@ -11,11 +11,15 @@ import (
 
 func TestShouldAutoRun(t *testing.T) {
 	if !ShouldAutoRun(store.IssueTypeDDL) || !ShouldAutoRun("dml") || !ShouldAutoRun(store.IssueTypeCreateDB) || !ShouldAutoRun(store.IssueTypeHA) ||
-		!ShouldAutoRun(store.IssueTypeSrCluster) || !ShouldAutoRun(store.IssueTypeDbDeploy) || !ShouldAutoRun(store.IssueTypeResourceApply) {
-		t.Fatal("ddl/dml/createdb/ha/sr_cluster/db_deploy/resource_apply should auto run")
+		!ShouldAutoRun(store.IssueTypeSrCluster) || !ShouldAutoRun(store.IssueTypeDbDeploy) || !ShouldAutoRun(store.IssueTypeResourceApply) ||
+		!ShouldAutoRun(store.IssueTypeRedis) {
+		t.Fatal("ddl/dml/createdb/ha/sr_cluster/db_deploy/resource_apply/redis should auto run")
 	}
-	if ShouldAutoRun(store.IssueTypeDQL) {
-		t.Fatal("dql should not auto run")
+	for _, typ := range []string{store.IssueTypeDQL, store.IssueTypeDCL, store.IssueTypeKafka, store.IssueTypeArchive,
+		store.IssueTypeFlashback, store.IssueTypeCDC, store.IssueTypeMigration} {
+		if ShouldAutoRun(typ) {
+			t.Fatalf("%s should not auto run", typ)
+		}
 	}
 }
 

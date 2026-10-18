@@ -531,7 +531,7 @@ export default function TicketDetail() {
     if (s === 'approved')
       return isDQL
         ? '点击下载'
-        : isFlashback || isCDC || isMigration || isCreateDB
+        : isFlashback || isCDC || isMigration || isCreateDB || item?.issue_type === 'redis'
           ? item?.scheduled_at
             ? '等待定时执行'
             : '已自动执行'
