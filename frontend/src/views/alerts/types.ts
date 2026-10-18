@@ -23,6 +23,24 @@ export type AlertItem = {
   updated_at: string
 }
 
+/** 告警历史一行：每次外发通知一行（notify），结案一行（resolve）；id 为父告警 id。 */
+export type AlertHistoryRow = AlertItem & {
+  event_id: string
+  kind: 'notify' | 'resolve'
+  event_at: string
+  event_detail: string
+  operator: string
+  notify_seq?: number
+}
+
+export function alertLocation(labels?: Record<string, string>): { host: string; mount: string } {
+  const l = labels || {}
+  return {
+    host: l.hostname || l.instance || l.host || '',
+    mount: l.mountpoint || l.path || l.device || '',
+  }
+}
+
 export type AlertTier = {
   op: '>=' | '>' | '<=' | '<' | string
   value: number

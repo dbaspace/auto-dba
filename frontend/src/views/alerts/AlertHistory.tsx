@@ -3,10 +3,10 @@ import { Button, Card, Col, DatePicker, Drawer, Row, Select, Space, Statistic, T
 import dayjs, { type Dayjs } from 'dayjs'
 import api from '../../api/request'
 import ResponsiveTable from '../../components/ResponsiveTable'
-import { AlertItem, HANDLE_LABEL, SEV_COLOR, durationText } from './types'
+import { type AlertHistoryRow, HANDLE_LABEL, SEV_COLOR, alertLocation, durationText } from './types'
 
 export default function AlertHistory() {
-  const [rows, setRows] = useState<AlertItem[]>([])
+  const [rows, setRows] = useState<AlertHistoryRow[]>([])
   const [loading, setLoading] = useState(false)
   const [severity, setSeverity] = useState<string>()
   const [range, setRange] = useState<[Dayjs, Dayjs] | null>([dayjs().subtract(7, 'day'), dayjs()])
@@ -36,25 +36,45 @@ export default function AlertHistory() {
     { title: '级别', dataIndex: 'severity', width: 70, render: (v: string) => <Tag color={SEV_COLOR[v]}>{v}</Tag> },
     {
       title: '告警内容', key: 't',
-      render: (_: unknown, a: AlertItem) => (
+      render: (_: unknown, a: AlertHistoryRow) => (
         <div>
-          <div style={{ fontWeight: 600 }}>{a.title}</div>
+          <div style={{ fontWeight: 600 }}>
+            {a.kind === 'resolve' ? <Tag color="green">恢复</Tag> : <Tag color="orange">通知</Tag>}
+            {a.title}
+          </div>
           <Typography.Text type="secondary" ellipsis={{ tooltip: a.id }} style={{ fontSize: 12, maxWidth: '100%', display: 'inline-block' }}>
-            {a.id}{a.cluster ? ` · ${a.cluster}` : ''}
+            告警 {a.id.slice(0, 8)}{a.cluster ? ` · ${a.cluster}` : ''}
           </Typography.Text>
         </div>
       ),
     },
-    { title: '服务', dataIndex: 'service', width: 140, render: (v: string) => v ? <Tag>{v}</Tag> : '—' },
-    { title: '持续', width: 100, render: (_: unknown, a: AlertItem) => durationText(a.started_at) },
     {
-      title: '恢复时间', width: 160,
-      render: (_: unknown, a: AlertItem) => a.resolved_at ? dayjs(a.resolved_at).format('YYYY-MM-DD HH:mm') : '—',
+      title: '主机 / 目录', key: 'loc', width: 200,
+      render: (_: unknown, a: AlertHistoryRow) => {
+        const { host, mount } = alertLocation(a.labels)
+        if (!host && !mount) return '—'
+        const text = [host, mount].filter(Boolean).join(' · ')
+        return <Typography.Text ellipsis={{ tooltip: text }} style={{ maxWidth: 190 }}>{text}</Typography.Text>
+      },
+    },
+    { title: '服务', dataIndex: 'service', width: 120, render: (v: string) => v ? <Tag>{v}</Tag> : '—' },
+    {
+      title: '时间', dataIndex: 'event_at', width: 150,
+      render: (v: string) => v ? dayjs(v).format('YYYY-MM-DD HH:mm') : '—',
+    },
+    {
+      title: '第几次', width: 80,
+      render: (_: unknown, a: AlertHistoryRow) => a.kind === 'notify' && a.notify_seq ? `第 ${a.notify_seq} 次` : '—',
+    },
+    { title: '持续', width: 90, render: (_: unknown, a: AlertHistoryRow) => durationText(a.started_at) },
+    {
+      title: '恢复时间', width: 150,
+      render: (_: unknown, a: AlertHistoryRow) => a.resolved_at ? dayjs(a.resolved_at).format('YYYY-MM-DD HH:mm') : '—',
     },
     { title: '负责人', dataIndex: 'owner', width: 100, render: (v: string) => v || '—' },
     {
       title: '状态', width: 90,
-      render: (_: unknown, a: AlertItem) => {
+      render: (_: unknown, a: AlertHistoryRow) => {
         const h = HANDLE_LABEL[a.handle] || { label: a.handle, color: 'default' }
         return <Tag color={h.color}>{h.label}</Tag>
       },
@@ -65,7 +85,7 @@ export default function AlertHistory() {
     <div style={{ padding: 16 }}>
       <Typography.Title level={4} style={{ marginTop: 0 }}>历史告警</Typography.Title>
       <Row gutter={12} style={{ marginBottom: 16 }}>
-        <Col xs={12} md={6}><Card size="small"><Statistic title="已恢复" value={rows.length} suffix="条" /></Card></Col>
+        <Col xs={12} md={6}><Card size="small"><Statistic title="历史记录" value={rows.length} suffix="条" /></Card></Col>
         <Col xs={12} md={6}><Card size="small"><Statistic title="时间范围" value={range ? `${range[0].format('MM-DD')} ~ ${range[1].format('MM-DD')}` : '全部'} /></Card></Col>
       </Row>
       <Card size="small">
@@ -96,7 +116,7 @@ export default function AlertHistory() {
             }
           }}>生成复盘</Button>
         </Space>
-        <ResponsiveTable rowKey="id" loading={loading} dataSource={rows} columns={columns} pagination={{ pageSize: 20 }} />
+        <ResponsiveTable rowKey="event_id" loading={loading} dataSource={rows} columns={columns} pagination={{ pageSize: 20 }} />
       </Card>
       <Drawer open={reportOpen} onClose={() => setReportOpen(false)} title="告警复盘报告" width={720}
         extra={<Button onClick={() => {

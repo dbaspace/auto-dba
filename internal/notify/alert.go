@@ -449,12 +449,38 @@ func FormatAlertText(p AlertPayload) string {
 	} else if s := strings.TrimSpace(p.ImpactSummary); s != "" {
 		ctx = " | " + s
 	}
-	if p.Event == "resolve" {
-		return fmt.Sprintf("[%s] 告警已恢复 %s value=%s thr=%s%s%s",
-			p.Severity, p.Title, p.CurValue, p.Threshold, extra, ctx)
+	host, mount := alertLocation(p)
+	loc := ""
+	if host != "" {
+		loc += " host=" + host
 	}
-	return fmt.Sprintf("[%s] %s %s value=%s thr=%s handle=%s%s%s",
-		p.Severity, p.Event, p.Title, p.CurValue, p.Threshold, p.Handle, extra, ctx)
+	if mount != "" {
+		loc += " mount=" + mount
+	}
+	if p.Event == "resolve" {
+		return fmt.Sprintf("[%s] 告警已恢复 %s value=%s thr=%s%s%s%s",
+			p.Severity, p.Title, p.CurValue, p.Threshold, loc, extra, ctx)
+	}
+	return fmt.Sprintf("[%s] %s %s value=%s thr=%s%s handle=%s%s%s",
+		p.Severity, p.Event, p.Title, p.CurValue, p.Threshold, loc, p.Handle, extra, ctx)
+}
+
+// alertLocation 从标签取主机与挂载目录（磁盘类告警）。
+func alertLocation(p AlertPayload) (host, mount string) {
+	pick := func(keys ...string) string {
+		for _, k := range keys {
+			if v := strings.TrimSpace(p.Labels[k]); v != "" {
+				return v
+			}
+		}
+		return ""
+	}
+	host = pick("hostname", "instance", "host")
+	if host == "" {
+		host = strings.TrimSpace(p.InstanceID)
+	}
+	mount = pick("mountpoint", "path", "device")
+	return host, mount
 }
 
 // FormatAlertMarkdown 企微 markdown。
@@ -487,8 +513,16 @@ func FormatAlertMarkdown(p AlertPayload) string {
 	if p.Event == "resolve" {
 		title = "已恢复 · " + p.Title
 	}
-	return fmt.Sprintf("## [%s] %s\n> 事件: <font color=\"%s\">%s</font>\n> 服务: %s · 集群: %s\n> 当前值: %s / 阈值: %s\n> 处理: %s%s%s",
-		p.Severity, title, color, eventLabel, nz(p.Service, "-"), nz(p.Cluster, "-"),
+	locLines := ""
+	host, mount := alertLocation(p)
+	if host != "" {
+		locLines += "\n> 主机: " + host
+	}
+	if mount != "" {
+		locLines += "\n> 挂载: " + mount
+	}
+	return fmt.Sprintf("## [%s] %s\n> 事件: <font color=\"%s\">%s</font>\n> 服务: %s · 集群: %s%s\n> 当前值: %s / 阈值: %s\n> 处理: %s%s%s",
+		p.Severity, title, color, eventLabel, nz(p.Service, "-"), nz(p.Cluster, "-"), locLines,
 		nz(p.CurValue, "-"), nz(p.Threshold, "-"), nz(p.Handle, "-"), group, ctxLine)
 }
 

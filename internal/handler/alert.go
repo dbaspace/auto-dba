@@ -38,6 +38,15 @@ func (h *AlertHandler) List(c *gin.Context) {
 		Since:    strings.TrimSpace(c.Query("since")),
 		TenantID: middleware.TenantID(c),
 	}
+	if f.Tab == "history" {
+		rows, err := h.Store.ListAlertHistoryRows(f)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"data": rows})
+		return
+	}
 	list, err := h.Store.ListAlerts(f)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
