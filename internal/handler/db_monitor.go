@@ -9,6 +9,8 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"auto-dba/internal/dbmonitor"
+	"auto-dba/internal/middleware"
+	"auto-dba/internal/store"
 )
 
 // DbMonitorHandler 数据库监控 API。
@@ -32,7 +34,7 @@ func (h *DbMonitorHandler) Instances(c *gin.Context) {
 	if dbType == "" {
 		dbType = "postgres"
 	}
-	list, err := h.Svc.ListInstancesInTenant(effectiveListTenantID(h.Svc.Store, c), dbType)
+	list, err := h.Svc.ListInstancesInTenant(h.monitorListTenantID(c), dbType)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -48,12 +50,28 @@ func (h *DbMonitorHandler) Clusters(c *gin.Context) {
 	if engine == "" {
 		engine = "starrocks"
 	}
-	list, err := h.Svc.ListClustersInTenant(effectiveListTenantID(h.Svc.Store, c), engine)
+	list, err := h.Svc.ListClustersInTenant(h.monitorListTenantID(c), engine)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": list, "message": "ok"})
+}
+
+// monitorListTenantID 监控下拉范围：平台 admin 与 dba 租户有效成员不受当前租户限制（空串 = 全平台），其余按租户。
+func (h *DbMonitorHandler) monitorListTenantID(c *gin.Context) string {
+	if h.Svc != nil && h.Svc.Store != nil {
+		uid := middleware.UserID(c)
+		if ok, err := h.Svc.Store.UserIsAdmin(uid); err == nil && ok {
+			return ""
+		}
+		if t, err := h.Svc.Store.GetTenantByCode(store.DBATenantCode); err == nil && t != nil {
+			if ok, err := h.Svc.Store.IsActiveTenantMember(t.ID, uid); err == nil && ok {
+				return ""
+			}
+		}
+	}
+	return effectiveListTenantID(h.Svc.Store, c)
 }
 
 func (h *DbMonitorHandler) Overview(c *gin.Context) {

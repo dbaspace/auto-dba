@@ -131,39 +131,62 @@ export type LegendSort = {
   dir: LegendSortDir
 }
 
-/** max/current 单列宽度（够 194.24 KiB/s / 488.40 GiB） */
+/** max/current 单列理想宽度（够 194.24 KiB/s / 488.40 GiB） */
 export const LEGEND_VAL_COL_PX = 88
-const LEGEND_VAL_GAP_PX = 8
-const LEGEND_ICON_PX = 18
-const LEGEND_PAD_PX = 8
+/** 数值列下限：必须装下表头 current（11px 等宽） */
+export const LEGEND_VAL_COL_MIN_PX = 72
+/** 与 .dbmon-legend-row 的 3 个 column-gap 一致 */
+const LEGEND_COL_GAP_PX = 6
+const LEGEND_DOT_PX = 10
+const LEGEND_NAME_MIN_PX = 56
+const LEGEND_SCROLLBAR_PX = 14
+const LEGEND_PLOT_MIN_PX = 180
 
 export type LegendLayout = {
+  /** 卡片过窄时图例改到折线下方整行，避免裁切 current */
+  stacked: boolean
   legendWidth: number
   gridRight: number
   nameWidth: number
   valColWidth: number
-  /** 顶部 max/current 排序条宽度 */
   hdrWidth: number
 }
 
-/** 按卡片容器宽度动态分配右侧图例；数值列优先，不够则压缩左侧绘图区 */
+/** 圆点列 + 3 段间距 + 名称 + 两列数值 + 滚动条 */
+function legendChrome(valCol: number, name: number) {
+  return LEGEND_DOT_PX + LEGEND_COL_GAP_PX * 3 + name + valCol * 2 + LEGEND_SCROLLBAR_PX
+}
+
+/** 按卡片宽度分配图例。并排装不下完整 current 列时改为上下排列。 */
 export function computeLegendLayout(containerWidth = 0): LegendLayout {
-  const valCols = LEGEND_VAL_COL_PX * 2 + LEGEND_VAL_GAP_PX
-  const minLegend = valCols + 64 + LEGEND_ICON_PX
-  const cw = containerWidth > 0 ? containerWidth : 560
-  // 最多占容器 48%，保证折线区仍可见；至少塞下数值列 + 短名
-  const maxByContainer = Math.floor(cw * 0.48)
-  const legendWidth = Math.max(minLegend, Math.min(360, maxByContainer))
-  const nameWidth = Math.max(
-    40,
-    legendWidth - LEGEND_ICON_PX - valCols - LEGEND_PAD_PX,
-  )
+  const cw = containerWidth > 0 ? containerWidth : 720
+  const sideMin = legendChrome(LEGEND_VAL_COL_MIN_PX, LEGEND_NAME_MIN_PX)
+  const sideComfort = legendChrome(LEGEND_VAL_COL_PX, 72)
+  const stacked = cw < sideMin + LEGEND_PLOT_MIN_PX + 8
+
+  if (stacked) {
+    const valColWidth = LEGEND_VAL_COL_PX
+    const legendWidth = Math.max(cw - 4, sideComfort)
+    return {
+      stacked: true,
+      legendWidth,
+      gridRight: 16,
+      nameWidth: Math.max(LEGEND_NAME_MIN_PX, legendWidth - legendChrome(valColWidth, 0)),
+      valColWidth,
+      hdrWidth: valColWidth * 2 + LEGEND_COL_GAP_PX,
+    }
+  }
+
+  const maxLegend = Math.min(380, cw - LEGEND_PLOT_MIN_PX - 8)
+  const valColWidth = sideComfort <= maxLegend ? LEGEND_VAL_COL_PX : LEGEND_VAL_COL_MIN_PX
+  const legendWidth = Math.min(maxLegend, Math.max(legendChrome(valColWidth, LEGEND_NAME_MIN_PX), Math.floor(cw * 0.4)))
   return {
+    stacked: false,
     legendWidth,
-    gridRight: legendWidth + 12,
-    nameWidth,
-    valColWidth: LEGEND_VAL_COL_PX,
-    hdrWidth: valCols,
+    gridRight: legendWidth + 8,
+    nameWidth: Math.max(32, legendWidth - legendChrome(valColWidth, 0)),
+    valColWidth,
+    hdrWidth: valColWidth * 2 + LEGEND_COL_GAP_PX,
   }
 }
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
   AutoComplete,
   Button,
@@ -56,8 +56,9 @@ type Tenant = {
   description?: string
 }
 
-function isDefaultTenant(t: Tenant) {
-  return t.id === 'tenant-default' || String(t.code || '').toLowerCase() === 'default'
+function isSystemTenant(t: Tenant) {
+  const code = String(t.code || '').toLowerCase()
+  return t.id === 'tenant-default' || code === 'default' || code === 'dba'
 }
 
 type Member = {
@@ -107,6 +108,7 @@ export default function Tenants() {
   ])
   const [form] = Form.useForm()
   const [memberForm] = Form.useForm()
+  const memberOptsLoaded = useRef(false)
 
   const targetTenantOptions = useMemo(
     () =>
@@ -133,9 +135,18 @@ export default function Tenants() {
     api.get('/tenants/plan-options', { silent: true }).then((r) => {
       if (Array.isArray(r.data?.data) && r.data.data.length) setPlanOptions(r.data.data)
     }).catch(() => {})
-    api.get('/roles', { silent: true }).then((r) => setRoles(r.data?.data || [])).catch(() => {})
-    api.get('/users', { silent: true }).then((r) => setUsers(r.data?.data || [])).catch(() => {})
   }, [])
+
+  async function ensureUsersAndRoles() {
+    if (memberOptsLoaded.current) return
+    const [u, r] = await Promise.all([
+      api.get('/users', { silent: true }),
+      api.get('/roles', { silent: true }),
+    ])
+    setUsers(u.data?.data || [])
+    setRoles(r.data?.data || [])
+    memberOptsLoaded.current = true
+  }
 
   async function onCreate() {
     const v = await form.validateFields()
@@ -149,8 +160,11 @@ export default function Tenants() {
   async function openMembers(t: Tenant) {
     setCurrent(t)
     setMemberOpen(true)
-    const { data } = await api.get(`/tenants/${t.id}/members`)
-    setMembers(data.data || [])
+    const [, membersRes] = await Promise.all([
+      ensureUsersAndRoles(),
+      api.get(`/tenants/${t.id}/members`),
+    ])
+    setMembers(membersRes.data.data || [])
   }
 
   async function saveMember() {
@@ -376,7 +390,7 @@ export default function Tenants() {
         },
       })
     }
-    if (hasUrn(Perm.tenants.delete) && !isDefaultTenant(r)) {
+    if (hasUrn(Perm.tenants.delete) && !isSystemTenant(r)) {
       items.push({ type: 'divider' })
       items.push({
         key: 'delete',

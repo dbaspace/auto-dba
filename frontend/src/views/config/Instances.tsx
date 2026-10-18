@@ -190,6 +190,7 @@ export default function Instances() {
   const [allEnvs, setAllEnvs] = useState<MetaRow[]>([])
   const [rows, setRows] = useState<InstanceRow[]>([])
   const [q, setQ] = useState('')
+  const [envFilter, setEnvFilter] = useState<string>()
   const [visible, setVisible] = useState(false)
   const [testing, setTesting] = useState(false)
   const [form, setForm] = useState<InstanceRow>({})
@@ -257,12 +258,15 @@ export default function Instances() {
   }, [typeOptions, rows, knownTypes])
 
   const filteredRows = useMemo(() => {
+    let list = rows
     if (activeType === OTHER) {
-      return rows.filter((r) => r.db_type && !knownTypes.has(typeKey(r.db_type)))
+      list = rows.filter((r) => r.db_type && !knownTypes.has(typeKey(r.db_type)))
+    } else if (activeType) {
+      list = rows.filter((r) => typeKey(r.db_type) === typeKey(activeType) || r.db_type === activeType)
     }
-    if (!activeType) return rows
-    return rows.filter((r) => typeKey(r.db_type) === typeKey(activeType) || r.db_type === activeType)
-  }, [rows, activeType, knownTypes])
+    if (envFilter) list = list.filter((r) => r.env_id === envFilter)
+    return list
+  }, [rows, activeType, knownTypes, envFilter])
 
   function sortValue(row: InstanceRow, key: SortKey): string {
     switch (key) {
@@ -669,10 +673,32 @@ export default function Instances() {
 
   return (
     <div className="ops-page">
-      <div className="ops-filters">
-        <div className="filter-item">
+      <div className="ops-filters inst-filters">
+        <div className="filter-item filter-item-fixed">
+          <span className="label">环境：</span>
+          <Select
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            placeholder="全部环境"
+            style={{ width: 160 }}
+            value={envFilter}
+            options={allEnvs.map((e) => ({ value: e.id, label: e.name || e.code || e.id }))}
+            onChange={(v) => {
+              setEnvFilter(v)
+              setPage(1)
+            }}
+          />
+        </div>
+        <div className="filter-item filter-item-fixed">
           <span className="label">关键词：</span>
-          <Input value={q} placeholder="请输入名称/主机" onChange={(e) => setQ(e.target.value)} onPressEnter={() => void search()} />
+          <Input
+            value={q}
+            placeholder="请输入名称/主机"
+            style={{ width: 220 }}
+            onChange={(e) => setQ(e.target.value)}
+            onPressEnter={() => void search()}
+          />
         </div>
         <div className="toolbar" style={{ margin: 0, flexShrink: 0 }}>
           <Button type="primary" onClick={() => void search()}>

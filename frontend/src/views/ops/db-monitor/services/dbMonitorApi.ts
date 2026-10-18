@@ -159,10 +159,23 @@ export function resolveInstanceDomain(it: MonitorInstance): string {
   return String(it.host || '').trim()
 }
 
-/** 实例标签选项：仅取 tags 中显式定义的 db= 值，未定义则不返回 */
+function pushUnique(out: string[], seen: Set<string>, v: string) {
+  const s = String(v || '').trim()
+  if (!s || seen.has(s)) return
+  seen.add(s)
+  out.push(s)
+}
+
+/**
+ * 实例标签选项（用于筛选下拉）：
+ * 1) 优先 tags 中显式 db=
+ * 2) 无 db= 时回退 alias=/label=
+ * 3) 再回退实例 name，避免无 db= 的实例无法被选中
+ */
 export function resolveInstanceTagLabels(it: MonitorInstance): string[] {
   const out: string[] = []
   const seen = new Set<string>()
+  const aliases: string[] = []
   for (const raw of it.tags || []) {
     const t = String(raw || '').trim()
     if (!t) continue
@@ -170,14 +183,18 @@ export function resolveInstanceTagLabels(it: MonitorInstance): string[] {
     if (i <= 0) continue
     const k = t.slice(0, i).trim().toLowerCase()
     const v = t.slice(i + 1).trim()
-    if (k !== 'db' || !v || seen.has(v)) continue
-    seen.add(v)
-    out.push(v)
+    if (!v) continue
+    if (k === 'db') pushUnique(out, seen, v)
+    else if (k === 'alias' || k === 'label') aliases.push(v)
   }
+  if (out.length) return out
+  for (const v of aliases) pushUnique(out, seen, v)
+  if (out.length) return out
+  pushUnique(out, seen, it.name || '')
   return out
 }
 
-/** 仅按 db= 标签匹配 */
+/** 按 resolveInstanceTagLabels 解析结果匹配 */
 export function instanceHasTag(it: MonitorInstance, tag: string): boolean {
   const want = String(tag || '').trim()
   if (!want) return true

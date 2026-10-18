@@ -177,11 +177,30 @@
 .dbmon-legend-panel {
   flex: 0 0 var(--dbmon-legend-w, 260px);
   width: var(--dbmon-legend-w, 260px);
-  max-width: 48%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
   min-height: 0;
   padding-top: 2px;
+}
+
+/* 卡片过窄：图例换到折线下方整行，max/current 不再被右侧裁切 */
+.dbmon-chart-wrap--stack {
+  flex-direction: column;
+  gap: 0;
+}
+
+.dbmon-chart-wrap--stack .dbmon-chart-plot {
+  flex: 0 0 auto;
+  width: 100%;
+}
+
+.dbmon-chart-wrap--stack .dbmon-legend-panel {
+  flex: 1 1 auto;
+  width: 100%;
+  max-width: none;
 }
 
 .dbmon-legend-hdr {
@@ -189,12 +208,12 @@
   top: 2px;
   right: 8px;
   z-index: 2;
-  display: flex;
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) var(--dbmon-legend-val-w, 88px) var(--dbmon-legend-val-w, 88px);
   align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
+  column-gap: 6px;
   /* 与 chartOption LEGEND_VAL_COL*2+gap 对齐，由 --dbmon-legend-hdr-w 动态覆盖 */
-  width: var(--dbmon-legend-hdr-w, 168px);
+  width: var(--dbmon-legend-hdr-w, 182px);
   box-sizing: border-box;
   pointer-events: none;
 }
@@ -207,6 +226,11 @@
   pointer-events: none;
 }
 
+.dbmon-legend-hdr-spacer {
+  min-width: 0;
+  pointer-events: none;
+}
+
 .dbmon-legend-scroll {
   flex: 1 1 auto;
   min-height: 0;
@@ -214,6 +238,7 @@
   overflow-y: auto;
   padding: 0 2px 4px;
   overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .dbmon-legend-row {
@@ -261,16 +286,17 @@
 .dbmon-legend-val {
   text-align: right;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow: visible;
 }
 
 .dbmon-legend-sort {
   pointer-events: auto;
-  flex: 1;
+  width: 100%;
   min-width: 0;
   margin: 0;
-  padding: 0 2px;
+  padding: 0;
+  white-space: nowrap;
+  overflow: visible;
   border: 0;
   background: transparent;
   color: var(--app-text-secondary, #8c8c8c);

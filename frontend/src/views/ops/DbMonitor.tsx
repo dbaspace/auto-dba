@@ -127,16 +127,17 @@ function MonitorTimeseriesChart(props: {
     setHiddenNames((prev) => (prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name]))
   }
   const heightPx = Number.parseInt(String(height), 10) || 260
+  const legendBand = layout.stacked ? 108 : 0
   return (
     <div
       ref={wrapRef}
-      className="dbmon-chart-wrap dbmon-chart-wrap--split"
+      className={`dbmon-chart-wrap dbmon-chart-wrap--split${layout.stacked ? ' dbmon-chart-wrap--stack' : ''}`}
       style={
         {
           ['--dbmon-legend-hdr-w' as string]: `${layout.hdrWidth}px`,
           ['--dbmon-legend-w' as string]: `${layout.legendWidth}px`,
           ['--dbmon-legend-val-w' as string]: `${layout.valColWidth}px`,
-          height: heightPx,
+          height: heightPx + legendBand,
         } as React.CSSProperties
       }
     >
@@ -145,6 +146,8 @@ function MonitorTimeseriesChart(props: {
       </div>
       <div className="dbmon-legend-panel">
         <div className="dbmon-legend-hdr" aria-label="图例排序">
+          <span className="dbmon-legend-hdr-spacer" aria-hidden />
+          <span className="dbmon-legend-hdr-spacer" aria-hidden />
           <button
             type="button"
             className={`dbmon-legend-sort${sort.by === 'max' ? ' is-active' : ''}`}
@@ -360,7 +363,7 @@ export default function DbMonitor({ engine = 'postgres' }: Props) {
     }
     return Array.from(set)
       .sort((a, b) => a.localeCompare(b))
-      .map((v) => ({ value: v, label: v }))
+      .map((v) => ({ value: v, label: v, title: v }))
   }, [filteredByIdc])
 
   const filteredInstances = useMemo(() => {
@@ -844,7 +847,9 @@ export default function DbMonitor({ engine = 'postgres' }: Props) {
                 mode="multiple"
                 allowClear
                 maxTagCount="responsive"
-                style={{ minWidth: 120, maxWidth: 180 }}
+                style={{ minWidth: 200, maxWidth: 360 }}
+                popupMatchSelectWidth={false}
+                dropdownStyle={{ minWidth: 280 }}
                 placeholder="请选择标签"
                 value={tagFilters}
                 options={tagOptions}

@@ -14,6 +14,7 @@ import (
 const (
 	DefaultTenantID      = "tenant-default"
 	DefaultTenantCode    = "default"
+	DBATenantCode        = "dba"
 	TenantStatusActive   = "active"
 	TenantStatusDisabled = "disabled"
 	MemberStatusActive   = "active"
@@ -186,6 +187,10 @@ func isDefaultTenant(t *Tenant) bool {
 	return strings.EqualFold(strings.TrimSpace(t.Code), DefaultTenantCode)
 }
 
+func isDBATenant(t *Tenant) bool {
+	return t != nil && strings.EqualFold(strings.TrimSpace(t.Code), DBATenantCode)
+}
+
 func (d *DB) tableExistsPublic(table string) (bool, error) {
 	var n int
 	err := d.db.QueryRow(`
@@ -244,6 +249,9 @@ func (d *DB) DeleteTenant(tenantID string) error {
 	}
 	if isDefaultTenant(t) {
 		return &TenantDeleteBlockedError{Kind: "default", Message: "默认租户不可删除"}
+	}
+	if isDBATenant(t) {
+		return &TenantDeleteBlockedError{Kind: "default", Message: "系统租户不可删除"}
 	}
 	usage, err := d.CountTenantUsage(tenantID)
 	if err != nil {

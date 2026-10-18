@@ -291,6 +291,23 @@ func TestDeleteTenantGuards(t *testing.T) {
 		t.Fatalf("want default blocked, got %T %v", err, err)
 	}
 
+	dbaTenant, err := d.GetTenantByCode(DBATenantCode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dbaTenant == nil {
+		dbaTenant = &Tenant{Code: DBATenantCode, Name: "数据库管理员", Status: TenantStatusActive}
+		if err := d.CreateTenant(dbaTenant); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _, _ = d.Exec(`DELETE FROM tbl_tenants WHERE id=?`, dbaTenant.ID) })
+	}
+	if err := d.DeleteTenant(dbaTenant.ID); err == nil {
+		t.Fatal("dba tenant must not be deleted")
+	} else if be, ok := err.(*TenantDeleteBlockedError); !ok || be.Kind != "default" {
+		t.Fatalf("want dba blocked as system tenant, got %T %v", err, err)
+	}
+
 	empty := &Tenant{Code: "del-empty-" + uuid.NewString()[:8], Name: "空租户", Status: TenantStatusActive}
 	if err := d.CreateTenant(empty); err != nil {
 		t.Fatal(err)

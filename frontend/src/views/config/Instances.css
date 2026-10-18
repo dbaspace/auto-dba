@@ -1,3 +1,29 @@
+/* 筛选区固定宽度，环境与关键词紧挨，避免 flex:1 拉出大空白 */
+.inst-filters.ops-filters {
+  gap: 4px;
+}
+
+.inst-filters .filter-item-fixed {
+  flex: 0 0 auto;
+  width: auto;
+  max-width: none;
+}
+
+.inst-filters .filter-item .label {
+  min-width: 0;
+  padding-right: 4px;
+}
+
+.inst-filters .toolbar {
+  margin-left: 4px;
+}
+
+.inst-filters .filter-item-fixed .ant-select,
+.inst-filters .filter-item-fixed .ant-input-affix-wrapper,
+.inst-filters .filter-item-fixed .ant-input {
+  flex: none;
+}
+
 .inst-tabs {
   flex-shrink: 0;
 }
