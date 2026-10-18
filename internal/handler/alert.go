@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -36,15 +37,20 @@ func (h *AlertHandler) List(c *gin.Context) {
 		Service:  strings.TrimSpace(c.Query("service")),
 		Keyword:  strings.TrimSpace(c.Query("keyword")),
 		Since:    strings.TrimSpace(c.Query("since")),
+		Until:    strings.TrimSpace(c.Query("until")),
 		TenantID: middleware.TenantID(c),
 	}
 	if f.Tab == "history" {
-		rows, err := h.Store.ListAlertHistoryRows(f)
+		page, _ := strconv.Atoi(c.Query("page"))
+		size, _ := strconv.Atoi(c.Query("page_size"))
+		rows, total, err := h.Store.ListAlertHistoryRows(store.AlertHistoryQuery{
+			AlertFilter: f, AlertID: strings.TrimSpace(c.Query("alert_id")), Page: page, PageSize: size,
+		})
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"data": rows})
+		c.JSON(http.StatusOK, gin.H{"data": rows, "total": total})
 		return
 	}
 	list, err := h.Store.ListAlerts(f)

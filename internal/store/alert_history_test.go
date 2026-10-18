@@ -1,37 +1,54 @@
 package store
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
-func TestBuildAlertHistoryRows(t *testing.T) {
-	alerts := map[string]Alert{
-		"a1": {ID: "a1", Title: "磁盘", Severity: "P2", Status: AlertStatusResolved, Handle: AlertHandleResolved},
-		"a2": {ID: "a2", Title: "CPU", Severity: "P1", Status: AlertStatusFiring, Handle: AlertHandleUnclaimed},
+func TestNormalizeAlertTime(t *testing.T) {
+	cases := map[string]string{
+		"2026-10-18T01:01:00.000Z":      "2026-10-18T01:01:00Z",
+		"2026-10-18T09:06:00.000+08:00": "2026-10-18T01:06:00Z",
+		"":                              "",
 	}
-	events := []AlertEvent{
-		{ID: "e1", AlertID: "a1", Action: "trigger", CreatedAt: "2026-10-18T01:00:00Z"},
-		{ID: "e2", AlertID: "a1", Action: "notify", Detail: "通知外发：trigger", CreatedAt: "2026-10-18T01:00:01Z"},
-		{ID: "e3", AlertID: "a1", Action: "notify", Detail: "通知外发：repeat", CreatedAt: "2026-10-18T01:05:00Z"},
-		{ID: "e4", AlertID: "a1", Action: "resolve", Detail: "指标回落，告警自动恢复", Operator: "系统", CreatedAt: "2026-10-18T01:10:00Z"},
-		{ID: "e5", AlertID: "a1", Action: "notify", Detail: "通知外发：resolve（告警已恢复）", CreatedAt: "2026-10-18T01:10:01Z"},
-		{ID: "e6", AlertID: "a2", Action: "notify", Detail: "通知外发：trigger", CreatedAt: "2026-10-18T01:02:00Z"},
+	for in, want := range cases {
+		if got := normalizeAlertTime(in); got != want {
+			t.Fatalf("normalize(%q)=%q want %q", in, got, want)
+		}
 	}
-	rows := BuildAlertHistoryRows(alerts, events, AlertFilter{})
-	if len(rows) != 4 {
-		t.Fatalf("want 4 rows got %d: %+v", len(rows), rows)
-	}
-	if rows[0].EventID != "e4" || rows[0].Kind != AlertHistoryKindResolve || rows[0].ID != "a1" {
-		t.Fatalf("newest should be resolve of a1: %+v", rows[0])
-	}
-	if rows[1].EventID != "e3" || rows[1].NotifySeq != 2 || rows[3].EventID != "e2" || rows[3].NotifySeq != 1 {
-		t.Fatalf("notify seq wrong: %+v", rows)
-	}
+}
 
-	p1 := BuildAlertHistoryRows(alerts, events, AlertFilter{Severity: "P1"})
-	if len(p1) != 1 || p1[0].ID != "a2" {
-		t.Fatalf("severity filter: %+v", p1)
+func TestAlertHistoryFromArgsOrder(t *testing.T) {
+	from, args := alertHistoryFrom(AlertHistoryQuery{
+		AlertFilter: AlertFilter{
+			Since: "2026-10-11T04:00:00.000Z", Until: "2026-10-18T04:00:00.000Z", TenantID: "t1", Severity: "P1", Keyword: "Disk",
+		},
+		AlertID: "a1",
+	})
+	if strings.Count(from, "?") != len(args) {
+		t.Fatalf("placeholders %d != args %d: %s", strings.Count(from, "?"), len(args), from)
 	}
-	since := BuildAlertHistoryRows(alerts, events, AlertFilter{Since: "2026-10-18T01:04:00Z"})
-	if len(since) != 2 || since[1].NotifySeq != 2 {
-		t.Fatalf("since filter should keep seq from full history: %+v", since)
+	for _, want := range []string{"ROW_NUMBER() OVER (PARTITION BY e.alert_id, e.action", "NOT LIKE '%resolve%'", "w.created_at >= ?", "ev.created_at <= ?", "a.id=?"} {
+		if !strings.Contains(from, want) {
+			t.Fatalf("query missing %q: %s", want, from)
+		}
+	}
+	want := []any{"2026-10-11T04:00:00Z", "2026-10-18T04:00:00Z", "2026-10-11T04:00:00Z", "2026-10-18T04:00:00Z", "t1", "P1", "a1", "%disk%"}
+	for i := range want {
+		if args[i] != want[i] {
+			t.Fatalf("arg[%d]=%v want %v (all %#v)", i, args[i], want[i], args)
+		}
+	}
+}
+
+func TestAlertHistoryLimitOffset(t *testing.T) {
+	if l, o := (AlertHistoryQuery{}).limitOffset(); l != 20 || o != 0 {
+		t.Fatalf("default %d %d", l, o)
+	}
+	if l, o := (AlertHistoryQuery{Page: 3, PageSize: 50}).limitOffset(); l != 50 || o != 100 {
+		t.Fatalf("page3 %d %d", l, o)
+	}
+	if l, _ := (AlertHistoryQuery{PageSize: 10000}).limitOffset(); l != 200 {
+		t.Fatalf("cap %d", l)
 	}
 }

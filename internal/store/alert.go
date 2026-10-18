@@ -119,6 +119,7 @@ type AlertFilter struct {
 	Service  string
 	Keyword  string
 	Since    string // RFC3339
+	Until    string // RFC3339，仅历史按事件时间使用
 	TenantID string
 }
 
@@ -192,6 +193,7 @@ func (d *DB) ensureAlertTables() error {
 			created_at TEXT NOT NULL DEFAULT ''
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_alert_events_alert ON tbl_alert_events(alert_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_alert_events_created ON tbl_alert_events(created_at)`,
 		`CREATE TABLE IF NOT EXISTS tbl_alert_silences (
 			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL DEFAULT '',
