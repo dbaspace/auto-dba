@@ -355,6 +355,7 @@ func loadSMTP(db *store.DB, encKey, ticketNo, tag string) (*store.SMTPConfig, ma
 	return smtpCfg, mail.Config{
 		Host: smtpCfg.Host, Port: smtpCfg.Port, Username: smtpCfg.Username,
 		Password: smtpCfg.Password, From: smtpCfg.From, UseTLS: smtpCfg.UseTLS,
+		AuthWay: smtpCfg.AuthWay, Rate: smtpCfg.Rate,
 	}, true
 }
 

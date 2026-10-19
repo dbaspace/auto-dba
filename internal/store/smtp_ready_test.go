@@ -25,3 +25,12 @@ func TestSMTPConfiguredVsReady(t *testing.T) {
 		t.Fatal("missing addr/password should not Configured")
 	}
 }
+
+func TestNormalizeSMTPAuthAndRate(t *testing.T) {
+	if NormalizeSMTPAuthWay("") != "PLAIN" || NormalizeSMTPAuthWay("login") != "LOGIN" || NormalizeSMTPAuthWay("crammd5") != "CRAM-MD5" {
+		t.Fatal("auth way")
+	}
+	if NormalizeSMTPRate(0) != 2 || NormalizeSMTPRate(5) != 5 {
+		t.Fatal("rate")
+	}
+}

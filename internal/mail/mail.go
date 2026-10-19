@@ -3,10 +3,12 @@ package mail
 import (
 	"crypto/tls"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net"
 	"net/smtp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -17,6 +19,8 @@ type Config struct {
 	Password string
 	From     string
 	UseTLS   bool
+	AuthWay  string
+	Rate     int
 }
 
 func (c Config) addr() string {
@@ -65,12 +69,9 @@ func Send(cfg Config, to, subject, body, contentType string) error {
 	msg.WriteString("\r\n")
 	msg.WriteString(body)
 
+	waitRate(cfg.Rate)
 	addr := cfg.addr()
-	authUser := strings.TrimSpace(cfg.Username)
-	var auth smtp.Auth
-	if authUser != "" {
-		auth = smtp.PlainAuth("", authUser, cfg.Password, host)
-	}
+	auth := smtpAuth(cfg, host)
 
 	if cfg.UseTLS && (cfg.Port == 465 || cfg.Port == 0) {
 		return sendSMTPS(addr, host, auth, from, []string{to}, []byte(msg.String()))
@@ -116,6 +117,76 @@ func sendSMTPS(addr, host string, auth smtp.Auth, from string, to []string, msg 
 		return err
 	}
 	return client.Quit()
+}
+
+func smtpAuth(cfg Config, host string) smtp.Auth {
+	user := strings.TrimSpace(cfg.Username)
+	if user == "" {
+		return nil
+	}
+	switch strings.ToUpper(strings.TrimSpace(cfg.AuthWay)) {
+	case "LOGIN":
+		return &loginAuth{username: user, password: cfg.Password, host: host}
+	case "CRAM-MD5", "CRAMMD5":
+		return smtp.CRAMMD5Auth(user, cfg.Password)
+	default:
+		return smtp.PlainAuth("", user, cfg.Password, host)
+	}
+}
+
+type loginAuth struct {
+	username, password, host string
+	sentUser                 bool
+}
+
+func (a *loginAuth) Start(server *smtp.ServerInfo) (string, []byte, error) {
+	if server == nil || (!server.TLS && !isSMTPLocalhost(server.Name)) {
+		return "", nil, errors.New("unencrypted connection")
+	}
+	if server.Name != a.host {
+		return "", nil, errors.New("wrong host name")
+	}
+	return "LOGIN", nil, nil
+}
+
+func (a *loginAuth) Next(fromServer []byte, more bool) ([]byte, error) {
+	if !more {
+		return nil, nil
+	}
+	prompt := strings.ToLower(strings.TrimSpace(string(fromServer)))
+	if strings.Contains(prompt, "password") || a.sentUser {
+		a.sentUser = true
+		return []byte(a.password), nil
+	}
+	a.sentUser = true
+	return []byte(a.username), nil
+}
+
+func isSMTPLocalhost(name string) bool {
+	return name == "localhost" || name == "127.0.0.1" || name == "::1"
+}
+
+var (
+	rateMu   sync.Mutex
+	nextSend time.Time
+)
+
+func waitRate(rate int) {
+	if rate <= 0 {
+		rate = 2
+	}
+	gap := time.Second / time.Duration(rate)
+	if gap <= 0 {
+		gap = 500 * time.Millisecond
+	}
+	rateMu.Lock()
+	defer rateMu.Unlock()
+	now := time.Now()
+	if now.Before(nextSend) {
+		time.Sleep(nextSend.Sub(now))
+		now = time.Now()
+	}
+	nextSend = now.Add(gap)
 }
 
 func encodeSubject(s string) string {

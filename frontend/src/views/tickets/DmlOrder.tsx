@@ -1,7 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import {
-  useNavigate,
-  useSearchParams } from 'react-router-dom'
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Button,
   DatePicker,
@@ -30,6 +28,8 @@ import {
 } from '../../utils/instanceSource'
 import DbTypeIcon from '../../components/DbTypeIcon'
 import { useWorkOrderDraft } from '../../hooks/useWorkOrderDraft'
+import { useAppDispatch, useAppSelector } from '../../store'
+import { goTicketListAndClose } from './goTicketList'
 import './DmlOrder.css'
 
 const PREFILL_KEY = 'auto-dba-dml-prefill'
@@ -111,6 +111,9 @@ function readJson(key: string): Record<string, any> | null {
 
 export default function DmlOrder() {
   const navigate = useNavigate()
+  const location = useLocation()
+  const dispatch = useAppDispatch()
+  const menus = useAppSelector((s) => s.auth.menus)
   const [searchParams] = useSearchParams()
   const [form, setForm] = useState<FormState>(emptyForm())
   const formRef = useRef(form)
@@ -441,7 +444,7 @@ export default function DmlOrder() {
       })
       message.success(data.data?.ticket_no ? `提交成功，工单号 ${data.data.ticket_no}` : '提交成功')
       clearOnSubmitSuccess()
-      navigate('/ops/tickets/' + (data.data?.id || ''))
+      goTicketListAndClose(dispatch, navigate, location, menus)
     } catch (e: any) {
       message.error(e.response?.data?.message || '提交失败')
     } finally {

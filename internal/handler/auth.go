@@ -1514,10 +1514,7 @@ func (h *AuthHandler) ForgotPassword(c *gin.Context) {
 	body := "您好 " + u.DisplayName + "（" + u.Username + "），\n\n" +
 		"请点击以下链接重置 auto-dba 账号「" + u.Username + "」的密码（30 分钟内有效）：\n" + link + "\n\n" +
 		"如非本人操作，请忽略本邮件。\n"
-	if err := mail.Send(mail.Config{
-		Host: smtpCfg.Host, Port: smtpCfg.Port, Username: smtpCfg.Username,
-		Password: smtpCfg.Password, From: smtpCfg.From, UseTLS: smtpCfg.UseTLS,
-	}, email, "重置 auto-dba 密码", body, "text/plain; charset=UTF-8"); err != nil {
+	if err := mail.Send(mailConfig(smtpCfg), email, "重置 auto-dba 密码", body, "text/plain; charset=UTF-8"); err != nil {
 		log.Printf("forgot password mail user=%s to=%s: %v", u.Username, email, err)
 		c.JSON(http.StatusBadRequest, gin.H{"message": "发送重置邮件失败: " + err.Error()})
 		return

@@ -42,6 +42,8 @@ interface SmtpForm {
   password: string
   from: string
   use_tls: boolean
+  auth_way: string
+  rate: number
   frontend_base_url: string
   test_to: string
 }
@@ -85,6 +87,8 @@ const DEFAULT_SMTP: SmtpForm = {
   password: '',
   from: '',
   use_tls: true,
+  auth_way: 'PLAIN',
+  rate: 2,
   frontend_base_url: 'http://127.0.0.1:5174',
   test_to: '',
 }
@@ -598,6 +602,8 @@ function SmtpPanel() {
         password: '',
         from: d.from || '',
         use_tls: d.use_tls !== false,
+        auth_way: d.auth_way || 'PLAIN',
+        rate: Number(d.rate) > 0 ? Number(d.rate) : 2,
         frontend_base_url: d.frontend_base_url || 'http://127.0.0.1:5174',
         test_to: '',
       })
@@ -623,6 +629,8 @@ function SmtpPanel() {
       password: (f.password || '').trim(),
       from: (f.from || '').trim(),
       use_tls: !!f.use_tls,
+      auth_way: f.auth_way || 'PLAIN',
+      rate: Number(f.rate) > 0 ? Number(f.rate) : 2,
       frontend_base_url: (f.frontend_base_url || '').trim(),
     }
   }
@@ -680,6 +688,18 @@ function SmtpPanel() {
         </Form.Item>
         <Form.Item label="启用 TLS" name="use_tls" valuePropName="checked">
           <Switch />
+        </Form.Item>
+        <Form.Item label="认证方式" name="auth_way" extra={<span className="field-hint">PLAIN、LOGIN、CRAM-MD5，默认 PLAIN</span>}>
+          <Select
+            options={[
+              { value: 'PLAIN', label: 'PLAIN' },
+              { value: 'LOGIN', label: 'LOGIN' },
+              { value: 'CRAM-MD5', label: 'CRAM-MD5' },
+            ]}
+          />
+        </Form.Item>
+        <Form.Item label="每秒封数" name="rate" extra={<span className="field-hint">发信限速，默认每秒 2 封</span>}>
+          <Input type="number" min={1} placeholder="2" />
         </Form.Item>
         <Form.Item label="账号" name="username">
           <Input placeholder="发信账号 / 邮箱" />

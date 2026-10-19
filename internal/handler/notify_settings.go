@@ -152,10 +152,7 @@ func (h *NotifyHandler) Test(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"message": "请填写收件邮箱，或在个人资料绑定邮箱"})
 			return
 		}
-		if err := mail.Send(mail.Config{
-			Host: smtpCfg.Host, Port: smtpCfg.Port, Username: smtpCfg.Username,
-			Password: smtpCfg.Password, From: smtpCfg.From, UseTLS: smtpCfg.UseTLS,
-		}, to, "[KeePlus] 通知渠道测试（邮件）", text, "text/plain; charset=UTF-8"); err != nil {
+		if err := mail.Send(mailConfig(smtpCfg), to, "[KeePlus] 通知渠道测试（邮件）", text, "text/plain; charset=UTF-8"); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 			return
 		}

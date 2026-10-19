@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { Button, Form, Input, Select, Space, Switch, message } from 'antd'
 import api from '../../api/request'
 import { useAppDispatch, useAppSelector } from '../../store'
-import { closeTab, openTab, tabKey } from '../../store/tabsSlice'
+import { goTicketListAndClose } from './goTicketList'
 import { dbLabel } from '../../utils/db'
 import { buildEnvOptions } from '../../utils/env'
 import DbTypeIcon from '../../components/DbTypeIcon'
@@ -73,12 +73,7 @@ export default function DqlExport() {
   const dispatch = useAppDispatch()
   const menus = useAppSelector((s) => s.auth.menus)
 
-  const goTicketListAndClose = () => {
-    const curKey = tabKey(location.pathname, location.search)
-    dispatch(openTab({ path: '/ops/tickets', menus, title: '工单列表' }))
-    dispatch(closeTab(curKey))
-    navigate('/ops/tickets')
-  }
+  const leaveToList = () => goTicketListAndClose(dispatch, navigate, location, menus)
   const [form, setForm] = useState(emptyForm())
   const formRef = useRef(form)
   formRef.current = form
@@ -322,7 +317,7 @@ export default function DqlExport() {
       })
       message.success('工单创建成功 ' + (data.data?.ticket_no || ''))
       clearOnSubmitSuccess()
-      goTicketListAndClose()
+      leaveToList()
     } finally {
       setSaving(false)
     }
@@ -476,7 +471,7 @@ export default function DqlExport() {
                 提交申请
               </Button>
               <Button onClick={() => saveDraft()}>保存草稿</Button>
-              <Button onClick={goTicketListAndClose}>取消</Button>
+              <Button onClick={leaveToList}>取消</Button>
             </Space>
           </Form.Item>
         </aside>

@@ -19,6 +19,8 @@ type SMTPConfig struct {
 	PasswordEnc     string `json:"password_enc,omitempty"`
 	From            string `json:"from"`
 	UseTLS          bool   `json:"use_tls"`
+	AuthWay         string `json:"auth_way"`
+	Rate            int    `json:"rate"`
 	FrontendBaseURL string `json:"frontend_base_url"`
 }
 
@@ -26,8 +28,28 @@ func DefaultSMTPConfig() *SMTPConfig {
 	return &SMTPConfig{
 		Port:            465,
 		UseTLS:          true,
+		AuthWay:         "PLAIN",
+		Rate:            2,
 		FrontendBaseURL: "http://127.0.0.1:5174",
 	}
+}
+
+func NormalizeSMTPAuthWay(s string) string {
+	switch strings.ToUpper(strings.TrimSpace(s)) {
+	case "LOGIN":
+		return "LOGIN"
+	case "CRAM-MD5", "CRAMMD5":
+		return "CRAM-MD5"
+	default:
+		return "PLAIN"
+	}
+}
+
+func NormalizeSMTPRate(n int) int {
+	if n <= 0 {
+		return 2
+	}
+	return n
 }
 
 func (d *DB) GetSMTPConfig(encKey string) (*SMTPConfig, error) {
@@ -48,6 +70,8 @@ func (d *DB) GetSMTPConfig(encKey string) (*SMTPConfig, error) {
 	if strings.TrimSpace(c.FrontendBaseURL) == "" {
 		c.FrontendBaseURL = "http://127.0.0.1:5174"
 	}
+	c.AuthWay = NormalizeSMTPAuthWay(c.AuthWay)
+	c.Rate = NormalizeSMTPRate(c.Rate)
 	if c.PasswordEnc == "" {
 		return &c, nil
 	}
@@ -95,6 +119,8 @@ func (d *DB) SetSMTPConfig(encKey string, c *SMTPConfig) error {
 		PasswordEnc:     enc,
 		From:            strings.TrimSpace(c.From),
 		UseTLS:          c.UseTLS,
+		AuthWay:         NormalizeSMTPAuthWay(c.AuthWay),
+		Rate:            NormalizeSMTPRate(c.Rate),
 		FrontendBaseURL: base,
 	}
 	raw, err := json.Marshal(toStore)
@@ -115,6 +141,8 @@ func (c *SMTPConfig) Public() map[string]any {
 		"username":          c.Username,
 		"from":              c.From,
 		"use_tls":           c.UseTLS,
+		"auth_way":          NormalizeSMTPAuthWay(c.AuthWay),
+		"rate":              NormalizeSMTPRate(c.Rate),
 		"frontend_base_url": c.FrontendBaseURL,
 		"password_set":      strings.TrimSpace(c.Password) != "" || strings.TrimSpace(c.PasswordEnc) != "",
 	}

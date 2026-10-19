@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { Button, DatePicker, Form, Input, Select, Space, Tooltip, message } from 'antd'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import dayjs, { Dayjs } from 'dayjs'
@@ -16,6 +16,8 @@ import {
 } from '../../utils/instanceSource'
 import DbTypeIcon from '../../components/DbTypeIcon'
 import { useWorkOrderDraft } from '../../hooks/useWorkOrderDraft'
+import { useAppDispatch, useAppSelector } from '../../store'
+import { goTicketListAndClose } from './goTicketList'
 import './CreateDb.css'
 
 function unionApproverNames(raws: string[]) {
@@ -83,6 +85,9 @@ function parseSelectedSources(keys: string[]) {
 
 export default function CreateDb() {
   const navigate = useNavigate()
+  const location = useLocation()
+  const dispatch = useAppDispatch()
+  const menus = useAppSelector((s) => s.auth.menus)
   const [form, setForm] = useState(emptyForm())
   const formMirror = useRef(form)
   formMirror.current = form
@@ -288,14 +293,13 @@ export default function CreateDb() {
         sql_content: sql,
       })
       const no = data.ticket_no || data.data?.ticket_no || ''
-      const id = data.issue_id || data.id || data.data?.id || ''
       message.success(
         no
           ? `提交成功，工单号 ${no}。工单审批通过后，账号将写入「配置 → 账号管理」，密码加密存储。`
           : '提交成功。工单审批通过后，账号将写入「配置 → 账号管理」。',
       )
       clearOnSubmitSuccess()
-      navigate(id ? '/ops/tickets/' + id : '/ops/tickets')
+      goTicketListAndClose(dispatch, navigate, location, menus)
     } catch (e: any) {
       message.error(e.response?.data?.message || '提交失败')
     } finally {

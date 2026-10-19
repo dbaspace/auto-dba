@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import {
-  useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import {
   Alert,
   Button,
@@ -35,6 +34,8 @@ import {
 } from '../../utils/instanceSource'
 import DbTypeIcon from '../../components/DbTypeIcon'
 import { useWorkOrderDraft } from '../../hooks/useWorkOrderDraft'
+import { useAppDispatch, useAppSelector } from '../../store'
+import { goTicketListAndClose } from './goTicketList'
 import './DdlOrder.css'
 
 interface DbType {
@@ -133,6 +134,9 @@ function levelClass(lv: string): string {
 
 export default function DdlOrder() {
   const navigate = useNavigate()
+  const location = useLocation()
+  const dispatch = useAppDispatch()
+  const menus = useAppSelector((s) => s.auth.menus)
   const [form, setForm] = useState<FormState>(emptyForm())
   const formRef = useRef(form)
   formRef.current = form
@@ -563,7 +567,7 @@ export default function DdlOrder() {
       })
       message.success(data.data?.ticket_no ? `提交成功，工单号 ${data.data.ticket_no}` : '提交成功')
       clearOnSubmitSuccess()
-      navigate('/ops/tickets/' + (data.data?.id || ''))
+      goTicketListAndClose(dispatch, navigate, location, menus)
     } catch (e: any) {
       message.error(e.response?.data?.message || '提交失败')
     } finally {

@@ -1,8 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { Alert, Button, Form, Input, Select, Space, Table, Tabs, Tag, message } from 'antd'
 import api from '../../api/request'
 import { useWorkOrderDraft } from '../../hooks/useWorkOrderDraft'
+import { useAppDispatch, useAppSelector } from '../../store'
+import { goTicketListAndClose } from './goTicketList'
 import './ResourceApply.css'
 
 type ResourceType = 'database' | 'domain' | 'host' | 'sr_cluster' | 'db_deploy_cluster'
@@ -47,6 +49,9 @@ function emptyForm() {
 
 export default function ResourceApply() {
   const navigate = useNavigate()
+  const location = useLocation()
+  const dispatch = useAppDispatch()
+  const menus = useAppSelector((s) => s.auth.menus)
   const [form, setForm] = useState(emptyForm())
   const formRef = useRef(form)
   formRef.current = form
@@ -276,7 +281,7 @@ export default function ResourceApply() {
       })
       clearOnSubmitSuccess()
       message.success(isApproverIntent ? '已提交库审核人申请' : '已提交平台资源申请')
-      navigate(`/ops/tickets/${data.data?.id || ''}`)
+      goTicketListAndClose(dispatch, navigate, location, menus)
     } catch (e: any) {
       message.error(e.response?.data?.message || '提交失败')
     } finally {

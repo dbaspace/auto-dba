@@ -68,6 +68,8 @@ type smtpConfigReq struct {
 	Password        string `json:"password"`
 	From            string `json:"from"`
 	UseTLS          bool   `json:"use_tls"`
+	AuthWay         string `json:"auth_way"`
+	Rate            int    `json:"rate"`
 	FrontendBaseURL string `json:"frontend_base_url"`
 	TestTo          string `json:"test_to"`
 }
@@ -89,6 +91,8 @@ func (h *SMTPHandler) Update(c *gin.Context) {
 		Username:        strings.TrimSpace(req.Username),
 		From:            strings.TrimSpace(req.From),
 		UseTLS:          req.UseTLS,
+		AuthWay:         store.NormalizeSMTPAuthWay(req.AuthWay),
+		Rate:            store.NormalizeSMTPRate(req.Rate),
 		FrontendBaseURL: strings.TrimSpace(req.FrontendBaseURL),
 	}
 	if req.Password != "" {
@@ -124,10 +128,7 @@ func (h *SMTPHandler) Test(c *gin.Context) {
 	if to == "" {
 		to = strings.TrimSpace(cfg.Username)
 	}
-	if err := mail.Send(mail.Config{
-		Host: cfg.Host, Port: cfg.Port, Username: cfg.Username,
-		Password: cfg.Password, From: cfg.From, UseTLS: cfg.UseTLS,
-	}, to, "auto-dba SMTP 测试", "这是一封来自 auto-dba 的 SMTP 测试邮件。", "text/plain; charset=UTF-8"); err != nil {
+	if err := mail.Send(mailConfig(cfg), to, "auto-dba SMTP 测试", "这是一封来自 auto-dba 的 SMTP 测试邮件。", "text/plain; charset=UTF-8"); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
@@ -144,6 +145,8 @@ func (h *SMTPHandler) buildSMTPForSend(req smtpConfigReq) (*store.SMTPConfig, er
 			Password: req.Password,
 			From:     strings.TrimSpace(req.From),
 			UseTLS:   req.UseTLS,
+			AuthWay:  store.NormalizeSMTPAuthWay(req.AuthWay),
+			Rate:     store.NormalizeSMTPRate(req.Rate),
 		}
 		if cfg.Port <= 0 {
 			cfg.Port = 465
@@ -161,4 +164,15 @@ func (h *SMTPHandler) buildSMTPForSend(req smtpConfigReq) (*store.SMTPConfig, er
 		return nil, errors.New("测试发信需要 SMTP 密码，请填写后保存再测试")
 	}
 	return cfg, nil
+}
+
+func mailConfig(cfg *store.SMTPConfig) mail.Config {
+	if cfg == nil {
+		return mail.Config{}
+	}
+	return mail.Config{
+		Host: cfg.Host, Port: cfg.Port, Username: cfg.Username,
+		Password: cfg.Password, From: cfg.From, UseTLS: cfg.UseTLS,
+		AuthWay: cfg.AuthWay, Rate: cfg.Rate,
+	}
 }

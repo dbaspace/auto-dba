@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { AutoComplete, Button, Checkbox, Form, Input, Select, Space, message } from 'antd'
 import api from '../../api/request'
 import DatabasePicker from '../../components/DatabasePicker'
@@ -17,6 +17,8 @@ import {
   type DomainSource,
 } from '../../utils/instanceSource'
 import { useWorkOrderDraft } from '../../hooks/useWorkOrderDraft'
+import { useAppDispatch, useAppSelector } from '../../store'
+import { goTicketListAndClose } from './goTicketList'
 import './DclGrants.css'
 
 const PERM_SQL: Record<string, string> = { r: 'SELECT', c: 'INSERT', u: 'UPDATE', d: 'DELETE' }
@@ -37,6 +39,9 @@ function emptyForm() {
 
 export default function DclGrants() {
   const navigate = useNavigate()
+  const location = useLocation()
+  const dispatch = useAppDispatch()
+  const menus = useAppSelector((s) => s.auth.menus)
   const [form, setForm] = useState(emptyForm())
   const formRef = useRef(form)
   formRef.current = form
@@ -218,7 +223,7 @@ export default function DclGrants() {
       })
       message.success('工单创建成功')
       clearOnSubmitSuccess()
-      navigate('/ops/tickets')
+      goTicketListAndClose(dispatch, navigate, location, menus)
     } finally {
       setSubmitting(false)
     }
