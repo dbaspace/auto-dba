@@ -286,6 +286,12 @@ func (d *DB) mergeMissingTicketReviewRules() error {
 	defs := defaultReviewItemsByEngine()
 	pg, pgChanged := mergeReviewCatalog(p.Postgres, defs["postgres"])
 	sr, srChanged := mergeReviewCatalog(p.StarRocks, defs["starrocks"])
+	if relabeled := refreshStaleReviewLabels(pg); relabeled {
+		pgChanged = true
+	}
+	if relabeled := refreshStaleReviewLabels(sr); relabeled {
+		srChanged = true
+	}
 	if !pgChanged && !srChanged {
 		return nil
 	}
@@ -323,6 +329,20 @@ func mergeReviewCatalog(have, defs []reviewCatalogItem) ([]reviewCatalogItem, bo
 		changed = true
 	}
 	return out, changed
+}
+
+const oldDMLWhereLabel = "UPDATE/DELETE 必须有 WHERE，且禁止恒真条件"
+
+// refreshStaleReviewLabels 把仍使用旧默认文案的 DMLWhere 改成只描述 WHERE 要求。
+func refreshStaleReviewLabels(items []reviewCatalogItem) bool {
+	changed := false
+	for i := range items {
+		if strings.EqualFold(strings.TrimSpace(items[i].Name), "DMLWhere") && strings.TrimSpace(items[i].Label) == oldDMLWhereLabel {
+			items[i].Label = "UPDATE/DELETE 必须有 WHERE"
+			changed = true
+		}
+	}
+	return changed
 }
 
 func (d *DB) ensureGlobalArgJSON(key, desc string, build func() (string, error)) error {
@@ -713,7 +733,8 @@ func defaultReviewRules() []reviewRuleSeed {
 		{reviewRuleSeed{Category: "ddl", Name: "DDLForbidDropDatabase", Label: "是否允许 DROP DATABASE", Value: `{"allow":false}`}, both},
 		{reviewRuleSeed{Category: "ddl", Name: "DDLForbidDropTable", Label: "禁止或限制 DROP TABLE", Value: `{"mode":"forbid","suffix":"_del"}`}, both},
 		{reviewRuleSeed{Category: "ddl", Name: "DDLIndexNameSpec", Label: "索引命名规范（idx_/uk_ 前缀）", Value: "false"}, both},
-		{reviewRuleSeed{Category: "dml", Name: "DMLWhere", Label: "UPDATE/DELETE 必须有 WHERE，且禁止恒真条件", Value: `{"tautologies":["1=1","true"]}`}, both},
+		{reviewRuleSeed{Category: "dml", Name: "DMLWhere", Label: "UPDATE/DELETE 必须有 WHERE", Value: `{"tautologies":["1=1","true"]}`}, both},
+		{reviewRuleSeed{Category: "dml", Name: "DMLForbidTautology", Label: "禁止 WHERE 写 1=1", Value: "true"}, both},
 		{reviewRuleSeed{Category: "dml", Name: "DMLInsertMustSpecifyColumn", Label: "INSERT 必须指定列清单", Value: "true"}, both},
 		{reviewRuleSeed{Category: "ddl", Name: "DDLForbidTruncate", Label: "禁止 TRUNCATE", Value: `{"allow":false}`}, both},
 		{reviewRuleSeed{Category: "ddl", Name: "DDLForbidDropSchema", Label: "禁止 DROP SCHEMA", Value: `{"allow":false}`}, pgOnly},

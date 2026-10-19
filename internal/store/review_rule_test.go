@@ -76,6 +76,9 @@ func TestDefaultTicketReviewRulesJSONRoundtrip(t *testing.T) {
 		}
 		return false
 	}
+	if !has(p.Postgres, "DMLForbidTautology") || !has(p.StarRocks, "DMLForbidTautology") {
+		t.Fatal("缺少 DMLForbidTautology 开关")
+	}
 	if !has(p.Postgres, "DMLWhere") || !has(p.StarRocks, "DMLWhere") {
 		t.Fatal("DDL/DML 分桶后丢失 DMLWhere")
 	}
@@ -84,6 +87,17 @@ func TestDefaultTicketReviewRulesJSONRoundtrip(t *testing.T) {
 	}
 	if has(p.StarRocks, "DDLForbidLockVacuumFull") {
 		t.Fatal("starrocks 分桶不应含 DDLForbidLockVacuumFull")
+	}
+}
+
+func TestRefreshStaleDMLWhereLabel(t *testing.T) {
+	items := []reviewCatalogItem{{Name: "DMLWhere", Label: oldDMLWhereLabel, Value: `{"tautologies":["1=1","true"]}`}}
+	if !refreshStaleReviewLabels(items) || items[0].Label != "UPDATE/DELETE 必须有 WHERE" {
+		t.Fatalf("label=%q", items[0].Label)
+	}
+	items[0].Label = "自定义 WHERE"
+	if refreshStaleReviewLabels(items) {
+		t.Fatal("custom label should stay")
 	}
 }
 

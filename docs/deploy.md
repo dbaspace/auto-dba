@@ -27,13 +27,13 @@ KeePlus（进程 `auto-dba`）支持多种打包方式。**构建在有 Node 18+
 
 一体包与后端包解压后工作目录须为**包根**（存在 `deploy/node-agent/bin/node-agent` 等），集群部署 SSH 下发无需再本机构建 Agent。
 
-可选环境变量：`GOOS` `GOARCH`（默认 `linux`/`amd64`）、`STAMP`（默认时间戳；发版用 `STAMP=v1.12.14`）、`IMAGE_TAG`、`SKIP_PNPM_INSTALL=1`（已有 `node_modules` 时）。
+可选环境变量：`GOOS` `GOARCH`（默认 `linux`/`amd64`）、`STAMP`（默认时间戳；发版用 `STAMP=v1.12.15`）、`IMAGE_TAG`、`SKIP_PNPM_INSTALL=1`（已有 `node_modules` 时）。
 
 ```bash
-STAMP=v1.12.14 ./scripts/pack_release.sh all
-STAMP=v1.12.14 ./scripts/pack_release.sh backend
-STAMP=v1.12.14 ./scripts/pack_release.sh frontend
-IMAGE_TAG=auto-dba:v1.12.14 ./scripts/pack_release.sh docker
+STAMP=v1.12.15 ./scripts/pack_release.sh all
+STAMP=v1.12.15 ./scripts/pack_release.sh backend
+STAMP=v1.12.15 ./scripts/pack_release.sh frontend
+IMAGE_TAG=auto-dba:v1.12.15 ./scripts/pack_release.sh docker
 ```
 
 ## 发布到 GitHub Release（固定流程）
@@ -46,13 +46,13 @@ IMAGE_TAG=auto-dba:v1.12.14 ./scripts/pack_release.sh docker
 # 已 push 的提交 + 写好 docs/changelog-vX.Y.Z.md 后：
 
 # 推荐：打包 + 打 tag + 创建 Release（一体包）
-PACK=1 ./scripts/publish_github_release.sh v1.12.14
+PACK=1 ./scripts/publish_github_release.sh v1.12.15
 
-# 已有 dist/*-v1.12.14.tgz 时只发版
-./scripts/publish_github_release.sh v1.12.14
+# 已有 dist/*-v1.12.15.tgz 时只发版
+./scripts/publish_github_release.sh v1.12.15
 
 # 发版前顺带删若干旧 Release（不删受仓库 Rules 保护的 tag）
-DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12.14
+DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12.15
 ```
 
 前提：本机能 `git push origin HEAD`；已安装 `gh`。若 Keychain 无凭据，先手动 push 一次或导出 `GH_TOKEN=...`。
@@ -61,7 +61,8 @@ DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12
 
 | 版本 | 要点 |
 |------|------|
-| [v1.12.14](changelog-v1.12.14.md) | **当前推荐**。admin/dba 看全平台监控；dba 不可删；租户页与图例体验 |
+| [v1.12.15](changelog-v1.12.15.md) | **当前推荐**。告警只打已登记资源；WITH DML 不误拆；1=1 独立开关 |
+| [v1.12.14](changelog-v1.12.14.md) | admin/dba 看全平台监控；dba 不可删；租户页与图例体验 |
 | [v1.12.13](changelog-v1.12.13.md) | 告警历史分页加速、关联通知、表格自适应 |
 | [v1.12.12](changelog-v1.12.12.md) | 告警通知补 host/目录；历史按通知次数 + 恢复行 |
 | [v1.12.11](changelog-v1.12.11.md) | Redis 工单审批通过后自动后台执行 |

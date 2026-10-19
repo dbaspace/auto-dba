@@ -374,8 +374,11 @@ func applyDMLRules(stmt, upper, kw string, byName map[string]Rule) []*ruleHit {
 	if (kw == "UPDATE" || kw == "DELETE") && enabled(byName, "check_dml_where", "DMLWhere", "DMLRequireWhere") {
 		if !reWhere.MatchString(stmt) {
 			add(errID("DMLWhere", ruleMsg(byName, "DMLWhere", "UPDATE/DELETE 必须带 WHERE")))
-		} else if taut := tautologyHit(stmt, byName); taut != "" {
-			add(errID("DMLWhere", taut))
+		}
+	}
+	if (kw == "UPDATE" || kw == "DELETE") && enabled(byName, "DMLForbidTautology") {
+		if taut := tautologyHit(stmt); taut != "" {
+			add(errID("DMLForbidTautology", taut))
 		}
 	}
 	if kw == "INSERT" && enabled(byName, "check_insert_field", "DMLInsertMustSpecifyColumn") && !reInsertCols.MatchString(stmt) {
@@ -490,26 +493,139 @@ func hasPrimaryKey(upper, dbType string) bool {
 	return false
 }
 
-func tautologyHit(stmt string, byName map[string]Rule) string {
-	r, ok := ruleOf(byName, "DMLWhere", "DMLRequireWhere")
-	if !ok {
+// tautologyHit 只在顶层 WHERE 的某个 AND/OR 条件整体等于 1=1 时命中。
+func tautologyHit(stmt string) string {
+	body := topLevelWhereBody(stmt)
+	if body == "" {
 		return ""
 	}
-	vals := ruleStringSlice(r.Value, "tautologies", nil)
-	if len(vals) == 0 {
-		vals = splitCSV(r.Value)
-	}
-	if len(vals) == 0 || (len(vals) == 1 && (vals[0] == "true" || vals[0] == "false")) {
-		vals = []string{"1=1", "true"}
-	}
-	norm := strings.ToLower(strings.ReplaceAll(stmt, " ", ""))
-	for _, t := range vals {
-		t = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(t), " ", ""))
-		if t != "" && strings.Contains(norm, t) {
-			return "WHERE 条件视为恒真（" + t + "）"
+	for _, pred := range splitTopLevelBool(body) {
+		if normalizeTautologyPred(pred) == "1=1" {
+			return "WHERE 条件视为恒真（1=1）"
 		}
 	}
 	return ""
+}
+
+func topLevelWhereBody(stmt string) string {
+	start := -1
+	scanTopLevel(stmt, func(i int) bool {
+		if ni, ok := matchWordAt(stmt, i, "WHERE"); ok && atWord(stmt, i) {
+			start = ni
+			return true
+		}
+		return false
+	})
+	if start < 0 {
+		return ""
+	}
+	end := len(stmt)
+	scanTopLevel(stmt[start:], func(i int) bool {
+		if _, ok := matchWordAt(stmt[start:], i, "RETURNING"); ok && atWord(stmt[start:], i) {
+			end = start + i
+			return true
+		}
+		return false
+	})
+	return strings.TrimSpace(stmt[start:end])
+}
+
+func atWord(s string, i int) bool {
+	return i >= 0 && i < len(s) && (i == 0 || !isWordByte(s[i-1])) && isWordByte(s[i])
+}
+
+func splitTopLevelBool(s string) []string {
+	var parts []string
+	last := 0
+	depth := 0
+	for i := 0; i < len(s); {
+		c := s[i]
+		if c == '\'' || c == '"' || c == '`' {
+			_, j, ok := skipQuotedSQL(s, i, c)
+			if !ok {
+				break
+			}
+			i = j
+			continue
+		}
+		if c == '$' && i+1 < len(s) && s[i+1] == '$' {
+			j := i + 2
+			for j+1 < len(s) && !(s[j] == '$' && s[j+1] == '$') {
+				j++
+			}
+			if j+1 >= len(s) {
+				break
+			}
+			i = j + 2
+			continue
+		}
+		if c == '(' {
+			depth++
+			i++
+			continue
+		}
+		if c == ')' {
+			if depth > 0 {
+				depth--
+			}
+			i++
+			continue
+		}
+		if depth == 0 && atWord(s, i) {
+			if ni, ok := matchWordAt(s, i, "AND"); ok {
+				parts = append(parts, s[last:i])
+				last = ni
+				i = ni
+				continue
+			}
+			if ni, ok := matchWordAt(s, i, "OR"); ok {
+				parts = append(parts, s[last:i])
+				last = ni
+				i = ni
+				continue
+			}
+		}
+		i++
+	}
+	parts = append(parts, s[last:])
+	return parts
+}
+
+func normalizeTautologyPred(s string) string {
+	s = strings.TrimSpace(s)
+	for {
+		if len(s) < 2 || s[0] != '(' || s[len(s)-1] != ')' || !parensWrapAll(s) {
+			break
+		}
+		s = strings.TrimSpace(s[1 : len(s)-1])
+	}
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+func parensWrapAll(s string) bool {
+	depth := 0
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return i == len(s)-1
+			}
+			if depth < 0 {
+				return false
+			}
+		}
+	}
+	return false
 }
 
 func updateSetUsesAnd(stmt string) bool {

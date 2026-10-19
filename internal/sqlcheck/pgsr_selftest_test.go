@@ -38,6 +38,7 @@ func configuredPGRules() []Rule {
 		{Name: "DDLForbidLockVacuumFull", Value: "true"},
 		{Name: "DDLBackwardIncompatible", Value: "true"},
 		{Name: "DMLWhere", Value: "1=1,true"},
+		{Name: "DMLForbidTautology", Value: "true"},
 		{Name: "DMLInsertMustSpecifyColumn", Value: "true"},
 		{Name: "DMLForbidDDL", Value: "true"},
 		{Name: "DMLUpdateSetAnd", Value: "true"},
@@ -66,6 +67,7 @@ func configuredSRRules() []Rule {
 		{Name: "DDLForbidGrant", Value: "true"},
 		{Name: "DDLAddColumnRequireDefault", Value: "true"},
 		{Name: "DMLWhere", Value: "1=1,true"},
+		{Name: "DMLForbidTautology", Value: "true"},
 		{Name: "DMLInsertMustSpecifyColumn", Value: "true"},
 		{Name: "DMLForbidDDL", Value: "true"},
 		{Name: "DMLAllowSubquery", Value: "false"},
@@ -139,7 +141,7 @@ func TestPGSRTicketSelftest(t *testing.T) {
 	}
 
 	cases := []tc{
-		{name: "pg_dml_tautology", db: "postgres", typ: "dml", sql: "UPDATE t SET a=1 WHERE 1=1;", errRule: "DMLWhere", rules: pg},
+		{name: "pg_dml_tautology", db: "postgres", typ: "dml", sql: "UPDATE t SET a=1 WHERE 1=1;", errRule: "DMLForbidTautology", rules: pg},
 		{name: "pg_dml_no_where", db: "postgres", typ: "dml", sql: "DELETE FROM t;", errRule: "DMLWhere", rules: pg},
 		{name: "pg_dml_insert_no_cols", db: "postgres", typ: "dml", sql: "INSERT INTO t VALUES (1);", errRule: "DMLInsertMustSpecifyColumn", rules: pg},
 		{name: "pg_dml_forbid_ddl", db: "postgres", typ: "dml", sql: "CREATE TABLE t (id int);", errRule: "DMLForbidDDL", rules: pg},
@@ -176,7 +178,7 @@ func TestPGSRTicketSelftest(t *testing.T) {
 		{name: "pg_ddl_alter_type_warn", db: "postgres", typ: "ddl", sql: "ALTER TABLE t ALTER COLUMN name TYPE integer;", wantOK: true, warnRule: "DDLColumnTypeChange", rules: pg},
 		{name: "pg_ddl_ctas_comment", db: "postgres", typ: "ddl", sql: "CREATE TABLE tbl_t2 AS SELECT * FROM t1;", errRule: "DDLCheckTableComment", rules: pg},
 		{name: "sr_dml_no_where", db: "starrocks", typ: "dml", sql: "DELETE FROM t;", errRule: "DMLWhere", rules: sr},
-		{name: "sr_dml_tautology", db: "starrocks", typ: "dml", sql: "UPDATE t SET a=1 WHERE 1=1;", errRule: "DMLWhere", rules: sr},
+		{name: "sr_dml_tautology", db: "starrocks", typ: "dml", sql: "UPDATE t SET a=1 WHERE 1=1;", errRule: "DMLForbidTautology", rules: sr},
 		{name: "sr_dml_insert_no_cols", db: "starrocks", typ: "dml", sql: "INSERT INTO t VALUES (1);", errRule: "DMLInsertMustSpecifyColumn", rules: sr},
 		{name: "sr_dml_forbid_ddl", db: "starrocks", typ: "dml", sql: "CREATE TABLE t (id int);", errRule: "DMLForbidDDL", rules: sr},
 		{name: "sr_dml_ok", db: "starrocks", typ: "dml", sql: "UPDATE t SET a=1 WHERE id=1;", wantOK: true, rules: sr},

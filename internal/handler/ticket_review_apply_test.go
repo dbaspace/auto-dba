@@ -66,7 +66,7 @@ func TestTicketDDLDMLAppliesCatalogRules(t *testing.T) {
 
 	cases := []tc{
 		{name: "pg_dml_no_where", db: "postgres", typ: "dml", sql: "DELETE FROM t;", errRule: "DMLWhere", aliases: []string{"pg", "postgresql"}},
-		{name: "pg_dml_tautology", db: "postgres", typ: "dml", sql: "UPDATE t SET a=1 WHERE 1=1;", errRule: "DMLWhere"},
+		{name: "pg_dml_tautology", db: "postgres", typ: "dml", sql: "UPDATE t SET a=1 WHERE 1=1;", errRule: "DMLForbidTautology"},
 		{name: "pg_dml_insert_cols", db: "postgres", typ: "dml", sql: "INSERT INTO t VALUES (1);", errRule: "DMLInsertMustSpecifyColumn"},
 		{name: "pg_dml_forbid_ddl", db: "postgres", typ: "dml", sql: "CREATE TABLE t (id int);", errRule: "DMLForbidDDL"},
 		{name: "pg_dml_ok", db: "postgres", typ: "dml", sql: "UPDATE t SET a=1 WHERE id=1;", wantOK: true},
@@ -79,7 +79,7 @@ func TestTicketDDLDMLAppliesCatalogRules(t *testing.T) {
 		{name: "pg_ddl_table_prefix", db: "postgres", typ: "ddl", sql: "CREATE TABLE t (id bigserial PRIMARY KEY, update_time timestamptz NOT NULL DEFAULT now());", errRule: "DDLTableNamePrefix"},
 		{name: "pg_ddl_add_ok", db: "postgres", typ: "ddl", sql: "ALTER TABLE t ADD COLUMN name varchar(20) NOT NULL DEFAULT 'x'; COMMENT ON COLUMN t.name IS 'n';", wantOK: true},
 		{name: "sr_dml_no_where", db: "starrocks", typ: "dml", sql: "DELETE FROM t;", errRule: "DMLWhere", aliases: []string{"sr"}},
-		{name: "sr_dml_tautology", db: "starrocks", typ: "dml", sql: "UPDATE t SET a=1 WHERE 1=1;", errRule: "DMLWhere"},
+		{name: "sr_dml_tautology", db: "starrocks", typ: "dml", sql: "UPDATE t SET a=1 WHERE 1=1;", errRule: "DMLForbidTautology"},
 		{name: "sr_dml_insert_cols", db: "starrocks", typ: "dml", sql: "INSERT INTO t VALUES (1);", errRule: "DMLInsertMustSpecifyColumn"},
 		{name: "sr_dml_forbid_ddl", db: "starrocks", typ: "dml", sql: "CREATE TABLE t (id int);", errRule: "DMLForbidDDL"},
 		{name: "sr_dml_ok", db: "starrocks", typ: "dml", sql: "UPDATE t SET a=1 WHERE id=1;", wantOK: true},
@@ -123,6 +123,7 @@ func TestTicketReviewRuleValueVersions(t *testing.T) {
 	versions := []ver{
 		{"legacy", []sqlcheck.Rule{
 			{Name: "DMLWhere", Value: "1=1,true"},
+			{Name: "DMLForbidTautology", Value: "true"},
 			{Name: "DMLInsertMustSpecifyColumn", Value: "true"},
 			{Name: "DDLForbidTruncate", Value: "false"},
 			{Name: "DDLColumnTypeDisallow", Value: "float,double,double precision,real"},
@@ -133,6 +134,7 @@ func TestTicketReviewRuleValueVersions(t *testing.T) {
 		}},
 		{"catalog_json", []sqlcheck.Rule{
 			{Name: "DMLWhere", Value: `{"tautologies":["1=1","true"]}`},
+			{Name: "DMLForbidTautology", Value: "true"},
 			{Name: "DMLInsertMustSpecifyColumn", Value: "true"},
 			{Name: "DDLForbidTruncate", Value: `{"allow":false}`},
 			{Name: "DDLColumnTypeDisallow", Value: `{"disallow_types":["float","double","double precision","real"]}`},
@@ -146,7 +148,7 @@ func TestTicketReviewRuleValueVersions(t *testing.T) {
 		name, db, typ, sql, errRule string
 	}{
 		{"dml_where", "postgres", "dml", "DELETE FROM t;", "DMLWhere"},
-		{"dml_tautology", "pg", "dml", "UPDATE t SET a=1 WHERE 1=1;", "DMLWhere"},
+		{"dml_tautology", "pg", "dml", "UPDATE t SET a=1 WHERE 1=1;", "DMLForbidTautology"},
 		{"ddl_truncate", "postgresql", "ddl", "TRUNCATE t;", "DDLForbidTruncate"},
 		{"ddl_lock", "postgres", "ddl", "LOCK TABLE t;", "DDLForbidLockVacuumFull"},
 		{"ddl_float", "postgres", "ddl", "CREATE TABLE tbl_t (id int NOT NULL DEFAULT 0, x float NOT NULL DEFAULT 0);", "DDLColumnTypeDisallow"},
@@ -216,7 +218,7 @@ func TestCheckTicketSQLUsesStoreReviewRules(t *testing.T) {
 	}{
 		{name: "pg_dml", db: "pg", typ: "dml", sql: "DELETE FROM t;", errRule: "DMLWhere"},
 		{name: "pg_ddl", db: "postgresql", typ: "ddl", sql: "TRUNCATE t;", errRule: "DDLForbidTruncate"},
-		{name: "sr_dml", db: "sr", typ: "dml", sql: "UPDATE t SET a=1 WHERE 1=1;", errRule: "DMLWhere"},
+		{name: "sr_dml", db: "sr", typ: "dml", sql: "UPDATE t SET a=1 WHERE 1=1;", errRule: "DMLForbidTautology"},
 		{name: "sr_ddl", db: "starrocks", typ: "ddl", sql: "TRUNCATE TABLE t;", errRule: "DDLForbidTruncate"},
 		{name: "pg_dml_ok", db: "postgres", typ: "dml", sql: "UPDATE t SET a=1 WHERE id=1;", wantOK: true},
 	}
