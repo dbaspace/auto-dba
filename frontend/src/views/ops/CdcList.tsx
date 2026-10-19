@@ -39,9 +39,9 @@ import CdcReinitBatchModal from './CdcReinitBatchModal'
 import {
   approvalText,
   decodeCdcExtra,
+  endpointLabel,
   envTagColor,
   formatSourceScopeLabel,
-  instAddr,
   instEnv,
   isValidCdcTaskID,
   statusTagColor,
@@ -63,6 +63,26 @@ const TYPE_ALL = [
   { label: '源表加列', value: 'alter_schema' },
   { label: '删除任务', value: 'delete_task' },
 ]
+const RUNNING_STATUS_OPTIONS = [
+  { label: '编排中', value: '编排中' },
+  { label: '运行中', value: '运行中' },
+  { label: '已暂停', value: '已暂停' },
+  { label: '异常', value: '异常' },
+  { label: '失败', value: '失败' },
+  { label: '重新初始化中', value: '重新初始化中' },
+]
+const PENDING_STATUS_OPTIONS = [{ label: '待审批', value: '待审批' }]
+const APPROVAL_STATUS_OPTIONS = [
+  { label: '已通过', value: '已通过' },
+  { label: '已驳回', value: '已驳回' },
+  { label: '已撤销', value: '已撤销' },
+]
+
+function runningStatusLabel(row: any): string {
+  const unhealthy = row._pipeline?.healthy === false && row.status !== 'reinitializing'
+  if (unhealthy) return '异常'
+  return statusText(row.status)
+}
 
 const COL_STORE = 'auto-dba.cdc.listCols.v1'
 const columnDefs = [
@@ -110,6 +130,7 @@ export default function CdcList() {
   const [pageSize, setPageSize] = useState(10)
   const [filterEnv, setFilterEnv] = useState('')
   const [filterType, setFilterType] = useState('init')
+  const [filterStatus, setFilterStatus] = useState('')
   const [filterQ, setFilterQ] = useState('')
   const [visibleCols, setVisibleCols] = useState<string[]>(loadCols())
   const [reinitTask, setReinitTask] = useState<any>(null)
@@ -123,6 +144,8 @@ export default function CdcList() {
   }, [instances])
 
   const taskTypeOptions = tab === 'running' ? [{ label: '初始化', value: 'init' }] : TYPE_ALL
+  const statusOptions =
+    tab === 'running' ? RUNNING_STATUS_OPTIONS : tab === 'pending' ? PENDING_STATUS_OPTIONS : APPROVAL_STATUS_OPTIONS
 
   function colOn(key: string) {
     return visibleCols.includes(key)
@@ -184,11 +207,18 @@ export default function CdcList() {
       if (tab === 'running' && !isRunning(r)) return false
       if (filterType && r.task_type !== filterType) return false
       if (filterEnv && rowEnv(r) !== filterEnv) return false
+      if (filterStatus) {
+        if (tab === 'running' && runningStatusLabel(r) !== filterStatus) return false
+        if (tab === 'pending' && filterStatus === '待审批' && !(r.approval_status === 'pending' || r.status === 'pending')) {
+          return false
+        }
+        if (tab === 'approval_result' && approvalText(r.approval_status) !== filterStatus) return false
+      }
       if (filterQ && !String(r.name || '').toLowerCase().includes(filterQ.trim().toLowerCase())) return false
       return true
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allRows, tab, filterType, filterEnv, filterQ, instMap])
+  }, [allRows, tab, filterType, filterEnv, filterStatus, filterQ, instMap])
 
   const pageRows = useMemo(() => {
     const start = (page - 1) * pageSize
@@ -353,6 +383,7 @@ export default function CdcList() {
       setTab(t)
       setPage(1)
       setFilterType(t === 'running' ? 'init' : '')
+      setFilterStatus('')
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams])
@@ -367,6 +398,7 @@ export default function CdcList() {
     setTab(key as TabKey)
     setPage(1)
     setFilterType(key === 'running' ? 'init' : '')
+    setFilterStatus('')
   }
 
   function goCreate(type: string) {
@@ -421,12 +453,15 @@ export default function CdcList() {
       key: 'source',
       width: 180,
       ellipsis: true,
-      render: (_: any, row: any) => (
-        <div style={{ lineHeight: 1.4 }}>
-          <div>{instAddr(instOf(row.source_instance_id))}</div>
-          <div style={{ color: '#8c8c8c', fontSize: 12 }}>{sourceScopeOf(row)}</div>
-        </div>
-      ),
+      render: (_: any, row: any) => {
+        const extra = extraOf(row)
+        return (
+          <div style={{ lineHeight: 1.4 }}>
+            <div>{endpointLabel(instOf(row.source_instance_id), extra.source_host, extra.source_port)}</div>
+            <div style={{ color: '#8c8c8c', fontSize: 12 }}>{sourceScopeOf(row)}</div>
+          </div>
+        )
+      },
     })
   }
   if (colOn('target')) {
@@ -435,14 +470,18 @@ export default function CdcList() {
       key: 'target',
       width: 180,
       ellipsis: true,
-      render: (_: any, row: any) => (
-        <div style={{ lineHeight: 1.4 }}>
-          <div>{row.target_instance_id ? instAddr(instOf(row.target_instance_id)) : '未配置'}</div>
-          <div style={{ color: '#8c8c8c', fontSize: 12 }}>
-            {row.target_db || (row.target_instance_id ? '—' : '未配置')}
+      render: (_: any, row: any) => {
+        const extra = extraOf(row)
+        const addr = endpointLabel(instOf(row.target_instance_id), extra.target_host, extra.target_port)
+        return (
+          <div style={{ lineHeight: 1.4 }}>
+            <div>{row.target_instance_id || extra.target_host ? addr : '未配置'}</div>
+            <div style={{ color: '#8c8c8c', fontSize: 12 }}>
+              {row.target_db || (row.target_instance_id || extra.target_host ? '—' : '未配置')}
+            </div>
           </div>
-        </div>
-      ),
+        )
+      },
     })
   }
   if (colOn('tables')) {
@@ -484,9 +523,7 @@ export default function CdcList() {
       render: (_: any, row: any) => {
         const unhealthy = row._pipeline?.healthy === false && row.status !== 'reinitializing'
         return (
-          <Tag color={unhealthy ? 'error' : statusTagColor(row.status)}>
-            {unhealthy ? '异常' : statusText(row.status)}
-          </Tag>
+          <Tag color={unhealthy ? 'error' : statusTagColor(row.status)}>{runningStatusLabel(row)}</Tag>
         )
       },
     })
@@ -718,6 +755,19 @@ export default function CdcList() {
               value={filterType || undefined}
               onChange={(v) => setFilterType(v || '')}
               options={taskTypeOptions}
+            />
+          </Form.Item>
+          <Form.Item label="状态">
+            <Select
+              allowClear
+              placeholder="全部"
+              style={{ width: 140 }}
+              value={filterStatus || undefined}
+              onChange={(v) => {
+                setFilterStatus(v || '')
+                setPage(1)
+              }}
+              options={statusOptions}
             />
           </Form.Item>
           <Form.Item label="任务名称">

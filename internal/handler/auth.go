@@ -572,6 +572,9 @@ func (h *AuthHandler) upsertSSOUser(info *ssoauth.UserInfo, fallbackUsername str
 			}
 			email = strings.TrimSpace(info.Email)
 		}
+		if cleaned := ldapauth.CleanDisplayName(displayName); cleaned != "" {
+			displayName = cleaned
+		}
 		u = &store.User{
 			Username:    localName,
 			DisplayName: displayName,

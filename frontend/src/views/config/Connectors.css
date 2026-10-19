@@ -1,3 +1,9 @@
+.connector-toolbar {
+  justify-content: flex-start;
+}
+.connector-add {
+  margin-left: auto;
+}
 .pager {
   display: flex;
   align-items: center;

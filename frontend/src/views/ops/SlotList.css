@@ -1,0 +1,38 @@
+/* 页本身不滚动，避免底部滚动条压住分页 */
+.slot-list.ops-page {
+  overflow: hidden;
+}
+
+.slot-list .ops-table {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.slot-list .ops-table .ant-table-wrapper,
+.slot-list .ops-table .ant-spin-nested-loading,
+.slot-list .ops-table .ant-spin-container {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.slot-list .ops-table .ant-table {
+  flex: 1;
+  min-height: 0;
+}
+
+.slot-list .ops-table .ant-table-container {
+  height: 100%;
+}
+
+.slot-list .ops-table .ant-table-body {
+  overflow: auto !important;
+}
+
+.slot-list .ops-table .ant-table-pagination.ant-pagination {
+  flex: 0 0 auto;
+  margin: 12px 0 0 !important;
+  align-items: center;
+}

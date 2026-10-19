@@ -630,7 +630,7 @@ func (o *Orchestrator) reinitPG(ctx context.Context, t *store.CDCTask, extra map
 		if err := o.ensureSignalOnDB(ctx, inst, p.DbName, p.PublicationName, signalTable); err != nil {
 			return fmt.Errorf("分库 %s signal: %w", p.DbName, err)
 		}
-		_ = o.Store.UpsertSlot(&store.SyncSlot{
+		_ = o.Store.UpsertSlotMeta(&store.SyncSlot{
 			Host: inst.Host, Port: inst.Port, SlotName: p.SlotName, Database: p.DbName, Active: true, Plugin: "pgoutput",
 		})
 	}

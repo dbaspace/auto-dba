@@ -220,15 +220,18 @@ type CDCTask struct {
 }
 
 type SyncSlot struct {
-	ID         string `json:"id"`
-	Host       string `json:"host"`
-	Port       int    `json:"port"`
-	SlotName   string `json:"slot_name"`
-	Database   string `json:"database"`
-	Active     bool   `json:"active"`
-	RestartLSN string `json:"restart_lsn,omitempty"`
-	Plugin     string `json:"plugin,omitempty"`
-	UpdatedAt  string `json:"updated_at"`
+	ID                string `json:"id"`
+	Host              string `json:"host"`
+	Port              int    `json:"port"`
+	SlotName          string `json:"slot_name"`
+	Database          string `json:"database"`
+	Active            bool   `json:"active"`
+	ActivePID         int64  `json:"active_pid,omitempty"`
+	RestartLSN        string `json:"restart_lsn,omitempty"`
+	ConfirmedFlushLSN string `json:"confirmed_flush_lsn,omitempty"`
+	LagBytes          int64  `json:"lag_bytes,omitempty"`
+	Plugin            string `json:"plugin,omitempty"`
+	UpdatedAt         string `json:"updated_at"`
 }
 
 type MigrationTask struct {

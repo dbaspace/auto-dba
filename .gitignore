@@ -26,3 +26,6 @@ node_modules/
 /scripts/_*.sql
 /scripts/_imported_*.raw.txt
 /scripts/_platform_*.raw.txt
+/scripts/import_hub_cdc.sql
+/scripts/import_hub_cdc_all.sql
+/scripts/import_hub_cdc_versions.sql

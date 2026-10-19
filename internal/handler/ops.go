@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -552,7 +553,9 @@ func (h *CDCHandler) createSharedCDCIssue(c *gin.Context, t *store.CDCTask, revi
 		AssignedTo:  reviewer,
 	}
 	stampTenantID(c, func(tid string) {
-		if issue != nil { issue.TenantID = tid }
+		if issue != nil {
+			issue.TenantID = tid
+		}
 	})
 	if err := h.Store.CreateIssue(issue); err != nil {
 		return nil, err
@@ -730,62 +733,354 @@ func (h *CDCHandler) Delete(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
-type SlotHandler struct{ Store *store.DB }
+type SlotHandler struct {
+	Store  *store.DB
+	Secret string
+
+	collectMu   sync.Mutex
+	collectJobs map[string]*slotCollectJob
+}
+
+type slotCollectJob struct {
+	mu         sync.Mutex
+	Status     string
+	Total      int
+	Done       int
+	Percent    int
+	Current    string
+	Collected  int
+	Skipped    int
+	Message    string
+	StartedAt  string
+	FinishedAt string
+}
+
+type slotCollectView struct {
+	Status     string `json:"status"`
+	Total      int    `json:"total"`
+	Done       int    `json:"done"`
+	Percent    int    `json:"percent"`
+	Current    string `json:"current"`
+	Collected  int    `json:"collected"`
+	Skipped    int    `json:"skipped"`
+	Message    string `json:"message"`
+	StartedAt  string `json:"started_at,omitempty"`
+	FinishedAt string `json:"finished_at,omitempty"`
+	Started    bool   `json:"started"`
+}
+
+func (j *slotCollectJob) view(started bool) slotCollectView {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.viewLocked(started)
+}
+
+func (j *slotCollectJob) viewLocked(started bool) slotCollectView {
+	return slotCollectView{
+		Status: j.Status, Total: j.Total, Done: j.Done, Percent: j.Percent,
+		Current: j.Current, Collected: j.Collected, Skipped: j.Skipped, Message: j.Message,
+		StartedAt: j.StartedAt, FinishedAt: j.FinishedAt, Started: started,
+	}
+}
+
+func (h *SlotHandler) collectJob(tenantID string) *slotCollectJob {
+	if strings.TrimSpace(tenantID) == "" {
+		tenantID = "_"
+	}
+	h.collectMu.Lock()
+	defer h.collectMu.Unlock()
+	if h.collectJobs == nil {
+		h.collectJobs = map[string]*slotCollectJob{}
+	}
+	job, ok := h.collectJobs[tenantID]
+	if !ok {
+		job = &slotCollectJob{Status: "idle", Message: "尚未采集"}
+		h.collectJobs[tenantID] = job
+	}
+	return job
+}
 
 func (h *SlotHandler) List(c *gin.Context) {
-	list, err := h.Store.ListSlotsInTenant(effectiveListTenantID(h.Store, c))
+	tid := effectiveListTenantID(h.Store, c)
+	list, err := h.Store.ListSlotsInTenant(tid)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
-	if list == nil {
-		list = []store.SyncSlot{}
+	tasks, err := h.Store.ListCDCInTenant(tid, "", "")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": list})
+	insts, err := h.Store.ListInstancesInTenant(tid, "", "")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	rows := cdc.AttachSlotCDC(list, tasks, insts)
+	if rows == nil {
+		rows = []cdc.SlotRow{}
+	}
+	c.JSON(http.StatusOK, gin.H{"data": rows})
+}
+
+func (h *SlotHandler) CollectProgress(c *gin.Context) {
+	c.JSON(http.StatusOK, h.collectJob(effectiveListTenantID(h.Store, c)).view(false))
 }
 
 func (h *SlotHandler) Collect(c *gin.Context) {
-	insts, err := h.Store.ListInstancesInTenant(effectiveListTenantID(h.Store, c), "postgres", "")
+	tid := effectiveListTenantID(h.Store, c)
+	all, err := h.Store.ListInstancesInTenant(tid, "", "")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
-	n := 0
-	for _, inst := range insts {
-		_ = h.Store.UpsertSlot(&store.SyncSlot{
-			Host: inst.Host, Port: inst.Port, SlotName: "demo_slot_" + inst.ID[:8],
-			Database: "postgres", Active: false, Plugin: "pgoutput",
-		})
-		n++
+	insts := make([]store.Instance, 0, len(all))
+	for _, inst := range all {
+		if store.NormalizeDBType(inst.DBType) == "postgres" {
+			insts = append(insts, inst)
+		}
 	}
-	c.JSON(http.StatusOK, gin.H{"ok": true, "collected": n, "message": "已按本地 postgres 实例写入占位槽（未连真实库采集）"})
+	job := h.collectJob(tid)
+	job.mu.Lock()
+	if job.Status == "running" {
+		snap := job.viewLocked(false)
+		job.mu.Unlock()
+		c.JSON(http.StatusOK, snap)
+		return
+	}
+	now := time.Now().Format("2006-01-02 15:04:05")
+	job.Status = "running"
+	job.Total = len(insts)
+	job.Done = 0
+	job.Percent = 0
+	job.Collected = 0
+	job.Skipped = 0
+	job.Current = ""
+	job.StartedAt = now
+	job.FinishedAt = ""
+	if len(insts) == 0 {
+		job.Status = "done"
+		job.Percent = 100
+		job.Message = "没有已登记的 PostgreSQL 实例"
+		job.FinishedAt = now
+		snap := job.viewLocked(true)
+		job.mu.Unlock()
+		c.JSON(http.StatusOK, snap)
+		return
+	}
+	job.Message = fmt.Sprintf("准备采集 %d 个实例", len(insts))
+	snap := job.viewLocked(true)
+	job.mu.Unlock()
+	tasks, _ := h.Store.ListCDCInTenant(tid, "", "")
+	known, _ := h.Store.ListSlotsInTenant(tid)
+	go h.runSlotCollect(job, append([]store.Instance(nil), insts...), tasks, known)
+	c.JSON(http.StatusOK, snap)
+}
+
+func (h *SlotHandler) runSlotCollect(job *slotCollectJob, insts []store.Instance, tasks []store.CDCTask, known []store.SyncSlot) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	collected, skipped := 0, 0
+	var notes []string
+	for i := range insts {
+		inst := &insts[i]
+		if name := demoSlotName(inst.ID); name != "" {
+			_ = h.Store.DeleteSlotsByName(name)
+		}
+		label := cdc.SlotDisplayHost(inst)
+		if label == "" {
+			label = inst.Name
+		}
+		target := fmt.Sprintf("%s:%d", label, inst.Port)
+		job.mu.Lock()
+		job.Current = target
+		job.Message = fmt.Sprintf("正在采集 %s（%d/%d）", target, i+1, len(insts))
+		job.mu.Unlock()
+
+		slots, qerr := cdc.CollectInstanceSlots(ctx, inst, h.Secret, slotDBNames(inst, tasks, known))
+		if qerr != nil {
+			skipped++
+			notes = append(notes, fmt.Sprintf("%s 采集失败：%s", target, qerr.Error()))
+		} else if err := h.Store.ReplaceHostSlots(label, inst.Port, cdc.InstanceHostAliases(inst), slots); err != nil {
+			skipped++
+			notes = append(notes, fmt.Sprintf("%s 写入失败：%s", target, err.Error()))
+		} else {
+			collected += len(slots)
+		}
+		job.mu.Lock()
+		job.Done = i + 1
+		job.Collected = collected
+		job.Skipped = skipped
+		if job.Total > 0 {
+			job.Percent = job.Done * 100 / job.Total
+		}
+		job.mu.Unlock()
+	}
+	msg := fmt.Sprintf("已采集 %d 个复制槽", collected)
+	if skipped > 0 {
+		msg += fmt.Sprintf("，跳过 %d 个实例", skipped)
+	}
+	if len(notes) > 0 {
+		shown := notes
+		if len(shown) > 3 {
+			shown = append(append([]string{}, notes[:3]...), fmt.Sprintf("另有 %d 条失败", len(notes)-3))
+		}
+		msg += "：" + strings.Join(shown, "；")
+	}
+	job.mu.Lock()
+	job.Status = "done"
+	job.Done = len(insts)
+	job.Percent = 100
+	job.Current = ""
+	job.Collected = collected
+	job.Skipped = skipped
+	job.Message = msg
+	job.FinishedAt = time.Now().Format("2006-01-02 15:04:05")
+	job.mu.Unlock()
+}
+
+func slotDBNames(inst *store.Instance, tasks []store.CDCTask, slots []store.SyncSlot) []string {
+	if inst == nil {
+		return nil
+	}
+	var names []string
+	add := func(name string) {
+		name = strings.TrimSpace(name)
+		if name != "" {
+			names = append(names, name)
+		}
+	}
+	for _, task := range tasks {
+		if task.SourceID == inst.ID {
+			add(task.SourceDB)
+		}
+	}
+	for _, slot := range slots {
+		if cdc.SlotHostMatches(slot.Host, slot.Port, inst) {
+			add(slot.Database)
+		}
+	}
+	return names
+}
+
+func demoSlotName(id string) string {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return ""
+	}
+	if len(id) > 8 {
+		id = id[:8]
+	}
+	return "demo_slot_" + id
 }
 
 func (h *SlotHandler) Delete(c *gin.Context) {
+	ids := slotIDs(c)
+	if len(ids) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "id 必填"})
+		return
+	}
+	tid := effectiveListTenantID(h.Store, c)
+	deleted := 0
+	for _, id := range ids {
+		ok, err := h.Store.GetSlotInTenant(id, tid)
+		if err != nil || !ok {
+			continue
+		}
+		if err := h.Store.DeleteSlot(id); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+			return
+		}
+		deleted++
+	}
+	if deleted == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"message": "复制槽不存在"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "deleted": deleted})
+}
+
+func (h *SlotHandler) Restart(c *gin.Context) {
+	ids := slotIDs(c)
+	if len(ids) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "id 必填"})
+		return
+	}
+	tid := effectiveListTenantID(h.Store, c)
+	tasks, err := h.Store.ListCDCInTenant(tid, "", "")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	insts, err := h.Store.ListInstancesInTenant(tid, "", "")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Minute)
+	defer cancel()
+	restarted, skipped := 0, 0
+	var notes []string
+	for _, id := range ids {
+		ok, err := h.Store.GetSlotInTenant(id, tid)
+		if err != nil || !ok {
+			skipped++
+			continue
+		}
+		slot, err := h.Store.GetSyncSlot(id)
+		if err != nil || slot == nil {
+			skipped++
+			continue
+		}
+		rows := cdc.AttachSlotCDC([]store.SyncSlot{*slot}, tasks, insts)
+		if len(rows) == 0 || rows[0].ConnectorName == "" || rows[0].ConnectBase == "" {
+			skipped++
+			continue
+		}
+		if err := cdc.RestartDebeziumConnector(ctx, rows[0].ConnectBase, rows[0].ConnectorName); err != nil {
+			notes = append(notes, rows[0].ConnectorName+"："+err.Error())
+			continue
+		}
+		restarted++
+	}
+	msg := fmt.Sprintf("已重启 %d 个连接器", restarted)
+	if skipped > 0 {
+		msg += fmt.Sprintf("，跳过 %d 条未匹配连接器的记录", skipped)
+	}
+	if len(notes) > 0 {
+		msg += "；失败：" + strings.Join(notes, "；")
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": restarted > 0 || len(notes) == 0, "restarted": restarted, "skipped": skipped, "message": msg})
+}
+
+func slotIDs(c *gin.Context) []string {
 	var req struct {
-		ID string `json:"id"`
+		ID  string   `json:"id"`
+		IDs []string `json:"ids"`
 	}
 	_ = c.ShouldBindJSON(&req)
 	if req.ID == "" {
 		req.ID = c.Query("id")
 	}
-	if req.ID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "id 必填"})
-		return
+	seen := map[string]struct{}{}
+	var out []string
+	add := func(id string) {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return
+		}
+		if _, ok := seen[id]; ok {
+			return
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
 	}
-	if ok, err := h.Store.GetSlotInTenant(req.ID, effectiveListTenantID(h.Store, c)); err != nil || !ok {
-		c.JSON(http.StatusNotFound, gin.H{"message": "复制槽不存在"})
-		return
+	add(req.ID)
+	for _, id := range req.IDs {
+		add(id)
 	}
-	if err := h.Store.DeleteSlot(req.ID); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"ok": true})
-}
-
-func (h *SlotHandler) Restart(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"ok": false, "message": "重启复制槽需要连接目标 PostgreSQL，当前未配置真实采集"})
+	return out
 }
 
 type ArchiveHandler struct {
@@ -862,7 +1157,9 @@ func (h *ArchiveHandler) Create(c *gin.Context) {
 		AssignedTo:  approver,
 	}
 	stampTenantID(c, func(tid string) {
-		if issue != nil { issue.TenantID = tid }
+		if issue != nil {
+			issue.TenantID = tid
+		}
 	})
 	if err := h.Store.CreateIssue(issue); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
@@ -1161,7 +1458,9 @@ func (h *DCLHandler) Submit(c *gin.Context) {
 		Submitter: username, AssignedTo: reviewer,
 	}
 	stampTenantID(c, func(tid string) {
-		if issue != nil { issue.TenantID = tid }
+		if issue != nil {
+			issue.TenantID = tid
+		}
 	})
 	if err := h.Store.CreateIssue(issue); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})

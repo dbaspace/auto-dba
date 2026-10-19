@@ -61,6 +61,40 @@ func TestDisplayNameFromEntryPrefersChineseOverLogin(t *testing.T) {
 	}
 }
 
+func TestDisplayNameStripsEmployeePrefix(t *testing.T) {
+	cfg := &store.LdapConfig{DisplayNameAttr: "cn"}
+	entry := &ldap.Entry{Attributes: []*ldap.EntryAttribute{
+		{Name: "cn", Values: []string{"1d449671赵培超"}},
+		{Name: "displayName", Values: []string{"赵培超"}},
+	}}
+	if got := displayNameFromEntry(cfg, entry, "zhaopeichao"); got != "赵培超" {
+		t.Fatalf("prefer clean displayName, got %q", got)
+	}
+
+	onlyCN := &ldap.Entry{Attributes: []*ldap.EntryAttribute{
+		{Name: "cn", Values: []string{"1d449671赵培超"}},
+	}}
+	if got := displayNameFromEntry(cfg, onlyCN, "zhaopeichao"); got != "赵培超" {
+		t.Fatalf("strip cn prefix, got %q", got)
+	}
+
+	fromSN := &ldap.Entry{Attributes: []*ldap.EntryAttribute{
+		{Name: "sn", Values: []string{"1d449671"}},
+		{Name: "givenName", Values: []string{"赵培超"}},
+	}}
+	if got := displayNameFromEntry(nil, fromSN, "zhaopeichao"); got != "赵培超" {
+		t.Fatalf("do not join employee sn, got %q", got)
+	}
+
+	surname := &ldap.Entry{Attributes: []*ldap.EntryAttribute{
+		{Name: "sn", Values: []string{"赵"}},
+		{Name: "givenName", Values: []string{"培超"}},
+	}}
+	if got := displayNameFromEntry(nil, surname, "zhaopeichao"); got != "赵培超" {
+		t.Fatalf("join surname, got %q", got)
+	}
+}
+
 func TestDisplayNameFromEntryConfiguredAttr(t *testing.T) {
 	entry := &ldap.Entry{
 		Attributes: []*ldap.EntryAttribute{

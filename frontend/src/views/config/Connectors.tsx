@@ -46,13 +46,27 @@ export default function Connectors() {
   const [saving, setSaving] = useState(false)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
+  const [envFilter, setEnvFilter] = useState<string>()
+  const [kafkaFilter, setKafkaFilter] = useState('')
+  const [dbzFilter, setDbzFilter] = useState('')
   const [editingId, setEditingId] = useState('')
   const [form] = Form.useForm()
 
+  const filteredRows = useMemo(() => {
+    const kafka = kafkaFilter.trim().toLowerCase()
+    const dbz = dbzFilter.trim().toLowerCase()
+    return rows.filter((row) => {
+      if (envFilter && row.env !== envFilter) return false
+      if (kafka && !String(row.kafka_host || '').toLowerCase().includes(kafka)) return false
+      if (dbz && !String(row.dbz_host || '').toLowerCase().includes(dbz)) return false
+      return true
+    })
+  }, [rows, envFilter, kafkaFilter, dbzFilter])
+
   const pagedRows = useMemo(() => {
     const start = (page - 1) * pageSize
-    return rows.slice(start, start + pageSize)
-  }, [rows, page, pageSize])
+    return filteredRows.slice(start, start + pageSize)
+  }, [filteredRows, page, pageSize])
 
   const envValue = Form.useWatch('env', form)
   const kafkaValue = Form.useWatch('kafka_host', form)
@@ -165,8 +179,41 @@ export default function Connectors() {
 
   return (
     <div className="ops-page">
-      <div className="ops-title">
-        <Button type="primary" onClick={() => open()}>
+      <div className="ops-title connector-toolbar">
+        <Select
+          allowClear
+          showSearch
+          optionFilterProp="label"
+          placeholder="环境"
+          style={{ width: 180 }}
+          value={envFilter}
+          options={envOptions.filter((o) => !String(o.label).startsWith('未在接口列表中'))}
+          onChange={(v) => {
+            setEnvFilter(v)
+            setPage(1)
+          }}
+        />
+        <Input
+          allowClear
+          placeholder="Kafka 地址"
+          style={{ width: 200 }}
+          value={kafkaFilter}
+          onChange={(e) => {
+            setKafkaFilter(e.target.value)
+            setPage(1)
+          }}
+        />
+        <Input
+          allowClear
+          placeholder="Debezium 地址"
+          style={{ width: 200 }}
+          value={dbzFilter}
+          onChange={(e) => {
+            setDbzFilter(e.target.value)
+            setPage(1)
+          }}
+        />
+        <Button type="primary" className="connector-add" onClick={() => open()}>
           增加
         </Button>
       </div>
@@ -217,11 +264,11 @@ export default function Connectors() {
         />
       </div>
       <div className="pager">
-        <span className="pager-total">共 {rows.length} 条</span>
+        <span className="pager-total">共 {filteredRows.length} 条</span>
         <Pagination
           current={page}
           pageSize={pageSize}
-          total={rows.length}
+          total={filteredRows.length}
           pageSizeOptions={[10, 20, 50]}
           showSizeChanger
           showQuickJumper

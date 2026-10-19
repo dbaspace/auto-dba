@@ -261,6 +261,22 @@ export function instAddr(i: any): string {
   return i.host ? `${i.host}:${i.port}` : i.name || '—'
 }
 
+function extraEndpoint(host: any, port: any): string {
+  const h = String(host || '').trim()
+  const p = Number(port || 0)
+  if (h && p > 0) return `${h}:${p}`
+  return h
+}
+
+/** 实例对不上时仍展示任务里记下的主机端口。 */
+export function endpointLabel(instance: any, host: any, port: any, withName = false): string {
+  const raw = extraEndpoint(host, port)
+  if (!instance) return raw || '—'
+  const label = withName ? instLabel(instance) : instAddr(instance)
+  if (!raw || label.includes(raw)) return label
+  return `${label}（${raw}）`
+}
+
 export function instEnv(i: any): string {
   return i?.idc || i?.env || i?.env_code || ''
 }

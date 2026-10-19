@@ -349,6 +349,11 @@ func (h *RBACHandler) ListUsers(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
+	for i := range list {
+		if cleaned := ldapauth.CleanDisplayName(list[i].DisplayName); cleaned != "" {
+			list[i].DisplayName = cleaned
+		}
+	}
 	c.JSON(http.StatusOK, gin.H{"data": list})
 }
 

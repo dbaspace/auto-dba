@@ -541,6 +541,7 @@ func Init(e *gin.Engine, d Deps) {
 
 	secured.GET("/sync-slots", d.Slot.List)
 	secured.POST("/sync-slots/collect", d.Slot.Collect)
+	secured.GET("/sync-slots/collect", d.Slot.CollectProgress)
 	secured.POST("/sync-slots/restart", d.Slot.Restart)
 	secured.POST("/sync-slots/delete", d.Slot.Delete)
 
@@ -1038,7 +1039,7 @@ func Init(e *gin.Engine, d Deps) {
 }
 
 // spaAssetExt：带这些扩展名的请求在文件缺失时返回 404，禁止回落 index.html
-//（否则浏览器会把 HTML 当 JS/CSS 解析，表现为白屏）。
+// （否则浏览器会把 HTML 当 JS/CSS 解析，表现为白屏）。
 var spaAssetExt = map[string]struct{}{
 	".js": {}, ".mjs": {}, ".css": {}, ".map": {},
 	".svg": {}, ".png": {}, ".jpg": {}, ".jpeg": {}, ".gif": {}, ".webp": {}, ".ico": {},

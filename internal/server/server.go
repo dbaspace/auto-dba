@@ -156,7 +156,7 @@ func Run(cfg *config.Config, configPath string) {
 		Account:            &handler.AccountHandler{Store: db, Secret: fieldCrypto},
 		Review:             &handler.ReviewRuleHandler{Store: db, Secret: fieldCrypto},
 		CDC:                &handler.CDCHandler{Store: db, Cfg: cfg, Secret: fieldCrypto},
-		Slot:               &handler.SlotHandler{Store: db},
+		Slot:               &handler.SlotHandler{Store: db, Secret: fieldCrypto},
 		Migration:          &handler.MigrationHandler{Store: db, Cfg: cfg, Secret: fieldCrypto, Engine: migEngine},
 		Flashback:          &handler.FlashbackHandler{Store: db, Secret: fieldCrypto, Cfg: cfg, Engine: fbEngine},
 		Archive:            &handler.ArchiveHandler{Store: db, Secret: fieldCrypto, Engine: arcEngine},

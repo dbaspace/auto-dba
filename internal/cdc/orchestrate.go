@@ -350,7 +350,7 @@ func (o *Orchestrator) stepPG(ctx context.Context, t *store.CDCTask, extra map[s
 		if err := o.ensureSignalOnDB(ctx, inst, b.DbName, b.PublicationName, signalTable); err != nil {
 			return fmt.Errorf("分库 %s signal: %w", b.DbName, err)
 		}
-		_ = o.Store.UpsertSlot(&store.SyncSlot{
+		_ = o.Store.UpsertSlotMeta(&store.SyncSlot{
 			Host: inst.Host, Port: inst.Port, SlotName: b.SlotName, Database: b.DbName, Active: true, Plugin: "pgoutput",
 		})
 		o.appendLog(t, "INFO", "pg", "publication="+b.PublicationName+" slot="+b.SlotName+" db="+b.DbName)

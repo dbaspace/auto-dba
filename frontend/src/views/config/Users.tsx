@@ -104,6 +104,7 @@ export default function Users() {
   const [pwdSaving, setPwdSaving] = useState(false)
   const [busyId, setBusyId] = useState('')
   const [larkSyncing, setLarkSyncing] = useState(false)
+  const [usernameQuery, setUsernameQuery] = useState('')
   const me = currentUserId()
   const [form, setForm] = useState({
     id: '',
@@ -153,6 +154,12 @@ export default function Users() {
       setTenantRoleMap({})
     }
   }
+
+  const shown = useMemo(() => {
+    const q = usernameQuery.trim().toLowerCase()
+    if (!q) return rows
+    return rows.filter((r) => String(r.username || '').toLowerCase().includes(q))
+  }, [rows, usernameQuery])
 
   const names = useMemo(() => {
     const m: Record<string, string> = {}
@@ -271,6 +278,13 @@ export default function Users() {
   return (
     <div className="ops-page">
       <div className="ops-title">
+        <Input
+          allowClear
+          placeholder="搜索用户名"
+          style={{ width: 220, marginRight: 'auto' }}
+          value={usernameQuery}
+          onChange={(e) => setUsernameQuery(e.target.value)}
+        />
         <Space>
           <Auth urn={Perm.users.create}>
             <Button type="primary" onClick={() => open()}>
@@ -289,7 +303,7 @@ export default function Users() {
       <div className="ops-table">
         <ResponsiveTable
           rowKey={(r) => r.id || r.username}
-          dataSource={rows}
+          dataSource={shown}
           bordered
           pagination={false}
           scroll={{ y: '100%' }}

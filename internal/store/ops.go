@@ -10,6 +10,8 @@ import (
 	"github.com/google/uuid"
 )
 
+const cdcTaskCols = `id, name, task_type, status, COALESCE(source_instance_id,''), COALESCE(target_instance_id,''), COALESCE(source_db,''), COALESCE(target_db,''), COALESCE(parent_id,''), COALESCE(approval_status,''), COALESCE(issue_id,''), COALESCE(description,''), created_at, updated_at`
+
 func (d *DB) CreateCDC(t *CDCTask) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	if t.ID == "" {
@@ -50,7 +52,7 @@ func (d *DB) ListCDCByIssueID(issueID string) ([]CDCTask, error) {
 		return nil, nil
 	}
 	rows, err := d.Query(
-		`SELECT id, name, task_type, status, source_instance_id, target_instance_id, source_db, target_db, parent_id, approval_status, issue_id, description, created_at, updated_at FROM tbl_cdc_tasks WHERE issue_id=? ORDER BY created_at ASC`, issueID,
+		`SELECT `+cdcTaskCols+` FROM tbl_cdc_tasks WHERE issue_id=? ORDER BY created_at ASC`, issueID,
 	)
 	if err != nil {
 		return nil, err
@@ -70,7 +72,7 @@ func (d *DB) ListCDCByIssueID(issueID string) ([]CDCTask, error) {
 func (d *DB) GetCDC(id string) (*CDCTask, error) {
 	t := &CDCTask{}
 	err := d.QueryRow(
-		`SELECT id, name, task_type, status, source_instance_id, target_instance_id, source_db, target_db, parent_id, approval_status, issue_id, description, created_at, updated_at FROM tbl_cdc_tasks WHERE id=?`, id,
+		`SELECT `+cdcTaskCols+` FROM tbl_cdc_tasks WHERE id=?`, id,
 	).Scan(&t.ID, &t.Name, &t.TaskType, &t.Status, &t.SourceID, &t.TargetID, &t.SourceDB, &t.TargetDB, &t.ParentID, &t.ApprovalStatus, &t.IssueID, &t.Description, &t.CreatedAt, &t.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -83,7 +85,7 @@ func (d *DB) ListCDC(status, taskType string) ([]CDCTask, error) {
 }
 
 func (d *DB) ListCDCInTenant(tenantID, status, taskType string) ([]CDCTask, error) {
-	q := `SELECT id, name, task_type, status, source_instance_id, target_instance_id, source_db, target_db, parent_id, approval_status, issue_id, description, created_at, updated_at FROM tbl_cdc_tasks WHERE 1=1`
+	q := `SELECT ` + cdcTaskCols + ` FROM tbl_cdc_tasks WHERE 1=1`
 	var args []any
 	q, args = appendTenantFilter(q, args, tenantID)
 	if status != "" {
@@ -128,7 +130,7 @@ func (d *DB) ListSlots() ([]SyncSlot, error) {
 }
 
 func (d *DB) ListSlotsInTenant(tenantID string) ([]SyncSlot, error) {
-	q := `SELECT id, host, port, slot_name, database_name, active, restart_lsn, plugin, updated_at FROM tbl_sync_slots WHERE 1=1`
+	q := `SELECT id, host, port, slot_name, database_name, active, COALESCE(active_pid,0), restart_lsn, COALESCE(confirmed_flush_lsn,''), COALESCE(lag_bytes,0), plugin, updated_at FROM tbl_sync_slots WHERE 1=1`
 	args := []any{}
 	q, args = appendTenantFilter(q, args, tenantID)
 	q += ` ORDER BY host, slot_name`
@@ -141,13 +143,46 @@ func (d *DB) ListSlotsInTenant(tenantID string) ([]SyncSlot, error) {
 	for rows.Next() {
 		var s SyncSlot
 		var active int
-		if err := rows.Scan(&s.ID, &s.Host, &s.Port, &s.SlotName, &s.Database, &active, &s.RestartLSN, &s.Plugin, &s.UpdatedAt); err != nil {
+		if err := rows.Scan(&s.ID, &s.Host, &s.Port, &s.SlotName, &s.Database, &active, &s.ActivePID, &s.RestartLSN, &s.ConfirmedFlushLSN, &s.LagBytes, &s.Plugin, &s.UpdatedAt); err != nil {
 			return nil, err
 		}
 		s.Active = active == 1
 		out = append(out, s)
 	}
 	return out, rows.Err()
+}
+
+// UpsertSlotMeta 只登记槽身份。已有 pid、LSN、滞后时不覆盖，避免建任务把采集结果清掉。
+func (d *DB) UpsertSlotMeta(s *SyncSlot) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	if s.ID == "" {
+		s.ID = uuid.NewString()
+	}
+	active := 0
+	if s.Active {
+		active = 1
+	}
+	var exists string
+	err := d.QueryRow(`SELECT id FROM tbl_sync_slots WHERE host=? AND port=? AND slot_name=?`, s.Host, s.Port, s.SlotName).Scan(&exists)
+	if err == nil && exists != "" {
+		_, err = d.Exec(`UPDATE tbl_sync_slots SET database_name=?, active=?, plugin=?, updated_at=? WHERE id=?`,
+			s.Database, active, s.Plugin, now, exists)
+		return err
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	_, err = d.Exec(
+		`INSERT INTO tbl_sync_slots(id, host, port, slot_name, database_name, active, active_pid, restart_lsn, confirmed_flush_lsn, lag_bytes, plugin, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+		s.ID, s.Host, s.Port, s.SlotName, s.Database, active, s.ActivePID, s.RestartLSN, s.ConfirmedFlushLSN, s.LagBytes, s.Plugin, now,
+	)
+	if err != nil {
+		return err
+	}
+	if tid := d.inheritTenantFromHostPort(s.Host, s.Port); tid != "" {
+		return d.AssignTenantID("tbl_sync_slots", s.ID, tid)
+	}
+	return nil
 }
 
 func (d *DB) UpsertSlot(s *SyncSlot) error {
@@ -162,16 +197,16 @@ func (d *DB) UpsertSlot(s *SyncSlot) error {
 	var exists string
 	err := d.QueryRow(`SELECT id FROM tbl_sync_slots WHERE host=? AND port=? AND slot_name=?`, s.Host, s.Port, s.SlotName).Scan(&exists)
 	if err == nil && exists != "" {
-		_, err = d.Exec(`UPDATE tbl_sync_slots SET database_name=?, active=?, restart_lsn=?, plugin=?, updated_at=? WHERE id=?`,
-			s.Database, active, s.RestartLSN, s.Plugin, now, exists)
+		_, err = d.Exec(`UPDATE tbl_sync_slots SET database_name=?, active=?, active_pid=?, restart_lsn=?, confirmed_flush_lsn=?, lag_bytes=?, plugin=?, updated_at=? WHERE id=?`,
+			s.Database, active, s.ActivePID, s.RestartLSN, s.ConfirmedFlushLSN, s.LagBytes, s.Plugin, now, exists)
 		return err
 	}
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
 	_, err = d.Exec(
-		`INSERT INTO tbl_sync_slots(id, host, port, slot_name, database_name, active, restart_lsn, plugin, updated_at) VALUES(?,?,?,?,?,?,?,?,?)`,
-		s.ID, s.Host, s.Port, s.SlotName, s.Database, active, s.RestartLSN, s.Plugin, now,
+		`INSERT INTO tbl_sync_slots(id, host, port, slot_name, database_name, active, active_pid, restart_lsn, confirmed_flush_lsn, lag_bytes, plugin, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+		s.ID, s.Host, s.Port, s.SlotName, s.Database, active, s.ActivePID, s.RestartLSN, s.ConfirmedFlushLSN, s.LagBytes, s.Plugin, now,
 	)
 	if err != nil {
 		return err
@@ -185,6 +220,58 @@ func (d *DB) UpsertSlot(s *SyncSlot) error {
 func (d *DB) DeleteSlot(id string) error {
 	_, err := d.Exec(`DELETE FROM tbl_sync_slots WHERE id=?`, id)
 	return err
+}
+
+func (d *DB) GetSyncSlot(id string) (*SyncSlot, error) {
+	s := &SyncSlot{}
+	var active int
+	err := d.QueryRow(`SELECT id, host, port, slot_name, database_name, active, COALESCE(active_pid,0), restart_lsn, COALESCE(confirmed_flush_lsn,''), COALESCE(lag_bytes,0), plugin, updated_at FROM tbl_sync_slots WHERE id=?`, id).
+		Scan(&s.ID, &s.Host, &s.Port, &s.SlotName, &s.Database, &active, &s.ActivePID, &s.RestartLSN, &s.ConfirmedFlushLSN, &s.LagBytes, &s.Plugin, &s.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	s.Active = active == 1
+	return s, nil
+}
+
+func (d *DB) DeleteSlotsByName(name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil
+	}
+	_, err := d.Exec(`DELETE FROM tbl_sync_slots WHERE slot_name=?`, name)
+	return err
+}
+
+// ReplaceHostSlots 用本次采集结果替换同一实例主机（含域名和多地址）上的旧槽。
+func (d *DB) ReplaceHostSlots(displayHost string, port int, aliases []string, slots []SyncSlot) error {
+	seen := map[string]struct{}{}
+	for _, h := range append([]string{displayHost}, aliases...) {
+		h = strings.TrimSpace(h)
+		if h == "" {
+			continue
+		}
+		key := strings.ToLower(h)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		if _, err := d.Exec(`DELETE FROM tbl_sync_slots WHERE host=? AND port=?`, h, port); err != nil {
+			return err
+		}
+	}
+	for i := range slots {
+		slots[i].ID = ""
+		slots[i].Host = displayHost
+		slots[i].Port = port
+		if err := d.UpsertSlot(&slots[i]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (d *DB) CreateArchive(t *ArchiveTask) error {

@@ -38,7 +38,7 @@ import {
   formatLagBytes,
   formatLogTime,
   formatSourceScopeLabel,
-  instLabel,
+  endpointLabel,
   isValidCdcTaskID,
   keyModelLabel,
   LOG_STEP_OPTIONS,
@@ -984,8 +984,13 @@ export default function CdcDetail() {
           <Card size="small" title="源端 / 目标端" className="cdc-card small">
             <Descriptions column={2} size="small">
               {descItems([
-                { label: '源端 PostgreSQL', children: instLabel(source) },
-                { label: '目标端 StarRocks', children: task.target_instance_id ? instLabel(target) : '未配置' },
+                { label: '源端 PostgreSQL', children: endpointLabel(source, extra.source_host, extra.source_port, true) },
+                {
+                  label: '目标端 StarRocks',
+                  children: task.target_instance_id || extra.target_host
+                    ? endpointLabel(target, extra.target_host, extra.target_port, true)
+                    : '未配置',
+                },
                 { label: 'PG 数据库', children: sourceScopeLabel },
                 { label: '目标数据库', children: task.target_db || '未配置' },
                 { label: 'Schema', children: extra.source_schema || 'public' },

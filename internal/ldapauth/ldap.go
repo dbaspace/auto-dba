@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"regexp"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf16"
 
 	"github.com/go-ldap/ldap/v3"
@@ -427,7 +429,9 @@ func displayNameFromEntry(cfg *store.LdapConfig, entry *ldap.Entry, username str
 	add(entry.GetAttributeValue("name"))
 	sn := strings.TrimSpace(entry.GetAttributeValue("sn"))
 	given := strings.TrimSpace(entry.GetAttributeValue("givenName"))
-	if sn != "" || given != "" {
+	if looksLikeEmployeeID(sn) {
+		add(given)
+	} else if sn != "" || given != "" {
 		add(sn + given) // 中文常见「姓+名」无空格
 		if sn != "" && given != "" {
 			add(given + " " + sn)
@@ -435,15 +439,75 @@ func displayNameFromEntry(cfg *store.LdapConfig, entry *ldap.Entry, username str
 	}
 	add(entry.GetAttributeValue("cn"))
 
+	return preferPersonName(candidates, username)
+}
+
+// employeePrefix 工号紧贴在汉字前：至少 4 位数字，或至少 6 位十六进制。
+var employeePrefix = regexp.MustCompile(`^(?:[0-9]{4,}|[0-9a-fA-F]{6,})(\p{Han}.*)$`)
+
+// CleanDisplayName 去掉紧贴在中文名前的工号，例如 1d449671赵培超 → 赵培超。
+func CleanDisplayName(name string) string {
+	name = strings.TrimSpace(name)
+	if m := employeePrefix.FindStringSubmatch(name); len(m) == 2 {
+		return m[1]
+	}
+	return name
+}
+
+func looksLikeEmployeeID(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+	digits, hex := true, true
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			digits = false
+		}
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')) {
+			hex = false
+		}
+	}
+	if digits && len(s) >= 4 {
+		return true
+	}
+	return hex && len(s) >= 6
+}
+
+func preferPersonName(candidates []string, username string) string {
+	var usable []string
 	for _, c := range candidates {
-		if username == "" || !strings.EqualFold(c, username) {
+		if username != "" && strings.EqualFold(c, username) {
+			continue
+		}
+		usable = append(usable, c)
+	}
+	if len(usable) == 0 {
+		usable = candidates
+	}
+	for _, c := range usable {
+		if CleanDisplayName(c) == c && !looksLikeEmployeeID(c) && personNameLike(c) {
 			return c
 		}
 	}
-	if len(candidates) > 0 {
-		return candidates[0]
+	for _, c := range usable {
+		if s := CleanDisplayName(c); s != "" && s != c {
+			return s
+		}
+	}
+	if len(usable) > 0 {
+		return CleanDisplayName(usable[0])
 	}
 	return ""
+}
+
+func personNameLike(s string) bool {
+	for _, r := range s {
+		if unicode.Is(unicode.Han, r) || unicode.IsLetter(r) {
+			return true
+		}
+	}
+	return false
 }
 
 func emailFromEntry(entry *ldap.Entry) string {

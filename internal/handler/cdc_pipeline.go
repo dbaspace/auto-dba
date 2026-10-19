@@ -118,7 +118,10 @@ func (h *CDCHandler) Tables(c *gin.Context) {
 				continue
 			}
 			tgt := firstNonEmpty(m.TargetTable, firstOf(m.SourceTables))
-			topics := cdc.CollectMappingKafkaTopics(prefix, schema, m)
+			topics := m.KafkaTopics
+			if len(topics) == 0 {
+				topics = cdc.CollectMappingKafkaTopics(prefix, schema, m)
+			}
 			rl := rlByTable[strings.ToLower(tgt)]
 			src := strings.TrimSpace(m.Source)
 			if src == "" {
@@ -139,8 +142,8 @@ func (h *CDCHandler) Tables(c *gin.Context) {
 				"status":              firstNonEmpty(m.Status, "active"),
 				"source":              src,
 				"topic_names":         topics,
-				"routine_load_name":   firstNonEmpty(rl.Name, tgt+"_rl"),
-				"routine_load_status": rl.State,
+				"routine_load_name":   firstNonEmpty(rl.Name, m.RoutineLoadName, tgt+"_rl"),
+				"routine_load_status": firstNonEmpty(rl.State, m.RoutineLoadStatus),
 			}
 			if it, ok := driftBy[strings.ToLower(tgt)]; ok {
 				row["schema_has_drift"] = it.HasDrift

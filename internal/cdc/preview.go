@@ -16,6 +16,9 @@ type TableMapping struct {
 	SyncTableMode      string            `json:"sync_table_mode,omitempty"`
 	Status             string            `json:"status,omitempty"`
 	Source             string            `json:"source,omitempty"`
+	KafkaTopics        []string          `json:"kafka_topics,omitempty"`
+	RoutineLoadName    string            `json:"routine_load_name,omitempty"`
+	RoutineLoadStatus  string            `json:"routine_load_status,omitempty"`
 }
 
 type PreviewInput struct {
