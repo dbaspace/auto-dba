@@ -38,7 +38,7 @@ func TestBuiltinBeConfMaterialize(t *testing.T) {
 		"brpc_port = 8060",
 		"starlet_port = 9070",
 		"priority_networks = 172.23.16.42",
-		"storage_root_path = /data/dorisdb/be/storage",
+		"storage_root_path = /data/dorisdb",
 	}
 	for _, w := range want {
 		if !strings.Contains(body, w) {

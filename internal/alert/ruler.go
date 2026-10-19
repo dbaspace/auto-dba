@@ -182,7 +182,16 @@ func (r *Ruler) RunOnce(ctx context.Context) {
 	}
 	wg.Wait()
 
+	// 读取登记资源失败时不过滤，保持原有评估行为
+	var registry *registryIndex
+	if insts, ierr := r.Store.ListInstances("", ""); ierr != nil {
+		log.Printf("alert-ruler: list instances: %v", ierr)
+	} else {
+		registry = newRegistryIndex(insts)
+	}
+
 	seen := map[string]bool{}
+	dropped := map[string]bool{}
 	for _, res := range results {
 		rule := res.rule
 		if res.err != nil {
@@ -218,6 +227,21 @@ func (r *Ruler) RunOnce(ctx context.Context) {
 				thr = store.FormatTierThreshold(tier)
 			}
 			fp := store.AlertFingerprint(rule.ID, labels)
+			if registry != nil {
+				svc := rule.Labels["service"]
+				if svc == "" {
+					svc = labels["service"]
+				}
+				if svc == "" {
+					svc = labels["job"]
+				}
+				inst, ok := registry.match(labels, svc)
+				if !ok {
+					dropped[fp] = true
+					continue
+				}
+				labels = registeredLabels(labels, inst)
+			}
 			seen[fp] = true
 			if err := r.upsertFiring(rule, labels, fp, ser.Value, sev, thr, forDur, now, silences); err != nil {
 				log.Printf("alert-ruler: upsert %s: %v", fp, err)
@@ -228,7 +252,7 @@ func (r *Ruler) RunOnce(ctx context.Context) {
 			rule.Health = res.health
 		}
 	}
-	r.resolveMissing(seen, now)
+	r.resolveMissing(seen, dropped, now)
 }
 
 func (r *Ruler) upsertFiring(rule store.AlertRule, labels map[string]string, fp string, value float64, severity, thr string, forDur time.Duration, now time.Time, silences []store.AlertSilence) error {
@@ -382,7 +406,8 @@ func (r *Ruler) buildDispatchOpts(a *store.Alert, active []store.Alert) *notify.
 	return opts
 }
 
-func (r *Ruler) resolveMissing(seen map[string]bool, now time.Time) {
+// resolveMissing 关闭本轮未命中的告警；dropped 为资源未登记或类型不符的，静默关闭不外发恢复通知。
+func (r *Ruler) resolveMissing(seen, dropped map[string]bool, now time.Time) {
 	list, err := r.Store.ListAlerts(store.AlertFilter{Tab: "active"})
 	if err != nil {
 		return
@@ -396,6 +421,18 @@ func (r *Ruler) resolveMissing(seen map[string]bool, now time.Time) {
 			continue
 		}
 		if seen[a.Fingerprint] {
+			continue
+		}
+		if dropped[a.Fingerprint] {
+			a.Status = store.AlertStatusResolved
+			a.Handle = store.AlertHandleResolved
+			a.ResolvedAt = now.UTC().Format(time.RFC3339)
+			a.ResolveNotified = true
+			if err := r.Store.SaveAlert(&a); err == nil {
+				_ = r.Store.AddAlertEvent(&store.AlertEvent{
+					AlertID: a.ID, Action: "resolve", Detail: "资源未在平台登记或类型与规则不符，关闭告警（不外发）", Operator: "系统",
+				})
+			}
 			continue
 		}
 		alreadyResolveNotified := a.ResolveNotified

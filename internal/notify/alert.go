@@ -475,7 +475,15 @@ func alertLocation(p AlertPayload) (host, mount string) {
 		}
 		return ""
 	}
-	host = pick("hostname", "instance", "host")
+	if regHost := pick("registered_host"); regHost != "" {
+		host = regHost
+		if name := pick("registered_name"); name != "" && !strings.EqualFold(name, regHost) {
+			host = name + "(" + regHost + ")"
+		}
+	}
+	if host == "" {
+		host = pick("hostname", "instance", "host")
+	}
 	if host == "" {
 		host = strings.TrimSpace(p.InstanceID)
 	}

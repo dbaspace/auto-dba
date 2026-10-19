@@ -148,6 +148,11 @@ func ruleOf(byName map[string]Rule, names ...string) (Rule, bool) {
 
 func checkStatement(stmt, issueType, dbType string, byName map[string]Rule) []*ruleHit {
 	kw := firstKeyword(stmt)
+	if strings.EqualFold(issueType, "dml") {
+		if mk := mainKeyword(stmt); mk != "" {
+			kw = mk
+		}
+	}
 	upper := strings.ToUpper(stmt)
 	switch issueType {
 	case "ddl":
@@ -388,7 +393,7 @@ func applyDMLRules(stmt, upper, kw string, byName map[string]Rule) []*ruleHit {
 	if enabled(byName, "DMLAllowSubquery") && (kw == "UPDATE" || kw == "DELETE") && reHasSelect.MatchString(upper) {
 		add(catalogHit("DMLAllowSubquery", ruleMsg(byName, "DMLAllowSubquery", "不允许包含子查询")))
 	}
-	if enabled(byName, "DMLAllowMultiTable") && isMultiTableDML(kw, upper) {
+	if enabled(byName, "DMLAllowMultiTable") && isMultiTableDML(kw, upper, stmt) {
 		add(catalogHit("DMLAllowMultiTable", "不允许一次更新/删除多表"))
 	}
 	if kw == "UPDATE" && enabled(byName, "DMLUpdateSetAnd") && updateSetUsesAnd(stmt) {
@@ -553,8 +558,11 @@ func countInsertRows(stmt string) int {
 	return strings.Count(stmt[i:], "),(") + 1
 }
 
-func isMultiTableDML(kw, upper string) bool {
+func isMultiTableDML(kw, upper, stmt string) bool {
 	if kw == "UPDATE" {
+		if updateFromOnlyCTEs(stmt) {
+			return false
+		}
 		return reUpdateFrom.MatchString(upper) || strings.Contains(upper, " JOIN ")
 	}
 	if kw == "DELETE" {

@@ -29,6 +29,11 @@ func TestFormatAlertLocation(t *testing.T) {
 		t.Fatalf("hostname priority / empty mount: %s", text)
 	}
 
+	p.Labels = map[string]string{"instance": "10.20.0.5:9187", "registered_host": "10.20.0.5", "registered_name": "pg-order"}
+	if text := FormatAlertText(p); !strings.Contains(text, "host=pg-order(10.20.0.5)") || strings.Contains(text, "9187") {
+		t.Fatalf("registered host priority: %s", text)
+	}
+
 	p.Labels = nil
 	if text := FormatAlertText(p); strings.Contains(text, "host=") || strings.Contains(text, "mount=") {
 		t.Fatalf("no labels should omit location: %s", text)

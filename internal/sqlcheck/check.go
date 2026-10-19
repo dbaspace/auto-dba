@@ -169,8 +169,334 @@ func bufferInPendingCreateMaterializedView(buf string) bool {
 	return !strings.Contains(upper, " AS") && !strings.HasSuffix(upper, " AS")
 }
 
+// bufferIsPendingCTEHead 判断缓冲区是否只有 WITH [RECURSIVE] cte AS (...) 定义、主体还没出现。
+func bufferIsPendingCTEHead(buf string) bool {
+	names, rest, ok := parseLeadingCTEs(buf)
+	return ok && len(names) > 0 && strings.TrimSpace(rest) == ""
+}
+
+// parseLeadingCTEs 解析语句开头的 CTE 列表。ok 为 false 表示不是完整的 WITH 头。
+func parseLeadingCTEs(stmt string) (names []string, rest string, ok bool) {
+	s := strings.TrimSpace(stripSQLComments(stmt))
+	i, matched := matchWordAt(s, 0, "WITH")
+	if !matched {
+		return nil, stmt, false
+	}
+	if ni, yes := matchWordAt(s, i, "RECURSIVE"); yes {
+		i = ni
+	}
+	for {
+		name, ni, yes := readSQLIdent(s, i)
+		if !yes || name == "" {
+			return nil, stmt, false
+		}
+		i = ni
+		if j := skipSpaceSQL(s, i); j < len(s) && s[j] == '(' {
+			if end, closed := skipBalancedParens(s, j); closed {
+				if _, asOK := matchWordAt(s, end, "AS"); asOK {
+					i = end
+				}
+			}
+		}
+		ni, yes = matchWordAt(s, i, "AS")
+		if !yes {
+			return nil, stmt, false
+		}
+		i = ni
+		if ni, yes = matchWordAt(s, i, "NOT"); yes {
+			if ni2, mat := matchWordAt(s, ni, "MATERIALIZED"); mat {
+				i = ni2
+			}
+		} else if ni, yes = matchWordAt(s, i, "MATERIALIZED"); yes {
+			i = ni
+		}
+		end, closed := skipBalancedParens(s, i)
+		if !closed {
+			return nil, stmt, false
+		}
+		names = append(names, name)
+		i = skipSpaceSQL(s, end)
+		if i < len(s) && s[i] == ',' {
+			i++
+			continue
+		}
+		return names, strings.TrimSpace(s[i:]), true
+	}
+}
+
+func skipSpaceSQL(s string, i int) int {
+	for i < len(s) && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r') {
+		i++
+	}
+	return i
+}
+
+func matchWordAt(s string, i int, word string) (int, bool) {
+	i = skipSpaceSQL(s, i)
+	if i > 0 && isWordByte(s[i-1]) {
+		return i, false
+	}
+	if i+len(word) > len(s) || !strings.EqualFold(s[i:i+len(word)], word) {
+		return i, false
+	}
+	end := i + len(word)
+	if end < len(s) && isWordByte(s[end]) {
+		return i, false
+	}
+	return end, true
+}
+
+func readSQLIdent(s string, i int) (string, int, bool) {
+	i = skipSpaceSQL(s, i)
+	if i >= len(s) {
+		return "", i, false
+	}
+	if s[i] == '"' || s[i] == '`' {
+		name, j, ok := skipQuotedSQL(s, i, s[i])
+		if !ok {
+			return "", i, false
+		}
+		return strings.Trim(name, "\"`"), j, true
+	}
+	if !isWordByte(s[i]) || (s[i] >= '0' && s[i] <= '9') {
+		return "", i, false
+	}
+	j := i + 1
+	for j < len(s) && isWordByte(s[j]) {
+		j++
+	}
+	return s[i:j], j, true
+}
+
+// skipQuotedSQL 返回引号内原文（不含两端引号）以及引号后的下标。
+func skipQuotedSQL(s string, i int, q byte) (string, int, bool) {
+	j := i + 1
+	var b strings.Builder
+	for j < len(s) {
+		if s[j] == q {
+			if j+1 < len(s) && s[j+1] == q {
+				b.WriteByte(q)
+				j += 2
+				continue
+			}
+			return b.String(), j + 1, true
+		}
+		if q == '\'' && s[j] == '\\' && j+1 < len(s) {
+			b.WriteByte(s[j+1])
+			j += 2
+			continue
+		}
+		b.WriteByte(s[j])
+		j++
+	}
+	return "", i, false
+}
+
+func skipBalancedParens(s string, i int) (int, bool) {
+	i = skipSpaceSQL(s, i)
+	if i >= len(s) || s[i] != '(' {
+		return i, false
+	}
+	depth := 0
+	for ; i < len(s); i++ {
+		c := s[i]
+		if c == '\'' || c == '"' || c == '`' {
+			_, j, ok := skipQuotedSQL(s, i, c)
+			if !ok {
+				return i, false
+			}
+			i = j - 1
+			continue
+		}
+		if c == '$' && i+1 < len(s) && s[i+1] == '$' {
+			j := i + 2
+			for j+1 < len(s) && !(s[j] == '$' && s[j+1] == '$') {
+				j++
+			}
+			if j+1 >= len(s) {
+				return i, false
+			}
+			i = j + 1
+			continue
+		}
+		if c == '(' {
+			depth++
+			continue
+		}
+		if c == ')' {
+			depth--
+			if depth == 0 {
+				return i + 1, true
+			}
+		}
+	}
+	return i, false
+}
+
+// scanTopLevel 在括号和字符串之外回调。返回 true 表示停止。
+func scanTopLevel(s string, fn func(i int) bool) {
+	depth := 0
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == '\'' || c == '"' || c == '`' {
+			_, j, ok := skipQuotedSQL(s, i, c)
+			if !ok {
+				return
+			}
+			i = j - 1
+			continue
+		}
+		if c == '$' && i+1 < len(s) && s[i+1] == '$' {
+			j := i + 2
+			for j+1 < len(s) && !(s[j] == '$' && s[j+1] == '$') {
+				j++
+			}
+			if j+1 >= len(s) {
+				return
+			}
+			i = j + 1
+			continue
+		}
+		if c == '(' {
+			depth++
+			continue
+		}
+		if c == ')' {
+			if depth > 0 {
+				depth--
+			}
+			continue
+		}
+		if depth == 0 && fn(i) {
+			return
+		}
+	}
+}
+
+func splitTopLevelComma(s string) []string {
+	var parts []string
+	last := 0
+	scanTopLevel(s, func(i int) bool {
+		if s[i] == ',' {
+			parts = append(parts, s[last:i])
+			last = i + 1
+		}
+		return false
+	})
+	parts = append(parts, s[last:])
+	return parts
+}
+
+// mainKeyword 返回语句主体关键字。WITH ... UPDATE/INSERT/DELETE/SELECT 返回主体，而不是 WITH。
+func mainKeyword(stmt string) string {
+	kw := firstKeyword(stmt)
+	if kw != "WITH" {
+		return kw
+	}
+	_, rest, ok := parseLeadingCTEs(stmt)
+	if !ok || strings.TrimSpace(rest) == "" {
+		return kw
+	}
+	if mk := firstKeyword(rest); mk != "" {
+		return mk
+	}
+	return kw
+}
+
+// cteNames 返回本语句 WITH 定义的 CTE 名。
+func cteNames(stmt string) []string {
+	names, _, ok := parseLeadingCTEs(stmt)
+	if !ok {
+		return nil
+	}
+	return names
+}
+
+// updateFromOnlyCTEs 判断 UPDATE 顶层 FROM 是否只引用本语句定义的 CTE，且不含 JOIN。
+func updateFromOnlyCTEs(stmt string) bool {
+	body := stmt
+	defined, rest, ok := parseLeadingCTEs(stmt)
+	if ok {
+		body = rest
+	}
+	names := map[string]bool{}
+	for _, n := range defined {
+		names[strings.ToLower(n)] = true
+	}
+	from, found := topLevelFromList(body)
+	if !found || strings.TrimSpace(from) == "" {
+		return false
+	}
+	if containsSQLKeyword(from, "JOIN") {
+		return false
+	}
+	items := splitTopLevelComma(from)
+	if len(items) == 0 {
+		return false
+	}
+	for _, item := range items {
+		table := firstFromTable(item)
+		if table == "" || !names[strings.ToLower(table)] {
+			return false
+		}
+	}
+	return true
+}
+
+func topLevelFromList(body string) (string, bool) {
+	start := -1
+	scanTopLevel(body, func(i int) bool {
+		if ni, ok := matchWordAt(body, i, "FROM"); ok {
+			start = ni
+			return true
+		}
+		return false
+	})
+	if start < 0 {
+		return "", false
+	}
+	end := len(body)
+	scanTopLevel(body[start:], func(i int) bool {
+		if _, ok := matchWordAt(body[start:], i, "WHERE"); ok {
+			end = start + i
+			return true
+		}
+		if _, ok := matchWordAt(body[start:], i, "RETURNING"); ok {
+			end = start + i
+			return true
+		}
+		return false
+	})
+	return strings.TrimSpace(body[start:end]), true
+}
+
+func firstFromTable(item string) string {
+	s := strings.TrimSpace(item)
+	i := 0
+	if ni, ok := matchWordAt(s, i, "ONLY"); ok {
+		i = ni
+	}
+	if ni, ok := matchWordAt(s, i, "LATERAL"); ok {
+		i = ni
+	}
+	name, ni, ok := readSQLIdent(s, i)
+	if !ok || name == "" {
+		return ""
+	}
+	if j := skipSpaceSQL(s, ni); j < len(s) && s[j] == '.' {
+		return ""
+	}
+	return name
+}
+
 // shouldSuppressMissingSemicolonSplit 在 DDL 多行语句内部子句处不强制分段。
 func shouldSuppressMissingSemicolonSplit(buf string, keyword string, sqlContent string, i int) bool {
+	switch keyword {
+	case "INSERT", "UPDATE", "DELETE", "SELECT", "WITH":
+		if bufferIsPendingCTEHead(buf) {
+			return true
+		}
+	}
 	if keyword == "SELECT" || keyword == "WITH" {
 		return bufferEndsWithPendingQueryAS(buf) || bufferEndsWithClosedCTE(buf) || bufferEndsWithSetOp(buf)
 	}

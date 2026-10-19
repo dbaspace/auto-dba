@@ -3034,12 +3034,12 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
           </Form.Item>
           <Form.Item
             name="data_root"
-            label={clusterModalMode === 'register' ? 'BE 数据目录（storage_root_path）' : 'BE 数据盘挂载点'}
+            label="BE 数据目录（storage_root_path）"
             extra={clusterModalMode === 'register'
-              ? '登记时填完整 storage_root_path（如 /data1/dorisdb/be/storage），可由 BE :8040/varz 探测'
-              : '不存在时自动选用未使用磁盘格式化挂载；已存在时须位于非系统盘'}
+              ? '登记时填探测到的完整目录（如 /data1/dorisdb/be/storage），下发时原样写入，不拼接路径'
+              : '填写实际数据目录，下发时原样写入 be.conf。不存在时自动选用未使用磁盘格式化挂载；已存在时须位于非系统盘'}
           >
-            <Input placeholder={clusterModalMode === 'register' ? '/data1/dorisdb/be/storage' : '/data'} />
+            <Input placeholder="/data1/dorisdb/be/storage" />
           </Form.Item>
           <Form.Item
             name="fe_password"
@@ -3323,11 +3323,11 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
               <>
                 <Form.Item
                   name="data_root"
-                  label="数据目录（BE 数据盘挂载点）"
+                  label="数据目录（storage_root_path）"
                   rules={[{ required: true, message: '请填写数据目录' }]}
-                  extra="不存在时自动选用未使用磁盘格式化挂载；已存在时须位于非系统盘"
+                  extra="填写实际数据目录，下发时原样写入。不存在时自动选用未使用磁盘格式化挂载；已存在时须位于非系统盘"
                 >
-                  <Input placeholder="/data" />
+                  <Input placeholder="/data1/dorisdb/be/storage" />
                 </Form.Item>
                 <Alert type="warning" showIcon message="BE：校验数据目录（空闲盘格式化挂载 / 已挂载直接使用 / 系统盘拒绝）→ 装包到 dorisdb_base/be → ADD BACKEND" />
               </>

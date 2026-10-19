@@ -166,17 +166,17 @@ func softwareBaseForRole(cl *store.SrCluster, role string) string {
 	return strings.TrimRight(strings.TrimSpace(cl.SoftwareBase), "/")
 }
 
-// resolveStorageRoot：data_root 已是完整 storage_root_path（以 /storage 结尾）则原样使用；否则拼 {data_root}/be/storage。
+// resolveStorageRoot 原样使用 data_root：登记集群为探测到的目录，初始化为表单填写值。不拼接 be/storage。
 func resolveStorageRoot(dataRoot string) string {
 	dr := filepath.ToSlash(strings.TrimSpace(dataRoot))
 	if dr == "" {
 		dr = "/data"
 	}
 	trim := strings.TrimRight(dr, "/")
-	if strings.HasSuffix(strings.ToLower(trim), "/storage") || strings.EqualFold(filepath.Base(trim), "storage") {
-		return trim
+	if trim == "" {
+		return "/data"
 	}
-	return filepath.ToSlash(filepath.Join(trim, "be", "storage"))
+	return trim
 }
 
 // BuildConfVars 从集群/节点推导端口与锁定路径。
@@ -208,7 +208,7 @@ func BuildConfVars(cl *store.SrCluster, n *store.SrNode) ConfVars {
 		LogDir: filepath.ToSlash(filepath.Join(soft, "log")),
 		// FE meta 落在软件目录（现网：/home/dorisdb_base/fe/meta）
 		MetaDir: filepath.ToSlash(filepath.Join(soft, "meta")),
-		// BE storage：登记探测常写入完整 storage_root_path；新建仍用 {data_root}/be/storage
+		// BE storage：登记用探测目录，初始化用填写的 data_root，均原样写入
 		StorageRoot: resolveStorageRoot(dataRoot),
 		BEPort:      9060,
 		BRPCPort:    8060,

@@ -36,10 +36,16 @@ func TestParseBEVarz(t *testing.T) {
 }
 
 func TestResolveStorageRoot(t *testing.T) {
-	if got := resolveStorageRoot("/data"); got != "/data/be/storage" {
-		t.Fatalf("mount got %q", got)
+	cases := []string{"/data", "/data1/dorisdb/be/storeage", "/data1/dorisdb/be/storage", "/data/dorisdb"}
+	for _, in := range cases {
+		if got := resolveStorageRoot(in); got != in {
+			t.Fatalf("resolveStorageRoot(%q)=%q", in, got)
+		}
 	}
-	if got := resolveStorageRoot("/data1/dorisdb/be/storage"); got != "/data1/dorisdb/be/storage" {
-		t.Fatalf("full got %q", got)
+	if got := resolveStorageRoot("  /data1/dorisdb/be/storeage/  "); got != "/data1/dorisdb/be/storeage" {
+		t.Fatalf("trim got %q", got)
+	}
+	if got := resolveStorageRoot(""); got != "/data" {
+		t.Fatalf("empty got %q", got)
 	}
 }

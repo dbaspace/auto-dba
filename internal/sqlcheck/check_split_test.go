@@ -89,6 +89,71 @@ alter table tbl_test add column xx int;`
 	}
 }
 
+func TestSplitSQL_WithUpdateIsOneStatement(t *testing.T) {
+	sql := `update tbl_order_master set is_deleted = true, origin_business_date = business_date where is_deleted = false and corporation_id = 101 and shop_id in (407175243) and origin_business_date <= '2026-10-16';
+
+with clear_order as (select order_id, business_date from tbl_order_master where is_deleted = true and corporation_id = 101 and shop_id in (407175243))
+update tbl_order_item_master sub SET origin_business_date = clear_order.business_date, is_deleted = true FROM clear_order where is_deleted = false and corporation_id = 101 and shop_id in (407175243) and sub.order_id = clear_order.order_id;
+
+with clear_order as (select order_id, business_date from tbl_order_master where is_deleted = true and corporation_id = 101 and shop_id in (407175243))
+update tbl_order_item_modifier sub SET origin_business_date = clear_order.business_date, is_deleted = true FROM clear_order where is_deleted = false and corporation_id = 101 and shop_id in (407175243) and sub.order_id = clear_order.order_id;
+
+with clear_order as (select order_id, business_date from tbl_order_master where is_deleted = true and corporation_id = 101 and shop_id in (407175243))
+update tbl_order_payment sub SET origin_business_date = clear_order.business_date, is_deleted = true FROM clear_order where is_deleted = false and corporation_id = 101 and shop_id in (407175243) and sub.order_id = clear_order.order_id;
+
+with clear_order as (select order_id, business_date from tbl_order_master where is_deleted = true and corporation_id = 101 and shop_id in (407175243))
+update tbl_order_surcharge sub SET origin_business_date = clear_order.business_date, is_deleted = true FROM clear_order where is_deleted = false and corporation_id = 101 and shop_id in (407175243) and sub.order_id = clear_order.order_id;
+
+with clear_order as (select order_id, business_date from tbl_order_master where is_deleted = true and corporation_id = 101 and shop_id in (407175243))
+update tbl_order_tax sub SET origin_business_date = clear_order.business_date, is_deleted = true FROM clear_order where is_deleted = false and corporation_id = 101 and shop_id in (407175243) and sub.order_id = clear_order.order_id;
+
+with clear_order as (select order_id, business_date from tbl_order_master where is_deleted = true and corporation_id = 101 and shop_id in (407175243))
+update tbl_order_discount sub SET origin_business_date = clear_order.business_date, is_deleted = true FROM clear_order where is_deleted = false and corporation_id = 101 and shop_id in (407175243) and sub.order_id = clear_order.order_id;
+
+with clear_order as (select order_id, business_date from tbl_order_master where is_deleted = true and corporation_id = 101 and shop_id in (407175243))
+update tbl_order_refund_master sub SET origin_business_date = clear_order.business_date, is_deleted = true FROM clear_order where is_deleted = false and corporation_id = 101 and shop_id in (407175243) and sub.order_id = clear_order.order_id;
+
+with clear_order as (select order_id, business_date from tbl_order_master where is_deleted = true and corporation_id = 101 and shop_id in (407175243))
+update tbl_order_refund_item_master sub SET origin_business_date = clear_order.business_date, is_deleted = true FROM clear_order where is_deleted = false and corporation_id = 101 and shop_id in (407175243) and sub.order_id = clear_order.order_id;
+
+with clear_order as (select order_id, business_date from tbl_order_master where is_deleted = true and corporation_id = 101 and shop_id in (407175243))
+update tbl_order_refund_item_modifier sub SET origin_business_date = clear_order.business_date, is_deleted = true FROM clear_order where is_deleted = false and corporation_id = 101 and shop_id in (407175243) and sub.order_id = clear_order.order_id;
+
+with clear_order as (select order_id, business_date from tbl_order_master where is_deleted = true and corporation_id = 101 and shop_id in (407175243))
+update tbl_order_refund_payment sub SET origin_business_date = clear_order.business_date, is_deleted = true FROM clear_order where is_deleted = false and corporation_id = 101 and shop_id in (407175243) and sub.order_id = clear_order.order_id;
+
+with clear_order as (select order_id, business_date from tbl_order_master where is_deleted = true and corporation_id = 101 and shop_id in (407175243))
+update tbl_order_refund_discount sub SET origin_business_date = clear_order.business_date, is_deleted = true FROM clear_order where is_deleted = false and corporation_id = 101 and shop_id in (407175243) and sub.order_id = clear_order.order_id;
+
+with clear_order as (select order_id, business_date from tbl_order_master where is_deleted = true and corporation_id = 101 and shop_id in (407175243))
+update tbl_order_refund_surcharge sub SET origin_business_date = clear_order.business_date, is_deleted = true FROM clear_order where is_deleted = false and corporation_id = 101 and shop_id in (407175243) and sub.order_id = clear_order.order_id;
+
+with clear_order as (select order_id, business_date from tbl_order_master where is_deleted = true and corporation_id = 101 and shop_id in (407175243))
+UPDATE tbl_order_refund_tax as sub SET origin_business_date = clear_order.business_date, is_deleted = true FROM clear_order where is_deleted = false and corporation_id = 101 and shop_id in (407175243) and sub.order_id = clear_order.order_id;`
+	st := SplitSQL(sql)
+	if len(st) != 14 {
+		t.Fatalf("want 14 statements, got %d: %#v", len(st), st)
+	}
+	if strings.Contains(strings.ToLower(st[0]), "with ") {
+		t.Fatalf("first statement should be plain UPDATE: %s", st[0])
+	}
+	for i, stmt := range st[1:] {
+		low := strings.ToLower(stmt)
+		if !strings.HasPrefix(low, "with ") || !strings.Contains(low, "update ") {
+			t.Fatalf("stmt %d should keep WITH and UPDATE together: %s", i+2, stmt)
+		}
+	}
+}
+
+func TestSplitSQL_WithSelectThenUpdateStillSplits(t *testing.T) {
+	sql := `WITH x AS (select 1) SELECT * FROM x
+UPDATE t SET a=1 WHERE id=1;`
+	st := SplitSQL(sql)
+	if len(st) != 2 {
+		t.Fatalf("want 2 statements, got %d: %#v", len(st), st)
+	}
+}
+
 func TestSplitSQL_BlockCommentNotInStatement(t *testing.T) {
 	sql := `/* note */ CREATE TABLE tbl_t (id int);`
 	st := SplitSQL(sql)
