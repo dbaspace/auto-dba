@@ -113,6 +113,9 @@ func (d *DB) migrate() error {
 			database_name TEXT,
 			active INTEGER NOT NULL DEFAULT 0,
 			restart_lsn TEXT,
+			confirmed_flush_lsn TEXT,
+			active_pid BIGINT NOT NULL DEFAULT 0,
+			lag_bytes BIGINT NOT NULL DEFAULT 0,
 			plugin TEXT,
 			updated_at TEXT NOT NULL,
 			UNIQUE(host, port, slot_name)
@@ -1528,6 +1531,9 @@ func (d *DB) ensureFlashbackSchema() error {
 	if err := d.ensureSchemaCompareFixSQLColumn(); err != nil {
 		return err
 	}
+	if err := d.ensureSyncSlotColumns(); err != nil {
+		return err
+	}
 	if err := d.ensureAccessDomainsTable(); err != nil {
 		return err
 	}
@@ -1556,6 +1562,30 @@ func (d *DB) ensureCDCSyncLogsTable() error {
 	}
 	_, err := d.db.Exec(`CREATE INDEX IF NOT EXISTS idx_cdc_sync_logs_created ON tbl_cdc_sync_logs(created_at)`)
 	return err
+}
+
+func (d *DB) ensureSyncSlotColumns() error {
+	specs := []struct{ col, def string }{
+		{"confirmed_flush_lsn", "TEXT"},
+		{"active_pid", "BIGINT NOT NULL DEFAULT 0"},
+		{"lag_bytes", "BIGINT NOT NULL DEFAULT 0"},
+	}
+	for _, spec := range specs {
+		var n int
+		err := d.db.QueryRow(`
+			SELECT COUNT(1) FROM information_schema.columns
+			WHERE table_name = 'tbl_sync_slots' AND column_name = $1
+		`, spec.col).Scan(&n)
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			if _, err := d.db.Exec(`ALTER TABLE tbl_sync_slots ADD COLUMN ` + spec.col + ` ` + spec.def); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (d *DB) ensureSchemaCompareFixSQLColumn() error {
