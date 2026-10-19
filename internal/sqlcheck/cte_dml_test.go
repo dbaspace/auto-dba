@@ -68,6 +68,25 @@ update tbl_order_item_master sub SET is_deleted = true FROM clear_order where is
 	}
 }
 
+func TestDMLWithInsertColumnList(t *testing.T) {
+	rules := []Rule{{Name: "DMLInsertMustSpecifyColumn", Value: "true"}}
+	sql := `WITH realm_codes AS ( SELECT DISTINCT code FROM tbl_login_realm WHERE is_deleted = 0 AND is_archived = false AND code <> '' ), numbered AS ( SELECT code, row_number() OVER (ORDER BY code) AS slot FROM realm_codes ) INSERT INTO tbl_login_config (id, config_id, realm_code, config_type, config_code, config_content, is_archived, is_deleted, create_by, modify_by) SELECT 202610160000 + slot, '', code, 'Json', 'password_policy_tiers', '{"version":1}', false, 0, 'account-security-policy-init', 'account-security-policy-init' FROM numbered WHERE slot <= 9999 AND NOT EXISTS ( SELECT 1 FROM tbl_login_config current WHERE current.realm_code = numbered.code AND current.config_code = 'password_policy_tiers' AND current.is_deleted = 0 AND current.is_archived = false );`
+	res := CheckTicketWithRules(sql, "dml", "postgres", rules)
+	if hasRuleID(res, "DMLInsertMustSpecifyColumn") {
+		t.Fatalf("WITH INSERT with column list should pass: %+v", res)
+	}
+	missing := `WITH c AS (SELECT 1 AS a) INSERT INTO t VALUES (1);`
+	res = CheckTicketWithRules(missing, "dml", "postgres", rules)
+	if !hasRuleID(res, "DMLInsertMustSpecifyColumn") {
+		t.Fatalf("WITH INSERT without column list should fail: %+v", res)
+	}
+	plain := `INSERT INTO t VALUES (1);`
+	res = CheckTicketWithRules(plain, "dml", "postgres", rules)
+	if !hasRuleID(res, "DMLInsertMustSpecifyColumn") {
+		t.Fatalf("plain INSERT without column list should fail: %+v", res)
+	}
+}
+
 func TestMainKeywordWithUpdate(t *testing.T) {
 	stmt := `with c (id) as not materialized (select 1)
 update t set a = 1 from c where t.id = c.id`

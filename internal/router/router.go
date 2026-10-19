@@ -217,6 +217,7 @@ func Init(e *gin.Engine, d Deps) {
 
 	secured.GET("/users", d.RBAC.ListUsers)
 	secured.POST("/users", requireURN(store.URNUsersCreate), d.RBAC.CreateUser)
+	secured.POST("/users/lark-sync", requireURN(store.URNUsersEdit), d.RBAC.SyncLarkUsers)
 	secured.PUT("/users/:id", requireURN(store.URNUsersEdit), d.RBAC.UpdateUser)
 	secured.PUT("/users/:id/password", requireURN(store.URNUsersEdit), d.RBAC.ResetUserPassword)
 	secured.PUT("/users/:id/disable", requireURN(store.URNUsersEdit), d.RBAC.DisableUser)

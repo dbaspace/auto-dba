@@ -381,7 +381,7 @@ func applyDMLRules(stmt, upper, kw string, byName map[string]Rule) []*ruleHit {
 			add(errID("DMLForbidTautology", taut))
 		}
 	}
-	if kw == "INSERT" && enabled(byName, "check_insert_field", "DMLInsertMustSpecifyColumn") && !reInsertCols.MatchString(stmt) {
+	if kw == "INSERT" && enabled(byName, "check_insert_field", "DMLInsertMustSpecifyColumn") && !insertHasColumnList(stmt) {
 		add(errID("DMLInsertMustSpecifyColumn", ruleMsg(byName, "DMLInsertMustSpecifyColumn", "INSERT 必须指定列清单")))
 	}
 	if enabled(byName, "DMLInsertDisallowSelectStar") && reInsertSelectStar.MatchString(upper) {
@@ -1011,3 +1011,12 @@ var (
 	reHasSelect        = regexp.MustCompile(`\bSELECT\b`)
 	reDropTableName    = regexp.MustCompile(`(?i)DROP\s+TABLE(?:\s+IF\s+EXISTS)?\s+(?:[\w."]+\.)?["\x60]?([A-Za-z0-9_]+)`)
 )
+
+// insertHasColumnList 判断 INSERT 是否写了列清单。WITH ... INSERT 只看 CTE 之后的主体。
+func insertHasColumnList(stmt string) bool {
+	body := stmt
+	if _, rest, ok := parseLeadingCTEs(stmt); ok && strings.TrimSpace(rest) != "" {
+		body = rest
+	}
+	return reInsertCols.MatchString(body)
+}

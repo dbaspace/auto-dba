@@ -51,6 +51,18 @@ func TestResolveLarkRecipient(t *testing.T) {
 	if got := ResolveLarkRecipient(u); len(got) != 0 {
 		t.Fatalf("want empty, got %v", got)
 	}
+	u = &store.User{IMType: "lark", IMAccount: "u1", Email: "a@corp.com", LarkEmail: "a@qq.com"}
+	got = ResolveLarkRecipient(u)
+	want = []string{"email:a@qq.com", "u1", "email:a@corp.com"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("unsynced got %v want %v", got, want)
+	}
+	u.LarkID, u.LarkOpenID = "u1", "ou_1"
+	got = ResolveLarkRecipient(u)
+	want = []string{"open_id:ou_1", "user_id:u1", "email:a@qq.com"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("synced got %v want %v", got, want)
+	}
 }
 
 func TestLarkSendFallbackAndContinue(t *testing.T) {

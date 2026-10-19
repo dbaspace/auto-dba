@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"errors"
+	"log"
 	"net/http"
 	"strings"
 
@@ -9,6 +11,7 @@ import (
 
 	"auto-dba/internal/ldapauth"
 	"auto-dba/internal/middleware"
+	"auto-dba/internal/notify"
 	"auto-dba/internal/store"
 )
 
@@ -413,12 +416,19 @@ func (h *RBACHandler) UpdateUser(c *gin.Context) {
 	var req struct {
 		DisplayName string   `json:"display_name"`
 		Email       string   `json:"email"`
+		LarkEmail   *string  `json:"lark_email"`
 		RoleID      string   `json:"role_id"`
 		RoleIDs     []string `json:"role_ids"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
+	}
+	if req.LarkEmail != nil {
+		if le := strings.TrimSpace(*req.LarkEmail); le != "" && !strings.Contains(le, "@") {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "飞书邮箱格式不正确"})
+			return
+		}
 	}
 	email := strings.TrimSpace(req.Email)
 	if email != "" && !strings.Contains(email, "@") {
@@ -449,6 +459,12 @@ func (h *RBACHandler) UpdateUser(c *gin.Context) {
 	if err := h.Store.SetUserEmail(exist.ID, email); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
+	}
+	if req.LarkEmail != nil {
+		if err := h.Store.SetUserLarkEmail(exist.ID, *req.LarkEmail); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+			return
+		}
 	}
 	updated, _ := h.Store.GetUserByID(exist.ID)
 	if updated == nil {
@@ -580,6 +596,25 @@ func (h *RBACHandler) UnlockUser(c *gin.Context) {
 	}
 	updated, _ := h.Store.GetUserByID(exist.ID)
 	c.JSON(http.StatusOK, gin.H{"data": updated})
+}
+
+// SyncLarkUsers 对登录过本平台的用户批量点查飞书身份；不新建账号，不扫通讯录。
+func (h *RBACHandler) SyncLarkUsers(c *gin.Context) {
+	res, err := notify.SyncLarkUsers(h.Store)
+	switch {
+	case errors.Is(err, notify.ErrLarkSyncRunning):
+		c.JSON(http.StatusConflict, gin.H{"message": err.Error()})
+		return
+	case errors.Is(err, notify.ErrLarkSyncNotReady):
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	case err != nil:
+		c.JSON(http.StatusBadGateway, gin.H{"message": err.Error()})
+		return
+	}
+	log.Printf("lark sync: total=%d synced=%d unmatched=%d requests=%d pages=%d msg=%s",
+		res.Total, res.Synced, len(res.Unmatched), res.Requests, res.ScannedPages, res.Message)
+	c.JSON(http.StatusOK, gin.H{"data": res})
 }
 
 func (h *RBACHandler) DeleteUser(c *gin.Context) {

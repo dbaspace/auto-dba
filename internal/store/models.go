@@ -23,6 +23,12 @@ type User struct {
 	Phone            string   `json:"phone,omitempty"`
 	IMType           string   `json:"im_type,omitempty"`
 	IMAccount        string   `json:"im_account,omitempty"`
+	LarkID           string   `json:"lark_id,omitempty"`
+	LarkOpenID       string   `json:"lark_open_id,omitempty"`
+	LarkEmail        string   `json:"lark_email,omitempty"`
+	LarkSyncTime     string   `json:"lark_sync_time,omitempty"`
+	// HasLoggedIn 仅 ListUsers 填充：tbl_user_sessions 中出现过
+	HasLoggedIn bool `json:"has_logged_in"`
 }
 
 type Role struct {

@@ -135,6 +135,10 @@ func userSource(s string) string {
 }
 
 func (d *DB) ListUsers() ([]User, error) {
+	loggedIn, err := d.LoggedInUserIDs()
+	if err != nil {
+		return nil, err
+	}
 	rows, err := d.Query(`
 		SELECT id, username, display_name, role, role_id, source, created_at,
 			COALESCE(login_disabled,0), COALESCE(failed_login_count,0), COALESCE(locked_at,'')
@@ -160,6 +164,7 @@ func (d *DB) ListUsers() ([]User, error) {
 		d.attachUserProfile(&u)
 		d.AttachUserRoleIDs(&u)
 		d.attachExternalLoginAttempt(&u)
+		u.HasLoggedIn = loggedIn[u.ID]
 		out = append(out, u)
 	}
 	return out, rows.Err()
@@ -172,6 +177,11 @@ type UserProfile struct {
 	Phone     string `json:"phone,omitempty"`
 	IMType    string `json:"im_type,omitempty"`
 	IMAccount string `json:"im_account,omitempty"`
+	// LarkEmail 飞书名片邮箱（可私聊），与企业邮箱 Email 分开
+	LarkEmail    string `json:"lark_email,omitempty"`
+	LarkID       string `json:"lark_id,omitempty"`
+	LarkOpenID   string `json:"lark_open_id,omitempty"`
+	LarkSyncTime string `json:"lark_sync_time,omitempty"`
 }
 
 func (d *DB) attachUserProfile(u *User) {
@@ -193,13 +203,20 @@ func (d *DB) attachUserProfile(u *User) {
 	u.Phone = p.Phone
 	u.IMType = p.IMType
 	u.IMAccount = p.IMAccount
+	u.LarkEmail = p.LarkEmail
+	u.LarkID = p.LarkID
+	u.LarkOpenID = p.LarkOpenID
+	u.LarkSyncTime = p.LarkSyncTime
 }
 
+// UpdateUserProfile 个人资料保存；飞书同步字段沿用库中原值。
 func (d *DB) UpdateUserProfile(id, displayName string, p UserProfile) error {
 	displayName = strings.TrimSpace(displayName)
 	if displayName == "" {
 		return errors.New("姓名必填")
 	}
+	old := d.loadUserProfile(id)
+	p.LarkEmail, p.LarkID, p.LarkOpenID, p.LarkSyncTime = old.LarkEmail, old.LarkID, old.LarkOpenID, old.LarkSyncTime
 	b, err := json.Marshal(p)
 	if err != nil {
 		return err

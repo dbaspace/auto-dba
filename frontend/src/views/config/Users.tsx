@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Button, Form, Input, Modal, Popconfirm, Select, Space, Tag, message } from 'antd'
+import { Button, Form, Input, Modal, Popconfirm, Select, Space, Tag, Tooltip, message } from 'antd'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import api from '../../api/request'
 import Auth from '../../components/Auth'
@@ -50,6 +50,24 @@ function isBuiltinAdmin(row: any): boolean {
   return String(row?.username || '').toLowerCase() === 'admin'
 }
 
+function larkMeta(row: any): { text: string; color: string } | null {
+  if (isBuiltinAdmin(row)) return null
+  if (row?.lark_open_id || row?.lark_id) return { text: '已同步', color: 'success' }
+  if (row?.has_logged_in) return { text: '未同步', color: 'warning' }
+  return { text: '未登录', color: 'default' }
+}
+
+function larkSyncSummary(r: any): string {
+  const parts = [`已同步 ${r.synced || 0}/${r.total || 0}`]
+  if (r.unmatched?.length) parts.push(`未匹配：${r.unmatched.join('、')}`)
+  if (r.no_key?.length) parts.push(`缺少邮箱和手机号：${r.no_key.join('、')}`)
+  if (r.scanned_pages) parts.push(`通讯录读取 ${r.scanned_pages} 页`)
+  if (r.skipped?.length) parts.push(`未处理 ${r.skipped.length} 人`)
+  if (r.not_logged_in) parts.push(`未登录 ${r.not_logged_in} 人已跳过`)
+  if (r.message) parts.push(r.message)
+  return parts.join('；')
+}
+
 function canAdminResetPassword(row: any): boolean {
   const src = String(row?.source || 'platform').toLowerCase()
   return src === 'platform' || src === '' || src === 'ldap'
@@ -85,6 +103,7 @@ export default function Users() {
   const [pwdConfirm, setPwdConfirm] = useState('')
   const [pwdSaving, setPwdSaving] = useState(false)
   const [busyId, setBusyId] = useState('')
+  const [larkSyncing, setLarkSyncing] = useState(false)
   const me = currentUserId()
   const [form, setForm] = useState({
     id: '',
@@ -92,8 +111,26 @@ export default function Users() {
     password: '',
     display_name: '',
     email: '',
+    lark_email: '',
     role_ids: [] as string[],
   })
+
+  async function syncLark() {
+    setLarkSyncing(true)
+    try {
+      const { data } = await api.post('/users/lark-sync', {}, { silent: true })
+      const r = data?.data || {}
+      const text = larkSyncSummary(r)
+      if (r.message || r.skipped?.length) message.warning(text, 8)
+      else if (r.unmatched?.length || r.no_key?.length) message.info(text, 8)
+      else message.success(text)
+      await load()
+    } catch (e: any) {
+      message.error(e?.response?.data?.message || e?.message || '同步失败')
+    } finally {
+      setLarkSyncing(false)
+    }
+  }
 
   async function load() {
     const [u, r] = await Promise.all([api.get('/users'), api.get('/roles')])
@@ -142,6 +179,7 @@ export default function Users() {
             password: '',
             display_name: row.display_name,
             email: row.email || '',
+            lark_email: row.lark_email || '',
             role_ids: ids,
           }
         : {
@@ -150,6 +188,7 @@ export default function Users() {
             password: '',
             display_name: '',
             email: '',
+            lark_email: '',
             role_ids: roles[0]?.id ? [roles[0].id] : [],
           },
     )
@@ -173,7 +212,7 @@ export default function Users() {
       role_ids: form.role_ids,
       role_id: form.role_ids[0],
     }
-    if (form.id) await api.put('/users/' + form.id, payload)
+    if (form.id) await api.put('/users/' + form.id, { ...payload, lark_email: (form.lark_email || '').trim() })
     else await api.post('/users', payload)
     message.success('已保存')
     setVisible(false)
@@ -232,11 +271,20 @@ export default function Users() {
   return (
     <div className="ops-page">
       <div className="ops-title">
-        <Auth urn={Perm.users.create}>
-          <Button type="primary" onClick={() => open()}>
-            新建用户
-          </Button>
-        </Auth>
+        <Space>
+          <Auth urn={Perm.users.create}>
+            <Button type="primary" onClick={() => open()}>
+              新建用户
+            </Button>
+          </Auth>
+          <Auth urn={Perm.users.edit}>
+            <Tooltip title="只同步登录过本平台的用户：按飞书邮箱、企业邮箱、手机号批量点查飞书身份，不新建账号">
+              <Button loading={larkSyncing} onClick={syncLark}>
+                同步 Lark
+              </Button>
+            </Tooltip>
+          </Auth>
+        </Space>
       </div>
       <div className="ops-table">
         <ResponsiveTable
@@ -250,10 +298,30 @@ export default function Users() {
             { title: '用户名', dataIndex: 'username' },
             { title: '显示名', dataIndex: 'display_name' },
             {
-              title: '邮箱',
+              title: '企业邮箱',
               dataIndex: 'email',
               ellipsis: true,
               render: (v: string) => v || '-',
+            },
+            {
+              title: '飞书邮箱',
+              dataIndex: 'lark_email',
+              ellipsis: true,
+              render: (v: string) => v || '-',
+            },
+            {
+              title: '飞书',
+              width: 90,
+              render: (_, row) => {
+                const m = larkMeta(row)
+                if (!m) return '-'
+                const tag = <Tag color={m.color}>{m.text}</Tag>
+                return row.lark_sync_time ? (
+                  <Tooltip title={`同步于 ${new Date(row.lark_sync_time).toLocaleString()}`}>{tag}</Tooltip>
+                ) : (
+                  tag
+                )
+              },
             },
             {
               title: '平台角色',
@@ -421,8 +489,8 @@ export default function Users() {
             />
           </Form.Item>
           <Form.Item
-            label="邮箱"
-            extra="用于忘记密码重置；平台/LDAP 账号建议填写"
+            label="企业邮箱"
+            extra="用于邮件通知和忘记密码重置；平台/LDAP 账号建议填写"
           >
             <Input
               value={form.email}
@@ -430,6 +498,18 @@ export default function Users() {
               placeholder="user@example.com"
             />
           </Form.Item>
+          {form.id ? (
+            <Form.Item
+              label="飞书邮箱"
+              extra="飞书名片上的邮箱；企业邮箱在飞书查不到时填写，同步时优先用它。修改后需重新同步 Lark"
+            >
+              <Input
+                value={form.lark_email}
+                onChange={(e) => setForm((f) => ({ ...f, lark_email: e.target.value }))}
+                placeholder="可留空"
+              />
+            </Form.Item>
+          ) : null}
           <Form.Item
             label="平台角色"
             extra="可多选，列表全部展示；权限为并集。首位为主角色（JWT/兼容）。业务侧栏看「租户角色」（租户成员里配置）。"

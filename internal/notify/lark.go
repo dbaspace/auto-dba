@@ -329,7 +329,9 @@ func ResolveLarkUserID(imType, imAccount string) string {
 	return ""
 }
 
-// ResolveLarkRecipient 用户的飞书候选身份（按优先级）：飞书 im_account > 邮箱 > 手机号。
+// ResolveLarkRecipient 用户的飞书候选身份（按优先级）。
+// 已同步：open_id > user_id > 飞书邮箱，不再用企业邮箱（飞书私聊不认）。
+// 未同步：飞书邮箱 > im_account > 邮箱 > 手机号。
 func ResolveLarkRecipient(u *store.User) []string {
 	if u == nil {
 		return nil
@@ -343,6 +345,25 @@ func ResolveLarkRecipient(u *store.User) []string {
 		}
 		seen[strings.ToLower(s)] = true
 		out = append(out, s)
+	}
+	larkEmail := strings.TrimSpace(u.LarkEmail)
+	if !strings.Contains(larkEmail, "@") {
+		larkEmail = ""
+	}
+	if oid, uid := strings.TrimSpace(u.LarkOpenID), strings.TrimSpace(u.LarkID); oid != "" || uid != "" {
+		if oid != "" {
+			add("open_id:" + oid)
+		}
+		if uid != "" {
+			add("user_id:" + uid)
+		}
+		if larkEmail != "" {
+			add("email:" + larkEmail)
+		}
+		return out
+	}
+	if larkEmail != "" {
+		add("email:" + larkEmail)
 	}
 	add(ResolveLarkUserID(u.IMType, u.IMAccount))
 	if e := strings.TrimSpace(u.Email); strings.Contains(e, "@") {
