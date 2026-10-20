@@ -11,9 +11,12 @@
 
 - 详情表映射分表源表用网格展示；Publication 相关逻辑拆出独立模块，交互与样式对齐。
 
-## K8s（方案）
+## K8s（底座 + DB-on-K8s）
 
-- 增加 [k8s.md](k8s.md) 多集群纳管与数据库上 K8s 产品技术方案；附带本地 `scripts/k8s/kind-up.sh` 辅助脚本。实现仍按方案分阶段推进。
+- 方案见 [k8s.md](k8s.md)；本地 `scripts/k8s/kind-up.sh`。
+- 多集群纳管（直连 / k8s-agent 反向隧道，非 SSH）、资源浏览与写操作、Pod 日志/终端、生产变更工单（`k8s_change`，生产判定优先集群 `env_id`）。
+- Operator 中心：可检测已装，也可由平台安装；CNPG/Percona/Redis/StarRocks/KubeBlocks 适配；数据库集群向导与 HA `k8s_operator` 切换联动。
+- 平台 Agent 归属增加 `k8s`；Helm 应用只读列举 release Secret。
 
 ## 打包与发版
 

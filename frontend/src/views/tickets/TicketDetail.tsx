@@ -7,6 +7,7 @@ import { useAppDispatch, useAppSelector } from '../../store'
 import { closeTab, openTab, tabKey } from '../../store/tabsSlice'
 import CollapsibleSqlBlock from '../../components/CollapsibleSqlBlock'
 import DdlExecImpact from './DdlExecImpact'
+import { countNonEmptyLines, lineVsStatementHint, shouldHintLineVsStatement } from './sqlStatementCount'
 import './TicketDetail.css'
 
 const SQL_TYPES = new Set(['ddl', 'dml'])
@@ -482,6 +483,14 @@ export default function TicketDetail() {
   const execErrorText = useMemo(
     () => String(execObj?.message || execObj?.summary || '').trim(),
     [execObj],
+  )
+  const sqlStatementCount = useMemo(() => {
+    const n = Number(execObj?.statement_count)
+    return Number.isFinite(n) && n > 0 ? n : 0
+  }, [execObj])
+  const sqlLineApprox = useMemo(
+    () => (SQL_TYPES.has(item?.issue_type) ? countNonEmptyLines(String(item?.sql_content || '')) : 0),
+    [item],
   )
   const execFailed = item?.status === 'failed'
   const execSuccess = execObj?.success === true ? true : execObj?.success === false ? false : undefined
@@ -1236,7 +1245,17 @@ export default function TicketDetail() {
                   ) : f.kind === 'db-tag' ? (
                     <Tag color="blue">{f.value}</Tag>
                   ) : f.kind === 'sql' ? (
-                    <CollapsibleSqlBlock value={f.value} />
+                    <div>
+                      {sqlStatementCount > 0 ? (
+                        <div className="user-sub" style={{ marginBottom: 8 }}>
+                          共 {sqlStatementCount} 条语句（按分号拆分）
+                          {shouldHintLineVsStatement(sqlLineApprox, sqlStatementCount)
+                            ? `；${lineVsStatementHint(sqlLineApprox, sqlStatementCount)}`
+                            : ''}
+                        </div>
+                      ) : null}
+                      <CollapsibleSqlBlock value={f.value} />
+                    </div>
                   ) : f.kind === 'schedule' ? (
                     <Tag color="warning">{f.value}</Tag>
                   ) : (
@@ -1310,6 +1329,13 @@ export default function TicketDetail() {
                       isExecRunning || !execObj?.rolled_back ? '' : String(execObj?.summary || '')
                     }
                     emptyText={execEmptyText}
+                    successCount={
+                      isExecRunning ? undefined : Number(execObj?.success_count)
+                    }
+                    statementCount={
+                      isExecRunning ? undefined : Number(execObj?.statement_count)
+                    }
+                    compacted={isExecRunning ? false : Boolean(execObj?.compacted)}
                   />
                 </div>
               </>

@@ -189,8 +189,9 @@ export default function AppLayout() {
       const nextSearch = opts?.search || ''
       const normalizedSearch =
         nextSearch && !nextSearch.startsWith('?') && nextSearch !== '' ? `?${nextSearch}` : nextSearch
-      // 实例页按 search(db_type) 区分 Tab：openTab 已有同 key 则激活，否则新建
-      dispatch(openTab({ path: toPath, search: normalizedSearch, title, menus }))
+      // CDC 列表 ?tab= 仅为页内状态，不区分导航 Tab；实例页仍按 search(db_type) 区分
+      const tabSearch = toPath === '/ops/cdc' ? '' : normalizedSearch
+      dispatch(openTab({ path: toPath, search: tabSearch, title, menus }))
       const to = toPath + (normalizedSearch || '')
       if (toPath !== path || (normalizedSearch || '') !== (search || '')) {
         navigate(to, { replace: opts?.replace })
@@ -208,7 +209,14 @@ export default function AppLayout() {
     if (!path || path === '/403' || path === '/login') return
     const allowed = collectPaths(menus)
     if (allowed.length && !pathAllowed(path, allowed)) return
-    const key = tabKey(path, search)
+    // /ops/cdc?tab=pending 与 /ops/cdc 共用一个导航 Tab，避免同名重复
+    const tabSearch = path === '/ops/cdc' ? '' : search
+    const key = tabKey(path, tabSearch)
+    if (path === '/ops/cdc') {
+      for (const t of tabs) {
+        if (t.path === '/ops/cdc' && t.key !== key) dispatch(closeTab(t.key))
+      }
+    }
     const exists = tabs.some((t) => t.key === key)
     if (exists) {
       if (activeKey !== key) dispatch(activateTab(key))
@@ -217,7 +225,7 @@ export default function AppLayout() {
     dispatch(
       openTab({
         path,
-        search,
+        search: tabSearch,
         title: titleForPath(path, menus),
         menus,
       }),

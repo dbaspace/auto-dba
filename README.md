@@ -129,5 +129,6 @@ PG 闪回生产约定：默认不改 `REPLICA IDENTITY`；DEFAULT 表靠 FPW/堆
 | [docs/migration-schema-compare.md](docs/migration-schema-compare.md) | 表结构对比 |
 | [docs/sr-cluster.md](docs/sr-cluster.md) / [docs/db-cluster.md](docs/db-cluster.md) / [docs/ha.md](docs/ha.md) | 集群部署与高可用 |
 | [docs/architecture.html](docs/architecture.html) | 模块关系总览 |
+| [docs/roadmap-gap-fill.md](docs/roadmap-gap-fill.md) | 能力缺口补齐实施记录（MySQL 执行 / 逻辑恢复 / CDC MySQL 等） |
 
 配置引导示例：[config/config.example.yaml](config/config.example.yaml)、[config/bootstrap.example.yaml](config/bootstrap.example.yaml)（Nacos）。

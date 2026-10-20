@@ -14,26 +14,14 @@ const (
 	firstDelay         = 30 * time.Second
 )
 
-// StartCollector 后台定时采集全部 PostgreSQL 实例活动快照，并按保留天数清理。
-// appSecret 指向配置中的 jwt_secret 字段，热更后无需重启采集协程。
+// StartCollector 已废弃：平台调度由 internal/jobreg 接管（pgdiag.activity_snapshot）。
+//
+// Deprecated: 使用 jobboot.RegisterPlatformJobs + jobreg.Registry.Start。
 func StartCollector(ctx context.Context, meta *store.DB, appSecret *string) {
-	interval := time.Duration(defaultIntervalSec) * time.Second
-	select {
-	case <-ctx.Done():
-		return
-	case <-time.After(firstDelay):
-	}
-	RunOnce(ctx, meta, derefSecret(appSecret))
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			RunOnce(ctx, meta, derefSecret(appSecret))
-		}
-	}
+	_ = ctx
+	_ = meta
+	_ = appSecret
+	log.Printf("DEPRECATED: pgdiag.StartCollector ignored; scheduling is owned by jobreg (pgdiag.activity_snapshot)")
 }
 
 func derefSecret(p *string) string {

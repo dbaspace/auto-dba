@@ -441,14 +441,15 @@ func Init(e *gin.Engine, d Deps) {
 
 	if d.Jobs != nil {
 		jg := secured.Group("/jobs")
-		jgURN := requireURN("um.sidebar.config-scheduled-jobs")
-		jg.GET("", jgURN, d.Jobs.List)
-		jg.GET("/cluster", jgURN, d.Jobs.Cluster)
-		jg.GET("/business-schedules", jgURN, d.Jobs.BusinessSchedules)
-		jg.GET("/:key", jgURN, d.Jobs.Get)
-		jg.PUT("/:key", jgURN, d.Jobs.Update)
-		jg.POST("/:key/trigger", jgURN, d.Jobs.Trigger)
-		jg.GET("/:key/runs", jgURN, d.Jobs.Runs)
+		jgView := requireURN(store.URNSidebarScheduledJobs)
+		jg.GET("", jgView, d.Jobs.List)
+		jg.GET("/cluster", jgView, d.Jobs.Cluster)
+		jg.GET("/business-schedules", jgView, d.Jobs.BusinessSchedules)
+		jg.GET("/:key", jgView, d.Jobs.Get)
+		jg.GET("/:key/runs", jgView, d.Jobs.Runs)
+		jg.GET("/:key/audits", jgView, d.Jobs.Audits)
+		jg.PUT("/:key", requireURN(store.URNScheduledJobsEdit), d.Jobs.Update)
+		jg.POST("/:key/trigger", requireURN(store.URNScheduledJobsTrigger), d.Jobs.Trigger)
 	}
 
 	t := secured.Group("/tickets")
@@ -737,6 +738,7 @@ func Init(e *gin.Engine, d Deps) {
 		bg.POST("/policies/:id/run", d.Backup.RunPolicy)
 		bg.GET("/runs", d.Backup.ListRuns)
 		bg.GET("/runs/:id", d.Backup.GetRun)
+		bg.POST("/restore", d.Backup.CreateRestore)
 		bg.GET("/storages", d.Backup.ListStorages)
 		bg.POST("/storages", d.Backup.CreateStorage)
 		bg.PATCH("/storages/:id", d.Backup.UpdateStorage)
@@ -777,6 +779,7 @@ func Init(e *gin.Engine, d Deps) {
 		kg.GET("/meta", d.K8s.Meta)
 		kg.GET("/summary", d.K8s.MultiClusterSummary)
 		kg.GET("/cost", d.K8s.CostEstimate)
+		kg.POST("/change-tickets", d.K8s.CreateK8sChangeTicket)
 		kg.GET("/db-clusters", d.K8s.ListDBClusters)
 		kg.GET("/db-clusters/:dbId", d.K8s.GetDBCluster)
 		kg.POST("/db-clusters/:dbId/scale", requireURN(store.URNK8sDBScale), d.K8s.ScaleDBCluster)
@@ -808,13 +811,18 @@ func Init(e *gin.Engine, d Deps) {
 
 		kg.POST("/clusters/:id/workloads/:kind/:ns/:name/scale", requireURN(store.URNK8sWorkloadScale), d.K8s.ScaleWorkload)
 		kg.POST("/clusters/:id/workloads/:kind/:ns/:name/restart", requireURN(store.URNK8sWorkloadRestart), d.K8s.RestartWorkload)
+		kg.POST("/clusters/:id/workloads/:kind/:ns/:name/rollback", requireURN(store.URNK8sWorkloadRollback), d.K8s.RollbackWorkload)
+		kg.POST("/clusters/:id/namespaces/:ns/quota", requireURN(store.URNK8sQuotaEdit), d.K8s.ApplyQuota)
 		kg.POST("/clusters/:id/nodes/:name/cordon", d.K8s.CordonNode)
 		kg.POST("/clusters/:id/nodes/:name/drain", requireURN(store.URNK8sNodeDrain), d.K8s.DrainNode)
 
 		kg.POST("/clusters/:id/operators/detect", d.K8s.DetectOperators)
+		kg.POST("/clusters/:id/operators/install", d.K8s.InstallOperator)
 		kg.GET("/clusters/:id/operators", d.K8s.ListOperators)
 		kg.POST("/clusters/:id/db-clusters", requireURN(store.URNK8sDBCreate), d.K8s.CreateDBCluster)
 		kg.GET("/clusters/:id/apps", d.K8s.ListHelmApps)
+		kg.POST("/clusters/:id/apps/upgrade", requireURN(store.URNK8sYAMLApply), d.K8s.HelmUpgradeInstall)
+		kg.POST("/clusters/:id/apps/rollback", requireURN(store.URNK8sWorkloadRollback), d.K8s.HelmRollback)
 	}
 
 	if d.K8s != nil {
@@ -957,6 +965,9 @@ func Init(e *gin.Engine, d Deps) {
 	secured.GET("/pg-sessions/locks", d.Session.Locks)
 	secured.POST("/pg-sessions/:pid/cancel", d.Session.Cancel)
 	secured.POST("/pg-sessions/:pid/terminate", d.Session.Terminate)
+	secured.GET("/mysql-sessions/processlist", d.Session.MySQLProcesslist)
+	secured.POST("/mysql-sessions/:id/kill", d.Session.MySQLKill)
+	secured.GET("/mysql-sessions/digests", d.Session.MySQLDigests)
 
 	if d.PgSpace != nil {
 		ps := secured.Group("/pg-space")

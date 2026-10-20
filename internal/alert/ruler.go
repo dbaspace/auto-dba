@@ -32,62 +32,15 @@ type Ruler struct {
 	Interval time.Duration
 }
 
-// Start 在后台循环评估与作用域编译刷新；ctx 取消后退出。
+// Start 已废弃：由 jobreg alert.ruler / alert.rule_compile 接管。
+//
+// Deprecated: 使用 jobboot.RegisterPlatformJobs。
 func Start(ctx context.Context, db *store.DB, interval time.Duration, secret string) {
-	if interval <= 0 {
-		interval = DefaultInterval
-	}
-	if v, _ := db.GetGlobalArg(argRulerInterval); strings.TrimSpace(v) != "" {
-		if sec, err := time.ParseDuration(strings.TrimSpace(v) + "s"); err == nil && sec >= 10*time.Second {
-			interval = sec
-		}
-	}
-	r := &Ruler{Store: db, Secret: secret, Interval: interval}
-	go func() {
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(3 * time.Second):
-		}
-		r.RunOnce(ctx)
-		t := time.NewTicker(r.Interval)
-		defer t.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-				r.RunOnce(ctx)
-			}
-		}
-	}()
-	go func() {
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(15 * time.Second):
-		}
-		if n, err := db.RefreshAllAlertRuleCompiled(); err != nil {
-			log.Printf("alert-ruler: compile refresh: %v", err)
-		} else if n > 0 {
-			log.Printf("alert-ruler: compiled %d rules", n)
-		}
-		t := time.NewTicker(DefaultCompileRefresh)
-		defer t.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-				if n, err := db.RefreshAllAlertRuleCompiled(); err != nil {
-					log.Printf("alert-ruler: compile refresh: %v", err)
-				} else {
-					log.Printf("alert-ruler: compiled %d rules", n)
-				}
-			}
-		}
-	}()
-	log.Printf("alert-ruler: started interval=%s compile_refresh=%s", interval, DefaultCompileRefresh)
+	_ = ctx
+	_ = db
+	_ = interval
+	_ = secret
+	log.Printf("DEPRECATED: alert.Start ignored; scheduling is owned by jobreg (alert.ruler / alert.rule_compile)")
 }
 
 func (r *Ruler) promClient() (*promclient.Client, error) {

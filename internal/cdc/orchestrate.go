@@ -44,6 +44,8 @@ func StepLabel(step string) string {
 	switch strings.TrimSpace(step) {
 	case "pg":
 		return "PG Publication/Slot"
+	case "mysql":
+		return "MySQL Binlog 预检"
 	case "debezium":
 		return "Debezium Connector"
 	case "kafka":
@@ -75,6 +77,8 @@ func stepSuccessLog(step string) string {
 	switch step {
 	case "pg":
 		return "pg publication & slot created"
+	case "mysql":
+		return "mysql binlog precheck ok"
 	case "kafka":
 		return "kafka topics ensured"
 	case "debezium":
@@ -105,7 +109,12 @@ func (o *Orchestrator) Apply(ctx context.Context, taskID, fromStep string) error
 		return o.applyDeleteTask(ctx, t)
 	}
 	extra := parseTaskExtra(t.Description)
+	srcEng := o.resolveCDCSourceEngine(t, extra)
+	extra["source_engine"] = srcEng
 	steps := []string{"pg", "kafka", "debezium", "starrocks"}
+	if srcEng == SourceEngineMySQL {
+		steps = []string{"mysql", "kafka", "debezium", "starrocks"}
+	}
 	start := 0
 	fromStep = strings.ToLower(strings.TrimSpace(fromStep))
 	if extra["error_step"] != "" && fromStep == "" {
@@ -271,6 +280,8 @@ func (o *Orchestrator) runStep(ctx context.Context, t *store.CDCTask, extra map[
 	switch step {
 	case "pg":
 		return o.stepPG(ctx, t, extra)
+	case "mysql":
+		return o.stepMySQL(ctx, t, extra)
 	case "kafka":
 		return o.stepKafka(ctx, t, extra)
 	case "debezium":
@@ -291,6 +302,118 @@ func (o *Orchestrator) runStep(ctx context.Context, t *store.CDCTask, extra map[
 			return nil
 		}
 		return o.applyTargetSQL(ctx, t, sqlText)
+	}
+	return nil
+}
+
+func (o *Orchestrator) resolveCDCSourceEngine(t *store.CDCTask, extra map[string]string) string {
+	if extra != nil {
+		if v := strings.TrimSpace(extra["source_engine"]); v != "" {
+			return NormalizeCDCSourceEngine(v)
+		}
+	}
+	if t != nil && o != nil && o.Store != nil {
+		if inst, _ := o.Store.GetInstance(t.SourceID); inst != nil {
+			return NormalizeCDCSourceEngine(inst.DBType)
+		}
+	}
+	return SourceEnginePostgres
+}
+
+// stepMySQL MySQL 源：校验 binlog/GTID，并补齐 connector/topic 命名（无 Publication/Slot）。
+func (o *Orchestrator) stepMySQL(ctx context.Context, t *store.CDCTask, extra map[string]string) error {
+	inst, err := o.Store.GetInstance(t.SourceID)
+	if err != nil || inst == nil {
+		return fmt.Errorf("源端实例不存在")
+	}
+	connector := extra["connector_name"]
+	if extra["topic_prefix"] == "" || connector == "" {
+		_, _, topic := defaultTaskNames(extra["env"], t.SourceDB, t.Name)
+		if extra["topic_prefix"] == "" {
+			extra["topic_prefix"] = topic
+		}
+		if connector == "" {
+			connector = sanitizeIdent(defaultStr(t.Name, t.SourceDB))
+			extra["connector_name"] = connector
+		}
+	}
+	if strings.TrimSpace(extra["mysql_server_id"]) == "" {
+		extra["mysql_server_id"] = "5400"
+	}
+	// 兼容分片绑定：MySQL 无 slot/pub，仍登记 binding 以便 debezium 多库 fanout
+	pub := defaultStr(extra["publication_name"], "mysql_"+sanitizeIdent(t.SourceDB))
+	slot := defaultStr(extra["slot_name"], "mysql_"+sanitizeIdent(t.SourceDB))
+	extra["publication_name"] = pub
+	extra["slot_name"] = slot
+	tables := splitCSV(extra["tables"])
+	maps := ParseMappingsJSON(extra["mappings"])
+	if len(tables) == 0 && len(maps) == 0 {
+		return fmt.Errorf("未指定同步表")
+	}
+	if err := ValidateMappingShardScopes(maps, ResolveShardDBs(extra, t.SourceDB)); err != nil {
+		return err
+	}
+	bindings := ResolveOrBuildShardBindings(extra, t.SourceDB, pub, slot, connector)
+	PersistShardBindings(extra, bindings)
+
+	db, err := dbmig.OpenInstance(ctx, inst, o.Secret, t.SourceDB)
+	if err != nil {
+		return fmt.Errorf("连接 MySQL 源端失败: %w", err)
+	}
+	defer db.Close()
+	var logBin, binlogFormat, gtidMode sql.NullString
+	var srcServerID sql.NullInt64
+	_ = db.QueryRowContext(ctx, `SELECT @@log_bin, @@binlog_format, @@gtid_mode, @@server_id`).Scan(&logBin, &binlogFormat, &gtidMode, &srcServerID)
+	if logBin.Valid && !strings.EqualFold(logBin.String, "1") && !strings.EqualFold(logBin.String, "ON") {
+		return fmt.Errorf("源端未开启 binlog（log_bin=%s）", logBin.String)
+	}
+	if binlogFormat.Valid && !strings.EqualFold(binlogFormat.String, "ROW") {
+		return fmt.Errorf("binlog_format 须为 ROW，当前=%s", binlogFormat.String)
+	}
+	wantSID := extraAtoi(extra["mysql_server_id"], 5400)
+	if srcServerID.Valid && srcServerID.Int64 > 0 && int64(wantSID) == srcServerID.Int64 {
+		return fmt.Errorf("mysql_server_id=%d 与源端 @@server_id 冲突，请为 Debezium 指定不同的 database.server.id", wantSID)
+	}
+	if err := o.checkMySQLServerIDConflict(t, wantSID); err != nil {
+		return err
+	}
+	o.appendLog(t, "INFO", "mysql", fmt.Sprintf("binlog 预检通过 log_bin=%s format=%s gtid=%s server_id=%d connector=%s debezium_server_id=%d",
+		logBin.String, binlogFormat.String, gtidMode.String, srcServerID.Int64, connector, wantSID))
+	return nil
+}
+
+// checkMySQLServerIDConflict 同源实例上其它活跃 CDC 任务不得复用同一 Debezium server.id。
+func (o *Orchestrator) checkMySQLServerIDConflict(cur *store.CDCTask, wantSID int) error {
+	if o == nil || o.Store == nil || cur == nil || wantSID <= 0 {
+		return nil
+	}
+	list, err := o.Store.ListCDC("", "")
+	if err != nil {
+		return nil
+	}
+	active := map[string]bool{
+		"running": true, "creating": true, "provisioning": true, "init": true, "paused": true,
+	}
+	for i := range list {
+		other := list[i]
+		if other.ID == cur.ID {
+			continue
+		}
+		if other.SourceID != cur.SourceID {
+			continue
+		}
+		if !active[strings.ToLower(strings.TrimSpace(other.Status))] {
+			continue
+		}
+		ex := ParseTaskExtra(other.Description)
+		otherSID := extraAtoi(ex["mysql_server_id"], 0)
+		if otherSID == 0 {
+			continue
+		}
+		if otherSID == wantSID {
+			return fmt.Errorf("mysql_server_id=%d 已被同源任务 %s（%s）占用，请更换 database.server.id",
+				wantSID, other.Name, other.ID)
+		}
 	}
 	return nil
 }

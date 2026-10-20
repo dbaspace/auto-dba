@@ -86,6 +86,168 @@ func applyBasicAuth(req *http.Request, auth AgentAuth) {
 	}
 }
 
+// LogicalRestoreRequest Agent 逻辑恢复请求。
+type LogicalRestoreRequest struct {
+	Engine    string      `json:"engine"`
+	Host      string      `json:"host"`
+	Port      int         `json:"port"`
+	Username  string      `json:"username"`
+	Password  string      `json:"password"`
+	Database  string      `json:"database,omitempty"`
+	Databases []string    `json:"databases,omitempty"`
+	LocalPath string      `json:"local_path,omitempty"`
+	ObjectKey string      `json:"object_key,omitempty"`
+	Dest      LogicalDest `json:"dest,omitempty"`
+}
+
+// PhysicalRestoreRequest Agent 物理恢复请求（同机 data_dir）。
+// ChainDirs 为 base→…→tip 的本机备份目录链；仅 tip（全量）时可只填 LocalPath。
+type PhysicalRestoreRequest struct {
+	Engine      string   `json:"engine"`
+	LocalPath   string   `json:"local_path,omitempty"`
+	ObjectKey   string   `json:"object_key,omitempty"`
+	DataDir     string   `json:"data_dir"`
+	ConfirmStop bool     `json:"confirm_stop"`
+	ChainDirs   []string `json:"chain_dirs,omitempty"`
+}
+
+// PITRRestoreRequest Agent 时间点恢复：物理还原 + WAL/binlog 追到 recover_to。
+type PITRRestoreRequest struct {
+	Engine         string `json:"engine"`
+	LocalPath      string `json:"local_path,omitempty"`
+	ObjectKey      string `json:"object_key,omitempty"`
+	DataDir        string `json:"data_dir"`
+	ConfirmStop    bool   `json:"confirm_stop"`
+	RecoverTo      string `json:"recover_to"`
+	WalOrBinlogDir string `json:"wal_or_binlog_dir"`
+}
+
+// CallPITRRestore 提交 PITR 并轮询 job。
+func CallPITRRestore(ctx context.Context, auth AgentAuth, req PITRRestoreRequest) (*LogicalBackupResponse, error) {
+	base := strings.TrimRight(strings.TrimSpace(auth.BaseURL), "/")
+	if base == "" {
+		return nil, fmt.Errorf("Agent Base URL 为空")
+	}
+	payload, _ := json.Marshal(req)
+	httpReq, err := httpNewPost(ctx, base+"/v1/restore/pitr", payload)
+	if err != nil {
+		return nil, err
+	}
+	applyBasicAuth(httpReq, auth)
+	resp, err := agentDo(httpReq, 60*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("Backup Agent 调用失败: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := readBodyLimit(resp.Body, 1<<20)
+	var out LogicalBackupResponse
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, fmt.Errorf("Agent 响应无效 HTTP %d: %s", resp.StatusCode, string(body))
+	}
+	if resp.StatusCode >= 300 && resp.StatusCode != http.StatusAccepted {
+		msg := out.Message
+		if msg == "" {
+			msg = string(body)
+		}
+		return nil, fmt.Errorf("Agent PITR 失败: %s", msg)
+	}
+	if out.OK && !strings.EqualFold(out.Status, "running") && out.JobID == "" {
+		return &out, nil
+	}
+	if out.JobID == "" {
+		msg := out.Message
+		if msg == "" {
+			msg = string(body)
+		}
+		return nil, fmt.Errorf("Agent PITR 失败: %s", msg)
+	}
+	return waitBackupJob(ctx, auth, out.JobID)
+}
+
+// CallPhysicalRestore 提交物理全量恢复并轮询 job。
+func CallPhysicalRestore(ctx context.Context, auth AgentAuth, req PhysicalRestoreRequest) (*LogicalBackupResponse, error) {
+	base := strings.TrimRight(strings.TrimSpace(auth.BaseURL), "/")
+	if base == "" {
+		return nil, fmt.Errorf("Agent Base URL 为空")
+	}
+	payload, _ := json.Marshal(req)
+	httpReq, err := httpNewPost(ctx, base+"/v1/restore/physical", payload)
+	if err != nil {
+		return nil, err
+	}
+	applyBasicAuth(httpReq, auth)
+	resp, err := agentDo(httpReq, 60*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("Backup Agent 调用失败: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := readBodyLimit(resp.Body, 1<<20)
+	var out LogicalBackupResponse
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, fmt.Errorf("Agent 响应无效 HTTP %d: %s", resp.StatusCode, string(body))
+	}
+	if resp.StatusCode >= 300 && resp.StatusCode != http.StatusAccepted {
+		msg := out.Message
+		if msg == "" {
+			msg = string(body)
+		}
+		return nil, fmt.Errorf("Agent 物理恢复失败: %s", msg)
+	}
+	if out.OK && !strings.EqualFold(out.Status, "running") && out.JobID == "" {
+		return &out, nil
+	}
+	if out.JobID == "" {
+		msg := out.Message
+		if msg == "" {
+			msg = string(body)
+		}
+		return nil, fmt.Errorf("Agent 物理恢复失败: %s", msg)
+	}
+	return waitBackupJob(ctx, auth, out.JobID)
+}
+
+// CallLogicalRestore 提交逻辑恢复并轮询 job。
+func CallLogicalRestore(ctx context.Context, auth AgentAuth, req LogicalRestoreRequest) (*LogicalBackupResponse, error) {
+	base := strings.TrimRight(strings.TrimSpace(auth.BaseURL), "/")
+	if base == "" {
+		return nil, fmt.Errorf("Agent Base URL 为空")
+	}
+	payload, _ := json.Marshal(req)
+	httpReq, err := httpNewPost(ctx, base+"/v1/restore/logical", payload)
+	if err != nil {
+		return nil, err
+	}
+	applyBasicAuth(httpReq, auth)
+	resp, err := agentDo(httpReq, 60*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("Backup Agent 调用失败: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := readBodyLimit(resp.Body, 1<<20)
+	var out LogicalBackupResponse
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, fmt.Errorf("Agent 响应无效 HTTP %d: %s", resp.StatusCode, string(body))
+	}
+	if resp.StatusCode >= 300 && resp.StatusCode != http.StatusAccepted {
+		msg := out.Message
+		if msg == "" {
+			msg = string(body)
+		}
+		return nil, fmt.Errorf("Agent 恢复失败: %s", msg)
+	}
+	if out.OK && !strings.EqualFold(out.Status, "running") && out.JobID == "" {
+		return &out, nil
+	}
+	if out.JobID == "" {
+		msg := out.Message
+		if msg == "" {
+			msg = string(body)
+		}
+		return nil, fmt.Errorf("Agent 恢复失败: %s", msg)
+	}
+	return waitBackupJob(ctx, auth, out.JobID)
+}
+
 // CallLogicalBackup 提交逻辑备份并轮询 job（Agent 返回 202）。
 func CallLogicalBackup(ctx context.Context, auth AgentAuth, req LogicalBackupRequest) (*LogicalBackupResponse, error) {
 	base := strings.TrimRight(strings.TrimSpace(auth.BaseURL), "/")

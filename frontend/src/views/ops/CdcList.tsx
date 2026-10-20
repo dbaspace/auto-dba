@@ -148,6 +148,7 @@ export default function CdcList() {
   const [loadError, setLoadError] = useState('')
   const [allRows, setAllRows] = useState<any[]>([])
   const [instances, setInstances] = useState<any[]>([])
+  const [defaultReviewers, setDefaultReviewers] = useState<string[]>([])
   const [envOptions, setEnvOptions] = useState<{ value: string; label: string }[]>([])
   const [driftById, setDriftById] = useState<Record<string, any>>({})
   const [tab, setTab] = useState<TabKey>('running')
@@ -321,11 +322,19 @@ export default function CdcList() {
   }
 
   async function loadSideData() {
-    const [inst, envRes] = await Promise.all([
+    const [inst, envRes, argsRes] = await Promise.all([
       api.get('/instances').catch(() => ({ data: { data: [] } })),
       api.get('/environments').catch(() => ({ data: { data: [] } })),
+      api.get('/global-args').catch(() => ({ data: { data: [] } })),
     ])
     setInstances(inst.data.data || [])
+    const set = new Set<string>()
+    String((argsRes.data.data || []).find((a: any) => a.key === 'sync_default_approver')?.value || '')
+      .split(/[,，\s]+/)
+      .map((s: string) => s.trim())
+      .filter(Boolean)
+      .forEach((u: string) => set.add(u))
+    setDefaultReviewers([...set])
     const envs = envRes.data.data || []
     let opts = envs
       .map((e: any) => ({ value: e.code || e.name, label: e.name || e.code }))
@@ -394,7 +403,11 @@ export default function CdcList() {
   }
 
   function remove(row: any) {
-    let reviewer = ''
+    const source = instMap.get(row.source_instance_id)
+    const opts = new Set(defaultReviewers)
+    for (const a of source?.approvers || []) if (a) opts.add(a)
+    const reviewerOptions = [...opts]
+    let reviewer = reviewerOptions[0] || ''
     Modal.confirm({
       title: '删除同步任务',
       content: (
@@ -402,7 +415,18 @@ export default function CdcList() {
           <p>
             删除任务「{row.name}」将提交审批，通过后清理 Publication / Slot / Connector（保留 StarRocks 表）。请填写审核人：
           </p>
-          <Input placeholder="审核人" onChange={(e) => (reviewer = e.target.value)} />
+          <Select
+            showSearch
+            mode="tags"
+            maxCount={1}
+            placeholder="审批通过后执行"
+            style={{ width: '100%' }}
+            defaultValue={reviewer ? [reviewer] : []}
+            onChange={(v: string[]) => {
+              reviewer = v[v.length - 1] || ''
+            }}
+            options={reviewerOptions.map((a) => ({ value: a, label: a }))}
+          />
         </div>
       ),
       okText: '提交审批',
@@ -412,10 +436,11 @@ export default function CdcList() {
           message.warning('审核人必填')
           throw new Error('reviewer required')
         }
-        const { data } = await api.post(`/cdc-sync/tasks/${row.id}/delete`, { reviewer, approver: reviewer })
+        await api.post(`/cdc-sync/tasks/${row.id}/delete`, { reviewer, approver: reviewer })
         message.success('已提交删除审批')
-        if (data.data?.issue_id) navigate('/ops/tickets/' + data.data.issue_id)
-        else await load({ force: true })
+        setTab('pending')
+        navigate('/ops/cdc?tab=pending')
+        await load({ force: true })
       },
     })
   }

@@ -54,11 +54,13 @@ export interface CdcForm {
   source_scope_mode: string
   source_db_prefix: string
   source_db_names: string[]
+  source_engine: string
   source_instance_id: string
   target_instance_id: string
   source_db: string
   target_db: string
   source_schema: string
+  mysql_server_id: string
   tables: string[]
   table_map: Record<string, string>
   connector_id: string
@@ -130,11 +132,13 @@ export function emptyForm(infraDefaults: InfraDefaults = { ...CDC_INFRA_DEFAULTS
     source_scope_mode: 'single_db',
     source_db_prefix: '',
     source_db_names: [],
+    source_engine: 'postgres',
     source_instance_id: '',
     target_instance_id: '',
     source_db: '',
     target_db: '',
     source_schema: 'public',
+    mysql_server_id: '5400',
     tables: [],
     table_map: {},
     connector_id: '',
@@ -352,9 +356,11 @@ export function extraPayload(deps: PayloadDeps): Record<string, any> {
   const overrides = collectSqlOverrides(sqlPreviews)
   return {
     env: form.env,
+    source_engine: form.source_engine || 'postgres',
+    mysql_server_id: form.source_engine === 'mysql' ? form.mysql_server_id || '5400' : undefined,
     source_instance_id: instanceID(form.source_instance_id),
     target_instance_id: instanceID(form.target_instance_id),
-    source_schema: form.source_schema,
+    source_schema: form.source_engine === 'mysql' ? form.source_schema || form.source_db || '' : form.source_schema,
     source_scope_mode: form.source_scope_mode,
     source_db_prefix: form.source_db_prefix,
     source_db_names: multi ? resolvedShardDbs : form.source_db ? [form.source_db] : [],
@@ -439,7 +445,11 @@ export function validateInitStep0(form: CdcForm, resolvedShardDbs: string[]): st
   if (!form.env) return '请选择环境'
   if (!instanceID(form.source_instance_id)) return '请选择源端实例'
   if (!form.source_db) return '请选择数据库'
-  if (!form.source_schema) return '请输入 Schema'
+  if (form.source_engine !== 'mysql' && !form.source_schema) return '请输入 Schema'
+  if (form.source_engine === 'mysql') {
+    const sid = Number(form.mysql_server_id)
+    if (!Number.isFinite(sid) || sid <= 0) return '请填写有效的 MySQL Debezium server.id'
+  }
   if (form.source_scope_mode === 'multi_db' && resolvedShardDbs.length < 2) {
     return '多分库至少匹配 2 个库，请检查分库前缀'
   }

@@ -51,7 +51,18 @@ func (a *cnpgAdapter) Detect(ctx context.Context, c *k8s.Client) (*OperatorInfo,
 }
 
 func (a *cnpgAdapter) Install(ctx context.Context, c *k8s.Client, opt InstallOpt) error {
-	return fmt.Errorf("请使用官方 manifest/Helm 安装 CloudNativePG；平台默认仅检测已安装 Operator")
+	url := DefaultInstallURL("postgres")
+	if v := strings.TrimSpace(opt.Version); v != "" && strings.HasPrefix(v, "http") {
+		url = v
+	}
+	n, err := FetchAndApply(ctx, c, url)
+	if err != nil {
+		return fmt.Errorf("安装 CloudNativePG 失败（也可仅检测已装 Operator）: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("清单未应用任何资源")
+	}
+	return nil
 }
 
 func (a *cnpgAdapter) Render(spec DBClusterSpec) (*unstructured.Unstructured, error) {

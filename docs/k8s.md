@@ -94,8 +94,8 @@ K8s 原生对象不落库，实时（或 informer 缓存）读取。
 | P3 | OperatorAdapter + CNPG 等 + 实例/HA/备份联动 |
 | P4 | Helm、多集群视图、Velero、KubeBlocks、AIOps |
 
-## 7. 待决问题
+## 7. 已确认决策
 
-1. Operator：平台安装 vs 仅检测已装。
-2. 隧道：自研 WebSocket vs 引入 remotedialer。
-3. 生产判定：集群绑定环境 vs 命名空间标签。
+1. **Operator**：平台可安装，也可只检测客户已装好的；两者并存。CNPG 有默认清单；其它引擎可传清单 URL。
+2. **隧道**：不是 SSH。Agent 主动连出，经反向 HTTP-over-WebSocket 访问 API Server（对齐 Rancher remotedialer；网络允许时可直接引用 `github.com/rancher/remotedialer`）。平台 Agent 归属组含 `k8s`。
+3. **生产判定**：优先使用集群绑定的 `env_id`（`EnvIsProd`），不用命名空间标签。

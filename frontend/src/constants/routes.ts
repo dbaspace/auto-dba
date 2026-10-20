@@ -35,6 +35,7 @@ export const PAGE_ROUTES = [
   { path: '/ops/backup', title: '数据备份' },
   { path: '/ops/backup/policies', title: '备份策略' },
   { path: '/ops/backup/runs', title: '备份执行记录' },
+  { path: '/ops/backup/restore', title: '备份恢复' },
   { path: '/ops/backup/settings', title: '备份存储' },
   { path: '/k8s/clusters', title: 'K8s 集群管理' },
   { path: '/k8s/overview', title: 'K8s 集群概览' },

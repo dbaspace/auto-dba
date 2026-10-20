@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -120,6 +121,98 @@ func (c *Client) RestartWorkload(ctx context.Context, kind, ns, name string) err
 	patch := fmt.Sprintf(`{"spec":{"template":{"metadata":{"annotations":{"kubectl.kubernetes.io/restartedAt":"%s"}}}}}`,
 		metav1.Now().UTC().Format("2006-01-02T15:04:05Z"))
 	_, err = c.Dynamic.Resource(gvr).Namespace(ns).Patch(ctx, name, types.MergePatchType, []byte(patch), metav1.PatchOptions{})
+	return err
+}
+
+// RollbackWorkload 回滚到上一 ReplicaSet revision（Deployment）。
+func (c *Client) RollbackWorkload(ctx context.Context, kind, ns, name string) error {
+	kind = strings.ToLower(strings.TrimSpace(kind))
+	if kind != "deployments" && kind != "deployment" {
+		return fmt.Errorf("当前仅支持 Deployment 回滚")
+	}
+	gvr, err := ResolveGVR("deployments")
+	if err != nil {
+		return err
+	}
+	dep, err := c.Dynamic.Resource(gvr).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return err
+	}
+	rss, err := c.Clientset.AppsV1().ReplicaSets(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: labelsFromMap(dep.GetLabels()),
+	})
+	if err != nil {
+		return err
+	}
+	curRev, _ := strconv.ParseInt(dep.GetAnnotations()["deployment.kubernetes.io/revision"], 10, 64)
+	var bestRev int64 = -1
+	var bestIdx = -1
+	for i := range rss.Items {
+		rs := &rss.Items[i]
+		owned := false
+		for _, o := range rs.OwnerReferences {
+			if o.Kind == "Deployment" && o.Name == name {
+				owned = true
+				break
+			}
+		}
+		if !owned {
+			continue
+		}
+		rev, _ := strconv.ParseInt(rs.Annotations["deployment.kubernetes.io/revision"], 10, 64)
+		if rev < curRev && rev > bestRev {
+			bestRev = rev
+			bestIdx = i
+		}
+	}
+	if bestIdx < 0 {
+		return fmt.Errorf("未找到可回滚的 ReplicaSet revision")
+	}
+	tpl, err := json.Marshal(rss.Items[bestIdx].Spec.Template)
+	if err != nil {
+		return err
+	}
+	patch := []byte(`{"spec":{"template":` + string(tpl) + `}}`)
+	_, err = c.Dynamic.Resource(gvr).Namespace(ns).Patch(ctx, name, types.StrategicMergePatchType, patch, metav1.PatchOptions{})
+	return err
+}
+
+func labelsFromMap(m map[string]string) string {
+	if len(m) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(m))
+	for k, v := range m {
+		if k == "pod-template-hash" {
+			continue
+		}
+		parts = append(parts, k+"="+v)
+	}
+	return strings.Join(parts, ",")
+}
+
+// ApplyQuota 创建或更新 ResourceQuota。
+func (c *Client) ApplyQuota(ctx context.Context, ns, name string, hard map[string]string) error {
+	if ns == "" || name == "" {
+		return fmt.Errorf("namespace/name 必填")
+	}
+	hardObj := map[string]any{}
+	for k, v := range hard {
+		hardObj[k] = v
+	}
+	obj := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "v1",
+		"kind":       "ResourceQuota",
+		"metadata":   map[string]any{"name": name, "namespace": ns},
+		"spec":       map[string]any{"hard": hardObj},
+	}}
+	gvr := schema.GroupVersionResource{Group: "", Version: "v1", Resource: "resourcequotas"}
+	_, err := c.Dynamic.Resource(gvr).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		_, err = c.Dynamic.Resource(gvr).Namespace(ns).Create(ctx, obj, metav1.CreateOptions{})
+		return err
+	}
+	_, err = c.Dynamic.Resource(gvr).Namespace(ns).Update(ctx, obj, metav1.UpdateOptions{})
 	return err
 }
 

@@ -36,6 +36,10 @@ const (
 	URNArgsCreate         = "um.action.args.create"
 	URNArgsEdit           = "um.action.args.edit"
 	URNArgsDelete         = "um.action.args.delete"
+
+	URNSidebarScheduledJobs   = "um.sidebar.config-scheduled-jobs"
+	URNScheduledJobsEdit      = "um.action.scheduled-jobs.edit"
+	URNScheduledJobsTrigger   = "um.action.scheduled-jobs.trigger"
 	URNUsersCreate        = "um.action.users.create"
 	URNUsersEdit          = "um.action.users.edit"
 	URNUsersDelete        = "um.action.users.delete"

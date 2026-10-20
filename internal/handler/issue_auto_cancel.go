@@ -18,22 +18,13 @@ func issuePendingAutoCancelDeadline(now time.Time) time.Time {
 	return now.UTC().Add(-issuePendingAutoCancelTTL)
 }
 
-// StartIssueAutoCancel 周期性取消超过 8 小时仍待审批的工单，启动时立即扫一遍。
+// StartIssueAutoCancel 已废弃：由 jobreg ticket.auto_cancel 接管。
+//
+// Deprecated: 使用 jobboot.RegisterPlatformJobs。
 func StartIssueAutoCancel(ctx context.Context, h *TicketHandler) {
-	if h == nil || h.Store == nil {
-		return
-	}
-	_ = RunIssueAutoCancelOnce(ctx, h)
-	ticker := time.NewTicker(issuePendingAutoCancelInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			_ = RunIssueAutoCancelOnce(ctx, h)
-		}
-	}
+	_ = ctx
+	_ = h
+	log.Printf("DEPRECATED: StartIssueAutoCancel ignored; scheduling is owned by jobreg (ticket.auto_cancel)")
 }
 
 // RunIssueAutoCancelOnce 供 jobreg 调用。

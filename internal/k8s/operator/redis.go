@@ -3,6 +3,7 @@ package operator
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -30,7 +31,11 @@ func (a *redisAdapter) Detect(ctx context.Context, c *k8s.Client) (*OperatorInfo
 }
 
 func (a *redisAdapter) Install(ctx context.Context, c *k8s.Client, opt InstallOpt) error {
-	return fmt.Errorf("请使用 OT-Container-Kit redis-operator Helm 安装")
+	if u := strings.TrimSpace(opt.Version); strings.HasPrefix(u, "http") {
+		_, err := FetchAndApply(ctx, c, u)
+		return err
+	}
+	return fmt.Errorf("Redis Operator 请提供清单 URL，或 Helm 安装；也可仅检测已装")
 }
 
 func (a *redisAdapter) Render(spec DBClusterSpec) (*unstructured.Unstructured, error) {

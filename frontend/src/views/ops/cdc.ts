@@ -48,7 +48,7 @@ export const PAGE_TITLES: Record<string, string> = {
 }
 
 export const PAGE_HINTS: Record<string, string> = {
-  init: '首次为某个 PG 数据库创建完整同步链路',
+  init: '首次为某个 PostgreSQL / MySQL 数据库创建完整同步链路',
   add_table: '在已有同步任务基础上追加新表（继承 Connector / Debezium 模式）',
   alter_schema: '源端表新增列后，同步到 StarRocks 目标表并更新 Routine Load',
   remove_table: '从已有初始化任务的 Publication 中移除表并收缩同步范围',
@@ -715,6 +715,120 @@ export function formatDebeziumConfig(cfg: any): string {
   const ordered: Record<string, any> = {}
   for (const k of keys) ordered[k] = cfg[k]
   return JSON.stringify(ordered, null, 2)
+}
+
+/** 排序 + 敏感字段脱敏后的 pretty JSON（对齐老项目配置对比） */
+export function configToPrettyJson(cfg: Record<string, any> | null | undefined): string {
+  if (!cfg || typeof cfg !== 'object') return '{\n}'
+  const ordered: Record<string, string> = {}
+  for (const k of Object.keys(cfg).sort((a, b) => a.localeCompare(b))) {
+    ordered[k] = isSensitiveConfigKey(k) ? '********' : String(cfg[k] ?? '')
+  }
+  return JSON.stringify(ordered, null, 2)
+}
+
+export type SideBySideLine = {
+  leftNo?: number
+  rightNo?: number
+  leftText: string
+  rightText: string
+  /** equal | add(仅左有=当前新增) | del(仅右有=历史有而当前无) | change */
+  kind: 'equal' | 'add' | 'del' | 'change'
+}
+
+/** 对两段文本按行 LCS 对齐，产出左右并排行（左=current，右=historical） */
+export function buildSideBySideLines(leftText: string, rightText: string): SideBySideLine[] {
+  const a = String(leftText || '').split('\n')
+  const b = String(rightText || '').split('\n')
+  const n = a.length
+  const m = b.length
+  const dp: number[][] = Array.from({ length: n + 1 }, () => Array(m + 1).fill(0))
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1])
+    }
+  }
+  type Op = { t: 'eq' | 'add' | 'del'; ai?: number; bi?: number }
+  const ops: Op[] = []
+  let i = 0
+  let j = 0
+  while (i < n && j < m) {
+    if (a[i] === b[j]) {
+      ops.push({ t: 'eq', ai: i, bi: j })
+      i++
+      j++
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      ops.push({ t: 'add', ai: i })
+      i++
+    } else {
+      ops.push({ t: 'del', bi: j })
+      j++
+    }
+  }
+  while (i < n) {
+    ops.push({ t: 'add', ai: i })
+    i++
+  }
+  while (j < m) {
+    ops.push({ t: 'del', bi: j })
+    j++
+  }
+
+  const out: SideBySideLine[] = []
+  for (let k = 0; k < ops.length; k++) {
+    const op = ops[k]
+    if (op.t === 'eq') {
+      out.push({
+        leftNo: (op.ai ?? 0) + 1,
+        rightNo: (op.bi ?? 0) + 1,
+        leftText: a[op.ai!],
+        rightText: b[op.bi!],
+        kind: 'equal',
+      })
+      continue
+    }
+    // 相邻 add+del 合并为 change，对齐展示
+    if (op.t === 'add' && ops[k + 1]?.t === 'del') {
+      const del = ops[k + 1]
+      out.push({
+        leftNo: (op.ai ?? 0) + 1,
+        rightNo: (del.bi ?? 0) + 1,
+        leftText: a[op.ai!],
+        rightText: b[del.bi!],
+        kind: 'change',
+      })
+      k++
+      continue
+    }
+    if (op.t === 'del' && ops[k + 1]?.t === 'add') {
+      const add = ops[k + 1]
+      out.push({
+        leftNo: (add.ai ?? 0) + 1,
+        rightNo: (op.bi ?? 0) + 1,
+        leftText: a[add.ai!],
+        rightText: b[op.bi!],
+        kind: 'change',
+      })
+      k++
+      continue
+    }
+    if (op.t === 'add') {
+      out.push({
+        leftNo: (op.ai ?? 0) + 1,
+        leftText: a[op.ai!],
+        rightText: '',
+        kind: 'add',
+      })
+    } else {
+      out.push({
+        rightNo: (op.bi ?? 0) + 1,
+        leftText: '',
+        rightText: b[op.bi!],
+        kind: 'del',
+      })
+    }
+  }
+  return out
 }
 
 export function collectSqlOverrides(previews: any[]): Record<string, any> {

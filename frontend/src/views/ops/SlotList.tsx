@@ -52,18 +52,12 @@ export default function SlotList() {
     }
   }, [])
 
-  const watchCollect = useCallback(async () => {
+  /** 只拉采集进度，running 期间不打全量 /sync-slots */
+  const pollCollect = useCallback(async () => {
     const { data } = await api.get('/sync-slots/collect')
     setJob(data)
-    if (data?.status === 'running') {
-      await load(true)
-      return true
-    }
-    if (data?.status === 'done') {
-      await load(true)
-    }
-    return false
-  }, [load])
+    return data?.status === 'running'
+  }, [])
 
   async function collect() {
     const { data } = await api.post('/sync-slots/collect')
@@ -93,13 +87,14 @@ export default function SlotList() {
     if (wasRunning.current && job?.status === 'done') {
       wasRunning.current = false
       message.info(job.message || '采集完成')
+      void load(true)
     }
-  }, [job])
+  }, [job, load])
 
   useEffect(() => {
-    load()
-    watchCollect().catch(() => {})
-  }, [load, watchCollect])
+    void load()
+    pollCollect().catch(() => {})
+  }, [load, pollCollect])
 
   useEffect(() => {
     if (job?.status !== 'running') return
@@ -108,7 +103,7 @@ export default function SlotList() {
     async function tick() {
       if (stop) return
       try {
-        const running = await watchCollect()
+        const running = await pollCollect()
         if (!stop && running) timer = window.setTimeout(tick, 1500)
       } catch {
         if (!stop) timer = window.setTimeout(tick, 3000)
@@ -119,7 +114,7 @@ export default function SlotList() {
       stop = true
       window.clearTimeout(timer)
     }
-  }, [job?.status, watchCollect])
+  }, [job?.status, pollCollect])
 
   const shown = useMemo(() => {
     const host = applied.host.trim().toLowerCase()

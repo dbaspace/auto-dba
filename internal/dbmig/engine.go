@@ -338,19 +338,12 @@ func (e *Engine) execute(ctx context.Context, t *store.MigrationTask, resume boo
 	return workCtx.Err()
 }
 
+// StartScheduler 已废弃：由 jobreg migration.due_scanner 接管。
+//
+// Deprecated: 使用 jobboot.RegisterPlatformJobs。
 func (e *Engine) StartScheduler(ctx context.Context) {
-	tick := time.NewTicker(30 * time.Second)
-	go func() {
-		defer tick.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-tick.C:
-				e.ScanDue()
-			}
-		}
-	}()
+	_ = ctx
+	log.Printf("DEPRECATED: dbmig.StartScheduler ignored; scheduling is owned by jobreg (migration.due_scanner)")
 }
 
 // ScanDue 扫描到期迁移任务（供 jobreg 调用）。

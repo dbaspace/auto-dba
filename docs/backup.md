@@ -208,9 +208,17 @@ sequenceDiagram
 | Agent | `deploy/backup-agent/`（产品名 **平台 Agent**，制品 `platform-agent`；与 MHA Agent 思路一致） |
 | 说明 | 本文；`docs/features.md` 增加「数据备份」入口 |
 
-**P0 已落地**：表结构 / 策略 CRUD / 手动+定时执行 / Run 列表 / 内嵌 `pg_dump`·`mysqldump`·`mydumper` / local+S3 / 最小 Backup Agent / 失败邮件开关。恢复工单、仪表盘、保留清理见 P1。
+**P0 已落地**：表结构 / 策略 CRUD / 手动+定时执行 / Run 列表 / 内嵌 `pg_dump`·`mysqldump`·`mydumper` / local+S3 / 最小 Backup Agent / 失败邮件开关。
 
-**P2 物理备份已落地（执行侧）**：`physical_full` / `physical_incr`；强制 Agent；PG `pg_basebackup`；MySQL `xtrabackup`/`mariabackup` 全量+增量链（`parent_run_id`）；PG 增量请走 WAL/pgBackRest（未内置）。PITR 恢复工单仍待后续。
+**逻辑恢复已落地**：`POST /api/v1/backup/restore` 建 `backup_restore` 工单；审批后 Agent `POST /v1/restore/logical`（`pg_restore` / `mysql`）；前端 `/ops/backup/restore`。仪表盘、保留清理仍见后续。
+
+**物理全量恢复已落地**：同接口 `restore_kind=physical` + `data_dir` + `confirm_stop`；Agent `POST /v1/restore/physical`（PG 目录拷贝 / MySQL xtrabackup prepare+copy-back）。
+
+**PITR 骨架已落地**：`restore_kind=pitr` + `recover_to` + `wal_or_binlog_dir` + `data_dir` + `confirm_stop`；Agent `POST /v1/restore/pitr`（PG：物理还原后写 `recovery.signal`/restore_command；MySQL：物理还原后 `mysqlbinlog --stop-datetime` 生成 SQL）。平台不拉取云端 WAL/binlog，须事先放到 Agent 本机目录。
+
+**物理增量链恢复已落地（MySQL）**：选 `physical_incr` run 做 `restore_kind=physical` 时，平台沿 `parent_run_id` 回溯到 `physical_full`，把 base→tip 目录链传给 Agent；Agent `xtrabackup --prepare --apply-log-only` + `--incremental-dir` 后 `--copy-back`。PostgreSQL 物理增量请走 PITR/WAL。
+
+**P2 物理备份已落地（执行侧）**：`physical_full` / `physical_incr`；强制 Agent；PG `pg_basebackup`；MySQL `xtrabackup`/`mariabackup` 全量+增量链（`parent_run_id`）；PG 增量请走 WAL/pgBackRest（未内置）。
 
 ### Agent SSH 下发（平台编排）
 

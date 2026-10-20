@@ -1,9 +1,16 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, Button, Drawer, Input, Modal, Pagination, Space, Tag, message } from 'antd'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import type { ColumnsType } from 'antd/es/table'
 import api from '../../api/request'
-import { formatOperationType, isSensitiveConfigKey, operationTypeTagColor, pipelineStateText } from './cdc'
+import {
+  buildSideBySideLines,
+  configToPrettyJson,
+  formatOperationType,
+  isSensitiveConfigKey,
+  operationTypeTagColor,
+  pipelineStateText,
+} from './cdc'
 import './CdcDebeziumConfigTab.css'
 
 interface ConfigRow {
@@ -70,7 +77,12 @@ export default function CdcDebeziumConfigTab({ taskId, extra, pending = false, o
   const [detailOpen, setDetailOpen] = useState(false)
   const [detailRows, setDetailRows] = useState<ConfigRow[]>([])
   const [diffOpen, setDiffOpen] = useState(false)
-  const [diffRows, setDiffRows] = useState<any[]>([])
+  const [diffVersionLabel, setDiffVersionLabel] = useState('')
+  const [diffCurrentJson, setDiffCurrentJson] = useState('')
+  const [diffHistoricalJson, setDiffHistoricalJson] = useState('')
+  const diffLeftRef = useRef<HTMLDivElement>(null)
+  const diffRightRef = useRef<HTMLDivElement>(null)
+  const diffScrollLock = useRef(false)
   const [previewOpen, setPreviewOpen] = useState(false)
   const [preview, setPreview] = useState<any>(null)
   const [restoreTarget, setRestoreTarget] = useState<any>(null)
@@ -84,7 +96,24 @@ export default function CdcDebeziumConfigTab({ taskId, extra, pending = false, o
     )
   }, [rows, keyword])
   const prettyJSON = useMemo(() => JSON.stringify(rowsToConfig(rows), null, 2), [rows])
+  const diffLines = useMemo(
+    () => buildSideBySideLines(diffCurrentJson, diffHistoricalJson),
+    [diffCurrentJson, diffHistoricalJson],
+  )
   const missing = !!detail.connector_missing
+
+  function syncDiffScroll(from: 'left' | 'right') {
+    if (diffScrollLock.current) return
+    const src = from === 'left' ? diffLeftRef.current : diffRightRef.current
+    const dst = from === 'left' ? diffRightRef.current : diffLeftRef.current
+    if (!src || !dst) return
+    diffScrollLock.current = true
+    dst.scrollTop = src.scrollTop
+    dst.scrollLeft = src.scrollLeft
+    requestAnimationFrame(() => {
+      diffScrollLock.current = false
+    })
+  }
 
   async function load() {
     if (!taskId) return
@@ -171,21 +200,10 @@ export default function CdcDebeziumConfigTab({ taskId, extra, pending = false, o
     const d = await fetchVersion(row)
     const hist = d?.config || {}
     const cur = rowsToConfig(rows)
-    const keys = new Set([...Object.keys(cur), ...Object.keys(hist)])
-    setDiffRows(
-      [...keys]
-        .sort()
-        .map((key) => {
-          const c = cur[key]
-          const h = hist[key]
-          let kind = '相同'
-          if (c == null) kind = '删除'
-          else if (h == null) kind = '新增'
-          else if (c !== h) kind = '修改'
-          return { key, kind, current: c ?? '—', historical: h ?? '—' }
-        })
-        .filter((r) => r.kind !== '相同'),
-    )
+    const ver = row.version || row.version_no || d?.version || d?.version_no || ''
+    setDiffVersionLabel(ver ? String(ver) : '')
+    setDiffCurrentJson(configToPrettyJson(cur))
+    setDiffHistoricalJson(configToPrettyJson(hist))
     setDiffOpen(true)
   }
   async function beginRestore(row: any) {
@@ -469,20 +487,35 @@ export default function CdcDebeziumConfigTab({ taskId, extra, pending = false, o
         />
       </Modal>
 
-      <Modal title="与当前配置对比" open={diffOpen} footer={null} width={860} onCancel={() => setDiffOpen(false)}>
-        <ResponsiveTable
-          rowKey="key"
-          size="small"
-          dataSource={diffRows}
-          pagination={false}
-          scroll={{ x: 'max-content', y: 420 }}
-          columns={[
-            { title: 'Key', dataIndex: 'key', width: 200 },
-            { title: '变化', dataIndex: 'kind', width: 80 },
-            { title: '当前', dataIndex: 'current' },
-            { title: '历史版本', dataIndex: 'historical' },
-          ]}
-        />
+      <Modal
+        title={diffVersionLabel ? `配置对比 — ${diffVersionLabel}` : '配置对比'}
+        open={diffOpen}
+        footer={null}
+        width={960}
+        destroyOnClose
+        onCancel={() => setDiffOpen(false)}
+      >
+        <div className="dbz-diff-note">
+          【注】左侧为当前运行配置，右侧为选中历史版本（敏感字段已脱敏）
+        </div>
+        <div className="dbz-diff-panes">
+          <div className="dbz-diff-pane" ref={diffLeftRef} onScroll={() => syncDiffScroll('left')}>
+            {diffLines.map((line, idx) => (
+              <div key={`L${idx}`} className={`dbz-diff-line dbz-diff-${line.kind}`}>
+                <span className="dbz-diff-gutter">{line.leftNo || ''}</span>
+                <span className="dbz-diff-text">{line.leftText || '\u00a0'}</span>
+              </div>
+            ))}
+          </div>
+          <div className="dbz-diff-pane" ref={diffRightRef} onScroll={() => syncDiffScroll('right')}>
+            {diffLines.map((line, idx) => (
+              <div key={`R${idx}`} className={`dbz-diff-line dbz-diff-${line.kind}`}>
+                <span className="dbz-diff-gutter">{line.rightNo || ''}</span>
+                <span className="dbz-diff-text">{line.rightText || '\u00a0'}</span>
+              </div>
+            ))}
+          </div>
+        </div>
       </Modal>
 
       <Modal

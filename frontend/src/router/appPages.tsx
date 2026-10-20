@@ -21,6 +21,7 @@ import SrNodes from '../views/ops/SrNodes'
 import ClusterDeployHub from '../views/ops/ClusterDeployHub'
 import ClusterDeployEngine from '../views/ops/ClusterDeployEngine'
 import Sessions from '../views/ops/Sessions'
+import MysqlSlow from '../views/ops/MysqlSlow'
 import SqlInsight from '../views/ops/SqlInsight'
 import DbMonitor from '../views/ops/DbMonitor'
 import RedisRdb from '../views/ops/redis-rdb/RedisRdb'
@@ -68,6 +69,7 @@ import Terminal from '../views/ops/Terminal'
 import HaMaintain from '../views/ops/HaMaintain'
 import BackupPolicies from '../views/backup/Policies'
 import BackupRuns from '../views/backup/Runs'
+import BackupRestore from '../views/backup/Restore'
 import BackupSettings from '../views/backup/Settings'
 import K8sClusters from '../views/k8s/Clusters'
 import K8sOverview from '../views/k8s/Overview'
@@ -201,6 +203,7 @@ export function TabPagePanel({ pathname, search }: { pathname: string; search?: 
       <Route path="/ops/backup" element={<Navigate to="/ops/backup/policies" replace />} />
       <Route path="/ops/backup/policies" element={<BackupPolicies />} />
       <Route path="/ops/backup/runs" element={<BackupRuns />} />
+      <Route path="/ops/backup/restore" element={<BackupRestore />} />
       <Route path="/ops/backup/settings" element={<BackupSettings />} />
 
       <Route path="/k8s/clusters" element={<K8sClusters />} />
@@ -237,6 +240,7 @@ export function TabPagePanel({ pathname, search }: { pathname: string; search?: 
       <Route path="/metadata/database/search/serviceOperations/activitysnapshot" element={<Navigate to="/ops/sql-insight" replace />} />
       <Route path="/database/search/serviceOperations/activitysnapshot" element={<Navigate to="/ops/sql-insight" replace />} />
       <Route path="/ops/sessions" element={<Sessions />} />
+      <Route path="/ops/mysql-slow" element={<MysqlSlow />} />
       <Route path="/metadata/database/search/serviceOperations/process" element={<Navigate to="/ops/sessions" replace />} />
       <Route path="/database/search/serviceOperations/process" element={<Navigate to="/ops/sessions" replace />} />
       <Route path="/ops/multilang" element={<Multilang />} />

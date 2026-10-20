@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"auto-dba/internal/archive"
+	"auto-dba/internal/backup"
 	"auto-dba/internal/cdc"
 	"auto-dba/internal/dbmig"
 	"auto-dba/internal/flashback"
@@ -35,6 +36,7 @@ type TicketHandler struct {
 	Migration *dbmig.Engine
 	Archive   *archive.Engine
 	CDC       *cdc.Orchestrator
+	Backup    *backup.Engine
 }
 
 type ticketCheckReq struct {
@@ -316,9 +318,12 @@ func (h *TicketHandler) loadReviewRules(engine string) []sqlcheck.Rule {
 func (h *TicketHandler) checkTicketSQL(sqlContent, issueType, dbType, instanceID, dbName string, skipSchemaCheck bool) sqlcheck.Result {
 	engine := h.resolveReviewEngine(dbType, instanceID)
 	issueType = strings.ToLower(strings.TrimSpace(issueType))
+	var res sqlcheck.Result
 	// 分库/分表：模板表名通常不存在于代表库，跳过 goInception 库表存在性审核，仅静态规则。
 	if !skipSchemaCheck && engine == "mysql" && (issueType == store.IssueTypeDDL || issueType == store.IssueTypeDML) {
-		if res, used := h.checkViaGoInception(sqlContent, instanceID, dbName); used {
+		if out, used := h.checkViaGoInception(sqlContent, instanceID, dbName); used {
+			res = out
+			sqlcheck.AttachStatementCount(&res, sqlContent)
 			return res
 		}
 	}
@@ -329,7 +334,9 @@ func (h *TicketHandler) checkTicketSQL(sqlContent, issueType, dbType, instanceID
 			h.Store.BoolArg("dml_require_where", true),
 		)
 	}
-	return sqlcheck.CheckTicketWithRules(sqlContent, issueType, engine, rules)
+	res = sqlcheck.CheckTicketWithRules(sqlContent, issueType, engine, rules)
+	sqlcheck.AttachStatementCount(&res, sqlContent)
+	return res
 }
 
 func applyCreateDBReview(h *TicketHandler, sqlContent, dbType, instanceID string) sqlcheck.Result {
@@ -343,7 +350,9 @@ func applyCreateDBReview(h *TicketHandler, sqlContent, dbType, instanceID string
 	if h != nil {
 		rules = h.loadReviewRules(engine)
 	}
-	return sqlcheck.CheckCreateDBWithRules(sqlContent, engine, rules)
+	res := sqlcheck.CheckCreateDBWithRules(sqlContent, engine, rules)
+	sqlcheck.AttachStatementCount(&res, sqlContent)
+	return res
 }
 
 func (h *TicketHandler) checkViaGoInception(sqlContent, instanceID, dbName string) (sqlcheck.Result, bool) {
@@ -1350,6 +1359,9 @@ func (h *TicketHandler) executeTicket(ctx context.Context, it *store.Issue) erro
 	if it.IssueType == store.IssueTypeHA {
 		return h.executeHATicket(ctx, it)
 	}
+	if it.IssueType == store.IssueTypeK8sChange {
+		return h.executeK8sChangeTicket(ctx, it)
+	}
 	if it.IssueType == store.IssueTypeSrCluster {
 		return h.executeSrClusterTicket(ctx, it)
 	}
@@ -1358,6 +1370,9 @@ func (h *TicketHandler) executeTicket(ctx context.Context, it *store.Issue) erro
 	}
 	if it.IssueType == store.IssueTypeResourceApply {
 		return h.executeResourceApplyTicket(ctx, it)
+	}
+	if it.IssueType == store.IssueTypeBackupRestore {
+		return h.executeBackupRestoreTicket(ctx, it)
 	}
 	inst, err := h.Store.GetInstanceUsableInTenant(it.InstanceID, it.TenantID)
 	if err != nil {
@@ -1478,12 +1493,15 @@ func (h *TicketHandler) executeDDLTicket(ctx context.Context, it *store.Issue) e
 	if len(ids) == 0 {
 		return h.persistExec(it, &ticketexec.Result{Success: false, Message: "工单未指定实例"})
 	}
-	merged := &ticketexec.Result{StartedAt: time.Now().UTC().Format(time.RFC3339), Success: true}
+	stmtN := len(sqlcheck.SplitSQL(it.SQLContent))
+	merged := &ticketexec.Result{
+		StartedAt:      time.Now().UTC().Format(time.RFC3339),
+		Success:        true,
+		StatementCount: stmtN,
+	}
 	var prev *ticketexec.Result
-	stmtN := 0
 	if len(ids) > 1 {
 		prev = ticketexec.Parse(it.ExecuteResult)
-		stmtN = len(sqlcheck.SplitSQL(it.SQLContent))
 	}
 	var skipped []string
 	for _, id := range ids {
@@ -1576,6 +1594,15 @@ func (h *TicketHandler) executeHATicket(ctx context.Context, it *store.Issue) er
 	return h.persistExec(it, res)
 }
 
+func (h *TicketHandler) executeK8sChangeTicket(ctx context.Context, it *store.Issue) error {
+	k8sH := NewK8sHandler(h.Store, h.Secret)
+	res, err := k8sH.ExecuteK8sChangeTicket(ctx, it)
+	if err != nil {
+		return err
+	}
+	return h.persistExec(it, res)
+}
+
 func (h *TicketHandler) executeSrClusterTicket(ctx context.Context, it *store.Issue) error {
 	srH := &SrClusterHandler{Store: h.Store, Secret: h.Secret}
 	res, err := srH.ExecuteSrClusterTicket(ctx, it)
@@ -1600,6 +1627,41 @@ func (h *TicketHandler) executeResourceApplyTicket(ctx context.Context, it *stor
 	if err != nil {
 		return err
 	}
+	return h.persistExec(it, res)
+}
+
+func (h *TicketHandler) executeBackupRestoreTicket(ctx context.Context, it *store.Issue) error {
+	payload, err := backup.ParseLogicalRestorePayload(it.SQLContent)
+	if err != nil {
+		return h.persistExec(it, ticketexec.FailBeforeExec(err.Error(), ticketexec.Record{
+			InstanceID: it.InstanceID, DB: it.DBName,
+		}))
+	}
+	eng := h.Backup
+	if eng == nil {
+		eng = backup.New(h.Store, h.Secret, backup.Config{AllowEmbedded: true})
+	}
+	msg, err := eng.ExecuteLogicalRestore(ctx, payload)
+	if err != nil {
+		res := ticketexec.FailBeforeExec(err.Error(), ticketexec.Record{
+			InstanceID: payload.TargetInstanceID, DB: payload.TargetDB,
+			SQL: "logical_restore", Status: "failed",
+		})
+		res.Message = err.Error()
+		return h.persistExec(it, res)
+	}
+	res := &ticketexec.Result{
+		Success:   true,
+		Summary:   msg,
+		Message:   msg,
+		StartedAt: time.Now().UTC().Format(time.RFC3339),
+		EndedAt:   time.Now().UTC().Format(time.RFC3339),
+		Engine:    payload.Engine,
+	}
+	res.Records = []ticketexec.Record{{
+		InstanceID: payload.TargetInstanceID, DB: payload.TargetDB,
+		SQL: "logical_restore", Status: "success", StartedAt: res.StartedAt, EndedAt: res.EndedAt,
+	}}
 	return h.persistExec(it, res)
 }
 

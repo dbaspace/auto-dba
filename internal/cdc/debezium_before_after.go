@@ -102,6 +102,14 @@ func BuildConfigBeforeAfter(p DebeziumBuildParams) map[string]string {
 }
 
 func BuildConfig(mode string, p DebeziumBuildParams) map[string]string {
+	if NormalizeCDCSourceEngine(p.SourceEngine) == SourceEngineMySQL {
+		switch strings.TrimSpace(mode) {
+		case ModeBeforeAfter:
+			return BuildConfigMySQLBeforeAfter(p)
+		default:
+			return BuildConfigMySQLAfterOnly(p)
+		}
+	}
 	switch strings.TrimSpace(mode) {
 	case ModeBeforeAfter:
 		return BuildConfigBeforeAfter(p)

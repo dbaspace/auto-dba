@@ -14,10 +14,25 @@ type StatementRow struct {
 }
 
 type Result struct {
-	OK         bool             `json:"ok"`
-	Statements []StatementRow   `json:"statements"`
-	Errors     []map[string]any `json:"errors,omitempty"`
-	Warns      []map[string]any `json:"warns,omitempty"`
+	OK             bool             `json:"ok"`
+	StatementCount int              `json:"statement_count,omitempty"` // len(SplitSQL)，与审核行数可能不同（extras）
+	Statements     []StatementRow   `json:"statements"`
+	Errors         []map[string]any `json:"errors,omitempty"`
+	Warns          []map[string]any `json:"warns,omitempty"`
+}
+
+// AttachStatementCount 写入按分号拆分的语句数（与执行侧口径一致）。
+func AttachStatementCount(res *Result, sqlContent string) {
+	if res == nil {
+		return
+	}
+	n := len(SplitSQL(sqlContent))
+	if n == 0 && strings.TrimSpace(sqlContent) != "" {
+		// 空拆分但原文非空时仍标 0，便于前端提示
+		res.StatementCount = 0
+		return
+	}
+	res.StatementCount = n
 }
 
 var (
@@ -781,6 +796,7 @@ func CheckTicket(sqlContent, issueType string, forbidDropDB, requireWhere bool) 
 func CheckCreateDB(sqlContent string) Result {
 	res := Result{OK: true}
 	stmts := SplitSQL(sqlContent)
+	res.StatementCount = len(stmts)
 	if len(stmts) == 0 {
 		return fail("parse", "SQL 不能为空", sqlContent)
 	}

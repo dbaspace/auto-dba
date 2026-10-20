@@ -498,7 +498,7 @@ export default function PlatformAgent() {
       <div className="backup-toolbar">
         <h2>平台 Agent</h2>
         <span className="backup-hint">
-          平台级执行面：定义时勾选归属（备份 / Redis RDB / 高可用），业务模块按归属引用。
+          平台级执行面：定义时勾选归属（备份 / Redis RDB / 高可用 / K8s 反向隧道），业务模块按归属引用。
         </span>
         <Space>
           <Button onClick={() => refreshAgentStatus()}>刷新状态</Button>
@@ -562,6 +562,7 @@ export default function PlatformAgent() {
                 { label: '备份控制', value: 'backup' },
                 { label: 'Redis RDB 分析', value: 'rdb' },
                 { label: '高可用', value: 'ha' },
+                { label: 'K8s 反向隧道', value: 'k8s' },
               ]}
             />
           </Form.Item>
@@ -653,6 +654,7 @@ export default function PlatformAgent() {
                 { label: '备份控制', value: 'backup' },
                 { label: 'Redis RDB 分析', value: 'rdb' },
                 { label: '高可用', value: 'ha' },
+                { label: 'K8s 反向隧道', value: 'k8s' },
               ]}
             />
           </Form.Item>

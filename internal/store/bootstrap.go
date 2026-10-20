@@ -142,6 +142,9 @@ func (d *DB) seedFast() error {
 			if err := d.ensureScheduledJobsMenu(now); err != nil {
 				return err
 			}
+			if err := d.ensureScheduledJobsActionMenus(now); err != nil {
+				return err
+			}
 			if err := d.SyncDefaultTenantMemberships(); err != nil {
 				return err
 			}

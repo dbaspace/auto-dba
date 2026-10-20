@@ -3,7 +3,6 @@ package flashback
 import (
 	"bytes"
 	"context"
-	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -267,12 +266,6 @@ func flashbackTC3Headers(secretID, secretKey, service, host, action, version, re
 func sha256Hex(b []byte) string {
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
-}
-
-func hmacSHA256(key []byte, msg string) []byte {
-	m := hmac.New(sha256.New, key)
-	_, _ = m.Write([]byte(msg))
-	return m.Sum(nil)
 }
 
 func flashbackTencentFormatTime(t time.Time) string {

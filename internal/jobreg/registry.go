@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -20,6 +21,9 @@ type registered struct {
 	runner Runner
 }
 
+// FailureHook 任务失败回调（通知等）；勿在 hook 内再触发 TryFire。
+type FailureHook func(jobKey, jobName, runID, errMsg string)
+
 // Registry 平台定时任务注册中心。
 type Registry struct {
 	Store     *store.DB
@@ -28,9 +32,14 @@ type Registry struct {
 	OwnerPID  int
 	LeaseTTL  time.Duration
 	Heartbeat time.Duration
+	OnFailure FailureHook
 
-	mu   sync.RWMutex
-	jobs map[string]*registered
+	mu      sync.RWMutex
+	jobs    map[string]*registered
+	cancel  context.CancelFunc
+	runOK   atomic.Int64
+	runFail atomic.Int64
+	leaseNo atomic.Int64
 }
 
 func New(db *store.DB) *Registry {
@@ -125,6 +134,10 @@ func (r *Registry) Start(ctx context.Context) {
 	if r == nil || r.Store == nil {
 		return
 	}
+	runCtx, cancel := context.WithCancel(ctx)
+	r.mu.Lock()
+	r.cancel = cancel
+	r.mu.Unlock()
 	if n, err := r.Store.RecoverStuckJobRuns(2 * time.Minute); err != nil {
 		log.Printf("jobreg: recover stuck: %v", err)
 	} else if n > 0 {
@@ -138,10 +151,43 @@ func (r *Registry) Start(ctx context.Context) {
 	r.mu.RUnlock()
 	for _, j := range list {
 		j := j
-		go r.loopJob(ctx, j)
+		go r.loopJob(runCtx, j)
 	}
-	go r.maintenanceLoop(ctx)
+	go r.maintenanceLoop(runCtx)
 	log.Printf("jobreg: started owner=%s host=%s jobs=%d", r.OwnerID, r.OwnerHost, len(list))
+}
+
+// Stop 停止轮询并释放本进程持有的租约（SIGTERM 优雅退出）。
+func (r *Registry) Stop() {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	cancel := r.cancel
+	r.cancel = nil
+	r.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if r.Store != nil {
+		if n, err := r.Store.ReleaseJobLeasesByOwner(r.OwnerID); err != nil {
+			log.Printf("jobreg: release leases: %v", err)
+		} else if n > 0 {
+			log.Printf("jobreg: released %d lease(s) owner=%s", n, r.OwnerID)
+		}
+	}
+}
+
+// Metrics 简易计数（管理页 summary 用）。
+func (r *Registry) Metrics() map[string]int64 {
+	if r == nil {
+		return nil
+	}
+	return map[string]int64{
+		"run_success":       r.runOK.Load(),
+		"run_failed":        r.runFail.Load(),
+		"lease_held_skip":   r.leaseNo.Load(),
+	}
 }
 
 func (r *Registry) maintenanceLoop(ctx context.Context) {
@@ -239,6 +285,7 @@ func (r *Registry) maybeMisfire(ctx context.Context, j *registered) {
 		return
 	}
 	log.Printf("jobreg: misfire catch-up job=%s fire_key=%s", j.desc.Key, fk)
+	log.Printf("jobreg_notify: event=misfire job=%s fire_key=%s", j.desc.Key, fk)
 	_, _ = r.TryFire(ctx, j.desc.Key, TriggerMisfire, fk)
 }
 
@@ -273,6 +320,7 @@ func (r *Registry) TryFire(ctx context.Context, key, trigger, fireKey string) (*
 		return nil, err
 	}
 	if !ok {
+		r.leaseNo.Add(1)
 		lease, _ := r.Store.GetJobLease(key)
 		res := &TriggerResult{Skipped: true, Reason: "lease_held", Conflict: true}
 		if lease != nil {
@@ -356,9 +404,18 @@ func (r *Registry) TryFire(ctx context.Context, key, trigger, fireKey string) (*
 	if runErr != nil {
 		status = "failed"
 		errMsg = runErr.Error()
+		r.runFail.Add(1)
 		log.Printf("jobreg: job=%s failed: %v", key, runErr)
-		// 失败可观测：管理页 24h 失败计数；后续可接 notify 邮件/飞书
 		log.Printf("jobreg_notify: event=job_failed job=%s run_id=%s err=%s", key, runID, errMsg)
+		if r.OnFailure != nil {
+			name := j.desc.Name
+			go func() {
+				defer func() { _ = recover() }()
+				r.OnFailure(key, name, runID, errMsg)
+			}()
+		}
+	} else {
+		r.runOK.Add(1)
 	}
 	dur := time.Since(started).Milliseconds()
 	_ = r.Store.FinishJobRun(runID, status, errMsg, dur)

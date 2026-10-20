@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import {
+  Alert,
   Button,
   Divider,
   Form,
@@ -11,11 +12,21 @@ import {
   Typography,
   message,
 } from 'antd'
-import { useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import api from '../../api/request'
 import Auth from '../../components/Auth'
 import { Perm } from '../../hooks/usePermission'
 import './SqlInsightSettings.css'
+
+/** 与后端 store.JobManagedGlobalArgKeys 对齐：调度只读，改到定时任务页 */
+const JOB_MANAGED_KEYS = new Set([
+  'awr_enabled',
+  'awr_daily_cron',
+  'pg_space_enabled',
+  'pg_space_daily_cron',
+  'sql_insight_analysis_cron_enabled',
+  'sql_insight_analysis_cron',
+])
 
 type FieldType = 'bool' | 'number' | 'cron' | 'text' | 'url' | 'password'
 type AwrGroup = 'prometheus' | 'report' | 'push'
@@ -201,12 +212,28 @@ function toStringValues(form: FormValues, defs: FieldDef[]): Record<string, stri
   return out
 }
 
+function scheduleManagedExtra(desc: string) {
+  return (
+    <span>
+      {desc}。调度请到{' '}
+      <Link to="/config/scheduled-jobs">配置中心 → 监控运维 → 定时任务</Link> 修改（只读展示当前值）。
+    </span>
+  )
+}
+
 function renderField(def: FieldDef) {
+  const managed = JOB_MANAGED_KEYS.has(def.key)
   switch (def.type) {
     case 'bool':
       return (
-        <Form.Item key={def.key} name={def.key} label={def.label} valuePropName="checked" extra={def.description}>
-          <Switch />
+        <Form.Item
+          key={def.key}
+          name={def.key}
+          label={def.label}
+          valuePropName="checked"
+          extra={managed ? scheduleManagedExtra(def.description) : def.description}
+        >
+          <Switch disabled={managed} />
         </Form.Item>
       )
     case 'number':
@@ -245,18 +272,22 @@ function renderField(def: FieldDef) {
           key={def.key}
           name={def.key}
           label={def.label}
-          extra={def.description}
-          rules={[
-            { required: true, message: '请输入 Cron 表达式' },
-            {
-              validator: (_, value: string) =>
-                !value || value.trim().split(/\s+/).length === 6
-                  ? Promise.resolve()
-                  : Promise.reject(new Error('Cron 需为 6 段（含秒）')),
-            },
-          ]}
+          extra={managed ? scheduleManagedExtra(def.description) : def.description}
+          rules={
+            managed
+              ? undefined
+              : [
+                  { required: true, message: '请输入 Cron 表达式' },
+                  {
+                    validator: (_, value: string) =>
+                      !value || value.trim().split(/\s+/).length === 6
+                        ? Promise.resolve()
+                        : Promise.reject(new Error('Cron 需为 6 段（含秒）')),
+                  },
+                ]
+          }
         >
-          <Input placeholder={def.placeholder} allowClear />
+          <Input placeholder={def.placeholder} allowClear disabled={managed} />
         </Form.Item>
       )
     default:
@@ -318,6 +349,7 @@ export default function SqlInsightSettings() {
     setSaving(true)
     try {
       for (const def of allDefs) {
+        if (JOB_MANAGED_KEYS.has(def.key)) continue
         const body = {
           key: def.key,
           value: payload[def.key] ?? def.default,
@@ -329,7 +361,7 @@ export default function SqlInsightSettings() {
           await api.post('/global-args', body)
         }
       }
-      message.success('已保存（Cron 约 30 秒内热更新）')
+      message.success('已保存（非调度项；Cron/开关请到定时任务页修改）')
       await load()
     } finally {
       setSaving(false)
@@ -349,7 +381,7 @@ export default function SqlInsightSettings() {
             SQL 洞察设置
           </Typography.Title>
           <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-            配置 AWR、表空间定时采集与智能分析日任务。底层写入全局参数，改后约 30 秒热更新。
+            配置 AWR / 表空间 / 智能分析非调度项。Cron 与定时开关已迁至「定时任务」页统一管理。
           </Typography.Paragraph>
         </div>
         <Space>
@@ -364,6 +396,17 @@ export default function SqlInsightSettings() {
         </Space>
       </div>
 
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 12 }}
+        message={
+          <span>
+            定时开关与 Cron（awr / pg_space / sql_insight）请到{' '}
+            <Link to="/config/scheduled-jobs">定时任务</Link> 修改；本页对应字段只读。
+          </span>
+        }
+      />
       <Tabs
         activeKey={activeTab}
         onChange={(k) => setParams(k === 'awr' ? {} : { tab: k })}
@@ -391,7 +434,7 @@ export default function SqlInsightSettings() {
             children: (
               <Form form={spaceForm} layout="vertical" className="settings-form" disabled={loading}>
                 <Typography.Paragraph type="secondary">
-                  配置表空间定时采集与快照保留。手动采集不受此处开关影响；改后约 30 秒热更新生效。
+                  快照保留等在此配置；定时采集开关与 Cron 请到定时任务页。手动采集不受影响。
                 </Typography.Paragraph>
                 {SPACE_DEFS.map(renderField)}
               </Form>
@@ -403,7 +446,7 @@ export default function SqlInsightSettings() {
             children: (
               <Form form={smartForm} layout="vertical" className="settings-form" disabled={loading}>
                 <Typography.Paragraph type="secondary">
-                  配置每日自动智能分析。手动触发不受此处开关影响；建议 Cron 晚于 AWR 日任务。
+                  定时分析开关与 Cron 请到定时任务页；手动触发不受影响。
                 </Typography.Paragraph>
                 {SMART_DEFS.map(renderField)}
               </Form>

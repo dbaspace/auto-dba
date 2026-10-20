@@ -24,8 +24,10 @@ const (
 // DebeziumBuildParams Debezium 配置构建入参。
 //
 // Tables 是非分表的单源 → 单 topic 表名；ShardGroups 是多源 → 单 logical topic 的分表组。
+// SourceEngine 为 mysql 时走 MySqlConnector（字段名仍复用 PGHost/PGPort 等连接信息）。
 type DebeziumBuildParams struct {
 	ConnectorName          string
+	SourceEngine           string // postgres（默认）| mysql
 	PGHost                 string
 	PGPort                 int
 	PGUser                 string
@@ -41,6 +43,7 @@ type DebeziumBuildParams struct {
 	TopicPartitions        int
 	TopicReplicationFactor int
 	FilterDeleteEvents     bool
+	MySQLServerID          int64
 }
 
 // ShardGroup Debezium ByLogicalTableRouter：把 N 个源 topic 合并为 1 个 logical topic。

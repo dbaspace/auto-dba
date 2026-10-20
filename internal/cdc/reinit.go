@@ -146,6 +146,7 @@ func taskBindings(t *store.CDCTask, extra map[string]string) []ShardDbBinding {
 type connectorPlanInput struct {
 	Extra        map[string]string
 	SourceDB     string
+	SourceEngine string
 	PGHost       string
 	PGPort       int
 	PGUser       string
@@ -168,9 +169,17 @@ func BuildTaskConnectorPlans(st *store.DB, secretKey string, t *store.CDCTask, e
 			return nil, fmt.Errorf("解密源端实例密码失败: %w", err)
 		}
 	}
+	srcEng := NormalizeCDCSourceEngine(inst.DBType)
+	if extra != nil {
+		if v := strings.TrimSpace(extra["source_engine"]); v != "" {
+			srcEng = NormalizeCDCSourceEngine(v)
+		}
+		extra["source_engine"] = srcEng
+	}
 	return buildConnectorPlans(connectorPlanInput{
 		Extra:        extra,
 		SourceDB:     t.SourceDB,
+		SourceEngine: srcEng,
 		PGHost:       defaultStr(strings.TrimSpace(inst.Host), strings.TrimSpace(inst.DomainName)),
 		PGPort:       inst.Port,
 		PGUser:       inst.Username,
@@ -184,8 +193,17 @@ func buildConnectorPlans(in connectorPlanInput) ([]ConnectorPlan, error) {
 	if extra == nil {
 		extra = map[string]string{}
 	}
-	if strings.TrimSpace(extra["publication_name"]) == "" || strings.TrimSpace(extra["slot_name"]) == "" {
-		return nil, fmt.Errorf("任务未登记 publication / slot 名称")
+	srcEng := NormalizeCDCSourceEngine(in.SourceEngine)
+	if srcEng == "" {
+		srcEng = SourceEnginePostgres
+	}
+	isMySQL := srcEng == SourceEngineMySQL
+	if !isMySQL {
+		if strings.TrimSpace(extra["publication_name"]) == "" || strings.TrimSpace(extra["slot_name"]) == "" {
+			return nil, fmt.Errorf("任务未登记 publication / slot 名称")
+		}
+	} else if strings.TrimSpace(extra["topic_prefix"]) == "" {
+		return nil, fmt.Errorf("MySQL CDC 任务未登记 topic_prefix")
 	}
 	maps := ActiveMappings(ParseMappingsJSON(extra["mappings"]))
 	tables := splitCSV(extra["tables"])
@@ -194,9 +212,16 @@ func buildConnectorPlans(in connectorPlanInput) ([]ConnectorPlan, error) {
 	}
 	mode := defaultStr(strings.TrimSpace(extra["debezium_mode"]), ModeAfterOnly)
 	schema := defaultStr(extra["source_schema"], "public")
+	if isMySQL && (schema == "" || schema == "public") {
+		schema = ""
+	}
 	port := in.PGPort
 	if port <= 0 {
-		port = 5432
+		if isMySQL {
+			port = 3306
+		} else {
+			port = 5432
+		}
 	}
 	snapshot := defaultStr(strings.TrimSpace(in.SnapshotMode), defaultStr(extra["snapshot_mode"], SnapshotNever))
 	template := CurrentConfigFromExtra(extra)
@@ -216,6 +241,7 @@ func buildConnectorPlans(in connectorPlanInput) ([]ConnectorPlan, error) {
 		plain, shards := SplitMappings(dbMaps, tables)
 		generated := BuildConfig(mode, DebeziumBuildParams{
 			ConnectorName:          b.ConnectorName,
+			SourceEngine:           srcEng,
 			PGHost:                 in.PGHost,
 			PGPort:                 port,
 			PGUser:                 in.PGUser,
@@ -231,8 +257,11 @@ func buildConnectorPlans(in connectorPlanInput) ([]ConnectorPlan, error) {
 			TopicPartitions:        extraAtoi(extra["kafka_topic_partitions"], 0),
 			TopicReplicationFactor: extraAtoi(extra["kafka_topic_replication_factor"], 0),
 			FilterDeleteEvents:     ResolveFilterDeleteEvents(mode, extra["filter_delete_events"] == "true"),
+			MySQLServerID:          int64(extraAtoi(extra["mysql_server_id"], 5400)),
 		})
-		generated["signal.data.collection"] = signal
+		if !isMySQL {
+			generated["signal.data.collection"] = signal
+		}
 		cfg := generated
 		if len(template) > 0 {
 			cfg = cloneStringMap(template)

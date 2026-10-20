@@ -112,7 +112,11 @@ func Compact(r *Result) *Result {
 		countSuccessRecords(r.Records) > DetailCompactThreshold
 	if !need {
 		if r.Summary == "" && successN > 0 {
-			r.Summary = fmt.Sprintf("成功执行 %d 条 SQL", successN)
+			planned := r.StatementCount
+			if planned <= 0 {
+				planned = successN
+			}
+			r.Summary = fmt.Sprintf("成功执行 %d / %d 条语句（按分号拆分）", successN, planned)
 		}
 		return r
 	}

@@ -49,6 +49,7 @@ type Result struct {
 	EndedAt      string       `json:"ended_at,omitempty"`
 	Engine       string       `json:"engine,omitempty"`
 	ChangeID     string       `json:"change_id,omitempty"`
+	StatementCount int        `json:"statement_count,omitempty"` // 计划执行条数（SplitSQL）
 	SuccessCount int          `json:"success_count,omitempty"`
 	FailCount    int          `json:"fail_count,omitempty"`
 	RolledBack   bool         `json:"rolled_back,omitempty"`
@@ -214,6 +215,7 @@ func Run(ctx context.Context, issueType string, sqlContent string, t Target) *Re
 		return fail(res, t, "工单未指定数据库")
 	}
 	stmts := sqlcheck.SplitSQL(sqlContent)
+	res.StatementCount = len(stmts)
 	if len(stmts) == 0 {
 		return fail(res, t, "SQL 不能为空")
 	}
@@ -240,12 +242,12 @@ func Run(ctx context.Context, issueType string, sqlContent string, t Target) *Re
 			res.Message = formatExecErr(err)
 		}
 		if res.SuccessCount > 0 && !res.RolledBack {
-			res.Summary = fmt.Sprintf("部分执行后失败，已成功 %d 条", res.SuccessCount)
+			res.Summary = fmt.Sprintf("部分执行后失败，已成功 %d / %d 条语句", res.SuccessCount, res.StatementCount)
 		}
 		return Compact(res)
 	}
 	res.Success = true
-	res.Summary = fmt.Sprintf("成功执行 %d 条 SQL", res.SuccessCount)
+	res.Summary = fmt.Sprintf("成功执行 %d / %d 条语句（按分号拆分）", res.SuccessCount, res.StatementCount)
 	return Compact(res)
 }
 

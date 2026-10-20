@@ -8,22 +8,13 @@ import (
 	"auto-dba/internal/store"
 )
 
-// StartAwaitExecStuckNotify 周期性扫描长时间停在「已通过/待执行」的工单并邮件告警提交人。
+// StartAwaitExecStuckNotify 已废弃：由 jobreg ticket.await_exec_notify 接管。
+//
+// Deprecated: 使用 jobboot.RegisterPlatformJobs。
 func StartAwaitExecStuckNotify(ctx context.Context, h *TicketHandler) {
-	if h == nil || h.Store == nil {
-		return
-	}
-	_, _ = RunAwaitExecStuckNotifyOnce(ctx, h)
-	ticker := time.NewTicker(12 * time.Minute)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			_, _ = RunAwaitExecStuckNotifyOnce(ctx, h)
-		}
-	}
+	_ = ctx
+	_ = h
+	log.Printf("DEPRECATED: StartAwaitExecStuckNotify ignored; scheduling is owned by jobreg (ticket.await_exec_notify)")
 }
 
 // RunAwaitExecStuckNotifyOnce 供 jobreg 调用。

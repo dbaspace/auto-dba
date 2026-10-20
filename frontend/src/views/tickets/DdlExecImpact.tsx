@@ -61,6 +61,9 @@ export default function DdlExecImpact(props: {
   /** 事务回滚时后端给出的摘要（第 N 条失败、均未生效） */
   rollbackSummary?: string
   emptyText?: string
+  successCount?: number
+  statementCount?: number
+  compacted?: boolean
 }) {
   const [tab, setTab] = useState<DdlExecTab>('all')
   const ticketFailed = isTicketExecFailed({
@@ -77,6 +80,9 @@ export default function DdlExecImpact(props: {
         execMessage: props.execMessage,
         execFailed: props.execFailed,
         execSuccess: props.execSuccess,
+        successCount: props.successCount,
+        statementCount: props.statementCount,
+        compacted: props.compacted,
       }),
     [
       props.records,
@@ -87,6 +93,9 @@ export default function DdlExecImpact(props: {
       props.execMessage,
       props.execFailed,
       props.execSuccess,
+      props.successCount,
+      props.statementCount,
+      props.compacted,
     ],
   )
   const rolledBack = Boolean(props.rollbackSummary) || stats.rolledBackSQL > 0
@@ -100,6 +109,13 @@ export default function DdlExecImpact(props: {
   const hasFail = stats.instFail > 0 || ticketFailed
   const allOk = stats.instTotal > 0 && stats.instFail === 0 && !ticketFailed
   const allFail = stats.instTotal > 0 && stats.instOk === 0
+  const planned = stats.statementCount || stats.totalSQL
+  const detailSampled =
+    Boolean(stats.compacted) ||
+    (stats.countsFromBackend &&
+      Array.isArray(props.records) &&
+      props.records.length > 0 &&
+      props.records.length < (stats.successSQL || 0))
 
   const summaryLine = (() => {
     if (!stats.instTotal && !stats.totalSQL) return props.emptyText || '暂无数据，执行后获取'
@@ -107,8 +123,13 @@ export default function DdlExecImpact(props: {
       return props.rollbackSummary || props.execMessage || '执行失败，事务已回滚，0 条生效'
     }
     if (hasFail && ticketFailed && props.execMessage) return props.execMessage
-    if (hasFail) return `部分失败，已成功 ${stats.successSQL} 条 SQL`
-    return `成功 ${stats.successSQL || stats.totalSQL} 条 SQL`
+    const base = hasFail
+      ? `部分失败，已成功 ${stats.successSQL} / ${planned || stats.successSQL} 条语句`
+      : `成功执行 ${stats.successSQL || planned} / ${planned || stats.successSQL || 0} 条语句`
+    const note = detailSampled
+      ? '（按分号拆分；明细已抽样，条数以统计为准）'
+      : '（按分号拆分，非文本行数）'
+    return base + note
   })()
 
   const bannerClass = allOk ? 'is-success' : allFail ? 'is-fail' : hasFail ? 'is-partial' : 'is-success'

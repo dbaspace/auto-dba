@@ -148,7 +148,8 @@ func (s *FlashbackImpl) executeTask(ctx context.Context, taskID string) error {
 	var truncated bool
 	walFiles := 0
 	archiveDir := flashbackArchiveDir(ctx)
-	if walSrc.Kind != flashbackWALSourceCloudTencent {
+	if walSrc.Kind != flashbackWALSourceCloudTencent && walSrc.Kind != flashbackWALSourceCloudAliyun &&
+		walSrc.Kind != flashbackWALSourceCloudHuawei && walSrc.Kind != flashbackWALSourceCloudAWS {
 		live, err := flashbackListLiveWAL(ctx, db)
 		if err != nil {
 			return fmt.Errorf("%w。若实际是云库请在「配置 → 实例」填写云厂商与云实例 ID", err)
@@ -282,24 +283,69 @@ func (s *FlashbackImpl) executeTask(ctx context.Context, taskID string) error {
 	}
 	var st flashbackParseStats
 	var pulled int64
-	if walSrc.Kind == flashbackWALSourceCloudTencent {
+	if walSrc.Kind == flashbackWALSourceCloudTencent || walSrc.Kind == flashbackWALSourceCloudAliyun ||
+		walSrc.Kind == flashbackWALSourceCloudHuawei || walSrc.Kind == flashbackWALSourceCloudAWS {
 		cpTime := flashbackCheckpointTime(ctx, db)
 		from, to := flashbackCloudDownloadWindow(row.TargetTime, end, cpTime, flashbackCloudLookback(ctx))
 		from, to = flashbackCloudApplyDownloadLag(from, to, flashbackCloudOSSLag)
 		if err := flashbackCloudWaitDownloadLag(ctx, end, flashbackCloudOSSLag); err != nil {
 			return fmt.Errorf("等待云厂商 WAL 上传滞后: %w", err)
 		}
-		reg, err := flashbackResolveTencentRegion(ctx, res, "")
-		if err != nil {
-			return err
+		var provider flashbackCloudWALProvider
+		switch walSrc.Kind {
+		case flashbackWALSourceCloudAliyun:
+			reg := "cn-hangzhou"
+			if res != nil {
+				if v := strings.TrimSpace(flashbackTagRaw(res.Tags, "cloud_region")); v != "" {
+					reg = v
+				}
+			}
+			s.logf(ctx, taskID, "INFO", "阿里云 Region=%s", reg)
+			p, err := flashbackNewAliyunWALProvider(ctx, reg)
+			if err != nil {
+				return err
+			}
+			provider = p
+		case flashbackWALSourceCloudHuawei:
+			reg := "cn-north-4"
+			if res != nil {
+				if v := strings.TrimSpace(flashbackTagRaw(res.Tags, "cloud_region")); v != "" {
+					reg = v
+				}
+			}
+			s.logf(ctx, taskID, "INFO", "华为云 Region=%s", reg)
+			p, err := flashbackNewHuaweiWALProvider(ctx, reg)
+			if err != nil {
+				return err
+			}
+			provider = p
+		case flashbackWALSourceCloudAWS:
+			reg := "ap-northeast-1"
+			if res != nil {
+				if v := strings.TrimSpace(flashbackTagRaw(res.Tags, "cloud_region")); v != "" {
+					reg = v
+				}
+			}
+			s.logf(ctx, taskID, "INFO", "AWS Region=%s", reg)
+			p, err := flashbackNewAWSWALProvider(ctx, reg)
+			if err != nil {
+				return err
+			}
+			provider = p
+		default:
+			reg, err := flashbackResolveTencentRegion(ctx, res, "")
+			if err != nil {
+				return err
+			}
+			s.logf(ctx, taskID, "INFO", "腾讯云 Region=%s 来源=%s", reg.Region, reg.Reason)
+			p, err := flashbackNewTencentWALProvider(ctx, reg.Region)
+			if err != nil {
+				return err
+			}
+			provider = p
 		}
-		s.logf(ctx, taskID, "INFO", "腾讯云 Region=%s 来源=%s", reg.Region, reg.Reason)
 		s.logf(ctx, taskID, "INFO", "云厂商 WAL 上传滞后，下载窗 %s ~ %s（开始-3m 结束+3m）",
 			from.Format(time.RFC3339), to.Format(time.RFC3339))
-		provider, err := flashbackNewTencentWALProvider(ctx, reg.Region)
-		if err != nil {
-			return err
-		}
 		spec := flashbackCloudWALSpec{InstanceID: walSrc.InstanceID, From: from, To: to}
 		pkgs, err := provider.ListByTime(ctx, spec)
 		if err != nil {

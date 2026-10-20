@@ -11,6 +11,7 @@ const (
 	GroupBackup = "backup"
 	GroupRDB    = "rdb"
 	GroupHA     = "ha"
+	GroupK8s    = "k8s" // 反向隧道 Agent（非 SSH）；供 K8s 纳管引用
 )
 
 // 备份控制可选实例类型（与 store.NormalizeDBType 对齐）。
@@ -67,7 +68,7 @@ func NormalizeGroups(in []string) []string {
 	for _, g := range in {
 		g = strings.ToLower(strings.TrimSpace(g))
 		switch g {
-		case GroupBackup, GroupRDB, GroupHA:
+		case GroupBackup, GroupRDB, GroupHA, GroupK8s:
 			if !seen[g] {
 				seen[g] = true
 				out = append(out, g)

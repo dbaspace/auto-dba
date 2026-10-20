@@ -4,8 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -15,6 +18,39 @@ import (
 	"auto-dba/internal/middleware"
 	"auto-dba/internal/store"
 )
+
+func (h *K8sHandler) InstallOperator(c *gin.Context) {
+	cli, cl, allow, ok := h.liveClient(c)
+	if !ok {
+		return
+	}
+	if allow != nil {
+		c.JSON(http.StatusForbidden, gin.H{"message": "仅集群归属方可安装 Operator"})
+		return
+	}
+	var req struct {
+		Engine  string `json:"engine"`
+		Version string `json:"version"` // 可选：清单 URL 覆盖默认
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.Engine == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "engine 必填"})
+		return
+	}
+	ad := h.Ops.Get(req.Engine)
+	if ad == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "不支持的引擎"})
+		return
+	}
+	if err := ad.Install(c.Request.Context(), cli, operator.InstallOpt{Version: req.Version}); err != nil {
+		h.audit(c, cl.ID, "", "install", "operator", req.Engine, "", "fail", err.Error())
+		c.JSON(http.StatusBadGateway, gin.H{"message": err.Error()})
+		return
+	}
+	h.audit(c, cl.ID, "", "install", "operator", req.Engine, "", "ok", "")
+	// 安装后自动再检测
+	info, _ := ad.Detect(c.Request.Context(), cli)
+	c.JSON(http.StatusOK, gin.H{"data": info, "message": "已提交安装（亦可只检测客户已装 Operator）"})
+}
 
 func (h *K8sHandler) DetectOperators(c *gin.Context) {
 	cli, cl, allow, ok := h.liveClient(c)
@@ -242,7 +278,162 @@ func (h *K8sHandler) DeleteDBCluster(c *gin.Context) {
 }
 
 func (h *K8sHandler) ListHelmApps(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"data": []any{}, "message": "Helm 应用管理将在增强期接入 helm.sh/helm/v3 SDK"})
+	cli, _, allow, ok := h.liveClient(c)
+	if !ok {
+		return
+	}
+	if allow != nil {
+		c.JSON(http.StatusForbidden, gin.H{"message": "仅集群归属方可浏览 Helm 应用"})
+		return
+	}
+	nsFilter := strings.TrimSpace(c.Query("namespace"))
+	opts := metav1.ListOptions{LabelSelector: "owner=helm"}
+	var secs *corev1.SecretList
+	var err error
+	if nsFilter != "" {
+		secs, err = cli.Clientset.CoreV1().Secrets(nsFilter).List(c.Request.Context(), opts)
+	} else {
+		secs, err = cli.Clientset.CoreV1().Secrets("").List(c.Request.Context(), opts)
+	}
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"data": []any{}, "message": "列举 Helm Secret 失败: " + err.Error() + "；完整 install/upgrade 待接入 helm SDK"})
+		return
+	}
+	type app struct {
+		Name       string `json:"name"`
+		Namespace  string `json:"namespace"`
+		Status     string `json:"status,omitempty"`
+		Version    string `json:"version,omitempty"`
+		Chart      string `json:"chart,omitempty"`
+		AppVersion string `json:"app_version,omitempty"`
+		UpdatedAt  string `json:"updated_at,omitempty"`
+		Revision   string `json:"revision,omitempty"`
+	}
+	// 同 name/ns 取最大 version 的 Secret（Helm v3 每个 revision 一个 secret）
+	best := map[string]app{}
+	bestVer := map[string]int{}
+	for _, s := range secs.Items {
+		name := s.Labels["name"]
+		if name == "" {
+			continue
+		}
+		key := s.Namespace + "/" + name
+		ver := 0
+		fmt.Sscanf(s.Labels["version"], "%d", &ver)
+		if prev, ok := bestVer[key]; ok && ver < prev {
+			continue
+		}
+		bestVer[key] = ver
+		a := app{
+			Name:      name,
+			Namespace: s.Namespace,
+			Status:    s.Labels["status"],
+			Version:   s.Labels["version"],
+			Chart:     s.Labels["chart"],
+			Revision:  s.Labels["version"],
+			UpdatedAt: s.CreationTimestamp.UTC().Format(time.RFC3339),
+		}
+		if a.Chart == "" {
+			a.Chart = s.Annotations["meta.helm.sh/release-name"]
+		}
+		if v := s.Labels["app.kubernetes.io/version"]; v != "" {
+			a.AppVersion = v
+		}
+		best[key] = a
+	}
+	out := make([]app, 0, len(best))
+	for _, a := range best {
+		out = append(out, a)
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"data":    out,
+		"message": "列举 Helm release Secret（revision 去重）；写操作见 POST .../apps/upgrade|rollback（本机 helm CLI）",
+	})
+}
+
+// HelmUpgradeInstall 本机 helm upgrade --install（需平台主机安装 helm，且集群凭据可写临时 kubeconfig）。
+func (h *K8sHandler) HelmUpgradeInstall(c *gin.Context) {
+	cli, cl, allow, ok := h.liveClient(c)
+	if !ok {
+		return
+	}
+	_ = cli
+	if allow != nil {
+		c.JSON(http.StatusForbidden, gin.H{"message": "仅集群归属方可执行 Helm upgrade"})
+		return
+	}
+	var req struct {
+		Release     string   `json:"release"`
+		Namespace   string   `json:"namespace"`
+		Chart       string   `json:"chart"`
+		ValuesFiles []string `json:"values_files"`
+		Set         []string `json:"set"`
+		Wait        bool     `json:"wait"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.Release) == "" || strings.TrimSpace(req.Namespace) == "" || strings.TrimSpace(req.Chart) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "release/namespace/chart 必填"})
+		return
+	}
+	cred, err := h.credFromCluster(cl, middleware.Username(c), middleware.Role(c))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	kc, cleanup, err := k8s.WriteTempKubeconfig(cred)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	defer cleanup()
+	out, err := k8s.HelmUpgradeInstall(c.Request.Context(), kc, req.Release, req.Namespace, req.Chart, req.ValuesFiles, req.Set, req.Wait)
+	if err != nil {
+		h.audit(c, cl.ID, req.Namespace, "helm_upgrade", "helm", req.Release, req.Chart, "fail", err.Error())
+		c.JSON(http.StatusBadGateway, gin.H{"message": err.Error(), "output": out})
+		return
+	}
+	h.audit(c, cl.ID, req.Namespace, "helm_upgrade", "helm", req.Release, req.Chart, "ok", "")
+	c.JSON(http.StatusOK, gin.H{"ok": true, "output": out})
+}
+
+// HelmRollback 本机 helm rollback。
+func (h *K8sHandler) HelmRollback(c *gin.Context) {
+	cli, cl, allow, ok := h.liveClient(c)
+	if !ok {
+		return
+	}
+	_ = cli
+	if allow != nil {
+		c.JSON(http.StatusForbidden, gin.H{"message": "仅集群归属方可执行 Helm rollback"})
+		return
+	}
+	var req struct {
+		Release   string `json:"release"`
+		Namespace string `json:"namespace"`
+		Revision  int    `json:"revision"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.Release) == "" || strings.TrimSpace(req.Namespace) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "release/namespace 必填"})
+		return
+	}
+	cred, err := h.credFromCluster(cl, middleware.Username(c), middleware.Role(c))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	kc, cleanup, err := k8s.WriteTempKubeconfig(cred)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	defer cleanup()
+	out, err := k8s.HelmRollback(c.Request.Context(), kc, req.Release, req.Namespace, req.Revision)
+	if err != nil {
+		h.audit(c, cl.ID, req.Namespace, "helm_rollback", "helm", req.Release, fmt.Sprintf("rev=%d", req.Revision), "fail", err.Error())
+		c.JSON(http.StatusBadGateway, gin.H{"message": err.Error(), "output": out})
+		return
+	}
+	h.audit(c, cl.ID, req.Namespace, "helm_rollback", "helm", req.Release, fmt.Sprintf("rev=%d", req.Revision), "ok", "")
+	c.JSON(http.StatusOK, gin.H{"ok": true, "output": out})
 }
 
 func (h *K8sHandler) loadDBCluster(c *gin.Context) (*store.K8sDBCluster, bool) {

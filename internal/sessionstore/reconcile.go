@@ -3,36 +3,18 @@ package sessionstore
 import (
 	"context"
 	"log"
-	"time"
 
 	"auto-dba/internal/store"
 )
 
-// StartReconcile 定时对账：元库 online ↔ Redis ↔ ZSET。ctx 取消即停。
+// StartReconcile 已废弃：平台调度由 internal/jobreg 接管（session.reconcile）。
+//
+// Deprecated: 使用 jobboot.RegisterPlatformJobs + jobreg.Registry.Start。
 func StartReconcile(ctx context.Context, s *Store, db *store.DB) {
-	if s == nil || db == nil {
-		return
-	}
-	go func() {
-		// 启动后稍晚跑一次
-		t := time.NewTimer(30 * time.Second)
-		defer t.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-				if s.Enabled() {
-					if n, err := ReconcileOnce(ctx, s, db); err != nil {
-						log.Printf("sessionstore reconcile: %v", err)
-					} else if n > 0 {
-						log.Printf("sessionstore reconcile: fixed %d inconsistencies", n)
-					}
-				}
-				t.Reset(s.ReconcileInterval())
-			}
-		}
-	}()
+	_ = ctx
+	_ = s
+	_ = db
+	log.Printf("DEPRECATED: sessionstore.StartReconcile ignored; scheduling is owned by jobreg (session.reconcile)")
 }
 
 // ReconcileOnce 执行一轮对账，返回修复条数。

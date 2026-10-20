@@ -266,6 +266,9 @@ func (d *DB) seedRBAC(now string) error {
 	if err := d.ensureScheduledJobsMenu(now); err != nil {
 		return err
 	}
+	if err := d.ensureScheduledJobsActionMenus(now); err != nil {
+		return err
+	}
 	if err := d.ensureQueryAuditsMenu(now); err != nil {
 		return err
 	}
@@ -606,6 +609,7 @@ func (d *DB) seedMenus(now string) error {
 		{"m-diag-perf", "m-diag", "性能诊断", "", "um.sidebar.diag-perf", "查看性能诊断", "search", 10},
 		{"m-diag-sql", "m-diag-perf", "SQL 洞察", "/ops/sql-insight", "um.sidebar.ops-sql-insight", "查看 SQL 洞察", "search", 1},
 		{"m-diag-sess", "m-diag-perf", "会话管理", "/ops/sessions", "um.sidebar.ops-sessions", "查看会话管理", "cpu", 2},
+		{"m-diag-mysql-slow", "m-diag-perf", "MySQL 慢 SQL", "/ops/mysql-slow", "um.sidebar.ops-mysql-slow", "查看 MySQL Top SQL digest", "histogram", 3},
 		{"m-diag-rdbms", "m-diag", "关系型数据库", "", "um.sidebar.diag-rdbms", "查看关系型数据库监控", "coin", 20},
 		{"m-diag-dbmon-mysql", "m-diag-rdbms", "MySQL监控", "/ops/db-monitor/mysql", "um.sidebar.ops-db-monitor-mysql", "查看 MySQL 监控", "coin", 1},
 		{"m-diag-dbmon", "m-diag-rdbms", "Postgres监控", "/ops/db-monitor/postgres", "um.sidebar.ops-db-monitor-postgres", "查看 Postgres 监控", "monitor", 2},
@@ -656,7 +660,7 @@ func (d *DB) seedMenus(now string) error {
 		{"m-cfg-monitor", "m-cfg-obs", "监控目标注册", "/config/monitor-targets", "um.sidebar.config-monitor-targets", "查看监控目标注册", "monitor", 1},
 		{"m-cfg-fe-admin", "m-cfg-obs", "FE管理", "/config/fe-admin", "um.sidebar.config-fe-admin", "查看 FE 管理", "coin", 2},
 		{"m-cfg-ds-admin", "m-cfg-obs", "海豚配置", "/config/ds-admin", "um.sidebar.config-ds-admin", "查看海豚配置", "histogram", 3},
-		{"m-cfg-scheduled-jobs", "m-cfg-obs", "定时任务", "/config/scheduled-jobs", "um.sidebar.config-scheduled-jobs", "查看与管理平台定时任务", "clock", 4},
+		{"m-cfg-scheduled-jobs", "m-cfg-obs", "定时任务", "/config/scheduled-jobs", URNSidebarScheduledJobs, "查看平台定时任务", "clock", 4},
 		{"m-db-config", "", "资源配置", "", "um.sidebar.db-config", "查看资源配置", "coin", 3},
 		{"m-cfg-inst", "m-db-config", "实例管理", "/config/instances", "um.sidebar.config-instances", "查看实例管理", "monitor", 1},
 		{"m-cfg-db", "m-db-config", "已登记库", "/config/databases", "um.sidebar.config-databases", "查看已登记库", "coin", 2},
@@ -1013,7 +1017,8 @@ func (d *DB) ensureBackupMenuTree(now string) error {
 		{"m-safe-bak", "m-safe", "数据备份", "", "um.sidebar.ops-backup", "查看数据备份", "folder", 40},
 		{"m-safe-bak-pol", "m-safe-bak", "备份策略", "/ops/backup/policies", "um.sidebar.ops-backup-policies", "查看备份策略", "list", 41},
 		{"m-safe-bak-runs", "m-safe-bak", "执行记录", "/ops/backup/runs", "um.sidebar.ops-backup-runs", "查看备份执行记录", "clock", 42},
-		{"m-safe-bak-set", "m-safe-bak", "备份存储", "/ops/backup/settings", "um.sidebar.ops-backup-settings", "查看备份存储", "setting", 43},
+		{"m-safe-bak-restore", "m-safe-bak", "备份恢复", "/ops/backup/restore", "um.sidebar.ops-backup-restore", "发起逻辑/物理全量恢复工单", "rollback", 43},
+		{"m-safe-bak-set", "m-safe-bak", "备份存储", "/ops/backup/settings", "um.sidebar.ops-backup-settings", "查看备份存储", "setting", 44},
 	}
 	for _, it := range items {
 		m := &Menu{
@@ -1411,7 +1416,7 @@ func (d *DB) ensureScheduledJobsMenu(now string) error {
 	}
 	m := &Menu{
 		ID: "m-cfg-scheduled-jobs", ParentID: "m-cfg-obs", Title: "定时任务", Path: "/config/scheduled-jobs",
-		URN: "um.sidebar.config-scheduled-jobs", PermissionDesc: "查看与管理平台定时任务", Icon: "clock",
+		URN: URNSidebarScheduledJobs, PermissionDesc: "查看平台定时任务", Icon: "clock",
 		SortOrder: 4, Enabled: true, CreatedAt: now, UpdatedAt: now,
 	}
 	if err := d.EnsureMenu(m); err != nil {
@@ -1421,6 +1426,31 @@ func (d *DB) ensureScheduledJobsMenu(now string) error {
 		return err
 	}
 	return d.grantMenuToRoleCode(m.ID, "admin")
+}
+
+func (d *DB) ensureScheduledJobsActionMenus(now string) error {
+	if err := d.ensureScheduledJobsMenu(now); err != nil {
+		return err
+	}
+	items := []seedMenu{
+		{"m-act-scheduled-jobs-edit", "m-cfg-scheduled-jobs", "编辑定时任务", "", URNScheduledJobsEdit, "启停与修改平台定时任务调度", "edit", 90},
+		{"m-act-scheduled-jobs-trigger", "m-cfg-scheduled-jobs", "触发定时任务", "", URNScheduledJobsTrigger, "手动立即执行平台定时任务", "thunderbolt", 91},
+	}
+	for _, it := range items {
+		m := &Menu{
+			ID: it.ID, ParentID: it.Parent, Title: it.Title, Path: it.Path,
+			URN: it.URN, PermissionDesc: it.Perm, Icon: it.Icon, SortOrder: it.Sort, Enabled: true,
+			CreatedAt: now, UpdatedAt: now,
+		}
+		if err := d.EnsureMenu(m); err != nil {
+			return err
+		}
+		if err := d.GrantMenuFollowingParent(it.ID, it.Parent); err != nil {
+			return err
+		}
+	}
+	log.Printf("seed: scheduled-jobs action menus ensured")
+	return nil
 }
 
 func (d *DB) ensureQueryAuditsMenu(now string) error {
@@ -1590,6 +1620,7 @@ func (d *DB) ensureDbMonitorMenu(now string) error {
 		{"m-diag-perf", "m-diag", "性能诊断", "", "um.sidebar.diag-perf", "查看性能诊断", "search", 10},
 		{"m-diag-sql", "m-diag-perf", "SQL 洞察", "/ops/sql-insight", "um.sidebar.ops-sql-insight", "查看 SQL 洞察", "search", 1},
 		{"m-diag-sess", "m-diag-perf", "会话管理", "/ops/sessions", "um.sidebar.ops-sessions", "查看会话管理", "cpu", 2},
+		{"m-diag-mysql-slow", "m-diag-perf", "MySQL 慢 SQL", "/ops/mysql-slow", "um.sidebar.ops-mysql-slow", "查看 MySQL Top SQL digest", "histogram", 3},
 		{"m-diag-rdbms", "m-diag", "关系型数据库", "", "um.sidebar.diag-rdbms", "查看关系型数据库监控", "coin", 20},
 		{"m-diag-dbmon-mysql", "m-diag-rdbms", "MySQL监控", "/ops/db-monitor/mysql", "um.sidebar.ops-db-monitor-mysql", "查看 MySQL 监控", "coin", 1},
 		{"m-diag-dbmon", "m-diag-rdbms", "Postgres监控", "/ops/db-monitor/postgres", "um.sidebar.ops-db-monitor-postgres", "查看 Postgres 监控", "monitor", 2},

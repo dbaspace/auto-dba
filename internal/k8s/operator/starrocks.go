@@ -3,6 +3,7 @@ package operator
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -30,7 +31,11 @@ func (a *starrocksAdapter) Detect(ctx context.Context, c *k8s.Client) (*Operator
 }
 
 func (a *starrocksAdapter) Install(ctx context.Context, c *k8s.Client, opt InstallOpt) error {
-	return fmt.Errorf("请使用 StarRocks Operator 官方安装方式")
+	if u := strings.TrimSpace(opt.Version); strings.HasPrefix(u, "http") {
+		_, err := FetchAndApply(ctx, c, u)
+		return err
+	}
+	return fmt.Errorf("StarRocks Operator 请提供清单 URL 或官方安装；也可仅检测已装")
 }
 
 func (a *starrocksAdapter) Render(spec DBClusterSpec) (*unstructured.Unstructured, error) {

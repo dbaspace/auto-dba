@@ -910,26 +910,32 @@ func (h *SlotHandler) CollectProgress(c *gin.Context) {
 	c.JSON(http.StatusOK, h.collectJob(effectiveListTenantID(h.Store, c)).view(false))
 }
 
-func (h *SlotHandler) Collect(c *gin.Context) {
-	tid := effectiveListTenantID(h.Store, c)
+// beginSlotCollect 准备采集任务。started=false 表示已有 running（跳过）；err 为列实例失败。
+func (h *SlotHandler) beginSlotCollect(tid string) (
+	job *slotCollectJob,
+	insts []store.Instance,
+	tasks []store.CDCTask,
+	known []store.SyncSlot,
+	started bool,
+	view slotCollectView,
+	err error,
+) {
 	all, err := h.Store.ListInstancesInTenant(tid, "", "")
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
-		return
+		return nil, nil, nil, nil, false, slotCollectView{}, err
 	}
-	insts := make([]store.Instance, 0, len(all))
+	insts = make([]store.Instance, 0, len(all))
 	for _, inst := range all {
 		if store.NormalizeDBType(inst.DBType) == "postgres" {
 			insts = append(insts, inst)
 		}
 	}
-	job := h.collectJob(tid)
+	job = h.collectJob(tid)
 	job.mu.Lock()
 	if job.Status == "running" {
-		snap := job.viewLocked(false)
+		view = job.viewLocked(false)
 		job.mu.Unlock()
-		c.JSON(http.StatusOK, snap)
-		return
+		return job, nil, nil, nil, false, view, nil
 	}
 	now := time.Now().Format("2006-01-02 15:04:05")
 	job.Status = "running"
@@ -946,67 +952,139 @@ func (h *SlotHandler) Collect(c *gin.Context) {
 		job.Percent = 100
 		job.Message = "没有已登记的 PostgreSQL 实例"
 		job.FinishedAt = now
-		snap := job.viewLocked(true)
+		view = job.viewLocked(true)
 		job.mu.Unlock()
-		c.JSON(http.StatusOK, snap)
-		return
+		return job, nil, nil, nil, true, view, nil
 	}
 	job.Message = fmt.Sprintf("准备采集 %d 个实例", len(insts))
-	snap := job.viewLocked(true)
+	view = job.viewLocked(true)
 	job.mu.Unlock()
-	tasks, _ := h.Store.ListCDCInTenant(tid, "", "")
-	known, _ := h.Store.ListSlotsInTenant(tid)
-	go h.runSlotCollect(job, append([]store.Instance(nil), insts...), tasks, known)
+	tasks, _ = h.Store.ListCDCInTenant(tid, "", "")
+	known, _ = h.Store.ListSlotsInTenant(tid)
+	insts = append([]store.Instance(nil), insts...)
+	return job, insts, tasks, known, true, view, nil
+}
+
+func (h *SlotHandler) Collect(c *gin.Context) {
+	tid := effectiveListTenantID(h.Store, c)
+	job, insts, tasks, known, started, snap, err := h.beginSlotCollect(tid)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	if started && len(insts) > 0 {
+		go h.runSlotCollect(context.Background(), job, insts, tasks, known)
+	}
 	c.JSON(http.StatusOK, snap)
 }
 
-func (h *SlotHandler) runSlotCollect(job *slotCollectJob, insts []store.Instance, tasks []store.CDCTask, known []store.SyncSlot) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+// RunSlotCollectOnce 供 jobreg 同步执行一次全量复制槽采集（tenantID 空=全库可见实例）。
+// 若已有采集在跑则跳过。
+func RunSlotCollectOnce(parent context.Context, h *SlotHandler) error {
+	if h == nil || h.Store == nil {
+		return nil
+	}
+	job, insts, tasks, known, started, _, err := h.beginSlotCollect("")
+	if err != nil {
+		return err
+	}
+	if !started || len(insts) == 0 {
+		return nil
+	}
+	ctx := parent
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	h.runSlotCollect(ctx, job, insts, tasks, known)
+	return nil
+}
+
+func (h *SlotHandler) runSlotCollect(parent context.Context, job *slotCollectJob, insts []store.Instance, tasks []store.CDCTask, known []store.SyncSlot) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, 10*time.Minute)
 	defer cancel()
+
+	const workers = 4
+	sem := make(chan struct{}, workers)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
 	collected, skipped := 0, 0
 	var notes []string
-	for i := range insts {
-		inst := &insts[i]
-		if name := demoSlotName(inst.ID); name != "" {
-			_ = h.Store.DeleteSlotsByName(name)
-		}
-		label := cdc.SlotDisplayHost(inst)
-		if label == "" {
-			label = inst.Name
-		}
-		target := fmt.Sprintf("%s:%d", label, inst.Port)
-		job.mu.Lock()
-		job.Current = target
-		job.Message = fmt.Sprintf("正在采集 %s（%d/%d）", target, i+1, len(insts))
-		job.mu.Unlock()
 
-		slots, qerr := cdc.CollectInstanceSlots(ctx, inst, h.Secret, slotDBNames(inst, tasks, known))
-		if qerr != nil {
-			skipped++
-			notes = append(notes, fmt.Sprintf("%s 采集失败：%s", target, qerr.Error()))
-		} else if err := h.Store.ReplaceHostSlots(label, inst.Port, cdc.InstanceHostAliases(inst), slots); err != nil {
-			skipped++
-			notes = append(notes, fmt.Sprintf("%s 写入失败：%s", target, err.Error()))
-		} else {
-			collected += len(slots)
-		}
-		job.mu.Lock()
-		job.Done = i + 1
-		job.Collected = collected
-		job.Skipped = skipped
-		if job.Total > 0 {
-			job.Percent = job.Done * 100 / job.Total
-		}
-		job.mu.Unlock()
+	for i := range insts {
+		i := i
+		inst := &insts[i]
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			if name := demoSlotName(inst.ID); name != "" {
+				_ = h.Store.DeleteSlotsByName(name)
+			}
+			label := cdc.SlotDisplayHost(inst)
+			if label == "" {
+				label = inst.Name
+			}
+			target := fmt.Sprintf("%s:%d", label, inst.Port)
+			job.mu.Lock()
+			job.Current = target
+			job.Message = fmt.Sprintf("正在采集 %s（%d/%d）", target, job.Done+1, len(insts))
+			job.mu.Unlock()
+
+			slots, qerr := cdc.CollectInstanceSlots(ctx, inst, h.Secret, slotDBNames(inst, tasks, known))
+			note := ""
+			nSlots := 0
+			fail := false
+			if qerr != nil {
+				fail = true
+				note = fmt.Sprintf("%s 采集失败：%s", target, qerr.Error())
+			} else if err := h.Store.ReplaceHostSlots(label, inst.Port, cdc.InstanceHostAliases(inst), slots); err != nil {
+				fail = true
+				note = fmt.Sprintf("%s 写入失败：%s", target, err.Error())
+			} else {
+				nSlots = len(slots)
+			}
+
+			mu.Lock()
+			if fail {
+				skipped++
+				if note != "" {
+					notes = append(notes, note)
+				}
+			} else {
+				collected += nSlots
+			}
+			// 与 job 进度同一把锁顺序：先 mu 再 job.mu，避免 Collected 被并发写乱序覆盖
+			job.mu.Lock()
+			job.Done++
+			job.Collected = collected
+			job.Skipped = skipped
+			if job.Total > 0 {
+				job.Percent = job.Done * 100 / job.Total
+			}
+			job.mu.Unlock()
+			mu.Unlock()
+		}()
 	}
-	msg := fmt.Sprintf("已采集 %d 个复制槽", collected)
-	if skipped > 0 {
-		msg += fmt.Sprintf("，跳过 %d 个实例", skipped)
+	wg.Wait()
+
+	mu.Lock()
+	finalCollected, finalSkipped := collected, skipped
+	finalNotes := append([]string(nil), notes...)
+	mu.Unlock()
+
+	msg := fmt.Sprintf("已采集 %d 个复制槽", finalCollected)
+	if finalSkipped > 0 {
+		msg += fmt.Sprintf("，跳过 %d 个实例", finalSkipped)
 	}
-	if len(notes) > 0 {
-		shown := notes
+	if len(finalNotes) > 0 {
+		shown := finalNotes
 		if len(shown) > 3 {
-			shown = append(append([]string{}, notes[:3]...), fmt.Sprintf("另有 %d 条失败", len(notes)-3))
+			shown = append(append([]string{}, finalNotes[:3]...), fmt.Sprintf("另有 %d 条失败", len(finalNotes)-3))
 		}
 		msg += "：" + strings.Join(shown, "；")
 	}
@@ -1015,8 +1093,8 @@ func (h *SlotHandler) runSlotCollect(job *slotCollectJob, insts []store.Instance
 	job.Done = len(insts)
 	job.Percent = 100
 	job.Current = ""
-	job.Collected = collected
-	job.Skipped = skipped
+	job.Collected = finalCollected
+	job.Skipped = finalSkipped
 	job.Message = msg
 	job.FinishedAt = time.Now().Format("2006-01-02 15:04:05")
 	job.mu.Unlock()

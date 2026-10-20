@@ -15,7 +15,9 @@ import {
 import dayjs from 'dayjs'
 import { Link } from 'react-router-dom'
 import ResponsiveTable from '../../components/ResponsiveTable'
+import Auth from '../../components/Auth'
 import api from '../../api/request'
+import { Perm, usePermission } from '../../hooks/usePermission'
 
 /** 统一展示为本地时间 YYYY-MM-DD HH:mm:ss（兼容 UTC Z / 带偏移 RFC3339） */
 function formatJobTime(raw?: string): string {
@@ -94,6 +96,9 @@ function statusTag(s?: string) {
 }
 
 export default function ScheduledJobs() {
+  const { hasUrn } = usePermission()
+  const canEdit = hasUrn(Perm.scheduledJobs.edit)
+  const canTrigger = hasUrn(Perm.scheduledJobs.trigger)
   const [loading, setLoading] = useState(false)
   const [jobs, setJobs] = useState<JobView[]>([])
   const [summary, setSummary] = useState<Record<string, any>>({})
@@ -217,7 +222,12 @@ export default function ScheduledJobs() {
         dataIndex: 'enabled',
         width: 80,
         render: (v: boolean, r: JobView) => (
-          <Switch checked={v} disabled={!r.pauseable} onChange={(c) => onToggle(r, c)} size="small" />
+          <Switch
+            checked={v}
+            disabled={!r.pauseable || !canEdit}
+            onChange={(c) => onToggle(r, c)}
+            size="small"
+          />
         ),
       },
       {
@@ -274,14 +284,18 @@ export default function ScheduledJobs() {
         render: (_: any, r: JobView) => (
           <Space>
             {r.triggerable ? (
-              <Button type="link" size="small" onClick={() => onTrigger(r)}>
-                立即执行
-              </Button>
+              <Auth urn={Perm.scheduledJobs.trigger}>
+                <Button type="link" size="small" onClick={() => onTrigger(r)}>
+                  立即执行
+                </Button>
+              </Auth>
             ) : null}
             {r.mutable ? (
-              <Button type="link" size="small" onClick={() => openEdit(r)}>
-                编辑调度
-              </Button>
+              <Auth urn={Perm.scheduledJobs.edit}>
+                <Button type="link" size="small" onClick={() => openEdit(r)}>
+                  编辑调度
+                </Button>
+              </Auth>
             ) : null}
             <Button type="link" size="small" onClick={() => openRuns(r)}>
               历史
@@ -291,7 +305,7 @@ export default function ScheduledJobs() {
       },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [jobs],
+    [jobs, canEdit, canTrigger],
   )
 
   const bizColumns = [
@@ -324,6 +338,11 @@ export default function ScheduledJobs() {
         <Tag>
           本机 {summary.local_host || '-'} / {(summary.local_owner_id || '').slice(0, 8)}
         </Tag>
+        {summary.metrics ? (
+          <Tag>
+            本进程成功 {summary.metrics.run_success ?? 0} / 失败 {summary.metrics.run_failed ?? 0}
+          </Tag>
+        ) : null}
         <Button onClick={load} loading={loading}>
           刷新
         </Button>

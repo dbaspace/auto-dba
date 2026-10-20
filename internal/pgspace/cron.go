@@ -14,16 +14,13 @@ var (
 	cronLastFire string // YYYY-MM-DD of last successful daily fire
 )
 
-// StartDailyCron 启动表空间每日采集监视（每 30s 检查一次）。
-// 解析 6 段 cron「秒 分 时 * * *」；匹配当前时分秒且当日未触发过则启动全量采集并清理过期快照。
+// StartDailyCron 已废弃：平台调度由 internal/jobreg 接管。误调用不会启动 watcher，避免双跑。
+//
+// Deprecated: 使用 jobboot.RegisterPlatformJobs + jobreg.Registry.Start。
 func StartDailyCron(ctx context.Context, svc *Service) {
-	if svc == nil {
-		return
-	}
-	cronOnce.Do(func() {
-		svc.MarkJobsInterrupted(context.Background())
-		go svc.dailyCronWatcher(ctx)
-	})
+	_ = ctx
+	_ = svc
+	log.Printf("DEPRECATED: pgspace.StartDailyCron ignored; scheduling is owned by jobreg (pgspace.daily)")
 }
 
 func (s *Service) dailyCronWatcher(ctx context.Context) {

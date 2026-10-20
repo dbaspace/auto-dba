@@ -14,15 +14,13 @@ var (
 	cronLastFire string
 )
 
-// StartDailyCron 启动 AWR 每日生成监视（每 30s 检查一次）。
+// StartDailyCron 已废弃：平台调度由 internal/jobreg 接管。
+//
+// Deprecated: 使用 jobboot.RegisterPlatformJobs + jobreg.Registry.Start。
 func StartDailyCron(ctx context.Context, svc *Service) {
-	if svc == nil {
-		return
-	}
-	cronOnce.Do(func() {
-		svc.MarkJobsInterrupted(context.Background())
-		go svc.dailyCronWatcher(ctx)
-	})
+	_ = ctx
+	_ = svc
+	log.Printf("DEPRECATED: awr.StartDailyCron ignored; scheduling is owned by jobreg (awr.daily)")
 }
 
 func (s *Service) dailyCronWatcher(ctx context.Context) {

@@ -2,12 +2,14 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 
 	"auto-dba/internal/backup"
 	"auto-dba/internal/middleware"
@@ -423,7 +425,7 @@ func (h *BackupHandler) CreateAgent(c *gin.Context) {
 	}
 	groups := backup.NormalizeGroups(req.EnabledGroups)
 	if len(groups) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "请至少选择一个归属（backup/rdb/ha）"})
+		c.JSON(http.StatusBadRequest, gin.H{"message": "请至少选择一个归属（backup/rdb/ha/k8s）"})
 		return
 	}
 	bakEngines := backup.NormalizeBackupEngines(req.BackupEngines)
@@ -708,5 +710,158 @@ func (h *BackupHandler) RedeployAgent(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{"deploy_id": id}})
+}
+
+// CreateRestore 从成功的备份记录发起恢复工单（逻辑 或 physical_full）。
+func (h *BackupHandler) CreateRestore(c *gin.Context) {
+	var req struct {
+		SourceRunID      string   `json:"source_run_id"`
+		TargetInstanceID string   `json:"target_instance_id"`
+		TargetDB         string   `json:"target_db"`
+		Databases        []string `json:"databases"`
+		AgentID          string   `json:"agent_id"`
+		AssignedTo       string   `json:"assigned_to"`
+		Description      string   `json:"description"`
+		ConfirmProd      bool     `json:"confirm_prod"`
+		RestoreKind      string   `json:"restore_kind"`
+		DataDir          string   `json:"data_dir"`
+		ConfirmStop      bool     `json:"confirm_stop"`
+		RecoverTo        string   `json:"recover_to"`
+		WalOrBinlogDir   string   `json:"wal_or_binlog_dir"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	run, err := h.Store.GetBackupRun(strings.TrimSpace(req.SourceRunID))
+	if err != nil || run == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "备份记录不存在"})
+		return
+	}
+	if !strings.EqualFold(run.Status, store.BackupRunSuccess) {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "仅成功的备份记录可发起恢复"})
+		return
+	}
+	method := strings.TrimSpace(run.Method)
+	if method == "" {
+		method = store.BackupMethodLogicalFull
+	}
+	kind := strings.ToLower(strings.TrimSpace(req.RestoreKind))
+	if kind == "" {
+		if store.IsPhysicalBackupMethod(method) {
+			kind = "physical"
+		} else {
+			kind = "logical"
+		}
+	}
+	switch kind {
+	case "physical":
+		if !store.IsPhysicalBackupMethod(method) {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "物理恢复须选择物理备份记录"})
+			return
+		}
+		if !req.ConfirmStop || strings.TrimSpace(req.DataDir) == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "物理恢复须填写 data_dir 并勾选 confirm_stop（确认已停库）"})
+			return
+		}
+	case "pitr":
+		if !store.IsPhysicalBackupMethod(method) {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "PITR 须选择物理备份记录"})
+			return
+		}
+		if !req.ConfirmStop || strings.TrimSpace(req.DataDir) == "" || strings.TrimSpace(req.RecoverTo) == "" || strings.TrimSpace(req.WalOrBinlogDir) == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "PITR 须填写 data_dir、recover_to、wal_or_binlog_dir 并勾选 confirm_stop"})
+			return
+		}
+	default:
+		if store.IsPhysicalBackupMethod(method) {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "该记录为物理备份，请选择物理恢复或 PITR"})
+			return
+		}
+	}
+	tid := effectiveListTenantID(h.Store, c)
+	target, err := h.Store.GetInstanceUsableInTenant(strings.TrimSpace(req.TargetInstanceID), tid)
+	if err != nil || target == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "目标实例不可用或不在本租户"})
+		return
+	}
+	targetDB := strings.TrimSpace(req.TargetDB)
+	if targetDB == "" && len(req.Databases) > 0 {
+		targetDB = strings.TrimSpace(req.Databases[0])
+	}
+	if kind == "logical" && targetDB == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "请指定目标库 target_db"})
+		return
+	}
+	preferred := strings.TrimSpace(req.AssignedTo)
+	if preferred == "" {
+		if def, _ := h.Store.GetGlobalArg("sync_default_approver"); def != "" {
+			preferred = def
+		}
+	}
+	assigned, aerr := resolveTenantAssignee(h.Store, middleware.TenantID(c), preferred)
+	if aerr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": aerr.Error()})
+		return
+	}
+	payload := backup.LogicalRestorePayload{
+		SourceRunID:      run.ID,
+		TargetInstanceID: target.ID,
+		TargetDB:         targetDB,
+		Databases:        req.Databases,
+		AgentID:          strings.TrimSpace(req.AgentID),
+		LocalPath:        run.LocalPath,
+		ObjectKey:        run.ObjectKey,
+		Engine:           run.Engine,
+		ConfirmProd:      req.ConfirmProd,
+		RestoreKind:      kind,
+		DataDir:          strings.TrimSpace(req.DataDir),
+		ConfirmStop:      req.ConfirmStop,
+		RecoverTo:        strings.TrimSpace(req.RecoverTo),
+		WalOrBinlogDir:   strings.TrimSpace(req.WalOrBinlogDir),
+	}
+	if payload.AgentID == "" {
+		if p, _ := h.Store.GetBackupPolicy(run.PolicyID); p != nil {
+			payload.AgentID = strings.TrimSpace(p.AgentID)
+		}
+	}
+	body, _ := json.Marshal(payload)
+	desc := strings.TrimSpace(req.Description)
+	if desc == "" {
+		switch kind {
+		case "physical":
+			desc = "物理恢复 · run=" + run.ID + " → " + target.Name + " data_dir=" + payload.DataDir
+		case "pitr":
+			desc = "PITR · run=" + run.ID + " → " + target.Name + " recover_to=" + payload.RecoverTo
+		default:
+			desc = "逻辑恢复 · run=" + run.ID + " → " + target.Name + "/" + targetDB
+		}
+	}
+	issue := &store.Issue{
+		ID:           uuid.NewString(),
+		TicketNo:     "R" + strings.ReplaceAll(uuid.NewString(), "-", "")[:10],
+		IssueType:    store.IssueTypeBackupRestore,
+		Type:         store.IssueTypeBackupRestore,
+		InstanceID:   target.ID,
+		DBName:       targetDB,
+		DBType:       target.DBType,
+		SQLContent:   string(body),
+		Description:  desc,
+		Status:       store.StatusPending,
+		Submitter:    middleware.Username(c),
+		AssignedTo:   assigned,
+		NeedRollback: `{"kind":"backup_restore"}`,
+	}
+	stampTenantID(c, func(t string) {
+		if issue != nil {
+			issue.TenantID = t
+		}
+	})
+	if err := h.Store.CreateIssue(issue); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	NotifyIssueCreatedAsync(h.Store, h.Secret, issue)
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"issue": issue, "run": run}})
 }
 

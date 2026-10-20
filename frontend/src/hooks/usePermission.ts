@@ -49,6 +49,11 @@ export const Perm = {
     edit: 'um.action.args.edit',
     delete: 'um.action.args.delete',
   },
+  scheduledJobs: {
+    edit: 'um.action.scheduled-jobs.edit',
+    trigger: 'um.action.scheduled-jobs.trigger',
+    sidebar: 'um.sidebar.config-scheduled-jobs',
+  },
   users: {
     create: 'um.action.users.create',
     edit: 'um.action.users.edit',

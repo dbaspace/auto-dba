@@ -219,6 +219,7 @@ func (h *K8sHandler) ApplyYAML(c *gin.Context) {
 }
 
 // requireProdTicket 生产环境高危操作拦截：返回 true 表示已响应、调用方应 return。
+// 生产判定优先使用「集群绑定的环境」env_id（非命名空间标签）。
 func (h *K8sHandler) requireProdTicket(c *gin.Context, cl *store.K8sCluster, verb, target string) bool {
 	if cl == nil || !h.Store.EnvIsProd(cl.EnvID) {
 		return false
@@ -226,13 +227,17 @@ func (h *K8sHandler) requireProdTicket(c *gin.Context, cl *store.K8sCluster, ver
 	if c.Query("ticket_id") != "" || c.GetHeader("X-K8s-Ticket") != "" {
 		return false // 已带工单放行（执行器调用）
 	}
+	if isK8sTicketExec(c.Request.Context()) {
+		return false
+	}
 	c.JSON(http.StatusConflict, gin.H{
-		"message": "生产环境变更需提交 K8s 变更工单",
+		"message": "生产环境变更需提交 K8s 变更工单（判定依据：集群绑定环境 env_id=" + cl.EnvID + "）",
 		"code":    "k8s_change_required",
-		"hint":    "请创建类型为 k8s_change 的工单，审批通过后由执行器带 ticket 执行",
+		"hint":    "POST /api/v1/k8s/change-tickets 创建工单，审批通过后自动执行",
 		"verb":    verb,
 		"target":  target,
 		"cluster": cl.ID,
+		"env_id":  cl.EnvID,
 	})
 	return true
 }

@@ -668,7 +668,7 @@ func CompatibleHAController(engine, mode, kind string) bool {
 
 func HAAutoSwitchoverMode(mode string) bool {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case "orchestrator", "mha", "proxysql_repl", "pg_autofailover", "patroni", "repmgr", "sentinel":
+	case "orchestrator", "mha", "proxysql_repl", "pg_autofailover", "patroni", "repmgr", "sentinel", "k8s_operator":
 		return true
 	default:
 		return false

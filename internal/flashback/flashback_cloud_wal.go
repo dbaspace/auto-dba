@@ -176,6 +176,42 @@ func flashbackWALSourceForVendor(res *ResourceDbsInfo, override, vendor, why str
 			Reason: why + "，但未填写云实例 ID，请在「配置 → 实例」填写 cloud_instance_id（或标签 pg:postgres-xxxx）",
 		}
 	}
+	if vendor == flashbackVendorAliyun {
+		if id, idWhy := flashbackFindAliyunInstanceID(res, override); id != "" {
+			return flashbackWALSource{
+				Kind: flashbackWALSourceCloudAliyun, Reason: why + "；" + idWhy,
+				InstanceID: id, Vendor: flashbackVendorAliyun,
+			}
+		}
+		return flashbackWALSource{
+			Kind: flashbackWALSourceCloudOther, Vendor: flashbackVendorAliyun,
+			Reason: why + "，但未填写云实例 ID，请在「配置 → 实例」填写 cloud_instance_id（rm-xxxx / pgm-xxxx）",
+		}
+	}
+	if vendor == flashbackVendorHuawei {
+		if id, idWhy := flashbackFindHuaweiInstanceID(res, override); id != "" {
+			return flashbackWALSource{
+				Kind: flashbackWALSourceCloudHuawei, Reason: why + "；" + idWhy,
+				InstanceID: id, Vendor: flashbackVendorHuawei,
+			}
+		}
+		return flashbackWALSource{
+			Kind: flashbackWALSourceCloudOther, Vendor: flashbackVendorHuawei,
+			Reason: why + "，但未填写云实例 ID",
+		}
+	}
+	if vendor == flashbackVendorAWS {
+		if id, idWhy := flashbackFindAWSInstanceID(res, override); id != "" {
+			return flashbackWALSource{
+				Kind: flashbackWALSourceCloudAWS, Reason: why + "；" + idWhy,
+				InstanceID: id, Vendor: flashbackVendorAWS,
+			}
+		}
+		return flashbackWALSource{
+			Kind: flashbackWALSourceCloudOther, Vendor: flashbackVendorAWS,
+			Reason: why + "，但未填写云实例 ID（DBInstanceIdentifier）",
+		}
+	}
 	return flashbackWALSource{
 		Kind: flashbackWALSourceCloudOther, Vendor: vendor,
 		Reason: why + "，该云厂商 PostgreSQL 日志下载尚未实现",

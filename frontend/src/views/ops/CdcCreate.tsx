@@ -1,7 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
+  useLocation,
   useNavigate,
   useSearchParams } from 'react-router-dom'
+import { useAppDispatch, useAppSelector } from '../../store'
+import { closeTab, openTab, tabKey } from '../../store/tabsSlice'
 import {
   Alert,
   Button,
@@ -99,6 +102,9 @@ const dpDefaults = CDC_DYNAMIC_PARTITION_DEFAULTS
 
 export default function CdcCreate() {
   const navigate = useNavigate()
+  const location = useLocation()
+  const dispatch = useAppDispatch()
+  const menus = useAppSelector((s) => s.auth.menus)
   const [searchParams] = useSearchParams()
 
   const [step, setStep] = useState(0)
@@ -296,13 +302,19 @@ export default function CdcCreate() {
     })
   }, [parentTasks, form.task_type, form.env, instances])
 
-  const sourceInstances = useMemo(
-    () =>
-      instances.filter(
-        (i) => matchType(i.db_type, 'postgres') && (!form.env || instEnv(i) === form.env || !instEnv(i)),
-      ),
-    [instances, form.env],
-  )
+  const sourceInstances = useMemo(() => {
+    const eng = form.source_engine === 'mysql' ? 'mysql' : 'postgres'
+    return instances.filter((i) => {
+      if (eng === 'mysql') {
+        if (!(matchType(i.db_type, 'mysql') || matchType(i.db_type, 'tidb') || matchType(i.db_type, 'oceanbase') || matchType(i.db_type, 'mariadb'))) {
+          return false
+        }
+      } else if (!matchType(i.db_type, 'postgres')) {
+        return false
+      }
+      return !form.env || instEnv(i) === form.env || !instEnv(i)
+    })
+  }, [instances, form.env, form.source_engine])
   const targetInstances = useMemo(() => {
     const list = instances.filter(
       (i) => matchType(i.db_type, 'starrocks') && (!form.env || instEnv(i) === form.env || !instEnv(i)),
@@ -621,11 +633,14 @@ export default function CdcCreate() {
 
   // ---- 导航 ----
   function goList(query?: Record<string, any>) {
-    if (query && typeof query === 'object' && query.tab) {
-      navigate('/ops/cdc?' + new URLSearchParams(query as Record<string, string>).toString())
-    } else {
-      navigate('/ops/cdc')
-    }
+    const createKey = tabKey(location.pathname, location.search)
+    const q =
+      query && typeof query === 'object' && query.tab
+        ? `?${new URLSearchParams(query as Record<string, string>).toString()}`
+        : ''
+    dispatch(openTab({ path: '/ops/cdc', menus, title: 'CDC 同步任务' }))
+    dispatch(closeTab(createKey))
+    navigate(`/ops/cdc${q}`)
   }
 
   function resetMode(type: string) {
@@ -1227,17 +1242,13 @@ export default function CdcCreate() {
         const skipped = data.data?.skipped || 0
         const label = f.task_type === 'alter_schema' ? '加列' : '加表'
         message.success(`已提交 ${created} 条${label}任务${skipped ? `，跳过 ${skipped} 个` : ''}`)
-        const issueId = data.data?.issue_id || (data.data?.items || []).find((it: any) => it.task?.issue_id)?.task?.issue_id
-        if (issueId) navigate('/ops/tickets/' + issueId)
-        else goList({ tab: 'pending' })
+        goList({ tab: 'pending' })
         return
       }
-      const { data } = await api.post('/cdc-sync/tasks', body)
+      await api.post('/cdc-sync/tasks', body)
       clearOnSubmitSuccess()
-      const row = data.data || {}
       message.success('已提交审批，通过后自动执行')
-      if (row.issue_id) navigate('/ops/tickets/' + row.issue_id)
-      else goList({ tab: 'pending' })
+      goList({ tab: 'pending' })
     } finally {
       setSubmitting(false)
     }
@@ -1401,13 +1412,56 @@ export default function CdcCreate() {
                 </Form.Item>
               </Form>
             </Card>
-            <Card size="small" className="cdc-card small" title={<span className="card-title">源端 PostgreSQL</span>}>
+            <Card
+              size="small"
+              className="cdc-card small"
+              title={<span className="card-title">源端 {form.source_engine === 'mysql' ? 'MySQL' : 'PostgreSQL'}</span>}
+            >
               <Form layout="vertical">
+                <Form.Item label="源引擎" required>
+                  <Select
+                    style={{ width: 220 }}
+                    value={form.source_engine || 'postgres'}
+                    onChange={(v) =>
+                      patchForm({
+                        source_engine: v,
+                        source_instance_id: '',
+                        source_db: '',
+                        source_schema: v === 'mysql' ? '' : 'public',
+                        mysql_server_id: form.mysql_server_id || '5400',
+                      })
+                    }
+                    options={[
+                      { value: 'postgres', label: 'PostgreSQL' },
+                      { value: 'mysql', label: 'MySQL / TiDB / OceanBase' },
+                    ]}
+                  />
+                </Form.Item>
+                {form.source_engine === 'mysql' ? (
+                  <Form.Item
+                    label="Debezium server.id"
+                    required
+                    extra="须与源端 @@server_id 及其它同源 CDC 任务不冲突"
+                  >
+                    <Input
+                      style={{ width: 220 }}
+                      value={form.mysql_server_id}
+                      onChange={(e) => patchForm({ mysql_server_id: e.target.value })}
+                      placeholder="5400"
+                    />
+                  </Form.Item>
+                ) : null}
                 <Form.Item label="实例" required>
                   <Select
                     showSearch
                     disabled={!form.env}
-                    placeholder={form.env ? '搜索 / 选择 PG 实例' : '请先选择环境'}
+                    placeholder={
+                      form.env
+                        ? form.source_engine === 'mysql'
+                          ? '搜索 / 选择 MySQL 实例'
+                          : '搜索 / 选择 PG 实例'
+                        : '请先选择环境'
+                    }
                     style={{ width: '100%' }}
                     value={form.source_instance_id || undefined}
                     onChange={onSourceInstChange}
@@ -1479,18 +1533,20 @@ export default function CdcCreate() {
                     </Form.Item>
                   </>
                 )}
-                <Form.Item label="Schema" required>
-                  <Select
-                    showSearch
-                    mode="tags"
-                    maxCount={1}
-                    placeholder="public"
-                    style={{ width: 220 }}
-                    value={form.source_schema ? [form.source_schema] : []}
-                    onChange={(v: string[]) => patchForm({ source_schema: v[v.length - 1] || '' })}
-                    options={[{ value: 'public', label: 'public' }]}
-                  />
-                </Form.Item>
+                {form.source_engine !== 'mysql' ? (
+                  <Form.Item label="Schema" required>
+                    <Select
+                      showSearch
+                      mode="tags"
+                      maxCount={1}
+                      placeholder="public"
+                      style={{ width: 220 }}
+                      value={form.source_schema ? [form.source_schema] : []}
+                      onChange={(v: string[]) => patchForm({ source_schema: v[v.length - 1] || '' })}
+                      options={[{ value: 'public', label: 'public' }]}
+                    />
+                  </Form.Item>
+                ) : null}
               </Form>
             </Card>
           </>

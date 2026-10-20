@@ -112,7 +112,7 @@ func Run(cfg *config.Config, configPath string) {
 	cdcOrch := cdc.NewOrchestrator(db, fieldCrypto, cfg.CDC)
 	flashback.SetRuntime(&flashback.Runtime{Store: db, Secret: fieldCrypto, Cfg: cfg.Flashback})
 	fbEngine := flashback.New()
-	ticketH := &handler.TicketHandler{Store: db, Secret: fieldCrypto, Flashback: fbEngine, Migration: migEngine, Archive: arcEngine, CDC: cdcOrch}
+	ticketH := &handler.TicketHandler{Store: db, Secret: fieldCrypto, Flashback: fbEngine, Migration: migEngine, Archive: arcEngine, CDC: cdcOrch, Backup: bakEngine}
 	pgSpaceSvc := pgspace.New(db, fieldCrypto)
 	redisRDBSvc := redisrdb.New(db, fieldCrypto, filepath.Join(os.TempDir(), "auto-dba-redis-rdb"))
 	awrSvc := awr.New(db, fieldCrypto)
@@ -142,12 +142,16 @@ func Run(cfg *config.Config, configPath string) {
 	authH := &handler.AuthHandler{Store: db, Cfg: cfg, Sessions: sessStore}
 	loginSessH := &handler.LoginSessionHandler{Store: db, Sessions: sessStore}
 	cdcH := &handler.CDCHandler{Store: db, Cfg: cfg, Secret: fieldCrypto}
+	slotH := &handler.SlotHandler{Store: db, Secret: fieldCrypto}
 	jobReg := jobreg.New(db)
 	jobboot.RegisterPlatformJobs(jobReg, jobboot.Deps{
 		DB: db, Sessions: sessStore, PgSpace: pgSpaceSvc, AWR: awrSvc, SQLInsight: siSvc,
 		Migration: migEngine, Archive: arcEngine, Backup: bakEngine,
-		Ticket: ticketH, CDC: cdcH, AlertSecret: fieldCrypto, PgSecret: &cryptoLive,
+		Ticket: ticketH, CDC: cdcH, Slot: slotH, AlertSecret: fieldCrypto, PgSecret: &cryptoLive,
 	})
+	jobReg.OnFailure = func(jobKey, jobName, runID, errMsg string) {
+		notify.JobFailed(db, fieldCrypto, jobKey, jobName, runID, errMsg)
+	}
 	deps := router.Deps{
 		Cfg:                cfg,
 		Auth:               authH,
@@ -165,7 +169,7 @@ func Run(cfg *config.Config, configPath string) {
 		Account:            &handler.AccountHandler{Store: db, Secret: fieldCrypto},
 		Review:             &handler.ReviewRuleHandler{Store: db, Secret: fieldCrypto},
 		CDC:                cdcH,
-		Slot:               &handler.SlotHandler{Store: db, Secret: fieldCrypto},
+		Slot:               slotH,
 		Migration:          &handler.MigrationHandler{Store: db, Cfg: cfg, Secret: fieldCrypto, Engine: migEngine},
 		Flashback:          &handler.FlashbackHandler{Store: db, Secret: fieldCrypto, Cfg: cfg, Engine: fbEngine},
 		Archive:            &handler.ArchiveHandler{Store: db, Secret: fieldCrypto, Engine: arcEngine},
@@ -310,6 +314,8 @@ func Run(cfg *config.Config, configPath string) {
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
 	<-ch
+	jobReg.Stop()
+	collectCancel()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(ctx)

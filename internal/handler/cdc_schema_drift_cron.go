@@ -9,24 +9,13 @@ import (
 	"auto-dba/internal/store"
 )
 
-const schemaDriftCronInterval = 300 * time.Second
-
-// StartSchemaDriftCron 对齐 Hub syncCdcSchemaDrift：周期性扫 running/paused init 写内存缓存。
+// StartSchemaDriftCron 已废弃：由 jobreg cdc.schema_drift 接管。
+//
+// Deprecated: 使用 jobboot.RegisterPlatformJobs。
 func StartSchemaDriftCron(ctx context.Context, h *CDCHandler) {
-	if h == nil || h.Store == nil {
-		return
-	}
-	RunSchemaDriftScanOnce(ctx, h)
-	ticker := time.NewTicker(schemaDriftCronInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			RunSchemaDriftScanOnce(ctx, h)
-		}
-	}
+	_ = ctx
+	_ = h
+	log.Printf("DEPRECATED: StartSchemaDriftCron ignored; scheduling is owned by jobreg (cdc.schema_drift)")
 }
 
 // RunSchemaDriftScanOnce 供 jobreg 调用。

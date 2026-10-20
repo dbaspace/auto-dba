@@ -1527,6 +1527,12 @@ func (h *GlobalArgHandler) Create(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if store.IsJobManagedGlobalArg(key) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"message": "调度相关参数请到「配置中心 → 监控运维 → 定时任务」修改（job=" + store.JobKeyForGlobalArg(key) + "）",
+		})
+		return
+	}
 	value = keepFlashbackSecret(h.Store, key, value)
 	if err := h.Store.CreateGlobalArg(key, value, desc); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
@@ -1538,6 +1544,12 @@ func (h *GlobalArgHandler) Create(c *gin.Context) {
 func (h *GlobalArgHandler) Update(c *gin.Context) {
 	key, value, desc, ok := bindGlobalArg(c)
 	if !ok {
+		return
+	}
+	if store.IsJobManagedGlobalArg(key) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"message": "调度相关参数请到「配置中心 → 监控运维 → 定时任务」修改（job=" + store.JobKeyForGlobalArg(key) + "）",
+		})
 		return
 	}
 	value = keepFlashbackSecret(h.Store, key, value)
@@ -1552,6 +1564,12 @@ func (h *GlobalArgHandler) Delete(c *gin.Context) {
 	key := strings.TrimSpace(c.Param("key"))
 	if key == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "key 必填"})
+		return
+	}
+	if store.IsJobManagedGlobalArg(key) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"message": "调度相关参数请到「配置中心 → 监控运维 → 定时任务」修改（job=" + store.JobKeyForGlobalArg(key) + "）",
+		})
 		return
 	}
 	if err := h.Store.DeleteGlobalArg(key); err != nil {

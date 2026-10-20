@@ -88,6 +88,9 @@ func main() {
 	mux.HandleFunc("/v1/backup/physical", withAuth(handlePhysical))
 	mux.HandleFunc("/v1/backup/redis-rdb", withAuth(handleRedisRDB))
 	mux.HandleFunc("/v1/backup/jobs/", withAuth(handleJob))
+	mux.HandleFunc("/v1/restore/logical", withAuth(handleLogicalRestore))
+	mux.HandleFunc("/v1/restore/physical", withAuth(handlePhysicalRestore))
+	mux.HandleFunc("/v1/restore/pitr", withAuth(handlePITRRestore))
 	log.Printf("platform-agent listen=%s workdir=%s conf-root=%s dry-run=%v", *listen, *workdir, *confRoot, *dryRun)
 	serveAgent("platform-agent", *listen, mux, 0) // 0：允许 RDB 长流
 }

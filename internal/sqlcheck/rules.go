@@ -69,6 +69,7 @@ func LegacyRules(forbidDropDB, requireWhere bool) []Rule {
 func CheckTicketWithRules(sqlContent, issueType, dbType string, rules []Rule) Result {
 	res := Result{OK: true}
 	stmts := SplitSQL(sqlContent)
+	res.StatementCount = len(stmts)
 	if len(stmts) == 0 {
 		return fail("empty", "SQL 不能为空", sqlContent)
 	}

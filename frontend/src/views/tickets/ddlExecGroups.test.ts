@@ -62,4 +62,18 @@ describe('buildDdlExecGroups', () => {
     expect(groups[0].ok).toBe(true)
     expect(stats.instOk).toBe(1)
   })
+
+  it('优先使用后端 success_count / statement_count', () => {
+    const { stats } = buildDdlExecGroups(
+      [
+        { instance_id: 'i1', host: 'h', db: 'd', sql: 'u1', status: 'success' },
+        { instance_id: 'i1', host: 'h', db: 'd', sql: 'u2', status: 'success' },
+      ],
+      { execSuccess: true, successCount: 50, statementCount: 50, compacted: true },
+    )
+    expect(stats.successSQL).toBe(50)
+    expect(stats.totalSQL).toBe(50)
+    expect(stats.countsFromBackend).toBe(true)
+    expect(stats.compacted).toBe(true)
+  })
 })

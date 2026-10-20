@@ -105,7 +105,7 @@ func TestNormalizeReviewEngineAliases(t *testing.T) {
 	cases := map[string]string{
 		"postgres": "postgres", "postgresql": "postgres", "pg": "postgres", "PG": "postgres",
 		"starrocks": "starrocks", "sr": "starrocks", "SR": "starrocks",
-		"mysql": "mysql", "tidb": "mysql",
+		"mysql": "mysql", "tidb": "mysql", "oceanbase": "mysql",
 		"": "", "oracle": "",
 	}
 	for in, want := range cases {

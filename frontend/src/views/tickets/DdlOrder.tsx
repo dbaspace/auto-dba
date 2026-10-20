@@ -40,6 +40,11 @@ import { useCheckResultView } from '../../hooks/useCheckResultView'
 import { useWorkOrderDraft } from '../../hooks/useWorkOrderDraft'
 import { useAppDispatch, useAppSelector } from '../../store'
 import { goTicketListAndClose } from './goTicketList'
+import {
+  countNonEmptyLines,
+  lineVsStatementHint,
+  shouldHintLineVsStatement,
+} from './sqlStatementCount'
 import './DdlOrder.css'
 
 interface DbType {
@@ -152,6 +157,7 @@ export default function DdlOrder() {
   const [dbRecords, setDbRecords] = useState<any[]>([])
   const [approvers, setApprovers] = useState<string[]>([])
   const [checkRows, setCheckRows] = useState<CheckRow[]>([])
+  const [statementCount, setStatementCount] = useState(0)
   const [lastCheckFp, setLastCheckFp] = useState<string | null>(null)
   const [mainTab, setMainTab] = useState('sql')
 
@@ -254,6 +260,7 @@ export default function DdlOrder() {
   function resetCheck() {
     setLastCheckFp(null)
     setCheckRows([])
+    setStatementCount(0)
   }
 
   function onEnvOrTypeChange(patch: Partial<FormState>) {
@@ -422,6 +429,9 @@ export default function DdlOrder() {
         instance_id: primary.instance_id || '',
         db_name: f.db_name,
       })
+      const parsed = Number(data.statement_count)
+      const n = Number.isFinite(parsed) && parsed > 0 ? parsed : (data.statements || []).length
+      setStatementCount(n)
       setCheckRows(
         (data.statements || []).map((r: any) => ({
           stage: r.stage || 'parse',
@@ -431,11 +441,12 @@ export default function DdlOrder() {
           affected_rows: r.affected_rows ?? '—',
         })),
       )
-      if (data.ok) message.success('检测通过')
+      if (data.ok) message.success(n > 0 ? `检测通过，将按 ${n} 条语句执行` : '检测通过')
       else message.warning('检测未通过')
     } catch (e: any) {
       const msg = e.response?.data?.message || e.message || 'SQL 检测请求失败'
       message.error(msg)
+      setStatementCount(0)
       setCheckRows([{ stage: '—', error_level: 'ERROR', message: msg, sql, affected_rows: '—' }])
     } finally {
       setCheckLoading(false)
@@ -646,6 +657,10 @@ export default function DdlOrder() {
     pagination: checkPagination,
     rowNo: checkRowNo,
   } = useCheckResultView(checkRows)
+
+  const sqlLineApprox = useMemo(() => countNonEmptyLines(form.sql_content), [form.sql_content])
+  const showStmtHint =
+    statementCount > 0 && shouldHintLineVsStatement(sqlLineApprox, statementCount)
 
   const checkColumns: ColumnsType<CheckRow> = [
     { title: '序号', width: 64, render: (_: unknown, __: unknown, index: number) => checkRowNo(index) },
@@ -879,6 +894,9 @@ export default function DdlOrder() {
             </Form.Item>
 
             <p className="hint">提交后超过 8 小时未审核完成，系统将自动取消。</p>
+            {statementCount > 0 ? (
+              <p className="hint">将按 {statementCount} 条语句执行（按分号拆分）</p>
+            ) : null}
             <Form.Item className="aside-actions">
               <Space wrap>
                 <Button onClick={fetchStructure}>获取表结构</Button>
@@ -930,6 +948,15 @@ export default function DdlOrder() {
                         message="分库/分表模式下仅做语法与规范校验，不校验表是否存在于单个库"
                       />
                     )}
+                    {statementCount > 0 ? (
+                      <Alert
+                        type="info"
+                        showIcon
+                        className="hint-alert"
+                        message={`将按 ${statementCount} 条语句执行（按分号拆分，与检测结果行数可能不同）`}
+                        description={showStmtHint ? lineVsStatementHint(sqlLineApprox, statementCount) : undefined}
+                      />
+                    ) : null}
                     <CheckResultFilterBar
                       value={levelFilter}
                       onChange={setLevelFilter}

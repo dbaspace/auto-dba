@@ -153,10 +153,16 @@ func Precheck(ctx context.Context, cluster *store.HACluster, action, targetInsta
 			add("模式", true, "pg_auto_failover 强制切换")
 		case "patroni":
 			add("模式", true, "Patroni failover")
+		case "proxysql", "proxysql_repl":
+			add("模式", true, "ProxySQL 强制切换写组（与计划切换同一流量切换路径）")
+		case "repmgr":
+			add("模式", true, "repmgr standby switchover（强制场景复用 Agent switchover）")
+		case "sentinel":
+			add("模式", true, "Sentinel FAILOVER")
 		case "mgr", "pxc":
 			add("模式", false, "MGR/PXC 不在本平台触发强制切主（组内共识/Galera 自愈），请走现网手册")
 		default:
-			add("模式", false, "强制切换仅支持 MHA / Orchestrator / pg_autofailover / Patroni")
+			add("模式", false, "强制切换仅支持 MHA / Orchestrator / pg_autofailover / Patroni / ProxySQL / repmgr / Sentinel")
 		}
 		if strings.TrimSpace(targetInstanceID) != "" {
 			found := false

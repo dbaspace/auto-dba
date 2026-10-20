@@ -66,3 +66,61 @@
 .preview-body p {
   margin: 0 0 8px;
 }
+.dbz-diff-note {
+  color: #6b7280;
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+.dbz-diff-panes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  overflow: hidden;
+  max-height: 520px;
+}
+.dbz-diff-pane {
+  overflow: auto;
+  max-height: 520px;
+  font-family: Menlo, Consolas, Monaco, monospace;
+  font-size: 12px;
+  line-height: 20px;
+  background: #fafafa;
+}
+.dbz-diff-pane + .dbz-diff-pane {
+  border-left: 1px solid #e5e7eb;
+}
+.dbz-diff-line {
+  display: flex;
+  white-space: pre;
+  min-height: 20px;
+}
+.dbz-diff-gutter {
+  flex-shrink: 0;
+  width: 36px;
+  text-align: right;
+  padding-right: 8px;
+  color: #bfbfbf;
+  user-select: none;
+  background: #f5f5f5;
+  border-right: 1px solid #eee;
+}
+.dbz-diff-text {
+  flex: 1;
+  padding: 0 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dbz-diff-add .dbz-diff-text,
+.dbz-diff-add .dbz-diff-gutter {
+  background: #e6fffb;
+}
+.dbz-diff-del .dbz-diff-text,
+.dbz-diff-del .dbz-diff-gutter {
+  background: #fff1f0;
+}
+.dbz-diff-change .dbz-diff-text,
+.dbz-diff-change .dbz-diff-gutter {
+  background: #fffbe6;
+}

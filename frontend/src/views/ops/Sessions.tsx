@@ -8,18 +8,22 @@ import './Sessions.css'
 
 function instLabel(i: any) {
   const host = i.host || i.domain_name || '-'
-  return `${i.name || host} (${host}:${i.port})`
+  return `${i.name || host} (${host}:${i.port}) [${i.db_type || ''}]`
 }
 function isPG(i: any) {
   const t = String(i.db_type || '').toLowerCase()
   return t === 'postgres' || t === 'postgresql' || t === 'pg'
 }
+function isMySQL(i: any) {
+  const t = String(i.db_type || '').toLowerCase()
+  return t === 'mysql' || t === 'tidb' || t === 'oceanbase' || t === 'mariadb'
+}
 function stateColor(state: any): string {
   const s = String(state || '').toLowerCase()
-  if (s.includes('active')) return 'success'
-  if (s.includes('idle in transaction')) return 'warning'
+  if (s.includes('active') || s.includes('query') || s.includes('execut')) return 'success'
+  if (s.includes('idle in transaction') || s.includes('sleep')) return 'warning'
   if (s.includes('idle')) return 'default'
-  if (s.includes('abort')) return 'error'
+  if (s.includes('abort') || s.includes('kill')) return 'error'
   return 'default'
 }
 
@@ -41,6 +45,9 @@ export default function Sessions() {
   const tabRef = useRef(tab)
   instanceIdRef.current = instanceId
   tabRef.current = tab
+
+  const currentInst = useMemo(() => instances.find((i) => i.id === instanceId), [instances, instanceId])
+  const engine = currentInst ? (isMySQL(currentInst) ? 'mysql' : 'postgres') : 'postgres'
 
   const sessionView = useMemo(() => {
     const q = keyword.trim().toLowerCase()
@@ -72,7 +79,7 @@ export default function Sessions() {
 
   async function loadInstances() {
     const { data } = await api.get('/instances')
-    setInstances((data.data || []).filter(isPG))
+    setInstances((data.data || []).filter((i: any) => isPG(i) || isMySQL(i)))
   }
 
   async function loadSessions() {
@@ -82,7 +89,10 @@ export default function Sessions() {
     }
     setLoading(true)
     try {
-      const { data } = await api.get('/pg-sessions/activities', { params: { instance_id: instanceIdRef.current } })
+      const inst = instances.find((i) => i.id === instanceIdRef.current)
+      const mysql = inst ? isMySQL(inst) : false
+      const url = mysql ? '/mysql-sessions/processlist' : '/pg-sessions/activities'
+      const { data } = await api.get(url, { params: { instance_id: instanceIdRef.current } })
       setSessions(data.data || [])
     } finally {
       setLoading(false)
@@ -92,6 +102,12 @@ export default function Sessions() {
   async function loadLocks() {
     if (!instanceIdRef.current) {
       setLocks([])
+      return
+    }
+    const inst = instances.find((i) => i.id === instanceIdRef.current)
+    if (inst && isMySQL(inst)) {
+      setLocks([])
+      message.info('MySQL 会话页暂无锁明细，请用 processlist 观察锁等待')
       return
     }
     setLoading(true)
@@ -113,10 +129,19 @@ export default function Sessions() {
     instanceIdRef.current = v || ''
     setKeyword('')
     setPage(1)
+    const inst = instances.find((i) => i.id === v)
+    if (inst && isMySQL(inst) && tab === 'locks') {
+      setTab('list')
+      tabRef.current = 'list'
+    }
     reload()
   }
 
   function cancelPid(row: any) {
+    if (engine === 'mysql') {
+      message.info('MySQL 无 cancel，请使用「关闭会话」(KILL)')
+      return
+    }
     Modal.confirm({
       title: '退出执行',
       content: `确认对会话 ${row.pid} 执行 pg_cancel_backend（退出当前查询）？`,
@@ -131,10 +156,16 @@ export default function Sessions() {
   function terminatePid(row: any) {
     Modal.confirm({
       title: '关闭会话',
-      content: `确认对会话 ${row.pid} 执行 pg_terminate_backend（关闭连接）？`,
+      content: engine === 'mysql'
+        ? `确认对连接 ${row.pid} 执行 KILL？`
+        : `确认对会话 ${row.pid} 执行 pg_terminate_backend（关闭连接）？`,
       okText: '关闭会话',
       onOk: async () => {
-        await api.post(`/pg-sessions/${row.pid}/terminate`, { instance_id: instanceId }, { params: { instance_id: instanceId } })
+        if (engine === 'mysql') {
+          await api.post(`/mysql-sessions/${row.pid}/kill`, { instance_id: instanceId }, { params: { instance_id: instanceId } })
+        } else {
+          await api.post(`/pg-sessions/${row.pid}/terminate`, { instance_id: instanceId }, { params: { instance_id: instanceId } })
+        }
         message.success(`已请求关闭会话：${row.pid}`)
         await loadSessions()
       },
@@ -184,19 +215,29 @@ export default function Sessions() {
       render: (v) => <Tag color={stateColor(v)}>{v || '-'}</Tag>,
     },
     { title: '执行中语句', dataIndex: 'query', ellipsis: true, width: 220 },
-    { title: '连接程序名', dataIndex: 'application_name', width: 140, ellipsis: true },
-    { title: '客户端地址', dataIndex: 'client_addr', width: 130 },
-    { title: '连接启动时间', dataIndex: 'backend_start', width: 170 },
-    { title: '连接持续时间', dataIndex: 'duration', width: 120 },
-    { title: '等待事件类型', dataIndex: 'wait_event_type', width: 130 },
-    { title: '等待事件', dataIndex: 'wait_event', width: 130 },
+    ...(engine === 'mysql'
+      ? [
+          { title: '命令', dataIndex: 'command', width: 100 },
+          { title: '耗时', dataIndex: 'duration', width: 90 },
+          { title: '客户端', dataIndex: 'client_addr', width: 150 },
+        ]
+      : [
+          { title: '连接程序名', dataIndex: 'application_name', width: 140, ellipsis: true },
+          { title: '客户端地址', dataIndex: 'client_addr', width: 130 },
+          { title: '连接启动时间', dataIndex: 'backend_start', width: 170 },
+          { title: '连接持续时间', dataIndex: 'duration', width: 120 },
+          { title: '等待事件类型', dataIndex: 'wait_event_type', width: 130 },
+          { title: '等待事件', dataIndex: 'wait_event', width: 130 },
+        ]),
     {
       title: '操作',
       width: 170,
-      fixed: 'right',
-      render: (_, row) => (
+      fixed: 'right' as const,
+      render: (_: any, row: any) => (
         <>
-          <Button type="link" size="small" onClick={() => cancelPid(row)}>退出执行</Button>
+          {engine === 'postgres' && (
+            <Button type="link" size="small" onClick={() => cancelPid(row)}>退出执行</Button>
+          )}
           <Button type="link" size="small" danger onClick={() => terminatePid(row)}>关闭会话</Button>
         </>
       ),
@@ -220,7 +261,7 @@ export default function Sessions() {
             value={instanceId || undefined}
             showSearch
             allowClear
-            placeholder="选择 PostgreSQL 实例"
+            placeholder="选择 PostgreSQL / MySQL 实例"
             style={{ flex: 1 }}
             optionFilterProp="label"
             onChange={onInstanceChange}
@@ -229,7 +270,7 @@ export default function Sessions() {
         </div>
       </div>
 
-      <Tabs value={tab} onChange={setTab} />
+      <Tabs value={tab} onChange={setTab} hideLocks={engine === 'mysql'} />
 
       <div className="toolbar extra">
         <span className="muted">自动刷新</span>
@@ -297,12 +338,13 @@ export default function Sessions() {
   )
 }
 
-// 简易 Tab 组件，保持与旧项目两个页签的一致视觉
-function Tabs({ value, onChange }: { value: string; onChange: (v: 'list' | 'locks') => void }) {
+function Tabs({ value, onChange, hideLocks }: { value: string; onChange: (v: 'list' | 'locks') => void; hideLocks?: boolean }) {
   const items: { key: 'list' | 'locks'; label: string }[] = [
     { key: 'list', label: '会话列表' },
-    { key: 'locks', label: '锁信息' },
   ]
+  if (!hideLocks) {
+    items.push({ key: 'locks', label: '锁信息' })
+  }
   return (
     <div className="sessions-tabs">
       {items.map((it) => (

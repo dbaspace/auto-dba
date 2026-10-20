@@ -27,6 +27,12 @@ export interface DdlExecStats {
   instTotal: number
   instOk: number
   instFail: number
+  /** 后端计划条数（SplitSQL）；有值时摘要优先用此口径 */
+  statementCount?: number
+  /** 明细是否已抽样收敛 */
+  compacted?: boolean
+  /** 摘要数字是否来自后端 success_count（而非 records 长度） */
+  countsFromBackend?: boolean
 }
 
 export const NO_DETAIL_ERROR = '执行失败但未记录错误详情，请联系管理员查看后端日志'
@@ -65,6 +71,9 @@ export function buildDdlExecGroups(
     execMessage?: string
     execFailed?: boolean
     execSuccess?: boolean
+    successCount?: number
+    statementCount?: number
+    compacted?: boolean
   },
 ): { groups: DdlExecGroup[]; stats: DdlExecStats } {
   const recs = Array.isArray(records) ? records : []
@@ -148,11 +157,23 @@ export function buildDdlExecGroups(
     }
   })
 
-  let successSQL = 0
-  const totalSQL = recs.length
-  successSQL = recs.filter((r) => String(r.status || '').toLowerCase() === 'success').length
+  let successSQL = recs.filter((r) => String(r.status || '').toLowerCase() === 'success').length
   if (!recs.length && groups.length) {
     successSQL = 0
+  }
+  let totalSQL = recs.length || groups.reduce((n, g) => n + g.rows.length, 0)
+  const backendSuccess = Number(opts.successCount)
+  const backendPlanned = Number(opts.statementCount)
+  let countsFromBackend = false
+  if (Number.isFinite(backendSuccess) && backendSuccess >= 0) {
+    successSQL = backendSuccess
+    countsFromBackend = true
+  }
+  if (Number.isFinite(backendPlanned) && backendPlanned > 0) {
+    totalSQL = backendPlanned
+    countsFromBackend = true
+  } else if (countsFromBackend && successSQL > totalSQL) {
+    totalSQL = successSQL
   }
 
   const instOk = groups.filter((g) => g.ok).length
@@ -161,12 +182,15 @@ export function buildDdlExecGroups(
   return {
     groups,
     stats: {
-      totalSQL: totalSQL || groups.reduce((n, g) => n + g.rows.length, 0),
+      totalSQL,
       successSQL,
       rolledBackSQL: groups.reduce((n, g) => n + g.rolledBack, 0),
       instTotal: groups.length,
       instOk,
       instFail,
+      statementCount: Number.isFinite(backendPlanned) && backendPlanned > 0 ? backendPlanned : undefined,
+      compacted: Boolean(opts.compacted),
+      countsFromBackend,
     },
   }
 }

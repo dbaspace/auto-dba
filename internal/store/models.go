@@ -745,6 +745,7 @@ const (
 	IssueTypeSrCluster     = "sr_cluster"
 	IssueTypeDbDeploy      = "db_deploy"
 	IssueTypeResourceApply = "resource_apply" // 平台资源申请（库/域名/主机/集群）
+	IssueTypeK8sChange     = "k8s_change"     // K8s 生产变更（apply/删除/drain/缩零等）
 
 	StatusPending        = "pending"
 	StatusApproved       = "approved"

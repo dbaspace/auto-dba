@@ -41,6 +41,52 @@ func (h *K8sHandler) ScaleWorkload(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
+func (h *K8sHandler) RollbackWorkload(c *gin.Context) {
+	cli, cl, allow, ok := h.liveClient(c)
+	if !ok {
+		return
+	}
+	ns, kind, name := c.Param("ns"), c.Param("kind"), c.Param("name")
+	if !h.nsAllowed(allow, ns) {
+		c.JSON(http.StatusForbidden, gin.H{"message": "命名空间未授权"})
+		return
+	}
+	if err := cli.RollbackWorkload(c.Request.Context(), kind, ns, name); err != nil {
+		h.audit(c, cl.ID, ns, "rollback", kind, name, "", "fail", err.Error())
+		c.JSON(http.StatusBadGateway, gin.H{"message": err.Error()})
+		return
+	}
+	h.audit(c, cl.ID, ns, "rollback", kind, name, "", "ok", "")
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func (h *K8sHandler) ApplyQuota(c *gin.Context) {
+	cli, cl, allow, ok := h.liveClient(c)
+	if !ok {
+		return
+	}
+	ns := c.Param("ns")
+	if !h.nsAllowed(allow, ns) {
+		c.JSON(http.StatusForbidden, gin.H{"message": "命名空间未授权"})
+		return
+	}
+	var req struct {
+		Name string            `json:"name"`
+		Hard map[string]string `json:"hard"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.Name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "name 与 hard 必填"})
+		return
+	}
+	if err := cli.ApplyQuota(c.Request.Context(), ns, req.Name, req.Hard); err != nil {
+		h.audit(c, cl.ID, ns, "quota", "resourcequotas", req.Name, "", "fail", err.Error())
+		c.JSON(http.StatusBadGateway, gin.H{"message": err.Error()})
+		return
+	}
+	h.audit(c, cl.ID, ns, "quota", "resourcequotas", req.Name, "", "ok", "")
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
 func (h *K8sHandler) RestartWorkload(c *gin.Context) {
 	cli, cl, allow, ok := h.liveClient(c)
 	if !ok {

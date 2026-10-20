@@ -196,30 +196,56 @@ func InstanceHostAliases(inst *store.Instance) []string {
 	return out
 }
 
+type slotTaskCand struct {
+	task  *store.CDCTask
+	inst  *store.Instance
+	extra map[string]string
+}
+
 // AttachSlotCDC 按主机、端口、槽名和库名把 CDC 任务补到复制槽上。对不上的任务字段留空。
+// 先按 slot_name 建索引，每个任务只 ParseTaskExtra 一次，避免 O(槽×任务) 全表扫描。
 func AttachSlotCDC(slots []store.SyncSlot, tasks []store.CDCTask, insts []store.Instance) []SlotRow {
 	byID := make(map[string]*store.Instance, len(insts))
 	for i := range insts {
 		byID[insts[i].ID] = &insts[i]
 	}
+	bySlot := make(map[string][]slotTaskCand)
+	addCand := func(slotName string, c slotTaskCand) {
+		key := strings.ToLower(strings.TrimSpace(slotName))
+		if key == "" {
+			return
+		}
+		bySlot[key] = append(bySlot[key], c)
+	}
+	for i := range tasks {
+		task := &tasks[i]
+		inst := byID[task.SourceID]
+		if inst == nil {
+			continue
+		}
+		extra := ParseTaskExtra(task.Description)
+		c := slotTaskCand{task: task, inst: inst, extra: extra}
+		for _, b := range ParseShardBindings(extra) {
+			addCand(b.SlotName, c)
+		}
+		addCand(extra["slot_name"], c)
+	}
 	out := make([]SlotRow, 0, len(slots))
 	for _, slot := range slots {
 		row := SlotRow{SyncSlot: slot}
 		best := 0
-		for i := range tasks {
-			task := &tasks[i]
-			inst := byID[task.SourceID]
-			if inst == nil || !slotHostMatches(slot.Host, slot.Port, inst) {
+		cands := bySlot[strings.ToLower(strings.TrimSpace(slot.SlotName))]
+		for _, c := range cands {
+			if !slotHostMatches(slot.Host, slot.Port, c.inst) {
 				continue
 			}
-			extra := ParseTaskExtra(task.Description)
-			name, base, topic, score := matchTaskSlot(slot, task, extra)
+			name, base, topic, score := matchTaskSlot(slot, c.task, c.extra)
 			if score <= best || name == "" {
 				continue
 			}
 			best = score
-			row.TaskID = task.ID
-			row.TaskName = task.Name
+			row.TaskID = c.task.ID
+			row.TaskName = c.task.Name
 			row.ConnectorName = name
 			row.ConnectBase = base
 			row.Connector = connectorLabel(base)

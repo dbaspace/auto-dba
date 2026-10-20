@@ -14,20 +14,13 @@ var (
 	cronLastFire string
 )
 
-// StartDailyCron 启动智能分析每日定时（每 30s 检查一次）。
+// StartDailyCron 已废弃：平台调度由 internal/jobreg 接管。
+//
+// Deprecated: 使用 jobboot.RegisterPlatformJobs + jobreg.Registry.Start。
 func StartDailyCron(ctx context.Context, svc *Service) {
-	if svc == nil {
-		return
-	}
-	cronOnce.Do(func() {
-		if err := svc.SeedSystemCases(context.Background()); err != nil {
-			log.Printf("sqlinsight: SeedSystemCases: %v", err)
-		}
-		if err := svc.SeedSystemRules(context.Background()); err != nil {
-			log.Printf("sqlinsight: SeedSystemRules: %v", err)
-		}
-		go svc.dailyCronWatcher(ctx)
-	})
+	_ = ctx
+	_ = svc
+	log.Printf("DEPRECATED: sqlinsight.StartDailyCron ignored; scheduling is owned by jobreg (sqlinsight.daily)")
 }
 
 func (s *Service) dailyCronWatcher(ctx context.Context) {

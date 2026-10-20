@@ -13,6 +13,7 @@ import (
 
 	"auto-dba/internal/backup"
 	"auto-dba/internal/ha"
+	"auto-dba/internal/k8s/operator"
 	"auto-dba/internal/middleware"
 	"auto-dba/internal/secret"
 	"auto-dba/internal/store"
@@ -1020,7 +1021,17 @@ func (h *HAHandler) ExecuteHATicket(ctx context.Context, it *store.Issue) (*tick
 	case "switchover":
 		checklist := ha.SwitchoverChecklist(cluster.Engine, cluster.Mode)
 		auto := false
-		if store.HAAutoSwitchoverMode(cluster.Mode) && strings.TrimSpace(cluster.ControllerID) != "" {
+		if strings.EqualFold(cluster.Mode, "k8s_operator") {
+			if msg, err := h.executeK8sOperatorSwitchover(ctx, cluster, task.TargetInstanceID); err != nil {
+				addStep("k8s_operator", "failed", err.Error())
+				res.Success = false
+				res.Message = err.Error()
+			} else {
+				auto = true
+				addStep("k8s_operator", "ok", msg)
+				res.Summary = msg
+			}
+		} else if store.HAAutoSwitchoverMode(cluster.Mode) && strings.TrimSpace(cluster.ControllerID) != "" {
 			ctrl, cerr := h.Store.GetHAController(cluster.ControllerID)
 			if cerr != nil || ctrl == nil {
 				addStep("controller", "skip", "控制器读取失败，按检查清单人工切换")
@@ -1175,4 +1186,68 @@ func (h *HAHandler) ExecuteHATicket(ctx context.Context, it *store.Issue) (*tick
 		res.Summary = "HA 变更执行完成"
 	}
 	return res, nil
+}
+
+// executeK8sOperatorSwitchover 经 K8s Operator Adapter 执行计划切换。
+func (h *HAHandler) executeK8sOperatorSwitchover(ctx context.Context, cluster *store.HACluster, targetInstanceID string) (string, error) {
+	inst, err := h.Store.GetInstance(targetInstanceID)
+	if err != nil || inst == nil {
+		return "", fmt.Errorf("目标实例不存在")
+	}
+	var k8sClusterID, ns, crName, engine string
+	for _, tag := range inst.Tags {
+		tag = strings.TrimSpace(tag)
+		switch {
+		case strings.HasPrefix(tag, "k8s_cluster_id="):
+			k8sClusterID = strings.TrimPrefix(tag, "k8s_cluster_id=")
+		case strings.HasPrefix(tag, "k8s_namespace="):
+			ns = strings.TrimPrefix(tag, "k8s_namespace=")
+		case strings.HasPrefix(tag, "k8s_cr="):
+			crName = strings.TrimPrefix(tag, "k8s_cr=")
+		case tag == "source=k8s":
+			// ok
+		}
+	}
+	engine = strings.ToLower(strings.TrimSpace(cluster.Engine))
+	if engine == "postgresql" {
+		engine = "postgres"
+	}
+	if k8sClusterID == "" || ns == "" || crName == "" {
+		// 回退：从平台登记的 db_clusters 按 instance_id 查
+		list, _ := h.Store.ListK8sDBClustersInTenant(cluster.TenantID, "")
+		for _, row := range list {
+			if row.InstanceID == inst.ID || row.InstanceID == targetInstanceID {
+				k8sClusterID, ns, crName, engine = row.ClusterID, row.Namespace, row.CRName, row.Engine
+				break
+			}
+		}
+	}
+	if k8sClusterID == "" || ns == "" || crName == "" {
+		return "", fmt.Errorf("实例未关联 K8s CR（需 tags: k8s_cluster_id/k8s_namespace/k8s_cr 或 tbl_k8s_db_clusters）")
+	}
+	k8sH := NewK8sHandler(h.Store, h.Secret)
+	cl, err := h.Store.GetK8sCluster(k8sClusterID)
+	if err != nil || cl == nil {
+		return "", fmt.Errorf("K8s 集群不存在: %s", k8sClusterID)
+	}
+	cred, err := k8sH.credFromCluster(cl, "ha", "admin")
+	if err != nil {
+		return "", err
+	}
+	cli, err := k8sH.Mgr.Get(cl.ID, cred)
+	if err != nil {
+		return "", err
+	}
+	ad := k8sH.Ops.Get(engine)
+	if ad == nil {
+		return "", fmt.Errorf("无 Operator 适配器: %s", engine)
+	}
+	targetPod := inst.Name
+	if err := ad.Switchover(ctx, cli, operator.CRRef{Namespace: ns, Name: crName}, targetPod); err != nil {
+		return "", err
+	}
+	if err := h.Store.UpdateHAMemberRoles(cluster.ID, inst.ID); err != nil {
+		return "已调用 Operator Switchover，但更新登记角色失败: " + err.Error(), nil
+	}
+	return "已通过 K8s Operator 完成计划切换并更新登记角色", nil
 }

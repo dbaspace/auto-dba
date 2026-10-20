@@ -12,8 +12,8 @@ import (
 func TestShouldAutoRun(t *testing.T) {
 	if !ShouldAutoRun(store.IssueTypeDDL) || !ShouldAutoRun("dml") || !ShouldAutoRun(store.IssueTypeCreateDB) || !ShouldAutoRun(store.IssueTypeHA) ||
 		!ShouldAutoRun(store.IssueTypeSrCluster) || !ShouldAutoRun(store.IssueTypeDbDeploy) || !ShouldAutoRun(store.IssueTypeResourceApply) ||
-		!ShouldAutoRun(store.IssueTypeRedis) {
-		t.Fatal("ddl/dml/createdb/ha/sr_cluster/db_deploy/resource_apply/redis should auto run")
+		!ShouldAutoRun(store.IssueTypeRedis) || !ShouldAutoRun(store.IssueTypeBackupRestore) {
+		t.Fatal("ddl/dml/createdb/ha/sr_cluster/db_deploy/resource_apply/redis/backup_restore should auto run")
 	}
 	for _, typ := range []string{store.IssueTypeDQL, store.IssueTypeDCL, store.IssueTypeKafka, store.IssueTypeArchive,
 		store.IssueTypeFlashback, store.IssueTypeCDC, store.IssueTypeMigration} {
@@ -48,17 +48,20 @@ func TestExecutable(t *testing.T) {
 	if !Executable("postgres") || !Executable("starrocks") || !Executable("pg") {
 		t.Fatal("pg/sr should be executable")
 	}
-	if Executable("mysql") || Executable("tidb") {
-		t.Fatal("mysql/tidb should not auto-exec SQL")
+	if !Executable("mysql") || !Executable("tidb") || !Executable("oceanbase") {
+		t.Fatal("mysql/tidb/oceanbase should auto-exec SQL")
+	}
+	if Executable("oracle") || Executable("mongodb") {
+		t.Fatal("unsupported engines should not auto-exec")
 	}
 }
 
-func TestRunSkipMySQL(t *testing.T) {
+func TestRunMySQLAttemptsConnect(t *testing.T) {
 	res := Run(context.Background(), "ddl", "ALTER TABLE t ADD COLUMN c int", Target{
-		Host: "127.0.0.1", Port: 3306, Username: "u", DBName: "db", DBType: "mysql",
+		Host: "127.0.0.1", Port: 1, Username: "u", DBName: "db", DBType: "mysql",
 	})
-	if res == nil || !res.Success || !res.Skipped {
-		t.Fatalf("mysql ddl should skip: %+v", res)
+	if res == nil || res.Skipped || res.Success {
+		t.Fatalf("mysql ddl should attempt connect and fail: %+v", res)
 	}
 }
 

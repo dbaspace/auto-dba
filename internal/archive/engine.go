@@ -6,6 +6,7 @@ import (
 	"encoding/csv"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -428,23 +429,12 @@ func hasCreateTime(ctx context.Context, db *sql.DB, dbType, table string) bool {
 	return n > 0
 }
 
+// StartScheduler 已废弃：由 jobreg archive.due_scanner 接管。
+//
+// Deprecated: 使用 jobboot.RegisterPlatformJobs。
 func (e *Engine) StartScheduler(ctx context.Context) {
-	if e == nil {
-		return
-	}
-	tick := time.NewTicker(60 * time.Second)
-	go func() {
-		defer tick.Stop()
-		e.ScanDue()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-tick.C:
-				e.ScanDue()
-			}
-		}
-	}()
+	_ = ctx
+	log.Printf("DEPRECATED: archive.StartScheduler ignored; scheduling is owned by jobreg (archive.due_scanner)")
 }
 
 // ScanDue 扫描到期归档任务（供 jobreg 调用）。

@@ -1,6 +1,7 @@
 package cdc
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -37,6 +38,27 @@ func TestAttachSlotCDCShardBinding(t *testing.T) {
 	}, tasks, []store.Instance{inst})
 	if rows[0].ConnectorName != "conn-1" || rows[0].TaskName != "分库" || rows[0].Topic != "shard" {
 		t.Fatalf("shard row = %+v", rows[0])
+	}
+}
+
+func TestAttachSlotCDCIndexedManyTasks(t *testing.T) {
+	inst := store.Instance{ID: "i1", Host: "10.0.0.8", Port: 5432}
+	tasks := make([]store.CDCTask, 0, 50)
+	for i := 0; i < 49; i++ {
+		tasks = append(tasks, store.CDCTask{
+			ID: fmt.Sprintf("noise-%d", i), Name: "noise", SourceID: "i1", SourceDB: "db",
+			Description: fmt.Sprintf(`-- auto-dba-cdc:{"slot_name":"slot_%d","connector_name":"c%d","topic_prefix":"t"}`, i, i),
+		})
+	}
+	tasks = append(tasks, store.CDCTask{
+		ID: "hit", Name: "目标", SourceID: "i1", SourceDB: "orders",
+		Description: `-- auto-dba-cdc:{"slot_name":"dbz_orders","connector_name":"conn-orders","connect_base_url":"http://10.1.2.3:8083","topic_prefix":"orders"}`,
+	})
+	rows := AttachSlotCDC([]store.SyncSlot{
+		{Host: "10.0.0.8", Port: 5432, SlotName: "dbz_orders", Database: "orders"},
+	}, tasks, []store.Instance{inst})
+	if rows[0].TaskName != "目标" || rows[0].ConnectorName != "conn-orders" {
+		t.Fatalf("indexed match = %+v", rows[0])
 	}
 }
 

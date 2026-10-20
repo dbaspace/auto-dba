@@ -213,7 +213,7 @@ func (s *FlashbackImpl) Precheck(c context.Context, req *FlashbackTaskReq) (*Fla
 		flashbackAddCheck(&out.Items, "cloud_instance", "云产品实例", flashbackCheckFailed, src.Reason)
 		out.OK = false
 		return out, nil
-	case flashbackWALSourceCloudTencent:
+	case flashbackWALSourceCloudTencent, flashbackWALSourceCloudAliyun, flashbackWALSourceCloudHuawei, flashbackWALSourceCloudAWS:
 		flashbackAddCheck(&out.Items, "wal_source", "WAL 来源", flashbackCheckPassed, src.Reason)
 		out.ParseMode = flashbackParseModeCloud
 	default:
@@ -319,7 +319,8 @@ func (s *FlashbackImpl) Precheck(c context.Context, req *FlashbackTaskReq) (*Fla
 	}
 	flashbackAddWalMinerLimits(&out.Items, dict, req.SQLType)
 
-	if src.Kind == flashbackWALSourceCloudTencent {
+	if src.Kind == flashbackWALSourceCloudTencent || src.Kind == flashbackWALSourceCloudAliyun ||
+		src.Kind == flashbackWALSourceCloudHuawei || src.Kind == flashbackWALSourceCloudAWS {
 		return flashbackPrecheckPGCloud(ctx, db, out, target, end, src, res, req.CloudRegion)
 	}
 
@@ -428,12 +429,42 @@ func flashbackPrecheckPGCloud(ctx context.Context, db *sql.DB, out *FlashbackPre
 	idKey, keyKey, _, _, _ := flashbackCloudVendorKeyPair(src.Vendor)
 	flashbackAddCheck(&out.Items, "cloud_creds", "云厂商凭证", flashbackCheckPassed,
 		"已配置「多云密钥」"+idKey+" / "+keyKey)
-	reg, rerr := flashbackResolveTencentRegion(ctx, res, cloudRegion)
-	if rerr != nil {
-		flashbackAddCheck(&out.Items, "cloud_region", "腾讯云 Region", flashbackCheckFailed, rerr.Error())
-		return flashbackPrecheckFinalize(out), nil
+
+	region := strings.TrimSpace(cloudRegion)
+	switch src.Kind {
+	case flashbackWALSourceCloudAliyun:
+		if region == "" && res != nil {
+			region = strings.TrimSpace(flashbackTagRaw(res.Tags, "cloud_region"))
+		}
+		if region == "" {
+			region = "cn-hangzhou"
+		}
+		flashbackAddCheck(&out.Items, "cloud_region", "阿里云 Region", flashbackCheckPassed, region)
+	case flashbackWALSourceCloudHuawei:
+		if region == "" && res != nil {
+			region = strings.TrimSpace(flashbackTagRaw(res.Tags, "cloud_region"))
+		}
+		if region == "" {
+			region = "cn-north-4"
+		}
+		flashbackAddCheck(&out.Items, "cloud_region", "华为云 Region", flashbackCheckPassed, region)
+	case flashbackWALSourceCloudAWS:
+		if region == "" && res != nil {
+			region = strings.TrimSpace(flashbackTagRaw(res.Tags, "cloud_region"))
+		}
+		if region == "" {
+			region = "ap-northeast-1"
+		}
+		flashbackAddCheck(&out.Items, "cloud_region", "AWS Region", flashbackCheckPassed, region)
+	default:
+		reg, rerr := flashbackResolveTencentRegion(ctx, res, cloudRegion)
+		if rerr != nil {
+			flashbackAddCheck(&out.Items, "cloud_region", "腾讯云 Region", flashbackCheckFailed, rerr.Error())
+			return flashbackPrecheckFinalize(out), nil
+		}
+		region = reg.Region
+		flashbackAddCheck(&out.Items, "cloud_region", "腾讯云 Region", flashbackCheckPassed, reg.Region+"（来源="+reg.Reason+"）")
 	}
-	flashbackAddCheck(&out.Items, "cloud_region", "腾讯云 Region", flashbackCheckPassed, reg.Region+"（来源="+reg.Reason+"）")
 
 	cpTime := flashbackCheckpointTime(ctx, db)
 	cpName, cpErr := flashbackCheckpointWALName(ctx, db)
@@ -446,7 +477,33 @@ func flashbackPrecheckPGCloud(ctx context.Context, db *sql.DB, out *FlashbackPre
 	}
 	from, to := flashbackCloudDownloadWindow(target, end, cpTime, flashbackCloudLookback(ctx))
 	from, to = flashbackCloudApplyDownloadLag(from, to, flashbackCloudOSSLag)
-	pkgs, err := flashbackListTencentLogBackups(ctx, src.InstanceID, reg.Region, from, to)
+	var pkgs []flashbackCloudWALObject
+	var err error
+	switch src.Kind {
+	case flashbackWALSourceCloudAliyun:
+		provider, perr := flashbackNewAliyunWALProvider(ctx, region)
+		if perr != nil {
+			flashbackAddCheck(&out.Items, "cloud_wal", "日志备份列表", flashbackCheckFailed, perr.Error())
+			return flashbackPrecheckFinalize(out), nil
+		}
+		pkgs, err = provider.ListByTime(ctx, flashbackCloudWALSpec{InstanceID: src.InstanceID, From: from, To: to})
+	case flashbackWALSourceCloudHuawei:
+		provider, perr := flashbackNewHuaweiWALProvider(ctx, region)
+		if perr != nil {
+			flashbackAddCheck(&out.Items, "cloud_wal", "日志备份列表", flashbackCheckFailed, perr.Error())
+			return flashbackPrecheckFinalize(out), nil
+		}
+		pkgs, err = provider.ListByTime(ctx, flashbackCloudWALSpec{InstanceID: src.InstanceID, From: from, To: to})
+	case flashbackWALSourceCloudAWS:
+		provider, perr := flashbackNewAWSWALProvider(ctx, region)
+		if perr != nil {
+			flashbackAddCheck(&out.Items, "cloud_wal", "日志备份列表", flashbackCheckFailed, perr.Error())
+			return flashbackPrecheckFinalize(out), nil
+		}
+		pkgs, err = provider.ListByTime(ctx, flashbackCloudWALSpec{InstanceID: src.InstanceID, From: from, To: to})
+	default:
+		pkgs, err = flashbackListTencentLogBackups(ctx, src.InstanceID, region, from, to)
+	}
 	if err != nil {
 		flashbackAddCheck(&out.Items, "cloud_wal", "日志备份列表", flashbackCheckFailed, err.Error())
 		return flashbackPrecheckFinalize(out), nil

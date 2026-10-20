@@ -81,6 +81,19 @@ func ForcedFailover(ctx context.Context, cluster *store.HACluster, ctrl Controll
 			}
 		}
 		return patroniFailoverAPI(ctx, ctrl, name)
+	case "proxysql":
+		if candidate == nil {
+			return fmt.Errorf("ProxySQL 强制切换需要指定新主实例")
+		}
+		oldPrimary := findRegisteredPrimary(cluster)
+		return ProxySQLPromoteWriter(ctx, ctrl, candidate, oldPrimary)
+	case "repmgr":
+		if candidate == nil {
+			return fmt.Errorf("repmgr 强制切换需要指定新主实例")
+		}
+		return repmgrAgentSwitchover(ctx, ctrl, candidate)
+	case "sentinel":
+		return sentinelFailover(ctx, ctrl, cluster.Name, candidate)
 	default:
 		return fmt.Errorf("控制器类型 %s 不支持强制切换", kind)
 	}

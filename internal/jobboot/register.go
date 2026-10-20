@@ -31,6 +31,7 @@ type Deps struct {
 	Backup     *backup.Engine
 	Ticket     *handler.TicketHandler
 	CDC        *handler.CDCHandler
+	Slot       *handler.SlotHandler
 	AlertSecret string
 	PgSecret    *string
 	Cmdb        *cmdb.Service
@@ -66,6 +67,9 @@ func RegisterPlatformJobs(r *jobreg.Registry, d Deps) {
 		return pgdiag.RunOnce(ctx, d.DB, deref(d.PgSecret))
 	})
 
+	if d.PgSpace != nil {
+		d.PgSpace.MarkJobsInterrupted(context.Background())
+	}
 	r.Register(jobreg.JobDesc{
 		Key: "pgspace.daily", Name: "表空间每日采集", Group: "collect",
 		Description: "每日定点全量表空间采集与过期快照清理",
@@ -79,6 +83,9 @@ func RegisterPlatformJobs(r *jobreg.Registry, d Deps) {
 		return d.PgSpace.RunDailyCron(ctx)
 	})
 
+	if d.AWR != nil {
+		d.AWR.MarkJobsInterrupted(context.Background())
+	}
 	r.Register(jobreg.JobDesc{
 		Key: "awr.daily", Name: "AWR 每日报告", Group: "collect",
 		Description: "每日生成昨日 AWR 报告并清理过期数据",
@@ -197,6 +204,25 @@ func RegisterPlatformJobs(r *jobreg.Registry, d Deps) {
 		return nil
 	})
 
+	_ = d.DB.EnsureGlobalArgDefault(
+		store.ArgSlotMonitorCollectIntervalSec,
+		"60",
+		"复制槽监控采集间隔（秒）：支持 30、60 或自定义；定时任务 sync.slots.collect 按此间隔采集",
+	)
+	r.Register(jobreg.JobDesc{
+		Key: "sync.slots.collect", Name: "复制槽状态采集", Group: "collect",
+		Description: "周期采集 PostgreSQL 复制槽（pid、LSN、滞后），供同步列表展示",
+		ScheduleKind: jobreg.ScheduleInterval, DefaultSpec: "60",
+		Mutable: true, Triggerable: true, Pauseable: true, RiskLevel: jobreg.RiskLow,
+		MisfirePolicy: jobreg.MisfireSkip,
+		SyncGlobalArg: store.ArgSlotMonitorCollectIntervalSec,
+	}, func(ctx context.Context) error {
+		if d.Slot == nil {
+			return nil
+		}
+		return handler.RunSlotCollectOnce(ctx, d.Slot)
+	})
+
 	ruler := &alert.Ruler{Store: d.DB, Secret: d.AlertSecret, Interval: alert.DefaultInterval}
 	r.Register(jobreg.JobDesc{
 		Key: "alert.ruler", Name: "告警规则评估", Group: "alert",
@@ -231,6 +257,19 @@ func RegisterPlatformJobs(r *jobreg.Registry, d Deps) {
 			d.Cmdb = cmdb.New(d.DB)
 		}
 		return d.Cmdb.ScanDueCron(ctx)
+	})
+
+	r.Register(jobreg.JobDesc{
+		Key: "ticket.scheduled_exec", Name: "工单预约到期执行", Group: "ticket",
+		Description: "扫描已通过且 scheduled_at 已到期的工单并后台自动执行",
+		ScheduleKind: jobreg.ScheduleInterval, DefaultSpec: "30s",
+		Mutable: true, Triggerable: true, Pauseable: true, RiskLevel: jobreg.RiskHigh,
+		MisfirePolicy: jobreg.MisfireSkip,
+	}, func(ctx context.Context) error {
+		if d.Ticket == nil {
+			return nil
+		}
+		return handler.RunDueScheduledIssuesOnce(ctx, d.Ticket)
 	})
 }
 

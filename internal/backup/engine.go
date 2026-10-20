@@ -5,7 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"hash/fnv"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -474,21 +476,12 @@ func max(a, b int) int {
 	return b
 }
 
-// StartScheduler 定时扫描启用策略（60s）。jobreg 接管后勿再调用。
+// StartScheduler 已废弃：平台调度由 internal/jobreg 接管（backup.due_scanner）。
+//
+// Deprecated: 使用 jobboot.RegisterPlatformJobs + jobreg.Registry.Start。
 func (e *Engine) StartScheduler(ctx context.Context) {
-	tick := time.NewTicker(60 * time.Second)
-	go func() {
-		e.ScanDue()
-		for {
-			select {
-			case <-ctx.Done():
-				tick.Stop()
-				return
-			case <-tick.C:
-				e.ScanDue()
-			}
-		}
-	}()
+	_ = ctx
+	log.Printf("DEPRECATED: backup.StartScheduler ignored; scheduling is owned by jobreg (backup.due_scanner)")
 }
 
 // ScanDue 扫描到期备份策略（供 jobreg 调用）。
@@ -510,9 +503,21 @@ func (e *Engine) scanDue() {
 		if !scheduleDue(expr, e.Store.LastBackupRunAt(p.ID), now) {
 			continue
 		}
+		// 错峰：同一分钟内按 instance_id 哈希分散 0–45s，避免齐刷
+		if !backupStaggerReady(p.InstanceID, now) {
+			continue
+		}
 		if _, err := e.Start(p.ID, store.BackupTriggerCron, "scheduler"); err != nil {
 			// 并发或未启用等忽略
 			_ = err
 		}
 	}
+}
+
+// backupStaggerReady 在当分钟的第 stagger 秒之后才允许启动（0–45）。
+func backupStaggerReady(instanceID string, now time.Time) bool {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(strings.TrimSpace(instanceID)))
+	stagger := int(h.Sum32() % 46)
+	return now.Second() >= stagger
 }

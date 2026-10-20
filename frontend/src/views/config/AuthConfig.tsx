@@ -814,6 +814,7 @@ function NotifyPanel() {
         email_on_ticket_await_exec: !!d.email_on_ticket_await_exec,
         email_on_ticket_await_exec_stuck: !!d.email_on_ticket_await_exec_stuck,
         email_on_backup_failed: !!d.email_on_backup_failed,
+        email_on_job_failed: !!d.email_on_job_failed,
         await_exec_stuck_hours: Number(d.await_exec_stuck_hours) > 0 ? Number(d.await_exec_stuck_hours) : 2,
         webhook_on_alert: d.webhook_on_alert !== false,
         wecom_on_alert: !!d.wecom_on_alert,
@@ -863,6 +864,7 @@ function NotifyPanel() {
         email_on_ticket_await_exec: !!f.email_on_ticket_await_exec,
         email_on_ticket_await_exec_stuck: !!f.email_on_ticket_await_exec_stuck,
         email_on_backup_failed: !!f.email_on_backup_failed,
+        email_on_job_failed: !!f.email_on_job_failed,
         await_exec_stuck_hours: Number(f.await_exec_stuck_hours) > 0 ? Number(f.await_exec_stuck_hours) : 2,
         webhook_on_alert: !!f.webhook_on_alert,
         wecom_on_alert: !!f.wecom_on_alert,
@@ -1004,6 +1006,14 @@ function NotifyPanel() {
                     <Switch />
                   </Form.Item>
                   <Form.Item label="备份失败" name="email_on_backup_failed" valuePropName="checked">
+                    <Switch />
+                  </Form.Item>
+                  <Form.Item
+                    label="定时任务失败"
+                    name="email_on_job_failed"
+                    valuePropName="checked"
+                    extra={<span className="field-hint">平台定时任务执行失败时通知管理员（同时会打告警群机器人）</span>}
+                  >
                     <Switch />
                   </Form.Item>
                   <Form.Item label="审批后待执行" name="email_on_ticket_await_exec" valuePropName="checked">

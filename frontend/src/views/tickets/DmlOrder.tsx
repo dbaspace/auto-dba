@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import {
+  Alert,
   Button,
   DatePicker,
   Form,
@@ -34,6 +35,11 @@ import { useCheckResultView } from '../../hooks/useCheckResultView'
 import { useWorkOrderDraft } from '../../hooks/useWorkOrderDraft'
 import { useAppDispatch, useAppSelector } from '../../store'
 import { goTicketListAndClose } from './goTicketList'
+import {
+  countNonEmptyLines,
+  lineVsStatementHint,
+  shouldHintLineVsStatement,
+} from './sqlStatementCount'
 import './DmlOrder.css'
 
 const PREFILL_KEY = 'auto-dba-dml-prefill'
@@ -130,6 +136,7 @@ export default function DmlOrder() {
   const [dbRecords, setDbRecords] = useState<any[]>([])
   const [approvers, setApprovers] = useState<string[]>([])
   const [checkRows, setCheckRows] = useState<CheckRow[]>([])
+  const [statementCount, setStatementCount] = useState(0)
   const [lastCheckFp, setLastCheckFp] = useState<string | null>(null)
 
   const [dsLoading, setDsLoading] = useState(false)
@@ -213,6 +220,7 @@ export default function DmlOrder() {
   function resetCheck() {
     setLastCheckFp(null)
     setCheckRows([])
+    setStatementCount(0)
   }
 
   function onEnvOrTypeChange(patch: Partial<FormState>) {
@@ -339,6 +347,9 @@ export default function DmlOrder() {
         instance_id: f.instance_id,
         db_name: f.db_name,
       })
+      const parsed = Number(data.statement_count)
+      const n = Number.isFinite(parsed) && parsed > 0 ? parsed : (data.statements || []).length
+      setStatementCount(n)
       setCheckRows(
         (data.statements || []).map((r: any) => ({
           stage: r.stage || 'parse',
@@ -348,11 +359,12 @@ export default function DmlOrder() {
           affected_rows: r.affected_rows ?? '—',
         })),
       )
-      if (data.ok) message.success('检测通过')
+      if (data.ok) message.success(n > 0 ? `检测通过，将按 ${n} 条语句执行` : '检测通过')
       else message.warning('检测未通过')
     } catch (e: any) {
       const msg = e.response?.data?.message || e.message || 'SQL 检测请求失败'
       message.error(msg)
+      setStatementCount(0)
       setCheckRows([{ stage: '—', error_level: 'ERROR', message: msg, sql, affected_rows: '—' }])
     } finally {
       setCheckLoading(false)
@@ -558,6 +570,10 @@ export default function DmlOrder() {
     rowNo: checkRowNo,
   } = useCheckResultView(checkRows)
 
+  const sqlLineApprox = useMemo(() => countNonEmptyLines(form.sql_content), [form.sql_content])
+  const showStmtHint =
+    statementCount > 0 && shouldHintLineVsStatement(sqlLineApprox, statementCount)
+
   const checkColumns: ColumnsType<CheckRow> = [
     { title: '序号', width: 64, render: (_: unknown, __: unknown, index: number) => checkRowNo(index) },
     { title: '阶段', dataIndex: 'stage', width: 100 },
@@ -698,6 +714,9 @@ export default function DmlOrder() {
             </Form.Item>
 
             <p className="hint">提交后超过 8 小时未审核完成，系统将自动取消。</p>
+            {statementCount > 0 ? (
+              <p className="hint">将按 {statementCount} 条语句执行（按分号拆分）</p>
+            ) : null}
             <Form.Item className="aside-actions">
               <Tooltip title={submitting || submitAllowed ? '' : submitDisabledReason} placement="top">
                 <span className="submit-wrap">
@@ -731,6 +750,15 @@ export default function DmlOrder() {
             <Button onClick={beautify}>SQL美化</Button>
           </div>
           <p className="hint">编辑框内可检测、美化 SQL</p>
+          {statementCount > 0 ? (
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 12 }}
+              message={`将按 ${statementCount} 条语句执行（按分号拆分，与检测结果行数可能不同）`}
+              description={showStmtHint ? lineVsStatementHint(sqlLineApprox, statementCount) : undefined}
+            />
+          ) : null}
           <CheckResultFilterBar
             value={levelFilter}
             onChange={setLevelFilter}

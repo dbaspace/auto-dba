@@ -17,6 +17,7 @@ type NotifyConfig struct {
 	EmailOnTicketAwaitExec  bool   `json:"email_on_ticket_await_exec"`
 	EmailOnTicketAwaitStuck bool   `json:"email_on_ticket_await_exec_stuck"`
 	EmailOnBackupFailed     bool   `json:"email_on_backup_failed"`
+	EmailOnJobFailed        bool   `json:"email_on_job_failed"`
 	EmailOnAlert            bool   `json:"email_on_alert"`
 	AwaitExecStuckHours     int    `json:"await_exec_stuck_hours"`
 	WebhookEnabled          bool   `json:"webhook_enabled"`
@@ -173,6 +174,7 @@ func (d *DB) SetNotifyConfig(c *NotifyConfig) error {
 		EmailOnTicketAwaitExec:  c.EmailOnTicketAwaitExec,
 		EmailOnTicketAwaitStuck: c.EmailOnTicketAwaitStuck,
 		EmailOnBackupFailed:     c.EmailOnBackupFailed,
+		EmailOnJobFailed:        c.EmailOnJobFailed,
 		EmailOnAlert:            c.EmailOnAlert,
 		AwaitExecStuckHours:     hours,
 		WebhookEnabled:          c.WebhookEnabled,
@@ -219,6 +221,7 @@ func (c *NotifyConfig) Public() map[string]any {
 		"email_on_ticket_await_exec":       c.EmailOnTicketAwaitExec,
 		"email_on_ticket_await_exec_stuck": c.EmailOnTicketAwaitStuck,
 		"email_on_backup_failed":           c.EmailOnBackupFailed,
+		"email_on_job_failed":              c.EmailOnJobFailed,
 		"email_on_alert":                   c.EmailOnAlert,
 		"await_exec_stuck_hours":           c.AwaitStuckHours(),
 		"webhook_on_alert":                 c.WebhookOnAlert,

@@ -3,6 +3,7 @@ import { Button, Drawer, InputNumber, Modal, Space, Tabs, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import ClusterNsPicker from './components/ClusterNsPicker'
+import api from '../../api/request'
 import {
   getPodLog,
   getResource,
@@ -80,6 +81,9 @@ export default function K8sWorkloads() {
               <>
                 <Button size="small" onClick={() => onScale(namespace, name, r?.spec?.replicas)}>扩缩</Button>
                 <Button size="small" onClick={() => onRestart(namespace, name)}>重启</Button>
+                {kind === 'deployments' && (
+                  <Button size="small" onClick={() => onRollback(namespace, name)}>回滚</Button>
+                )}
               </>
             )}
           </Space>
@@ -126,6 +130,16 @@ export default function K8sWorkloads() {
     await restartWorkload(clusterId, kind, namespace, name)
     message.success('已触发重启')
     load()
+  }
+
+  async function onRollback(namespace: string, name: string) {
+    try {
+      await api.post(`/k8s/clusters/${clusterId}/workloads/${kind}/${namespace}/${name}/rollback`)
+      message.success('已触发回滚')
+      load()
+    } catch (e: any) {
+      message.error(e?.response?.data?.message || '回滚失败')
+    }
   }
 
   return (

@@ -31,7 +31,11 @@ func (a *perconaAdapter) Detect(ctx context.Context, c *k8s.Client) (*OperatorIn
 }
 
 func (a *perconaAdapter) Install(ctx context.Context, c *k8s.Client, opt InstallOpt) error {
-	return fmt.Errorf("请使用 Percona 官方 Helm/manifest 安装；平台默认仅检测")
+	if u := strings.TrimSpace(opt.Version); strings.HasPrefix(u, "http") {
+		_, err := FetchAndApply(ctx, c, u)
+		return err
+	}
+	return fmt.Errorf("Percona 请提供 InstallOpt.Version=清单 URL，或使用官方 Helm；也可仅检测已装 Operator")
 }
 
 func (a *perconaAdapter) Render(spec DBClusterSpec) (*unstructured.Unstructured, error) {

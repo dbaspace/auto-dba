@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Button, Form, Input, Modal, Pagination, Space, Tooltip, message } from 'antd'
+import { Alert, Button, Form, Input, Modal, Pagination, Space, Tag, Tooltip, message } from 'antd'
 import { EyeOutlined } from '@ant-design/icons'
+import { Link } from 'react-router-dom'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import api from '../../api/request'
 import './GlobalArgs.css'
@@ -14,6 +15,20 @@ interface ArgRow {
 
 const PAGE_SIZE = 10
 const VALUE_PREVIEW_LEN = 48
+
+/** 与后端 store.JobManagedGlobalArgKeys 对齐 */
+const JOB_MANAGED_KEYS = new Set([
+  'awr_enabled',
+  'awr_daily_cron',
+  'pg_space_enabled',
+  'pg_space_daily_cron',
+  'sql_insight_analysis_cron_enabled',
+  'sql_insight_analysis_cron',
+])
+
+function isJobManagedKey(key?: string) {
+  return !!key && JOB_MANAGED_KEYS.has(key)
+}
 
 function truncateValue(raw?: string): string {
   const v = String(raw ?? '')
@@ -92,6 +107,17 @@ export default function GlobalArgs() {
   return (
     <div className="ops-page">
       <p className="hint">CDC / 建库 / 工单约束与实例类型等。修改后立即生效。</p>
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 12 }}
+        message={
+          <span>
+            调度类参数（awr / pg_space / sql_insight cron）由{' '}
+            <Link to="/config/scheduled-jobs">定时任务</Link> 独占写入，本页不可改删。
+          </span>
+        }
+      />
       <div className="toolbar">
         <span className="label">关键词：</span>
         <Input
@@ -117,7 +143,21 @@ export default function GlobalArgs() {
           scroll={{ y: 'calc(100% - 47px)' }}
           style={{ height: '100%' }}
           columns={[
-            { title: '键', dataIndex: 'key', width: 260, ellipsis: true },
+            {
+              title: '键',
+              dataIndex: 'key',
+              width: 280,
+              ellipsis: true,
+              render: (k: string) =>
+                isJobManagedKey(k) ? (
+                  <Space size={4}>
+                    <span>{k}</span>
+                    <Tag color="blue">定时任务</Tag>
+                  </Space>
+                ) : (
+                  k
+                ),
+            },
             {
               title: '值',
               dataIndex: 'value',
@@ -152,16 +192,19 @@ export default function GlobalArgs() {
               title: '操作',
               width: 160,
               fixed: 'right',
-              render: (_, row) => (
-                <Space size={0}>
-                  <Button type="link" onClick={() => open(row)}>
-                    编辑
-                  </Button>
-                  <Button type="link" danger onClick={() => remove(row)}>
-                    删除
-                  </Button>
-                </Space>
-              ),
+              render: (_, row) =>
+                isJobManagedKey(row.key) ? (
+                  <Link to="/config/scheduled-jobs">去定时任务</Link>
+                ) : (
+                  <Space size={0}>
+                    <Button type="link" onClick={() => open(row)}>
+                      编辑
+                    </Button>
+                    <Button type="link" danger onClick={() => remove(row)}>
+                      删除
+                    </Button>
+                  </Space>
+                ),
             },
           ]}
         />

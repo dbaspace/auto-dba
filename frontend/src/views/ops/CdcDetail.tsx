@@ -30,8 +30,10 @@ import CdcReinitModal from './CdcReinitModal'
 import PipelineVisualization, { PipelineNode } from './PipelineVisualization'
 import ShardSourceTablesGrid from './ShardSourceTablesGrid'
 import {
+  analyzeMappingPipelineDrift,
   filterPublicationDisplayRows,
   groupPublishedTablesByMappings,
+  type MappingPipelineDrift,
   type PublicationDisplayRow,
 } from './cdcPublication'
 import {
@@ -73,11 +75,12 @@ export default function CdcDetail() {
   const menus = useAppSelector((s) => s.auth.menus)
   const id = String(params.id || '')
 
-  const backToCdcList = (opts?: { replace?: boolean }) => {
+  const backToCdcList = (opts?: { replace?: boolean; tab?: string }) => {
     const detailKey = tabKey(location.pathname, location.search)
+    const q = opts?.tab ? `?tab=${encodeURIComponent(opts.tab)}` : ''
     dispatch(openTab({ path: '/ops/cdc', menus, title: 'CDC 同步任务' }))
     dispatch(closeTab(detailKey))
-    navigate('/ops/cdc', opts?.replace ? { replace: true } : undefined)
+    navigate(`/ops/cdc${q}`, opts?.replace ? { replace: true } : undefined)
   }
 
   const [loading, setLoading] = useState(false)
@@ -123,11 +126,14 @@ export default function CdcDetail() {
   const [availablePubTables, setAvailablePubTables] = useState<string[]>([])
   const [syncedTables, setSyncedTables] = useState<string[]>([])
   const [pubKeyword, setPubKeyword] = useState('')
+  const [connectorConfig, setConnectorConfig] = useState<Record<string, any> | null>(null)
   const [diffOpen, setDiffOpen] = useState(false)
   const [diffTarget, setDiffTarget] = useState<any>(null)
   const [diffCols, setDiffCols] = useState<any[]>([])
   const [diffReviewer, setDiffReviewer] = useState('')
   const [diffSubmitting, setDiffSubmitting] = useState(false)
+  const [defaultReviewers, setDefaultReviewers] = useState<string[]>([])
+  const [sourceDbApprovers, setSourceDbApprovers] = useState<string[]>([])
   const [migrateSQL, setMigrateSQL] = useState('')
   const [diffOffset, setDiffOffset] = useState('OFFSET_BEGINNING')
   const [reinitOpen, setReinitOpen] = useState(false)
@@ -146,6 +152,12 @@ export default function CdcDetail() {
   const sourceScopeLabel = formatSourceScopeLabel(task.source_db, extra.source_db_prefix, extra.source_db_names)
   const source = instances.find((i) => i.id === task.source_instance_id)
   const target = instances.find((i) => i.id === task.target_instance_id)
+  const reviewerOptions = useMemo(() => {
+    const set = new Set(defaultReviewers)
+    for (const a of source?.approvers || []) if (a) set.add(a)
+    for (const a of sourceDbApprovers) if (a) set.add(a)
+    return [...set]
+  }, [defaultReviewers, source, sourceDbApprovers])
   const isInit = task.task_type === 'init'
   const countView = syncTableCountView(extra)
   const workerURL = connectorWorkerURL(extra, {})
@@ -352,6 +364,11 @@ export default function CdcDetail() {
     [pubDisplayRows, pubKeyword],
   )
 
+  const pipelineDrift: MappingPipelineDrift = useMemo(
+    () => analyzeMappingPipelineDrift(publishedTableNames, tableRows, connectorConfig),
+    [publishedTableNames, tableRows, connectorConfig],
+  )
+
 
   function tableQuery() {
     return {
@@ -410,12 +427,14 @@ export default function CdcDetail() {
   async function loadPublication(tid?: string) {
     const id0 = tid || task.id || id
     if (!isValidCdcTaskID(id0)) return
-    const [{ data }, synced] = await Promise.all([
+    const [{ data }, synced, conn] = await Promise.all([
       api.get(`/cdc-sync/tasks/${id0}/publication`, { silent: true }).catch(() => ({ data: {} as any })),
       api.get(`/cdc-sync/tasks/${id0}/synced-tables`, { silent: true }).catch(() => ({ data: {} as any })),
+      api.get(`/cdc-sync/tasks/${id0}/connector`, { silent: true }).catch(() => ({ data: {} as any })),
     ])
     setPublication(data.data || {})
     setSyncedTables(synced.data.data || [])
+    setConnectorConfig(conn.data?.data?.config || null)
     publicationLoadedRef.current = true
   }
 
@@ -492,6 +511,19 @@ export default function CdcDetail() {
         .get('/instances')
         .then((res) => setInstances(res.data.data || []))
         .catch(() => {})
+      void api
+        .get('/global-args')
+        .then((res) => {
+          const args = res.data.data || []
+          const set = new Set<string>()
+          String(args.find((a: any) => a.key === 'sync_default_approver')?.value || '')
+            .split(/[,，\s]+/)
+            .map((s: string) => s.trim())
+            .filter(Boolean)
+            .forEach((u: string) => set.add(u))
+          setDefaultReviewers([...set])
+        })
+        .catch(() => {})
       void loadPipelineStatus(tid)
       if (t0.task_type === 'init' || t0.parent_id) void loadSchemaAlerts(false)
     } catch {
@@ -534,6 +566,30 @@ export default function CdcDetail() {
     load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id])
+
+  useEffect(() => {
+    const sid = String(task.source_instance_id || '').trim()
+    const dbName = String(task.source_db || '').trim()
+    if (!sid || !dbName) {
+      setSourceDbApprovers([])
+      return
+    }
+    let cancelled = false
+    api
+      .get('/databases', { params: { instance_id: sid } })
+      .then((res) => {
+        if (cancelled) return
+        const dbs = res.data.data || []
+        const db = dbs.find((d: any) => d.db_name === dbName || d.name === dbName)
+        setSourceDbApprovers((db?.approvers || []).filter(Boolean))
+      })
+      .catch(() => {
+        if (!cancelled) setSourceDbApprovers([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [task.source_instance_id, task.source_db])
 
   async function refreshPipeline() {
     const tid = taskID()
@@ -585,7 +641,7 @@ export default function CdcDetail() {
 
   async function openPub(mode: 'add' | 'remove', prefillTables?: string[]) {
     setPubMode(mode)
-    setPubReviewer('')
+    setPubReviewer(reviewerOptions[0] || '')
     setPubOpen(true)
     if (mode === 'add') {
       setPubTables('')
@@ -617,14 +673,14 @@ export default function CdcDetail() {
     setPubSubmitting(true)
     try {
       const body = { tables, reviewer: pubReviewer, approver: pubReviewer }
-      const { data } =
-        pubMode === 'add'
-          ? await api.post(`/cdc-sync/tasks/${task.id}/publication/tables`, body)
-          : await api.delete(`/cdc-sync/tasks/${task.id}/publication/tables`, { data: body })
+      if (pubMode === 'add') {
+        await api.post(`/cdc-sync/tasks/${task.id}/publication/tables`, body)
+      } else {
+        await api.delete(`/cdc-sync/tasks/${task.id}/publication/tables`, { data: body })
+      }
       message.success('已提交审批')
       setPubOpen(false)
-      if (data.data?.issue_id) navigate('/ops/tickets/' + data.data.issue_id)
-      else load()
+      backToCdcList({ tab: 'pending' })
     } finally {
       setPubSubmitting(false)
     }
@@ -634,7 +690,7 @@ export default function CdcDetail() {
     setDiffTarget(row)
     setDiffCols([])
     setMigrateSQL('')
-    setDiffReviewer('')
+    setDiffReviewer(reviewerOptions[0] || '')
     setDiffOpen(true)
     try {
       const { data } = await api.post(`/cdc-sync/tasks/${task.id}/schema-diff`, {
@@ -666,7 +722,7 @@ export default function CdcDetail() {
     const cols = diffCols.filter((c) => c.selected)
     setDiffSubmitting(true)
     try {
-      const { data } = await api.post('/cdc-sync/tasks', {
+      await api.post('/cdc-sync/tasks', {
         name: `${task.name}_加列`,
         task_type: 'alter_schema',
         parent_id: task.id,
@@ -690,7 +746,7 @@ export default function CdcDetail() {
       })
       message.success('已提交加列审批')
       setDiffOpen(false)
-      if (data.data?.issue_id) navigate('/ops/tickets/' + data.data.issue_id)
+      backToCdcList({ tab: 'pending' })
     } finally {
       setDiffSubmitting(false)
     }
@@ -754,7 +810,7 @@ export default function CdcDetail() {
           </div>
         ) : (
           <div>
-            <Tag color="blue">单表</Tag>{' '}
+            {row.system ? <Tag>系统</Tag> : row.orphan ? <Tag color="orange">未映射</Tag> : <Tag color="blue">单表</Tag>}{' '}
             <code>{row.tables[0] || '—'}</code>
           </div>
         ),
@@ -763,23 +819,31 @@ export default function CdcDetail() {
       title: '目标表',
       key: 'target',
       width: 180,
-      render: (_, row) => <code>{row.target_table || row.tables[0] || '—'}</code>,
+      render: (_, row) =>
+        row.system || row.orphan ? (
+          <span style={{ color: '#8c8c8c' }}>—</span>
+        ) : (
+          <code>{row.target_table || row.tables[0] || '—'}</code>
+        ),
     },
     {
       title: '操作',
       key: 'op',
       width: 120,
-      render: (_, row) => (
-        <Button
-          type="link"
-          size="small"
-          danger
-          disabled={pending}
-          onClick={() => openPub('remove', row.tables)}
-        >
-          移除
-        </Button>
-      ),
+      render: (_, row) =>
+        row.system ? (
+          <span style={{ color: '#8c8c8c', fontSize: 12 }}>受保护</span>
+        ) : (
+          <Button
+            type="link"
+            size="small"
+            danger
+            disabled={pending}
+            onClick={() => openPub('remove', row.tables)}
+          >
+            移除
+          </Button>
+        ),
     },
   ]
 
@@ -1353,9 +1417,17 @@ export default function CdcDetail() {
                 </span>
               )}
               <span style={{ color: '#8c8c8c', fontSize: 12 }}>
-                已发布 {publishedTableNames.length} 张表
-                {pubDisplayRows.length > 0 && pubDisplayRows.length < publishedTableNames.length
-                  ? `（${pubDisplayRows.length} 组）`
+                映射 {pipelineDrift.plainMappingCount + pipelineDrift.shardGroupCount} 组
+                （单表 {pipelineDrift.plainMappingCount}
+                {pipelineDrift.shardGroupCount ? ` + 分表组 ${pipelineDrift.shardGroupCount}` : ''}）
+                · 业务已发布 {pipelineDrift.publishedBusinessCount} 张
+                {pipelineDrift.publishedSystemCount ? ` · 系统表 ${pipelineDrift.publishedSystemCount}` : ''}
+                {pipelineDrift.orphanCount ? ` · 未映射 ${pipelineDrift.orphanCount}` : ''}
+                {connectorConfig
+                  ? ` · include ${pipelineDrift.includeExactCount} 表` +
+                    (pipelineDrift.includePatternCount
+                      ? ` + ${pipelineDrift.includePatternCount} 分表规则`
+                      : '')
                   : ''}
                 {pubKeyword.trim()
                   ? ` · 显示 ${pubFilteredRows.length} / ${pubDisplayRows.length} 组`
@@ -1391,6 +1463,24 @@ export default function CdcDetail() {
             </Space>
           </div>
           {publication.message && <Alert type="warning" showIcon className="mb" message={publication.message} />}
+          {pipelineDrift.hasDrift && (
+            <Alert
+              type="warning"
+              showIcon
+              className="mb"
+              message="映射 / Publication / Debezium 配置不一致"
+              description={
+                <div>
+                  {pipelineDrift.alertLines.map((line) => (
+                    <div key={line}>{line}</div>
+                  ))}
+                  <Button type="link" size="small" style={{ padding: 0, marginTop: 4 }} onClick={() => setTab('debezium')}>
+                    查看 Debezium 配置
+                  </Button>
+                </div>
+              }
+            />
+          )}
           <ResponsiveTable
             rowKey="key"
             size="small"
@@ -1543,7 +1633,16 @@ export default function CdcDetail() {
         </div>
         <div>
           <div style={{ marginBottom: 6 }}>审核人</div>
-          <Input placeholder="审批通过后执行" value={pubReviewer} onChange={(e) => setPubReviewer(e.target.value)} />
+          <Select
+            showSearch
+            mode="tags"
+            maxCount={1}
+            placeholder="审批通过后执行"
+            style={{ width: '100%' }}
+            value={pubReviewer ? [pubReviewer] : []}
+            onChange={(v: string[]) => setPubReviewer(v[v.length - 1] || '')}
+            options={reviewerOptions.map((a) => ({ value: a, label: a }))}
+          />
         </div>
       </Modal>
 
@@ -1606,7 +1705,16 @@ export default function CdcDetail() {
         </div>
         <div style={{ marginTop: 12 }}>
           <div style={{ marginBottom: 6 }}>审核人</div>
-          <Input placeholder="审批通过后执行" value={diffReviewer} onChange={(e) => setDiffReviewer(e.target.value)} />
+          <Select
+            showSearch
+            mode="tags"
+            maxCount={1}
+            placeholder="审批通过后执行"
+            style={{ width: '100%' }}
+            value={diffReviewer ? [diffReviewer] : []}
+            onChange={(v: string[]) => setDiffReviewer(v[v.length - 1] || '')}
+            options={reviewerOptions.map((a) => ({ value: a, label: a }))}
+          />
         </div>
       </Modal>
 

@@ -602,6 +602,7 @@ func (d *DB) ListAllK8sClusters() ([]K8sCluster, error) {
 }
 
 // EnvIsProd 根据环境 code/name 判断是否生产。
+// K8s 高危操作优先用「集群绑定的 env_id」调用本函数，不用命名空间标签。
 func (d *DB) EnvIsProd(envID string) bool {
 	if envID == "" {
 		return false

@@ -48,6 +48,15 @@ type JobLease struct {
 
 func (d *DB) ensureJobRegTables() error {
 	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS tbl_job_audits (
+			id TEXT PRIMARY KEY,
+			job_key TEXT NOT NULL DEFAULT '',
+			action TEXT NOT NULL,
+			actor TEXT NOT NULL DEFAULT '',
+			detail TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_job_audits_created ON tbl_job_audits(created_at DESC)`,
 		`CREATE TABLE IF NOT EXISTS tbl_job_settings (
 			job_key TEXT PRIMARY KEY,
 			enabled INTEGER NOT NULL DEFAULT 1,
@@ -395,4 +404,112 @@ func (d *DB) PurgeOldJobFireLedger(before time.Time) (int64, error) {
 		return 0, err
 	}
 	return res.RowsAffected()
+}
+
+type JobAudit struct {
+	ID        string `json:"id"`
+	JobKey    string `json:"job_key"`
+	Action    string `json:"action"`
+	Actor     string `json:"actor"`
+	Detail    string `json:"detail,omitempty"`
+	CreatedAt string `json:"created_at"`
+}
+
+func (d *DB) AppendJobAudit(jobKey, action, actor, detail string) error {
+	id := fmt.Sprintf("ja-%d", time.Now().UnixNano())
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := d.Exec(`
+		INSERT INTO tbl_job_audits(id, job_key, action, actor, detail, created_at)
+		VALUES(?,?,?,?,?,?)`,
+		id, strings.TrimSpace(jobKey), strings.TrimSpace(action), strings.TrimSpace(actor), strings.TrimSpace(detail), now,
+	)
+	return err
+}
+
+func (d *DB) ListJobAudits(jobKey string, limit int) ([]JobAudit, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	q := `SELECT id, job_key, action, actor, detail, created_at FROM tbl_job_audits`
+	args := []any{}
+	if strings.TrimSpace(jobKey) != "" {
+		q += ` WHERE job_key=?`
+		args = append(args, strings.TrimSpace(jobKey))
+	}
+	q += ` ORDER BY created_at DESC LIMIT ?`
+	args = append(args, limit)
+	rows, err := d.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []JobAudit
+	for rows.Next() {
+		var a JobAudit
+		if err := rows.Scan(&a.ID, &a.JobKey, &a.Action, &a.Actor, &a.Detail, &a.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// ReleaseJobLeasesByOwner 将本进程持有的未过期租约立即过期（优雅退出）。
+func (d *DB) ReleaseJobLeasesByOwner(ownerID string) (int64, error) {
+	res, err := d.Exec(`
+		UPDATE tbl_job_leases
+		SET expires_at = NOW(), heartbeat_at = NOW(), run_id = ''
+		WHERE owner_id=? AND expires_at > NOW()`, ownerID)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// ListDueScheduledIssues 已通过且 scheduled_at 已到期、仍待执行的工单。
+func (d *DB) ListDueScheduledIssues(now time.Time, limit int) ([]Issue, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	rows, err := d.Query(`
+		SELECT id, ticket_no, issue_type, instance_id, COALESCE(domain,''), database_id, db_name, sql_content, description,
+		       status, submitter, assigned_to, reject_reason, need_rollback, scheduled_at, execute_result, created_at, updated_at
+		FROM tbl_issues
+		WHERE status=? AND TRIM(scheduled_at)<>''
+		ORDER BY updated_at ASC
+		LIMIT 500`,
+		StatusApproved,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Issue
+	for rows.Next() {
+		var it Issue
+		var exec sql.NullString
+		if err := rows.Scan(
+			&it.ID, &it.TicketNo, &it.IssueType, &it.InstanceID, &it.Domain, &it.DatabaseID, &it.DBName, &it.SQLContent, &it.Description,
+			&it.Status, &it.Submitter, &it.AssignedTo, &it.RejectReason, &it.NeedRollback, &it.ScheduledAt, &exec,
+			&it.CreatedAt, &it.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		if exec.Valid {
+			it.ExecuteResult = exec.String
+		}
+		it.Type = it.IssueType
+		if strings.TrimSpace(it.ScheduledAt) == "" {
+			continue
+		}
+		// 未到期则跳过；到期（或解析失败按 DueOrEmpty）纳入
+		if !ScheduledAtDueOrEmpty(it.ScheduledAt, now) {
+			continue
+		}
+		out = append(out, it)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, rows.Err()
 }

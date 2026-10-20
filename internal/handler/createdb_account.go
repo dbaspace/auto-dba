@@ -252,6 +252,10 @@ func mergeExecResult(dst, src *ticketexec.Result) {
 	dst.SuccessSQLs = append(dst.SuccessSQLs, src.SuccessSQLs...)
 	dst.SuccessCount += src.SuccessCount
 	dst.FailCount += src.FailCount
+	// 计划语句数按单库口径，取较大值（多实例不累加）
+	if src.StatementCount > dst.StatementCount {
+		dst.StatementCount = src.StatementCount
+	}
 	if src.Compacted {
 		dst.Compacted = true
 	}

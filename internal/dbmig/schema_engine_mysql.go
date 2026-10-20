@@ -87,19 +87,15 @@ func buildMySQLAlterFixSQLFull(ctx context.Context, src *sql.DB, item *TableSche
 					continue
 				}
 				b.WriteString(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s;\n", ref, mysqlColDDLPart(c)))
-			} else if strings.Contains(msg, "列定义不一致") {
+			} else if strings.Contains(msg, "列定义不一致") || differ {
 				c, ok := colMap[strings.ToLower(d.Name)]
 				if !ok {
+					b.WriteString(fmt.Sprintf("-- TODO: 列 %s 无法解析源定义，需人工处理 源=%s 目标=%s\n", d.Name, d.Left, d.Right))
 					continue
 				}
-				if c.Default.Valid {
-					b.WriteString(fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s SET DEFAULT %s;\n",
-						ref, quoteMySQLIdent(c.Name), quoteMySQLDefault(c.Default.String, c.Type)))
-				} else {
-					b.WriteString(fmt.Sprintf("-- TODO: 列 %s 定义不一致，需人工处理 源=%s 目标=%s\n", d.Name, d.Left, d.Right))
-				}
-			} else if differ {
-				b.WriteString(fmt.Sprintf("-- TODO: 列 %s 类型不一致，需人工处理 源=%s 目标=%s\n", d.Name, d.Left, d.Right))
+				// 类型/默认值/可空等不一致统一 MODIFY（与改注释路径一致）
+				b.WriteString(fmt.Sprintf("-- 对齐列 %s：源=%s 目标=%s\n", d.Name, d.Left, d.Right))
+				b.WriteString(fmt.Sprintf("ALTER TABLE %s MODIFY COLUMN %s;\n", ref, mysqlColDDLPart(c)))
 			}
 		case "comment":
 			if srcOnly || differ {
@@ -135,7 +131,13 @@ func buildMySQLAlterFixSQLFull(ctx context.Context, src *sql.DB, item *TableSche
 				}
 				b.WriteString(buildMySQLAddIndex(ref, idx))
 			} else if differ {
-				b.WriteString(fmt.Sprintf("-- TODO: 索引 %s 定义不一致，需人工处理\n", d.Name))
+				idx, ok := idxMap[strings.ToLower(d.Name)]
+				if !ok {
+					b.WriteString(fmt.Sprintf("-- TODO: 索引 %s 定义不一致且无法解析源定义\n", d.Name))
+					continue
+				}
+				b.WriteString(fmt.Sprintf("ALTER TABLE %s DROP INDEX %s;\n", ref, quoteMySQLIdent(d.Name)))
+				b.WriteString(buildMySQLAddIndex(ref, idx))
 			}
 		case "foreign_key":
 			if srcOnly {

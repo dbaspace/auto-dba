@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { Button, Form, Input, Modal, Select, Space, Tag, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import ResponsiveTable from '../../components/ResponsiveTable'
+import api from '../../api/request'
 import {
   assignNamespace,
   createCluster,
@@ -13,6 +14,8 @@ import {
 } from './services/k8sApi'
 import './k8s.css'
 
+type IdName = { id?: string; name?: string }
+
 export default function K8sClusters() {
   const [rows, setRows] = useState<K8sCluster[]>([])
   const [loading, setLoading] = useState(false)
@@ -21,6 +24,10 @@ export default function K8sClusters() {
   const [editing, setEditing] = useState<K8sCluster | null>(null)
   const [form] = Form.useForm()
   const [assignForm] = Form.useForm()
+  const [regions, setRegions] = useState<IdName[]>([])
+  const [allEnvs, setAllEnvs] = useState<IdName[]>([])
+  const [regionEnvs, setRegionEnvs] = useState<IdName[]>([])
+  const watchedRegionId = Form.useWatch('region_id', form)
 
   async function load() {
     setLoading(true)
@@ -31,12 +38,40 @@ export default function K8sClusters() {
     }
   }
 
+  async function loadMeta() {
+    try {
+      const [r, e] = await Promise.all([api.get('/regions'), api.get('/environments')])
+      setRegions(r.data.data || [])
+      setAllEnvs(e.data.data || [])
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function loadRegionEnvs(regionId?: string) {
+    if (!regionId) {
+      setRegionEnvs([])
+      return
+    }
+    try {
+      setRegionEnvs((await api.get(`/regions/${regionId}/envs`)).data.data || [])
+    } catch {
+      setRegionEnvs([])
+    }
+  }
+
   useEffect(() => {
     load()
+    loadMeta()
   }, [])
+
+  const regionName = (id?: string) => regions.find((r) => r.id === id)?.name || id || '—'
+  const envName = (id?: string) => allEnvs.find((e) => e.id === id)?.name || id || '—'
 
   const columns: ColumnsType<K8sCluster> = [
     { title: '名称', dataIndex: 'name' },
+    { title: '区域', dataIndex: 'region_id', width: 120, render: (v) => regionName(v) },
+    { title: '环境', dataIndex: 'env_id', width: 120, render: (v) => envName(v) },
     { title: '状态', dataIndex: 'status', width: 110, render: (v) => <Tag color={statusColor(v)}>{v}</Tag> },
     { title: '版本', dataIndex: 'version', width: 140 },
     { title: '节点', dataIndex: 'node_count', width: 80 },
@@ -59,6 +94,7 @@ export default function K8sClusters() {
   function openCreate() {
     setEditing(null)
     form.resetFields()
+    setRegionEnvs([])
     form.setFieldsValue({ access_mode: 'direct', auth_type: 'kubeconfig', visibility: 'global' })
     setOpen(true)
   }
@@ -67,8 +103,8 @@ export default function K8sClusters() {
     setEditing(row)
     form.setFieldsValue({
       name: row.name,
-      env_id: row.env_id,
       region_id: row.region_id,
+      env_id: row.env_id,
       access_mode: row.access_mode,
       auth_type: row.auth_type,
       api_server: row.api_server,
@@ -78,6 +114,7 @@ export default function K8sClusters() {
       remark: row.remark,
       credential: '',
     })
+    loadRegionEnvs(row.region_id)
     setOpen(true)
   }
 
@@ -160,8 +197,29 @@ export default function K8sClusters() {
           </Form.Item>
           <Form.Item name="ca_data" label="CA（可选）"><Input.TextArea rows={2} /></Form.Item>
           <Form.Item name="agent_id" label="Agent ID"><Input placeholder="access_mode=agent 时填写" /></Form.Item>
-          <Form.Item name="env_id" label="环境 ID"><Input /></Form.Item>
-          <Form.Item name="region_id" label="区域 ID"><Input /></Form.Item>
+          <Form.Item name="region_id" label="区域" rules={[{ required: true, message: '请选择区域' }]}>
+            <Select
+              showSearch
+              allowClear
+              placeholder="请选择区域"
+              optionFilterProp="label"
+              options={regions.map((r) => ({ value: r.id, label: r.name }))}
+              onChange={(v) => {
+                form.setFieldsValue({ env_id: undefined })
+                loadRegionEnvs(v)
+              }}
+            />
+          </Form.Item>
+          <Form.Item name="env_id" label="环境" rules={[{ required: true, message: '请选择环境' }]} dependencies={['region_id']}>
+            <Select
+              showSearch
+              allowClear
+              disabled={!watchedRegionId}
+              placeholder={watchedRegionId ? '请选择环境' : '请先选择区域'}
+              optionFilterProp="label"
+              options={regionEnvs.map((e) => ({ value: e.id, label: e.name }))}
+            />
+          </Form.Item>
           <Form.Item name="remark" label="备注"><Input /></Form.Item>
         </Form>
       </Modal>

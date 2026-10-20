@@ -30,6 +30,7 @@ const ArgIssueGlobalApproverWhitelist = "issue_global_approver_whitelist"
 const ArgTicketDDLLongStmtTimeoutMinutes = "ticket_ddl_long_stmt_timeout_minutes"
 const ArgQueryDefaultLimit = "query_default_limit"
 const ArgQueryMaxLimit = "query_max_limit"
+const ArgSlotMonitorCollectIntervalSec = "slot_monitor_collect_interval_sec"
 
 const (
 	defaultQueryDefaultLimit = 1000
@@ -127,6 +128,20 @@ func (d *DB) SetGlobalArg(key, value, desc string) error {
 		d.invalidateArgCache(key)
 	}
 	return err
+}
+
+// EnsureGlobalArgDefault 仅在参数不存在时写入默认值，不覆盖已有配置。
+func (d *DB) EnsureGlobalArgDefault(key, value, desc string) error {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return nil
+	}
+	var exists int
+	_ = d.QueryRow(`SELECT COUNT(1) FROM tbl_global_args WHERE key=?`, key).Scan(&exists)
+	if exists > 0 {
+		return nil
+	}
+	return d.SetGlobalArg(key, value, desc)
 }
 
 func (d *DB) DeleteGlobalArg(key string) error {
