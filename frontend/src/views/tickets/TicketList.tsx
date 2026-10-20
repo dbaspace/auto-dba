@@ -28,7 +28,7 @@ const STATUSES = [
   { value: 'running', label: '执行中' },
   { value: 'rejected', label: '已驳回' },
   { value: 'canceled', label: '已撤销' },
-  { value: 'executed', label: '已执行' },
+  { value: 'executed', label: '已执行/已下载' },
   { value: 'failed', label: '执行失败' },
 ]
 
@@ -56,7 +56,8 @@ function typeText(t: string) {
     '-'
   )
 }
-function statusText(s: string) {
+function statusText(s: string, issueType?: string) {
+  if (s === 'executed' && issueType === 'dql') return '已下载'
   return (
     {
       pending: '待审批',
@@ -174,6 +175,27 @@ export default function TicketList() {
         }}
         columns={[
           { title: '单号', dataIndex: 'ticket_no', width: 160 },
+          {
+            title: '申请原因',
+            dataIndex: 'description',
+            width: 220,
+            ellipsis: true,
+            render: (_, r) => r.description || '-',
+          },
+          {
+            title: '环境',
+            dataIndex: 'env',
+            width: 120,
+            ellipsis: true,
+            render: (_, r) => r.env || '-',
+          },
+          {
+            title: '数据库类型',
+            dataIndex: 'db_type',
+            width: 120,
+            ellipsis: true,
+            render: (_, r) => r.db_type || '-',
+          },
           { title: '类型', width: 110, render: (_, r) => typeText(r.issue_type) },
           {
             title: '租户',
@@ -182,13 +204,15 @@ export default function TicketList() {
             render: (_, r) => r.tenant_name || r.tenant_id || '-',
           },
           { title: '库', dataIndex: 'db_name', ellipsis: true },
-          { title: '提交人', dataIndex: 'submitter_name', width: 120 },
-          { title: '审批人', dataIndex: 'assigned_to', width: 120 },
           {
             title: '状态',
             width: 110,
-            render: (_, r) => <Tag color={statusColor(r.status)}>{statusText(r.status)}</Tag>,
+            render: (_, r) => (
+              <Tag color={statusColor(r.status)}>{statusText(r.status, r.issue_type)}</Tag>
+            ),
           },
+          { title: '提交人', dataIndex: 'submitter_name', width: 120 },
+          { title: '审批人', dataIndex: 'assigned_to', width: 120 },
           { title: '创建时间', dataIndex: 'created_at', width: 200 },
           {
             title: '操作',

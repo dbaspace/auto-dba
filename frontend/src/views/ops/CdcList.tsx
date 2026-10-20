@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
   useNavigate,
   useSearchParams } from 'react-router-dom'
@@ -136,6 +136,7 @@ export default function CdcList() {
   const [reinitTask, setReinitTask] = useState<any>(null)
   const [batchOpen, setBatchOpen] = useState(false)
   const { isAdmin } = usePermission()
+  const probeGenRef = useRef(0)
 
   const instMap = useMemo(() => {
     const m = new Map<string, any>()
@@ -247,24 +248,33 @@ export default function CdcList() {
     setDriftById(m)
   }
 
-  async function probeRunningPipelines(rows: any[]) {
-    const targets = rows.filter((r) => isRunning(r) && r.task_type === 'init').slice(0, 20)
-    const chunk = 4
+  /** 对齐 Hub：仅对当前页 init 运行任务有界并发探测 pipeline，不挡首屏 */
+  async function probePagePipelines(rows: any[], gen: number) {
+    const targets = rows.filter((r) => isRunning(r) && r.task_type === 'init' && isValidCdcTaskID(r.id))
+    if (!targets.length) return
+    const chunk = 8
     for (let i = 0; i < targets.length; i += chunk) {
+      if (gen !== probeGenRef.current) return
       const part = targets.slice(i, i + chunk)
       // eslint-disable-next-line no-await-in-loop
-      await Promise.all(
+      const updates = await Promise.all(
         part.map(async (row) => {
-          if (!isValidCdcTaskID(row.id)) return
           const { data } = await api
             .get(`/cdc-sync/tasks/${row.id}/status`, { silent: true })
             .catch(() => ({ data: {} as any }))
           const pipe = data.data || {}
-          row._pipeline = { healthy: pipe.healthy, unhealthy_reason: pipe.unhealthy_reason }
+          return {
+            id: row.id,
+            _pipeline: { healthy: pipe.healthy, unhealthy_reason: pipe.unhealthy_reason },
+          }
         }),
       )
+      if (gen !== probeGenRef.current) return
+      const byId = new Map(updates.map((u) => [u.id, u._pipeline]))
+      setAllRows((prev) =>
+        prev.map((r) => (byId.has(r.id) ? { ...r, _pipeline: byId.get(r.id) } : r)),
+      )
     }
-    setAllRows((prev) => [...prev])
   }
 
   async function load() {
@@ -279,14 +289,13 @@ export default function CdcList() {
       const rows = tasksRes.data.data || []
       setAllRows(rows)
       setInstances(inst.data.data || [])
-      await loadDriftCache()
-      void probeRunningPipelines(rows)
       const envs = envRes.data.data || []
       let opts = envs
         .map((e: any) => ({ value: e.code || e.name, label: e.name || e.code }))
         .filter((e: any) => e.value)
       if (!opts.length) opts = [{ value: 'test', label: 'test' }, { value: 'prod', label: 'prod' }]
       setEnvOptions(opts)
+      void loadDriftCache()
     } catch (e: any) {
       setLoadError(e?.response?.data?.message || e?.message || '加载失败')
     } finally {
@@ -368,6 +377,26 @@ export default function CdcList() {
     load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  const pageProbeKey = useMemo(
+    () =>
+      pageRows
+        .filter((r) => isRunning(r) && r.task_type === 'init')
+        .map((r) => r.id)
+        .join(','),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pageRows],
+  )
+
+  useEffect(() => {
+    if (tab !== 'running' || !pageProbeKey) return
+    const gen = ++probeGenRef.current
+    void probePagePipelines(pageRows, gen)
+    return () => {
+      probeGenRef.current += 1
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, pageProbeKey])
 
   const hasReinitializing = allRows.some((r) => r.status === 'reinitializing')
   useEffect(() => {
@@ -631,7 +660,7 @@ export default function CdcList() {
             </Button>
           )}
           {row.can_reinit && !isPending(row) && (
-            <Tooltip title="Debezium Connector 在 Connect 上缺失，按原配置补齐资源">
+            <Tooltip title="按原配置重新初始化（执行前校验 Connector 是否缺失）">
               <Button
                 type="link"
                 size="small"

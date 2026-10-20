@@ -51,6 +51,54 @@ function filenameFromHeader(header: any, fallback: string): string {
   return plain?.[1] || fallback
 }
 
+function exportMime(format: string): string {
+  switch (String(format || '').toLowerCase()) {
+    case 'json':
+      return 'application/json;charset=utf-8'
+    case 'sql':
+      return 'application/sql;charset=utf-8'
+    default:
+      return 'text/csv;charset=utf-8'
+  }
+}
+
+/** 解析导出 blob：csv/json/sql 共用；区分错误 JSON 与成功文件（含 json 成功也是 application/json） */
+async function resolveExportBlob(
+  data: any,
+  contentType: string,
+  contentDisposition: string,
+  format: string,
+): Promise<{ blob: Blob } | { error: string }> {
+  const mime = exportMime(format)
+  let blob = data instanceof Blob ? data : new Blob([data], { type: mime })
+  const ctype = String(contentType || '')
+  const hasFile = /filename/i.test(String(contentDisposition || ''))
+
+  // 成功导出会带 Content-Disposition；错误体多为 JSON 且无文件名
+  // json 成功也是 application/json，不能只靠 Content-Type：有文件名则直接当下载体
+  // csv/sql 若误标成 application/json（无文件名或错类型）也要能读出 message
+  const maybeErrorJSON = !hasFile || (ctype.includes('application/json') && format !== 'json')
+
+  if (maybeErrorJSON) {
+    const text = await blob.text()
+    try {
+      const parsed = JSON.parse(text)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && parsed.message) {
+        return { error: String(parsed.message) }
+      }
+    } catch {
+      /* csv/sql/json 文件正文 */
+    }
+    return { blob: new Blob([text], { type: ctype || mime }) }
+  }
+
+  // 有文件名的成功响应：统一补齐 MIME，避免浏览器把 json/sql 存成错误扩展名
+  if (!blob.type || blob.type === 'application/octet-stream') {
+    blob = new Blob([blob], { type: mime })
+  }
+  return { blob }
+}
+
 interface ApplyField {
   key: string
   label: string
@@ -525,7 +573,7 @@ export default function TicketDetail() {
 
   const wfExecSub = useMemo(() => {
     const s = item?.status
-    if (s === 'executed') return isDQL ? '已导出' : execSkipped ? '已跳过连库' : '已执行'
+    if (s === 'executed') return isDQL ? '已下载' : execSkipped ? '已跳过连库' : '已执行'
     if (s === 'failed') return '执行失败'
     if (s === 'running') return '后台执行中'
     if (s === 'approved')
@@ -673,12 +721,26 @@ export default function TicketDetail() {
     setDownloading(true)
     try {
       const it = itemRef.current
+      if (!it?.id) {
+        message.error('工单不存在')
+        return
+      }
       const res = await api.post(
         `/tickets/${it.id}/export`,
         { file_format: fileFormat },
         { responseType: 'blob', timeout: 120000 },
       )
-      const blob = res.data instanceof Blob ? res.data : new Blob([res.data])
+      const resolved = await resolveExportBlob(
+        res.data,
+        String(res.headers['content-type'] || ''),
+        String(res.headers['content-disposition'] || ''),
+        fileFormat,
+      )
+      if ('error' in resolved) {
+        message.error(resolved.error)
+        return
+      }
+      const { blob } = resolved
       const name = filenameFromHeader(
         res.headers['content-disposition'],
         `dql_export.${fileFormat}`,
@@ -691,7 +753,13 @@ export default function TicketDetail() {
       URL.revokeObjectURL(url)
       setFmtVisible(false)
       message.success('开始下载')
-      await load()
+      setDownloading(false)
+      void load()
+    } catch (e: any) {
+      /* axios interceptor already toasts most errors */
+      if (!e?.response) {
+        message.error(e?.message || '下载失败')
+      }
     } finally {
       setDownloading(false)
     }
@@ -1034,17 +1102,23 @@ export default function TicketDetail() {
                 ) : isDQL ? (
                   <div className="flow-card-body download-body">
                     <div className="download-row">
-                      <span className="exec-wait">点击下载</span>
+                      <span className={item.status === 'executed' ? 'status-text success' : 'exec-wait'}>
+                        {item.status === 'executed' ? '已下载' : '点击下载'}
+                      </span>
                       <Button
                         type="primary"
                         disabled={!canDownload}
                         loading={downloading}
                         onClick={openExport}
                       >
-                        下载
+                        {item.status === 'executed' ? '再次下载' : '下载'}
                       </Button>
                     </div>
-                    <div className="download-hint">仅限工单发起人可下载</div>
+                    {item.status === 'executed' ? (
+                      <div className="download-hint">{fmtTime(item.updated_at) || '可再次下载'}</div>
+                    ) : (
+                      <div className="download-hint">仅限工单发起人可下载</div>
+                    )}
                   </div>
                 ) : (
                   <div className="flow-card-body exec-body">

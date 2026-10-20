@@ -470,8 +470,8 @@ export default function CommonQuery() {
         const inst = instMap[db.instance_id] || {}
         const alias = dbTagText(db)
         const dbName = String(db.db_name || '')
-        // 主标题优先 alias/label（登记库约定）；有短名时 tag 展示真实库名
-        const label = alias || dbName
+        // 主标题为库名；有 alias/label 时 tag 展示短名
+        const label = dbName || alias
         return buildNode({
           id: db.id,
           label,
@@ -480,7 +480,7 @@ export default function CommonQuery() {
           dbId: db.id,
           env: resolveDbEnv(db, inst) || '未分组',
           dbType: inst.db_type,
-          tag: alias && alias !== dbName ? dbName : '',
+          tag: alias && alias !== dbName ? alias : '',
         }, false)
       })
       return buildNode(

@@ -207,17 +207,18 @@ func ExecQuery(ctx context.Context, inst *store.Instance, password, dbName, rawS
 	if err := isReadOnlyQuery(inst.DBType, rawSQL); err != nil {
 		return nil, err
 	}
-	return runQuery(ctx, inst, password, dbName, rawSQL, clampLimit(limit))
+	return runQuery(ctx, inst, password, dbName, rawSQL, clampLimit(limit), 0)
 }
 
 func ExecExport(ctx context.Context, inst *store.Instance, password, dbName, rawSQL string, limit int) (*QueryResult, error) {
 	if err := isReadOnlyQuery(inst.DBType, rawSQL); err != nil {
 		return nil, err
 	}
-	return runQuery(ctx, inst, password, dbName, rawSQL, clampExportLimit(limit))
+	// Postgres：会话级超时，避免慢查询拖死导出（HTTP 侧另有 context 超时）
+	return runQuery(ctx, inst, password, dbName, rawSQL, clampExportLimit(limit), 55*time.Second)
 }
 
-func runQuery(ctx context.Context, inst *store.Instance, password, dbName, rawSQL string, limit int) (*QueryResult, error) {
+func runQuery(ctx context.Context, inst *store.Instance, password, dbName, rawSQL string, limit int, stmtTimeout time.Duration) (*QueryResult, error) {
 	dbName = strings.TrimSpace(dbName)
 	if dbName == "" {
 		return nil, fmt.Errorf("库名不能为空")
@@ -230,7 +231,7 @@ func runQuery(ctx context.Context, inst *store.Instance, password, dbName, rawSQ
 	var out *QueryResult
 	switch family(dbType) {
 	case "postgres":
-		out, err = queryPostgres(ctx, host, inst.Port, user, password, dbName, rawSQL, limit)
+		out, err = queryPostgres(ctx, host, inst.Port, user, password, dbName, rawSQL, limit, stmtTimeout)
 	case "mysql":
 		out, err = queryMySQL(ctx, host, inst.Port, user, password, dbName, rawSQL, limit)
 	case "clickhouse":
@@ -423,7 +424,7 @@ func queryMySQL(ctx context.Context, host string, port int, user, password, dbNa
 	return scanQuery(ctx, db, rawSQL, limit)
 }
 
-func queryPostgres(ctx context.Context, host string, port int, user, password, dbName, rawSQL string, limit int) (*QueryResult, error) {
+func queryPostgres(ctx context.Context, host string, port int, user, password, dbName, rawSQL string, limit int, stmtTimeout time.Duration) (*QueryResult, error) {
 	db, err := openPostgres(host, port, user, password, dbName)
 	if err != nil {
 		return nil, err
@@ -431,6 +432,15 @@ func queryPostgres(ctx context.Context, host string, port int, user, password, d
 	defer db.Close()
 	if err := db.PingContext(ctx); err != nil {
 		return nil, err
+	}
+	if stmtTimeout > 0 {
+		ms := int(stmtTimeout / time.Millisecond)
+		if ms < 1 {
+			ms = 1
+		}
+		if _, err := db.ExecContext(ctx, fmt.Sprintf("SET statement_timeout = %d", ms)); err != nil {
+			return nil, fmt.Errorf("设置 statement_timeout: %w", err)
+		}
 	}
 	return scanQuery(ctx, db, rawSQL, limit)
 }

@@ -617,6 +617,52 @@ func (h *TicketHandler) prepareDQLSubmit(c *gin.Context, req *ticketSubmitReq) e
 	return nil
 }
 
+// fillIssueListMeta 补列表展示用的环境、数据库类型：优先实例，其次 sql_content。
+func fillIssueListMeta(st *store.DB, it *store.Issue, instCache map[string]*store.Instance) {
+	if it == nil {
+		return
+	}
+	if id := strings.TrimSpace(it.InstanceID); id != "" && st != nil {
+		inst, ok := instCache[id]
+		if !ok {
+			inst, _ = st.GetInstance(id)
+			instCache[id] = inst
+		}
+		if inst != nil {
+			it.Env = strings.TrimSpace(inst.IDC)
+			it.DBType = strings.TrimSpace(inst.DBType)
+		}
+	}
+	raw := strings.TrimSpace(it.SQLContent)
+	if raw == "" || raw[0] != '{' {
+		return
+	}
+	var obj map[string]any
+	if json.Unmarshal([]byte(raw), &obj) != nil {
+		return
+	}
+	if it.Env == "" {
+		for _, key := range []string{"idc_scope", "env", "idc"} {
+			if s, ok := obj[key].(string); ok {
+				if s = strings.TrimSpace(s); s != "" {
+					it.Env = s
+					break
+				}
+			}
+		}
+	}
+	if it.DBType == "" {
+		for _, key := range []string{"db_type", "dbType", "engine"} {
+			if s, ok := obj[key].(string); ok {
+				if s = strings.TrimSpace(s); s != "" {
+					it.DBType = s
+					break
+				}
+			}
+		}
+	}
+}
+
 func (h *TicketHandler) List(c *gin.Context) {
 	role := middleware.Role(c)
 	user := middleware.Username(c)
@@ -650,10 +696,12 @@ func (h *TicketHandler) List(c *gin.Context) {
 		}
 	}
 	names := tenantNameMap(h.Store)
+	instCache := map[string]*store.Instance{}
 	for i := range list {
 		if n := names[list[i].TenantID]; n != "" {
 			list[i].TenantName = n
 		}
+		fillIssueListMeta(h.Store, &list[i], instCache)
 	}
 	c.JSON(http.StatusOK, gin.H{"data": list})
 }

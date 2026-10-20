@@ -60,11 +60,13 @@ func (h *CDCHandler) List(c *gin.Context) {
 	if list == nil {
 		list = []store.CDCTask{}
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
-	h.orch().AnnotateReinit(ctx, list)
-	cancel()
+	// 对齐 Hub CdcSyncList：列表只读 DB，can_reinit 按状态规则；不在列表同步探测 Connect。
+	// connector_missing / Connect 存在性仍由 Get / reinit candidates 的 AnnotateReinit 负责。
 	for i := range list {
 		list[i].Description = normalizeCDCDescription(list[i].Description)
+		if ok, _ := cdc.ReinitEligibleStatus(&list[i]); ok {
+			list[i].CanReinit = true
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{"data": list})
 }

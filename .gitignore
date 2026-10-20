@@ -29,3 +29,8 @@ node_modules/
 /scripts/import_hub_cdc.sql
 /scripts/import_hub_cdc_all.sql
 /scripts/import_hub_cdc_versions.sql
+/scripts/import_hub_cdc_platform.sql
+/scripts/import_hub_cdc_platform.sql.init-patch.json
+/scripts/hub_export/
+/scripts/cdc/
+/scripts/hub_desktop_cdc/

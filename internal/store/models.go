@@ -155,6 +155,9 @@ type Issue struct {
 	Domain       string `json:"domain,omitempty"`
 	DatabaseID   string `json:"database_id,omitempty"`
 	DBName       string `json:"db_name"`
+	// Env / DBType 列表展示用，来自实例或 sql_content，非表列。
+	Env          string `json:"env,omitempty"`
+	DBType       string `json:"db_type,omitempty"`
 	SQLContent   string `json:"sql_content"`
 	Description  string `json:"description"`
 	Status       string `json:"status"`
