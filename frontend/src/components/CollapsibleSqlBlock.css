@@ -1,0 +1,75 @@
+.collapsible-sql {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
+
+.collapsible-sql-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.collapsible-sql-body {
+  margin: 0;
+  padding: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--app-text, #1f2937);
+  background: transparent;
+}
+
+.collapsible-sql-body.is-collapsed {
+  overflow: hidden;
+}
+
+.collapsible-sql-body.is-expanded {
+  max-height: 60vh;
+  overflow: auto;
+}
+
+.collapsible-sql-fade {
+  display: block;
+  width: 100%;
+  margin-top: -28px;
+  padding: 28px 0 4px;
+  border: 0;
+  background: linear-gradient(transparent, #fff 55%);
+  color: #1677ff;
+  font-size: 13px;
+  cursor: pointer;
+  text-align: center;
+  position: relative;
+  z-index: 1;
+}
+
+.collapsible-sql-fade:hover {
+  color: #4096ff;
+}
+
+.collapsible-sql .sql-kw {
+  color: #0550ae;
+  font-weight: 600;
+}
+
+.collapsible-sql .sql-str {
+  color: #0a7b3e;
+}
+
+.collapsible-sql .sql-cmt {
+  color: #8b949e;
+  font-style: italic;
+}
+
+.collapsible-sql .sql-num {
+  color: #a40e26;
+}
+
+.collapsible-sql .sql-id {
+  color: #6e40c9;
+}

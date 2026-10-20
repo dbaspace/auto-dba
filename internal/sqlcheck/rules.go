@@ -62,6 +62,7 @@ func LegacyRules(forbidDropDB, requireWhere bool) []Rule {
 			Rule{Name: "DMLRequireWhere", Value: "true"},
 		)
 	}
+	out = append(out, Rule{Name: "SQLRequireSemicolon", Value: "true", Label: "多语句必须以分号分隔"})
 	return out
 }
 
@@ -104,6 +105,14 @@ func CheckTicketWithRules(sqlContent, issueType, dbType string, rules []Rule) Re
 		if hit := checkMergeAlterTable(stmts, byName); hit != nil {
 			appendHit(&res, stmts[0], hit)
 			extras = append(extras, StatementRow{Stage: "static", ErrorLevel: hit.Level, Message: hit.Message, SQL: stmts[0], RuleID: hit.RuleID})
+		}
+	}
+	if enabled(byName, "SQLRequireSemicolon") {
+		msg := ruleMsg(byName, "SQLRequireSemicolon", "相邻语句之间缺少分号 ;")
+		for _, snip := range findMissingSemicolonSplits(sqlContent) {
+			hit := errID("SQLRequireSemicolon", msg)
+			appendHit(&res, snip, hit)
+			extras = append(extras, StatementRow{Stage: "static", ErrorLevel: hit.Level, Message: hit.Message, SQL: snip, RuleID: hit.RuleID})
 		}
 	}
 	res.Statements = append(res.Statements, extras...)

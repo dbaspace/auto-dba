@@ -1,9 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { Alert, AutoComplete, Button, Form, Input, Select, Space, message } from 'antd'
+import CheckResultFilterBar from '../../components/CheckResultFilterBar'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import type { ColumnsType } from 'antd/es/table'
 import api from '../../api/request'
+import { useCheckResultView } from '../../hooks/useCheckResultView'
 import { useWorkOrderDraft } from '../../hooks/useWorkOrderDraft'
 import { useAppDispatch, useAppSelector } from '../../store'
 import { goTicketListAndClose } from '../tickets/goTicketList'
@@ -322,7 +324,17 @@ export default function RedisOrder() {
     setCheckPassed(false)
   }, [form.command])
 
+  const {
+    filteredRows: checkViewRows,
+    levelFilter,
+    setLevelFilter,
+    counts: checkCounts,
+    pagination: checkPagination,
+    rowNo: checkRowNo,
+  } = useCheckResultView(checkRows)
+
   const checkColumns: ColumnsType<CheckRow> = [
+    { title: '序号', width: 64, render: (_: unknown, __: unknown, index: number) => checkRowNo(index) },
     { title: '阶段', dataIndex: 'stage', width: 80 },
     {
       title: '错误等级',
@@ -488,14 +500,19 @@ export default function RedisOrder() {
                 ? '检测未通过，请修改命令后重新检测'
                 : '请先点击「命令检测」并通过后，再提交'}
           </p>
+          <CheckResultFilterBar
+            value={levelFilter}
+            onChange={setLevelFilter}
+            counts={checkCounts}
+          />
           <ResponsiveTable
-            dataSource={checkRows}
+            dataSource={checkViewRows}
             columns={checkColumns}
             size="small"
             bordered
             rowKey={(_, i) => String(i)}
-            pagination={false}
-            locale={{ emptyText: '暂无检测结果' }}
+            pagination={checkPagination}
+            locale={{ emptyText: levelFilter === 'all' ? '暂无检测结果' : '当前状态下无记录' }}
           />
         </main>
       </div>

@@ -40,6 +40,8 @@ import {
 import axios from 'axios'
 import api from '../../api/request'
 import DbTypeIcon from '../../components/DbTypeIcon'
+import SqlEditor from '../../components/SqlEditor'
+import { formatSqlContent } from '../../utils/formatSql'
 import './CommonQuery.css'
 
 const DQL_DRAFT_KEY = 'auto-dba-dql-draft'
@@ -896,13 +898,16 @@ export default function CommonQuery() {
 
   function formatSQL() {
     if (!current) return
-    const sql = String(current.sql || '')
-      .replace(/\s+/g, ' ')
-      .replace(/\s*;\s*/g, ';\n')
-      .replace(/\b(SELECT|FROM|WHERE|AND|OR|JOIN|LEFT|RIGHT|INNER|GROUP BY|ORDER BY|LIMIT|UPDATE|SET|INSERT INTO|VALUES|ALTER TABLE|ADD|DROP|CREATE|GRANT|TO|SHOW|EXPLAIN)\b/gi, '\n$1')
-      .replace(/\n+/g, '\n')
-      .trim()
-    updateCurrent({ sql })
+    const result = formatSqlContent(String(current.sql || ''))
+    if (!result.ok) {
+      message.warning(result.error || 'SQL 美化失败')
+      return
+    }
+    if (result.unchanged) {
+      message.info('SQL 已是规范格式')
+      return
+    }
+    updateCurrent({ sql: result.text })
   }
 
   function onSqlKey(e: React.KeyboardEvent) {
@@ -1248,13 +1253,14 @@ export default function CommonQuery() {
                       {current?.tag ? <span>({current.tag})</span> : null}
                     </span>
                   </div>
-                  <textarea
+                  <SqlEditor
                     ref={sqlBoxRef}
                     value={current?.sql || ''}
-                    className="sql-box"
+                    className="sql-box-hl"
                     spellCheck={false}
+                    minRows={8}
                     placeholder="输入 SQL，Ctrl / ⌘ + Enter 运行；选中片段则只执行选中内容"
-                    onChange={(e) => updateCurrent({ sql: e.target.value })}
+                    onChange={(v) => updateCurrent({ sql: v })}
                     onKeyDown={onSqlKey}
                   />
                 </div>

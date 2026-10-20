@@ -1,0 +1,97 @@
+.sql-hl {
+  position: relative;
+  width: 100%;
+  border: 1px solid var(--app-border, #d9d9d9);
+  border-radius: 6px;
+  background: #fff;
+  overflow: hidden;
+}
+
+/* Ticket pages: fixed viewport height, both layers scroll together */
+.sql-hl-box {
+  height: max(calc(var(--sql-hl-min-rows, 16) * 1.6em + 16px), min(360px, 42vh));
+  max-height: min(520px, 55vh);
+  min-height: 200px;
+}
+
+.sql-hl-fill {
+  min-height: 0;
+  height: 100%;
+  flex: 1;
+}
+
+.sql-hl:focus-within {
+  border-color: #1677ff;
+  box-shadow: 0 0 0 2px rgba(22, 119, 255, 0.12);
+}
+
+.sql-hl-pre,
+.sql-hl-input {
+  margin: 0;
+  padding: 8px 11px;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  font-family: Menlo, Consolas, Monaco, monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  tab-size: 2;
+  border: 0;
+  outline: none;
+  overflow: auto;
+  resize: none;
+}
+
+.sql-hl-pre {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  color: var(--app-text, #1f2937);
+  background: transparent;
+  z-index: 0;
+}
+
+.sql-hl-input {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: transparent;
+  color: transparent;
+  caret-color: #111827;
+  -webkit-text-fill-color: transparent;
+}
+
+.sql-hl-input::placeholder {
+  color: #bfbfbf;
+  -webkit-text-fill-color: #bfbfbf;
+}
+
+.sql-hl-input::selection {
+  background: rgba(22, 119, 255, 0.28);
+  color: transparent;
+}
+
+.sql-kw {
+  color: #0550ae;
+  font-weight: 600;
+}
+
+.sql-str {
+  color: #0a7b3e;
+}
+
+.sql-cmt {
+  color: #8b949e;
+  font-style: italic;
+}
+
+.sql-num {
+  color: #a40e26;
+}
+
+.sql-id {
+  color: #6e40c9;
+}

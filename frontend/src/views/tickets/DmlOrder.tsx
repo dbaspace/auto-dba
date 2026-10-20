@@ -9,11 +9,13 @@ import {
   Tooltip,
   message,
 } from 'antd'
+import CheckResultFilterBar from '../../components/CheckResultFilterBar'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs, { Dayjs } from 'dayjs'
 import api from '../../api/request'
 import { dbLabel } from '../../utils/db'
+import { formatSqlContent } from '../../utils/formatSql'
 import { buildEnvOptions, EnvOption } from '../../utils/env'
 import {
   filterAccessDomainRows,
@@ -27,6 +29,8 @@ import {
   type DomainSource,
 } from '../../utils/instanceSource'
 import DbTypeIcon from '../../components/DbTypeIcon'
+import SqlEditor from '../../components/SqlEditor'
+import { useCheckResultView } from '../../hooks/useCheckResultView'
 import { useWorkOrderDraft } from '../../hooks/useWorkOrderDraft'
 import { useAppDispatch, useAppSelector } from '../../store'
 import { goTicketListAndClose } from './goTicketList'
@@ -358,20 +362,16 @@ export default function DmlOrder() {
 
   function beautify() {
     const sql = String(formRef.current.sql_content || '').trim()
-    if (!sql) {
-      message.warning('请填写 SQL')
+    const result = formatSqlContent(sql)
+    if (!result.ok) {
+      message.warning(result.error || 'SQL 美化失败')
       return
     }
-    const next = sql
-      .replace(/\s+/g, ' ')
-      .replace(/\s*;\s*/g, ';\n')
-      .replace(
-        /\b(SELECT|FROM|WHERE|AND|OR|JOIN|LEFT|RIGHT|INNER|GROUP BY|ORDER BY|LIMIT|UPDATE|SET|INSERT INTO|VALUES|ALTER TABLE|ADD|DROP|CREATE|GRANT|TO|DELETE|REPLACE)\b/gi,
-        '\n$1',
-      )
-      .replace(/\n+/g, '\n')
-      .trim()
-    patchForm({ sql_content: next })
+    if (result.unchanged) {
+      message.info('SQL 已是规范格式')
+      return
+    }
+    patchForm({ sql_content: result.text })
   }
 
   const { restoreDraft, saveNow: saveDraft, clearOnSubmitSuccess, schedulePersist } = useWorkOrderDraft({
@@ -549,7 +549,17 @@ export default function DmlOrder() {
     })
   }, [form, antdForm])
 
+  const {
+    filteredRows: checkViewRows,
+    levelFilter,
+    setLevelFilter,
+    counts: checkCounts,
+    pagination: checkPagination,
+    rowNo: checkRowNo,
+  } = useCheckResultView(checkRows)
+
   const checkColumns: ColumnsType<CheckRow> = [
+    { title: '序号', width: 64, render: (_: unknown, __: unknown, index: number) => checkRowNo(index) },
     { title: '阶段', dataIndex: 'stage', width: 100 },
     {
       title: '错误等级',
@@ -707,12 +717,12 @@ export default function DmlOrder() {
 
         <main className="order-main">
           <div className="sql-title">填写 SQL</div>
-          <Input.TextArea
+          <SqlEditor
             className="sql-editor"
-            autoSize={{ minRows: 16 }}
+            minRows={16}
             placeholder="UPDATE t SET c=1 WHERE id=1;"
             value={form.sql_content}
-            onChange={(e) => patchForm({ sql_content: e.target.value })}
+            onChange={(v) => patchForm({ sql_content: v })}
           />
           <div className="sql-actions">
             <Button type="primary" loading={checkLoading} disabled={checkLoading} onClick={check}>
@@ -721,14 +731,19 @@ export default function DmlOrder() {
             <Button onClick={beautify}>SQL美化</Button>
           </div>
           <p className="hint">编辑框内可检测、美化 SQL</p>
+          <CheckResultFilterBar
+            value={levelFilter}
+            onChange={setLevelFilter}
+            counts={checkCounts}
+          />
           <ResponsiveTable
-            dataSource={checkRows}
+            dataSource={checkViewRows}
             columns={checkColumns}
             size="small"
             bordered
             rowKey={(_, i) => String(i)}
-            pagination={false}
-            locale={{ emptyText: '暂无检测结果' }}
+            pagination={checkPagination}
+            locale={{ emptyText: levelFilter === 'all' ? '暂无检测结果' : '当前状态下无记录' }}
           />
         </main>
       </div>

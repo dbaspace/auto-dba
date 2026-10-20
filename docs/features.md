@@ -86,8 +86,8 @@ Client Secret（及 LDAP Bind 密码）用字段加密密钥落库（优先 `app
 | 页面 | 路径 | 说明 |
 |------|------|------|
 | 工单列表 | `/ops/tickets` | 全部工单的查询、审批与执行记录；展示申请原因、环境、数据库类型；DQL 导出完成后状态为「已下载」 |
-| DDL 工单 | `/ops/ddl` | 结构变更。提交前按审核规则做 SQL 检查，可看执行影响；可多选域名级数据源 |
-| DML 工单 | `/ops/dml` | 数据变更，同样走审核与审批。PostgreSQL DML 由平台包事务执行，脚本中的 `BEGIN`/`COMMIT`/`ROLLBACK` 会被忽略（避免与外层事务双重提交） |
+| DDL 工单 | `/ops/ddl` | 结构变更。提交前按审核规则做 SQL 检查（结果可按状态过滤、按屏分页），支持美化与关键字高亮；可看执行影响；可多选域名级数据源 |
+| DML 工单 | `/ops/dml` | 数据变更，同样走审核与审批；填写 SQL 支持美化/高亮，检测结果分页与状态过滤。PostgreSQL DML 由平台包事务执行，脚本中的 `BEGIN`/`COMMIT`/`ROLLBACK` 会被忽略（避免与外层事务双重提交） |
 | DQL 工单 | `/ops/dql` | 数据导出。左侧填环境、库、审批人和事由，右侧写查询 SQL |
 | Kafka 工单 | `/ops/kafka` | 创建或调整 Topic；地址选自域名管理（本租户可见），环境选自环境管理 |
 | Redis 工单 | `/ops/redis` | 按 Redis 命令规则提交变更；地址选自域名管理，环境选自环境管理 |
@@ -95,7 +95,7 @@ Client Secret（及 LDAP Bind 密码）用字段加密密钥落库（优先 `app
 | 平台资源申请 | `/ops/resource-apply` | 资源可见：申请库/域名/主机/集群对本租户可用（同租 ACL、跨租 grant、默认租户划拨）。库审核人：从本租成员多选用户写入所选库 `approvers`（私有库同步开通可见）；工单审批人仅限平台管理员与 `issue_global_approver_whitelist`。后两类可跨租查看/审批全平台该类工单（其它工单类型仍按租户隔离）。均审批后自动生效；不替代手工划拨与 DCL |
 | 新增数据库 | `/ops/createdb` | 在已登记实例上申请建库 |
 
-申请页支持草稿。DDL / DML 在执行前可生成影响说明。DDL / DML / 建库在审批通过或手动执行后先置「执行中」并立即返回，后台脱离 HTTP 超时执行；详情页轮询至成功或失败。大批量结果自动收敛（按库汇总计数、失败全留、成功抽样、清空冗长 success_sqls），防止结果 JSON 撑爆内存或落库失败。不抬高全局 HTTP WriteTimeout。执行失败、审批后仍待执行、以及长时间停在待执行，可按通知配置邮件告知提交人。
+申请页支持草稿。DDL / DML 在执行前可生成影响说明。详情「执行 SQL」默认折叠并支持复制；执行明细中失败语句保留全文。DDL / DML / 建库在审批通过或手动执行后先置「执行中」并立即返回，后台脱离 HTTP 超时执行；详情页轮询至成功或失败。大批量结果自动收敛（按库汇总计数、失败全留、成功抽样、清空冗长 success_sqls），防止结果 JSON 撑爆内存或落库失败。不抬高全局 HTTP WriteTimeout。执行失败、审批后仍待执行、以及长时间停在待执行，可按通知配置邮件告知提交人。多语句缺分号可由审核规则 `SQLRequireSemicolon` 拦截（默认开启）。
 
 ## 同步与迁移
 
@@ -125,7 +125,7 @@ Client Secret（及 LDAP Bind 密码）用字段加密密钥落库（优先 `app
 | 备份存储 | `/ops/backup/settings` | 本地/S3 存储池 |
 | 平台 Agent | `/config/agents` | 配置中心登记 / SSH 下发；归属 backup/rdb/ha，业务按归属引用 |
 
-物理备份（`physical_full` / `physical_incr`）强制 Agent：`pg_basebackup` / `xtrabackup`。PITR 恢复工单见后续迭代。
+物理备份（`physical_full` / `physical_incr`）强制 Agent：`pg_basebackup` / `xtrabackup`。**恢复工单**已落地（`/ops/backup/restore` → `backup_restore`）：逻辑 / 物理全量 / PITR（本机 WAL·binlog 目录 + 时间点）。详见 [roadmap-gap-fill.md](roadmap-gap-fill.md)、[backup.md](backup.md)。
 
 ### 数据闪回
 
@@ -158,7 +158,8 @@ Client Secret（及 LDAP Bind 密码）用字段加密密钥落库（优先 `app
 | 页面 | 路径 | 说明 |
 |------|------|------|
 | SQL 洞察 | `/ops/sql-insight` | 六 Tab：SQL洞察 / 洞察分析 / 可视汇总 / AWR报告 / 表空间分析 / 智能分析；壳上统一「设置」入口（`/config/sql-insight`）。写操作权限：活动快照采集 / AWR 生成 / 表空间采集 / 智能分析（见 rbac-permissions） |
-| 会话管理 | `/ops/sessions` | 查看会话与锁，可定时刷新，并结束异常会话 |
+| 会话管理 | `/ops/sessions` | 查看会话与锁，可定时刷新，并结束异常会话（PostgreSQL / MySQL 族） |
+| MySQL 慢 SQL | `/ops/mysql-slow` | performance_schema digest Top SQL（只读） |
 
 ## 告警管理
 
@@ -187,12 +188,12 @@ Client Secret（及 LDAP Bind 密码）用字段加密密钥落库（优先 `app
 | 集群管理 | `/k8s/clusters` | 纳管、探测、命名空间划拨 |
 | 集群概览 | `/k8s/overview` | 节点/Pod 水位与异常 |
 | 节点 | `/k8s/nodes` | 节点列表；cordon/drain |
-| 工作负载 | `/k8s/workloads` | Deploy/STS/Pod 等；日志、扩缩、重启 |
+| 工作负载 | `/k8s/workloads` | Deploy/STS/Pod 等；日志、扩缩、重启、Deployment 回滚 |
 | 网络 / 存储 | `/k8s/network` `/k8s/storage` | Service、PVC 等 |
 | 资源浏览器 | `/k8s/resources` | CRD 浏览、YAML apply |
-| Operator 中心 | `/k8s/operators` | 检测已装 Operator |
+| Operator 中心 | `/k8s/operators` | 检测已装，或由平台安装 |
 | 数据库服务 | `/k8s/db-clusters` | 模板化创建与运维，自动登记实例 |
-| Helm 应用 | `/k8s/apps` | 增强期占位 |
+| Helm 应用 | `/k8s/apps` | 只读列举 Helm release；install/upgrade 待 SDK |
 
 ## 平台运维
 
@@ -259,7 +260,7 @@ DBA 域配置管理门面：统一目录（含 SR/部署/代理/账号/CDC）、
 | 已登记库 | `/config/databases` | 登记业务库、审批人与可见范围；列表可按**环境 / 域名 / 库名**筛选；域名按库自身绑定展示；tags 约定 `alias=`（查询树短名，兼容 `label=`）、`idc=`、`domain=`；审计下可单条或**批量指定归属租户**（不迁实例） |
 | 域名管理 | `/config/domains` | 全引擎统一域名资源；按类型一键同步（`UNIQUE(domain,db_type)` 隔离）；新域名默认归属默认租户；审计下单条/批量指定租户；可授权跨租只读。支持按环境 Select 与域名/实例/环境关键字过滤。工单（DDL/DML/建库/权限申请/Redis/Kafka）与 Redis/Kafka 查询的地址按**本租户可见域名**列出；仅划拨域名即可查询父实例 |
 | 账号管理 | `/config/accounts` | 登记供权限申请和执行使用的数据库账号（随库租户） |
-| 审核规则 | `/config/review-rules` | DDL / DML 的 SQL 审核规则，以及 Redis 命令规则。PostgreSQL 时间字段等多值规则见 [review-rules.md](review-rules.md) |
+| 审核规则 | `/config/review-rules` | DDL / DML 的 SQL 审核规则，以及 Redis 命令规则。含多语句分号校验 `SQLRequireSemicolon`；PostgreSQL 时间字段等多值规则见 [review-rules.md](review-rules.md) |
 
 ## 配置中心
 

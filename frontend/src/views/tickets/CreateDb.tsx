@@ -1,10 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { Button, DatePicker, Form, Input, Select, Space, Tooltip, message } from 'antd'
+import CheckResultFilterBar from '../../components/CheckResultFilterBar'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import dayjs, { Dayjs } from 'dayjs'
 import api from '../../api/request'
 import { buildEnvOptions } from '../../utils/env'
+import { formatSqlContent } from '../../utils/formatSql'
 import {
   filterAccessDomainRows,
   parseSourceKey,
@@ -15,6 +17,8 @@ import {
   type DomainSource,
 } from '../../utils/instanceSource'
 import DbTypeIcon from '../../components/DbTypeIcon'
+import SqlEditor from '../../components/SqlEditor'
+import { useCheckResultView } from '../../hooks/useCheckResultView'
 import { useWorkOrderDraft } from '../../hooks/useWorkOrderDraft'
 import { useAppDispatch, useAppSelector } from '../../store'
 import { goTicketListAndClose } from './goTicketList'
@@ -129,6 +133,14 @@ export default function CreateDb() {
   )
 
   const checkHasError = checkRows.some((r) => String(r.error_level || '').toUpperCase() === 'ERROR')
+  const {
+    filteredRows: checkViewRows,
+    levelFilter,
+    setLevelFilter,
+    counts: checkCounts,
+    pagination: checkPagination,
+    rowNo: checkRowNo,
+  } = useCheckResultView(checkRows)
   const fingerprintMatches = lastCheckFp != null && lastCheckFp === checkFp
   const submitAllowed = fingerprintMatches && !checkHasError
   const submitDisabledReason =
@@ -218,18 +230,16 @@ export default function CreateDb() {
 
   function beautify() {
     const sql = String(form.sql_content || '').trim()
-    if (!sql) {
-      message.warning('请填写 SQL')
+    const result = formatSqlContent(sql)
+    if (!result.ok) {
+      message.warning(result.error || 'SQL 美化失败')
       return
     }
-    patchForm({
-      sql_content: sql
-        .replace(/\s+/g, ' ')
-        .replace(/\s*;\s*/g, ';\n')
-        .replace(/\b(CREATE DATABASE|IF NOT EXISTS)\b/gi, '\n$1')
-        .replace(/\n+/g, '\n')
-        .trim(),
-    })
+    if (result.unchanged) {
+      message.info('SQL 已是规范格式')
+      return
+    }
+    patchForm({ sql_content: result.text })
   }
 
   const { restoreDraft, saveNow: saveDraft, clearOnSubmitSuccess, schedulePersist } = useWorkOrderDraft({
@@ -524,13 +534,13 @@ export default function CreateDb() {
 
         <main className="order-main">
           <div className="sql-title">填写SQL</div>
-          <Input.TextArea
+          <SqlEditor
             className="sql-editor"
-            autoSize={{ minRows: 16 }}
+            minRows={16}
             placeholder="CREATE DATABASE newdb;"
             value={form.sql_content}
-            onChange={(e) => {
-              patchForm({ sql_content: e.target.value })
+            onChange={(v) => {
+              patchForm({ sql_content: v })
               resetCheck()
             }}
           />
@@ -541,14 +551,20 @@ export default function CreateDb() {
             <Button onClick={beautify}>SQL美化</Button>
           </div>
           <p className="hint">编辑框内可检测、美化 SQL。仅允许 CREATE DATABASE。</p>
+          <CheckResultFilterBar
+            value={levelFilter}
+            onChange={setLevelFilter}
+            counts={checkCounts}
+          />
           <ResponsiveTable
             rowKey={(_, i) => String(i)}
             size="small"
             bordered
-            dataSource={checkRows}
-            pagination={false}
-            locale={{ emptyText: '暂无检测结果' }}
+            dataSource={checkViewRows}
+            pagination={checkPagination}
+            locale={{ emptyText: levelFilter === 'all' ? '暂无检测结果' : '当前状态下无记录' }}
             columns={[
+              { title: '序号', width: 64, render: (_: unknown, __: unknown, index: number) => checkRowNo(index) },
               { title: '阶段', dataIndex: 'stage', width: 100 },
               {
                 title: '错误等级',

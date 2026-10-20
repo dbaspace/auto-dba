@@ -635,6 +635,116 @@ func SplitSQL(s string) []string {
 	return out
 }
 
+// findMissingSemicolonSplits 找出因缺分号而会被 SplitSQL 强制分段的边界摘要（不改变拆句行为）。
+func findMissingSemicolonSplits(s string) []string {
+	var snippets []string
+	var cur strings.Builder
+	inSingle := false
+	inDollar := false
+	parenDepth := 0
+
+	resetBuf := func() { cur.Reset() }
+
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !inDollar && c == '\'' && (i == 0 || s[i-1] != '\\') {
+			inSingle = !inSingle
+			cur.WriteByte(c)
+			continue
+		}
+		if !inSingle && i+1 < len(s) && c == '$' && s[i+1] == '$' {
+			inDollar = !inDollar
+			cur.WriteByte(c)
+			cur.WriteByte(s[i+1])
+			i++
+			continue
+		}
+		if !inSingle && !inDollar {
+			if c == '-' && i+1 < len(s) && s[i+1] == '-' {
+				i += 2
+				for i < len(s) && s[i] != '\n' && s[i] != '\r' {
+					i++
+				}
+				if i < len(s) {
+					cur.WriteByte(s[i])
+				}
+				continue
+			}
+			if c == '#' {
+				i++
+				for i < len(s) && s[i] != '\n' && s[i] != '\r' {
+					i++
+				}
+				if i < len(s) {
+					cur.WriteByte(s[i])
+				}
+				continue
+			}
+			if c == '/' && i+1 < len(s) && s[i+1] == '*' {
+				i += 2
+				for i+1 < len(s) && !(s[i] == '*' && s[i+1] == '/') {
+					i++
+				}
+				if i+1 < len(s) {
+					i++
+				}
+				continue
+			}
+			if c == '(' {
+				parenDepth++
+				cur.WriteByte(c)
+				continue
+			}
+			if c == ')' {
+				if parenDepth > 0 {
+					parenDepth--
+				}
+				cur.WriteByte(c)
+				continue
+			}
+			if c == ';' && parenDepth == 0 {
+				resetBuf()
+				continue
+			}
+			if parenDepth == 0 && bufferAtLineStart(cur.String()) && isWordByte(c) {
+				kw := matchStatementStartKeyword(s, i)
+				if kw != "" && strings.TrimSpace(cur.String()) != "" && !shouldSuppressMissingSemicolonSplit(cur.String(), kw, s, i) {
+					prev := strings.TrimSpace(stripSQLComments(cur.String()))
+					nextEnd := i
+					for nextEnd < len(s) && isWordByte(s[nextEnd]) {
+						nextEnd++
+					}
+					// 再多取一点后文，方便定位
+					tail := nextEnd
+					for n := 0; tail < len(s) && n < 48; n++ {
+						if s[tail] == '\n' {
+							break
+						}
+						tail++
+					}
+					snippets = append(snippets, missingSemicolonSnippet(prev, s[i:tail]))
+					resetBuf()
+				}
+			}
+		}
+		cur.WriteByte(c)
+	}
+	return snippets
+}
+
+func missingSemicolonSnippet(prev, next string) string {
+	prev = strings.TrimSpace(prev)
+	next = strings.TrimSpace(next)
+	const max = 72
+	if len(prev) > max {
+		prev = "…" + prev[len(prev)-max:]
+	}
+	if len(next) > max {
+		next = next[:max] + "…"
+	}
+	return prev + " ←缺少;→ " + next
+}
+
 func firstKeyword(sql string) string {
 	sql = strings.TrimSpace(stripSQLComments(sql))
 	if sql == "" {

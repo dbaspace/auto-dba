@@ -5,6 +5,7 @@ import ResponsiveTable from '../../components/ResponsiveTable'
 import api from '../../api/request'
 import { useAppDispatch, useAppSelector } from '../../store'
 import { closeTab, openTab, tabKey } from '../../store/tabsSlice'
+import CollapsibleSqlBlock from '../../components/CollapsibleSqlBlock'
 import DdlExecImpact from './DdlExecImpact'
 import './TicketDetail.css'
 
@@ -1235,7 +1236,7 @@ export default function TicketDetail() {
                   ) : f.kind === 'db-tag' ? (
                     <Tag color="blue">{f.value}</Tag>
                   ) : f.kind === 'sql' ? (
-                    <pre className="sql-pre">{f.value}</pre>
+                    <CollapsibleSqlBlock value={f.value} />
                   ) : f.kind === 'schedule' ? (
                     <Tag color="warning">{f.value}</Tag>
                   ) : (

@@ -194,6 +194,27 @@
   color: var(--app-text, #111827);
   background: transparent;
 }
+.sql-box-hl.sql-hl {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+}
+.sql-box-hl.sql-hl:focus-within {
+  border: none;
+  box-shadow: none;
+}
+.sql-box-hl .sql-hl-pre,
+.sql-box-hl .sql-hl-input {
+  min-height: 100%;
+  height: 100%;
+  padding: 0 20px 12px;
+  resize: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
 .hist-col {
   flex-shrink: 0;
   min-width: 0;

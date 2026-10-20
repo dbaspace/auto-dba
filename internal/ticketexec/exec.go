@@ -21,7 +21,8 @@ import (
 const (
 	// 单目标连库执行上限；大 SQL / 多语句需足够长，避免误杀后台任务
 	ddlTimeout = 2 * time.Hour
-	maxSQLLen  = 500
+	// 成功明细可截断以控制落库体积；失败明细必须保留全文便于排障
+	maxSQLLen = 8 << 10 // 8KiB
 )
 
 // AsyncAutoExecMaxWait 审批/手动触发后的后台总墙钟上限（多实例串行）
@@ -88,7 +89,8 @@ type SuccSQL struct {
 func ShouldAutoRun(issueType string) bool {
 	switch strings.ToLower(strings.TrimSpace(issueType)) {
 	case store.IssueTypeDDL, store.IssueTypeDML, store.IssueTypeCreateDB, store.IssueTypeHA,
-		store.IssueTypeSrCluster, store.IssueTypeDbDeploy, store.IssueTypeResourceApply, store.IssueTypeRedis:
+		store.IssueTypeSrCluster, store.IssueTypeDbDeploy, store.IssueTypeResourceApply, store.IssueTypeRedis,
+		store.IssueTypeK8sChange, store.IssueTypeBackupRestore:
 		return true
 	default:
 		return false
@@ -135,7 +137,7 @@ func EngineOf(dbType string) string {
 
 func Executable(dbType string) bool {
 	switch EngineOf(dbType) {
-	case "postgres", "starrocks":
+	case "postgres", "starrocks", "mysql":
 		return true
 	default:
 		return false
@@ -192,7 +194,7 @@ func Run(ctx context.Context, issueType string, sqlContent string, t Target) *Re
 	if !canExec {
 		res.Skipped = true
 		res.Success = true
-		res.Summary = "MySQL/TiDB 工单仅套审核规则，不自动连库执行（与 Hub 一致）"
+		res.Summary = "该引擎工单仅套审核规则，不自动连库执行"
 		res.Message = res.Summary
 		res.appendRecord(Record{
 			Host: t.Host, DB: t.DBName, Port: t.Port, Username: t.Username,
@@ -351,13 +353,14 @@ func (r *Result) appendSuccess(t Target, sqlText string, started, ended time.Tim
 	if !r.shouldKeepSuccessDetail(t.Host, t.DBName) {
 		return
 	}
-	disp := displaySQL(sqlText)
+	full := strings.TrimSpace(sqlText)
+	// SuccessSQLs 仅作辅助列表，可截断；Records 留给详情弹窗，保留全文（回滚后仍可看）
 	r.SuccessSQLs = append(r.SuccessSQLs, SuccSQL{
-		Host: t.Host, DB: t.DBName, SQL: disp, Order: len(r.SuccessSQLs) + 1,
+		Host: t.Host, DB: t.DBName, SQL: displaySQL(full), Order: len(r.SuccessSQLs) + 1,
 	})
 	r.appendRecord(Record{
 		Host: t.Host, DB: t.DBName, Port: t.Port, Username: t.Username,
-		SQL: disp, StartedAt: started.UTC().Format(time.RFC3339), EndedAt: ended.UTC().Format(time.RFC3339),
+		SQL: full, StartedAt: started.UTC().Format(time.RFC3339), EndedAt: ended.UTC().Format(time.RFC3339),
 		Status: "success", AffectedRow: affected,
 	})
 }
@@ -367,7 +370,8 @@ func (r *Result) appendFailure(t Target, sqlText string, started time.Time, err 
 	r.bumpTarget(t.Host, t.DBName, "failed")
 	r.appendRecord(Record{
 		Host: t.Host, DB: t.DBName, Port: t.Port, Username: t.Username,
-		SQL: displaySQL(sqlText), StartedAt: started.UTC().Format(time.RFC3339), EndedAt: nowRFC3339(),
+		// 失败语句保留全文，避免弹窗「查看」只能看到截断片段
+		SQL: strings.TrimSpace(sqlText), StartedAt: started.UTC().Format(time.RFC3339), EndedAt: nowRFC3339(),
 		Status: "failed", ErrorMessage: formatExecErr(err),
 	})
 }

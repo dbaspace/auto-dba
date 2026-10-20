@@ -36,7 +36,7 @@ type reviewPartitioned struct {
 
 func NormalizeReviewEngine(raw string) string {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "mysql", "tidb":
+	case "mysql", "tidb", "oceanbase":
 		return "mysql"
 	case "postgres", "postgresql", "pg":
 		return "postgres"
@@ -734,6 +734,7 @@ func defaultReviewRules() []reviewRuleSeed {
 		{reviewRuleSeed{Category: "ddl", Name: "DDLForbidDropTable", Label: "禁止或限制 DROP TABLE", Value: `{"mode":"forbid","suffix":"_del"}`}, both},
 		{reviewRuleSeed{Category: "ddl", Name: "DDLIndexNameSpec", Label: "索引命名规范（idx_/uk_ 前缀）", Value: "false"}, both},
 		{reviewRuleSeed{Category: "dml", Name: "DMLWhere", Label: "UPDATE/DELETE 必须有 WHERE", Value: `{"tautologies":["1=1","true"]}`}, both},
+		{reviewRuleSeed{Category: "dml", Name: "SQLRequireSemicolon", Label: "多语句必须以分号分隔", Value: "true"}, both},
 		{reviewRuleSeed{Category: "dml", Name: "DMLForbidTautology", Label: "禁止 WHERE 写 1=1", Value: "true"}, both},
 		{reviewRuleSeed{Category: "dml", Name: "DMLInsertMustSpecifyColumn", Label: "INSERT 必须指定列清单", Value: "true"}, both},
 		{reviewRuleSeed{Category: "ddl", Name: "DDLForbidTruncate", Label: "禁止 TRUNCATE", Value: `{"allow":false}`}, both},
