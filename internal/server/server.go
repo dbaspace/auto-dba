@@ -14,7 +14,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"auto-dba/internal/alert"
 	"auto-dba/internal/archive"
 	"auto-dba/internal/awr"
 	"auto-dba/internal/backup"
@@ -26,9 +25,10 @@ import (
 	"auto-dba/internal/dbmonitor"
 	"auto-dba/internal/flashback"
 	"auto-dba/internal/handler"
+	"auto-dba/internal/jobboot"
+	"auto-dba/internal/jobreg"
 	"auto-dba/internal/notify"
 	"auto-dba/internal/ossupload"
-	"auto-dba/internal/pgdiag"
 	"auto-dba/internal/pgspace"
 	"auto-dba/internal/redisrdb"
 	"auto-dba/internal/router"
@@ -142,6 +142,12 @@ func Run(cfg *config.Config, configPath string) {
 	authH := &handler.AuthHandler{Store: db, Cfg: cfg, Sessions: sessStore}
 	loginSessH := &handler.LoginSessionHandler{Store: db, Sessions: sessStore}
 	cdcH := &handler.CDCHandler{Store: db, Cfg: cfg, Secret: fieldCrypto}
+	jobReg := jobreg.New(db)
+	jobboot.RegisterPlatformJobs(jobReg, jobboot.Deps{
+		DB: db, Sessions: sessStore, PgSpace: pgSpaceSvc, AWR: awrSvc, SQLInsight: siSvc,
+		Migration: migEngine, Archive: arcEngine, Backup: bakEngine,
+		Ticket: ticketH, CDC: cdcH, AlertSecret: fieldCrypto, PgSecret: &cryptoLive,
+	})
 	deps := router.Deps{
 		Cfg:                cfg,
 		Auth:               authH,
@@ -153,6 +159,7 @@ func Run(cfg *config.Config, configPath string) {
 		Env:                &handler.EnvironmentHandler{Store: db},
 		Connector:          &handler.ConnectorHandler{Store: db},
 		Args:               &handler.GlobalArgHandler{Store: db},
+		Jobs:               &handler.JobsHandler{Reg: jobReg, Store: db},
 		Ticket:             ticketH,
 		CreateDB:           &handler.CreateDBHandler{Store: db, Secret: fieldCrypto},
 		Account:            &handler.AccountHandler{Store: db, Secret: fieldCrypto},
@@ -279,22 +286,11 @@ func Run(cfg *config.Config, configPath string) {
 
 	collectCtx, collectCancel := context.WithCancel(context.Background())
 	defer collectCancel()
-	sessionstore.StartReconcile(collectCtx, sessStore, db)
-	go pgdiag.StartCollector(collectCtx, db, &cryptoLive)
-	pgspace.StartDailyCron(collectCtx, pgSpaceSvc)
-	awr.StartDailyCron(collectCtx, awrSvc)
-	sqlinsight.StartDailyCron(collectCtx, siSvc)
-	migEngine.StartScheduler(collectCtx)
-	arcEngine.StartScheduler(collectCtx)
-	bakEngine.StartScheduler(collectCtx)
 	_ = flashback.Bootstrap(collectCtx)
 	if n := cdc.RecoverStaleReinit(db); n > 0 {
 		log.Printf("boot: recovered %d CDC task(s) stuck in reinitializing", n)
 	}
-	go handler.StartIssueAutoCancel(collectCtx, ticketH)
-	go handler.StartAwaitExecStuckNotify(collectCtx, ticketH)
-	go handler.StartSchemaDriftCron(collectCtx, cdcH)
-	alert.Start(collectCtx, db, alert.DefaultInterval, cryptoLive)
+	jobReg.Start(collectCtx)
 
 	addr := fmt.Sprintf("%s:%d", cfg.HTTP.Host, cfg.HTTP.Port)
 	srv := &http.Server{

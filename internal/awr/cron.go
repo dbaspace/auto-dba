@@ -57,26 +57,33 @@ func (s *Service) maybeFireDailyCron() {
 	}
 	cronLastFire = dayKey
 	log.Printf("awr: daily cron triggered (%s)", spec)
-
-	day := time.Now().UTC().AddDate(0, 0, -1)
-	processed, written, failed, err := s.RunGenerateJobSync(context.Background(), day, "system")
-	if err != nil {
+	if err := s.RunDailyCron(context.Background()); err != nil {
 		log.Printf("awr: daily generate failed: %v", err)
-	} else {
-		log.Printf("awr: daily generate done day=%s processed=%d written=%d failed=%d",
-			day.Format("2006-01-02"), processed, written, failed)
 	}
+}
 
+// RunDailyCron 执行每日 AWR 生成+清理（供 jobreg 调用）。
+func (s *Service) RunDailyCron(ctx context.Context) error {
+	if s == nil {
+		return nil
+	}
+	day := time.Now().UTC().AddDate(0, 0, -1)
+	processed, written, failed, err := s.RunGenerateJobSync(ctx, day, "system")
+	if err != nil {
+		return err
+	}
+	log.Printf("awr: daily generate done day=%s processed=%d written=%d failed=%d",
+		day.Format("2006-01-02"), processed, written, failed)
 	retention := s.retentionDays()
 	if retention > 0 {
-		if n, e := s.CleanupReports(context.Background(), retention); e != nil {
+		if n, e := s.CleanupReports(ctx, retention); e != nil {
 			log.Printf("awr: cleanup failed: %v", e)
 		} else if n > 0 {
 			log.Printf("awr: cleanup done deleted=%d retention_days=%d", n, retention)
 		}
 	}
-
-	s.dailyPush(context.Background(), day)
+	s.dailyPush(ctx, day)
+	return nil
 }
 
 func parseDailyCronHMS(spec string) (sec, min, hour int, ok bool) {

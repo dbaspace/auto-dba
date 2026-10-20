@@ -474,21 +474,26 @@ func max(a, b int) int {
 	return b
 }
 
-// StartScheduler 定时扫描启用策略（60s）。
+// StartScheduler 定时扫描启用策略（60s）。jobreg 接管后勿再调用。
 func (e *Engine) StartScheduler(ctx context.Context) {
 	tick := time.NewTicker(60 * time.Second)
 	go func() {
-		e.scanDue()
+		e.ScanDue()
 		for {
 			select {
 			case <-ctx.Done():
 				tick.Stop()
 				return
 			case <-tick.C:
-				e.scanDue()
+				e.ScanDue()
 			}
 		}
 	}()
+}
+
+// ScanDue 扫描到期备份策略（供 jobreg 调用）。
+func (e *Engine) ScanDue() {
+	e.scanDue()
 }
 
 func (e *Engine) scanDue() {

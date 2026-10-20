@@ -260,6 +260,9 @@ func (d *DB) seedRBAC(now string) error {
 	if err := d.ensureLoginSessionsMenu(now); err != nil {
 		return err
 	}
+	if err := d.ensureScheduledJobsMenu(now); err != nil {
+		return err
+	}
 	if err := d.ensureQueryAuditsMenu(now); err != nil {
 		return err
 	}
@@ -496,6 +499,8 @@ func defaultMenuIcon(id, path string) string {
 		return "coin"
 	case "m-cfg-ds-admin":
 		return "histogram"
+	case "m-cfg-scheduled-jobs":
+		return "clock"
 	case "m-cfg-db":
 		return "coin"
 	case "m-cfg-domains":
@@ -648,6 +653,7 @@ func (d *DB) seedMenus(now string) error {
 		{"m-cfg-monitor", "m-cfg-obs", "监控目标注册", "/config/monitor-targets", "um.sidebar.config-monitor-targets", "查看监控目标注册", "monitor", 1},
 		{"m-cfg-fe-admin", "m-cfg-obs", "FE管理", "/config/fe-admin", "um.sidebar.config-fe-admin", "查看 FE 管理", "coin", 2},
 		{"m-cfg-ds-admin", "m-cfg-obs", "海豚配置", "/config/ds-admin", "um.sidebar.config-ds-admin", "查看海豚配置", "histogram", 3},
+		{"m-cfg-scheduled-jobs", "m-cfg-obs", "定时任务", "/config/scheduled-jobs", "um.sidebar.config-scheduled-jobs", "查看与管理平台定时任务", "clock", 4},
 		{"m-db-config", "", "资源配置", "", "um.sidebar.db-config", "查看资源配置", "coin", 3},
 		{"m-cfg-inst", "m-db-config", "实例管理", "/config/instances", "um.sidebar.config-instances", "查看实例管理", "monitor", 1},
 		{"m-cfg-db", "m-db-config", "已登记库", "/config/databases", "um.sidebar.config-databases", "查看已登记库", "coin", 2},
@@ -1137,6 +1143,7 @@ func (d *DB) ensureConfigCenterGroups(now string) error {
 		{"m-cfg-monitor", "m-cfg-obs", 1},
 		{"m-cfg-fe-admin", "m-cfg-obs", 2},
 		{"m-cfg-ds-admin", "m-cfg-obs", 3},
+		{"m-cfg-scheduled-jobs", "m-cfg-obs", 4},
 	}
 	for _, leaf := range leaves {
 		exist, err := d.GetMenu(leaf.id)
@@ -1388,6 +1395,25 @@ func (d *DB) ensureLoginSessionsMenu(now string) error {
 		return err
 	}
 	// 跟父菜单「用户权限」已授权的角色一并开通；并保证 admin 有权
+	if err := d.GrantMenuFollowingParent(m.ID, m.ParentID); err != nil {
+		return err
+	}
+	return d.grantMenuToRoleCode(m.ID, "admin")
+}
+
+// ensureScheduledJobsMenu 配置中心 · 监控运维 · 定时任务。
+func (d *DB) ensureScheduledJobsMenu(now string) error {
+	if err := d.ensureConfigCenterGroups(now); err != nil {
+		return err
+	}
+	m := &Menu{
+		ID: "m-cfg-scheduled-jobs", ParentID: "m-cfg-obs", Title: "定时任务", Path: "/config/scheduled-jobs",
+		URN: "um.sidebar.config-scheduled-jobs", PermissionDesc: "查看与管理平台定时任务", Icon: "clock",
+		SortOrder: 4, Enabled: true, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := d.EnsureMenu(m); err != nil {
+		return err
+	}
 	if err := d.GrantMenuFollowingParent(m.ID, m.ParentID); err != nil {
 		return err
 	}

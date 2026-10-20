@@ -45,6 +45,7 @@ import Connectors from '../views/config/Connectors'
 import MonitorTargets from '../views/config/MonitorTargets'
 import FeAdmin from '../views/config/FeAdmin'
 import DsAdmin from '../views/config/DsAdmin'
+import ScheduledJobs from '../views/config/ScheduledJobs'
 import AuthConfig from '../views/config/AuthConfig'
 import ReviewRules from '../views/config/ReviewRules'
 import Instances from '../views/config/Instances'
@@ -246,6 +247,7 @@ export function TabPagePanel({ pathname, search }: { pathname: string; search?: 
       <Route path="/config/monitor-targets" element={<MonitorTargets />} />
       <Route path="/config/fe-admin" element={<FeAdmin />} />
       <Route path="/config/ds-admin" element={<DsAdmin />} />
+      <Route path="/config/scheduled-jobs" element={<ScheduledJobs />} />
       <Route path="/metadata/database/manage/connector" element={<Navigate to="/config/connectors" replace />} />
       <Route path="/config/databases" element={<Databases />} />
       <Route path="/config/domains" element={<AccessDomains />} />

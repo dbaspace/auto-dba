@@ -435,16 +435,21 @@ func (e *Engine) StartScheduler(ctx context.Context) {
 	tick := time.NewTicker(60 * time.Second)
 	go func() {
 		defer tick.Stop()
-		e.scanDue()
+		e.ScanDue()
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-tick.C:
-				e.scanDue()
+				e.ScanDue()
 			}
 		}
 	}()
+}
+
+// ScanDue 扫描到期归档任务（供 jobreg 调用）。
+func (e *Engine) ScanDue() {
+	e.scanDue()
 }
 
 func (e *Engine) scanDue() {

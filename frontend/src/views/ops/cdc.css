@@ -109,6 +109,13 @@
 .cdc-pager { display: flex; justify-content: flex-end; margin-top: 12px; }
 .muted { color: #8c8c8c; }
 .mb { margin-bottom: 12px; }
+.card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
 .mt { margin-top: 16px; }
 
 /* 工具栏用 Tailwind utility（styles.css 已启用） */
@@ -163,4 +170,32 @@
   border-radius: 8px;
   font-size: 13px;
   color: #595959;
+}
+
+/* 表映射明细：分表源表两列网格，避免 join 单行撑破布局 */
+.shard-src-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 12px;
+  row-gap: 4px;
+  margin-top: 4px;
+  max-width: 100%;
+}
+.shard-src-item {
+  font-size: 12px !important;
+  word-break: break-all;
+  white-space: normal;
+}
+.cdc-map-key-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.cdc-map-topic-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  max-width: 220px;
+  word-break: break-all;
 }

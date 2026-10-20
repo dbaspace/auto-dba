@@ -16,7 +16,7 @@ func StartSchemaDriftCron(ctx context.Context, h *CDCHandler) {
 	if h == nil || h.Store == nil {
 		return
 	}
-	runSchemaDriftScanOnce(ctx, h)
+	RunSchemaDriftScanOnce(ctx, h)
 	ticker := time.NewTicker(schemaDriftCronInterval)
 	defer ticker.Stop()
 	for {
@@ -24,12 +24,13 @@ func StartSchemaDriftCron(ctx context.Context, h *CDCHandler) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			runSchemaDriftScanOnce(ctx, h)
+			RunSchemaDriftScanOnce(ctx, h)
 		}
 	}
 }
 
-func runSchemaDriftScanOnce(parent context.Context, h *CDCHandler) {
+// RunSchemaDriftScanOnce 供 jobreg 调用。
+func RunSchemaDriftScanOnce(parent context.Context, h *CDCHandler) {
 	list, err := h.Store.ListCDCInTenant("", "", "init")
 	if err != nil {
 		log.Printf("cdc_schema_drift_cron: list: %v", err)

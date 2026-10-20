@@ -13,17 +13,7 @@ func StartAwaitExecStuckNotify(ctx context.Context, h *TicketHandler) {
 	if h == nil || h.Store == nil {
 		return
 	}
-	run := func() {
-		n, err := h.notifyStaleAwaitExecIssues(ctx, time.Now())
-		if err != nil {
-			log.Printf("await-exec stuck notify: %v", err)
-			return
-		}
-		if n > 0 {
-			log.Printf("await-exec stuck notify: sent %d", n)
-		}
-	}
-	run()
+	_, _ = RunAwaitExecStuckNotifyOnce(ctx, h)
 	ticker := time.NewTicker(12 * time.Minute)
 	defer ticker.Stop()
 	for {
@@ -31,9 +21,22 @@ func StartAwaitExecStuckNotify(ctx context.Context, h *TicketHandler) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			run()
+			_, _ = RunAwaitExecStuckNotifyOnce(ctx, h)
 		}
 	}
+}
+
+// RunAwaitExecStuckNotifyOnce 供 jobreg 调用。
+func RunAwaitExecStuckNotifyOnce(ctx context.Context, h *TicketHandler) (int, error) {
+	n, err := h.notifyStaleAwaitExecIssues(ctx, time.Now())
+	if err != nil {
+		log.Printf("await-exec stuck notify: %v", err)
+		return 0, err
+	}
+	if n > 0 {
+		log.Printf("await-exec stuck notify: sent %d", n)
+	}
+	return n, nil
 }
 
 func (h *TicketHandler) notifyStaleAwaitExecIssues(ctx context.Context, now time.Time) (int, error) {

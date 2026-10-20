@@ -59,19 +59,29 @@ func (s *Service) maybeFireDailyCron() {
 	}
 	cronLastFire = day
 	log.Printf("pg_space: daily cron triggered (%s)", spec)
-
-	if _, err := s.StartCollectJob(context.Background(), "", "", 0, "system"); err != nil {
+	if err := s.RunDailyCron(context.Background()); err != nil {
 		log.Printf("pg_space: scheduled collect failed: %v", err)
+	}
+}
+
+// RunDailyCron 执行每日采集+清理（供 jobreg 调用；调度判重由 jobreg ledger 负责）。
+func (s *Service) RunDailyCron(ctx context.Context) error {
+	if s == nil {
+		return nil
+	}
+	if _, err := s.StartCollectJob(ctx, "", "", 0, "system"); err != nil {
+		return err
 	}
 	retention := s.retentionDays()
 	if retention > 0 {
 		before := time.Now().UTC().AddDate(0, 0, -retention)
-		if n, err := s.Store.DeleteSpaceSnapshotsBefore(context.Background(), before); err != nil {
+		if n, err := s.Store.DeleteSpaceSnapshotsBefore(ctx, before); err != nil {
 			log.Printf("pg_space: cleanup failed: %v", err)
 		} else if n > 0 {
 			log.Printf("pg_space: cleanup done deleted=%d retention_days=%d", n, retention)
 		}
 	}
+	return nil
 }
 
 // parseDailyCronHMS 仅支持「秒 分 时 * * *」定点每日表达式。

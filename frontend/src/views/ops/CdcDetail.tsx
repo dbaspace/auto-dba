@@ -27,6 +27,12 @@ import api from '../../api/request'
 import CdcDebeziumConfigTab from './CdcDebeziumConfigTab'
 import CdcReinitModal from './CdcReinitModal'
 import PipelineVisualization, { PipelineNode } from './PipelineVisualization'
+import ShardSourceTablesGrid from './ShardSourceTablesGrid'
+import {
+  filterPublicationDisplayRows,
+  groupPublishedTablesByMappings,
+  type PublicationDisplayRow,
+} from './cdcPublication'
 import {
   approvalText,
   assignedToOf,
@@ -114,6 +120,7 @@ export default function CdcDetail() {
   const [pubSelected, setPubSelected] = useState<string[]>([])
   const [availablePubTables, setAvailablePubTables] = useState<string[]>([])
   const [syncedTables, setSyncedTables] = useState<string[]>([])
+  const [pubKeyword, setPubKeyword] = useState('')
   const [diffOpen, setDiffOpen] = useState(false)
   const [diffTarget, setDiffTarget] = useState<any>(null)
   const [diffCols, setDiffCols] = useState<any[]>([])
@@ -326,20 +333,23 @@ export default function CdcDetail() {
     ]
   }, [pipe, extra, task])
 
-  const pubTableRows = useMemo(() => {
-    const live = publication.tables || []
+  const publishedTableNames = useMemo(() => {
+    const live: string[] = (publication.tables || []).map((n: any) => String(n).trim()).filter(Boolean)
+    if (live.length) return live
     const rec = publication.task_tables || extra.tables || []
-    const set = new Set<string>()
-    const out: any[] = []
-    for (const n of live) {
-      set.add(String(n).toLowerCase())
-      out.push({ name: n, live: true })
-    }
-    for (const n of rec) {
-      if (!set.has(String(n).toLowerCase())) out.push({ name: n, live: false })
-    }
-    return out
+    return (Array.isArray(rec) ? rec : []).map((n: any) => String(n).trim()).filter(Boolean)
   }, [publication, extra])
+
+  const pubDisplayRows = useMemo(
+    () => groupPublishedTablesByMappings(publishedTableNames, tableRows),
+    [publishedTableNames, tableRows],
+  )
+
+  const pubFilteredRows = useMemo(
+    () => filterPublicationDisplayRows(pubDisplayRows, pubKeyword),
+    [pubDisplayRows, pubKeyword],
+  )
+
 
   function tableQuery() {
     return {
@@ -571,19 +581,22 @@ export default function CdcDetail() {
     })
   }
 
-  async function openPub(mode: 'add' | 'remove') {
+  async function openPub(mode: 'add' | 'remove', prefillTables?: string[]) {
     setPubMode(mode)
-    setPubTables('')
-    setPubSelected([])
     setPubReviewer('')
     setPubOpen(true)
     if (mode === 'add') {
+      setPubTables('')
+      setPubSelected([])
       const { data } = await api
         .get(`/cdc-sync/tasks/${task.id}/add-table/available-tables`)
         .catch(() => ({ data: {} as any }))
       setAvailablePubTables(data.data || [])
     } else {
-      setAvailablePubTables(syncedTables.length ? syncedTables : extra.tables || [])
+      const pref = (prefillTables || []).map((t) => String(t).trim()).filter(Boolean)
+      setPubSelected(pref)
+      setPubTables(pref.length ? pref.join(', ') : '')
+      setAvailablePubTables(syncedTables.length ? syncedTables : publishedTableNames)
     }
   }
 
@@ -726,29 +739,80 @@ export default function CdcDetail() {
     }
   }
 
+  const pubColumns: ColumnsType<PublicationDisplayRow> = [
+    {
+      title: '源表',
+      key: 'src',
+      render: (_, row) =>
+        row.kind === 'shard' ? (
+          <div>
+            <Tag color="purple">分表 {row.tables.length}</Tag>
+            {row.shard_pattern ? <code style={{ marginLeft: 4 }}>{row.shard_pattern}</code> : null}
+            <ShardSourceTablesGrid tables={row.tables} />
+          </div>
+        ) : (
+          <div>
+            <Tag color="blue">单表</Tag>{' '}
+            <code>{row.tables[0] || '—'}</code>
+          </div>
+        ),
+    },
+    {
+      title: '目标表',
+      key: 'target',
+      width: 180,
+      render: (_, row) => <code>{row.target_table || row.tables[0] || '—'}</code>,
+    },
+    {
+      title: '操作',
+      key: 'op',
+      width: 120,
+      render: (_, row) => (
+        <Button
+          type="link"
+          size="small"
+          danger
+          disabled={pending}
+          onClick={() => openPub('remove', row.tables)}
+        >
+          移除
+        </Button>
+      ),
+    },
+  ]
+
   const mapColumns: ColumnsType<any> = [
     {
       title: '源表',
       key: 'src',
-      width: 220,
-      render: (_, row) => (
-        <span>
-          {row.is_shard_group || (row.source_tables || []).length > 1 ? (
-            <Tag color="orange">分表 {(row.source_tables || []).length}</Tag>
-          ) : (
-            <Tag>单表</Tag>
-          )}
-          <code style={{ marginLeft: 6 }}>{(row.source_tables || [row.name]).join(', ')}</code>
-        </span>
-      ),
+      width: 320,
+      render: (_, row) => {
+        const srcs: string[] = row.source_tables?.length ? row.source_tables : row.name ? [row.name] : []
+        const isShard = !!(row.is_shard_group || srcs.length > 1)
+        return isShard ? (
+          <div>
+            <Tag color="orange">分表 {srcs.length}</Tag>
+            {row.shard_pattern ? <code style={{ marginLeft: 4 }}>{row.shard_pattern}</code> : null}
+            <ShardSourceTablesGrid tables={srcs} />
+          </div>
+        ) : (
+          <div>
+            <Tag color="blue">单表</Tag>{' '}
+            <code>{srcs[0] || '—'}</code>
+          </div>
+        )
+      },
     },
     {
       title: '目标表',
       key: 'tgt',
-      width: 140,
+      width: 160,
+      ellipsis: true,
       render: (_, row) => (
         <span>
-          <code style={{ color: row.status === 'deleted' ? '#909399' : undefined }}>{row.target_table}</code>
+          <code style={{ color: row.status === 'deleted' ? '#909399' : undefined, wordBreak: 'break-all' }}>
+            {row.target_table}
+          </code>
           {row.status === 'deleted' && <Tag style={{ marginLeft: 4 }}>已移除</Tag>}
         </span>
       ),
@@ -756,27 +820,34 @@ export default function CdcDetail() {
     {
       title: 'KEY 列',
       key: 'keys',
-      width: 140,
+      width: 160,
       render: (_, row) => {
         const ks = row.key_columns || row.primary_keys || []
         if (!ks.length) return <span style={{ color: '#c0c4cc' }}>—</span>
-        return ks.map((k: string) => (
-          <Tag key={k} style={{ marginRight: 4 }}>
-            {k}
-          </Tag>
-        ))
+        return (
+          <div className="cdc-map-key-wrap">
+            {ks.map((k: string) => (
+              <Tag key={k} style={{ margin: 0 }}>
+                {k}
+              </Tag>
+            ))}
+          </div>
+        )
       },
     },
     {
       title: 'Kafka Topic',
       key: 'topic',
-      width: 200,
+      width: 220,
       render: (_, row) =>
         (row.topic_names || []).length ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 12 }}>
+          <div className="cdc-map-topic-wrap">
             {row.topic_names.slice(0, 3).map((t: string) => (
               <code key={t}>{t}</code>
             ))}
+            {row.topic_names.length > 3 ? (
+              <span style={{ color: '#8c8c8c' }}>共 {row.topic_names.length} 个</span>
+            ) : null}
           </div>
         ) : (
           <span style={{ color: '#c0c4cc' }}>—</span>
@@ -798,19 +869,9 @@ export default function CdcDetail() {
     {
       title: 'Routine Load',
       key: 'rl',
-      width: 180,
+      width: 200,
       render: (_, row) => (
-        <span>
-          <code>{row.routine_load_name || '—'}</code>
-          {row.routine_load_status && (
-            <Tag
-              style={{ marginLeft: 6 }}
-              color={String(row.routine_load_status).toUpperCase() === 'RUNNING' ? 'success' : 'default'}
-            >
-              {row.routine_load_status}
-            </Tag>
-          )}
-        </span>
+        <code style={{ wordBreak: 'break-all', fontSize: 12 }}>{row.routine_load_name || '—'}</code>
       ),
     },
     {
@@ -997,7 +1058,10 @@ export default function CdcDetail() {
           setTab(k)
           if (k === 'logs') void loadLogs()
           if (k === 'tables') void ensureTablesLoaded()
-          if (k === 'publication') void ensurePublicationLoaded()
+          if (k === 'publication') {
+            void ensurePublicationLoaded()
+            void ensureTablesLoaded()
+          }
           if (k === 'pipeline') void ensurePipelineLoaded()
         }}
         items={[
@@ -1226,7 +1290,7 @@ export default function CdcDetail() {
             columns={mapColumns}
             dataSource={pagedTableRows}
             pagination={false}
-            scroll={{ x: 1090 }}
+            scroll={{ x: 'max-content' }}
             locale={{ emptyText: '暂无映射表' }}
           />
           <div className="cdc-pager">
@@ -1247,34 +1311,69 @@ export default function CdcDetail() {
       )}
 
       {tab === 'publication' && (
-        <Card
-          size="small"
-          className="cdc-card wide"
-          title={
-            <div className="card-head">
-              <span>Publication {publication.publication_name || extra.publication_name || ''}</span>
-              <Space>
-                <Button onClick={loadPublication}>刷新</Button>
-                {!pending && <Button onClick={() => openPub('add')}>追加表</Button>}
-                {!pending && (
-                  <Button danger onClick={() => openPub('remove')}>
-                    移除表
-                  </Button>
-                )}
-              </Space>
+        <Card size="small" className="cdc-card wide">
+          <div className="card-head" style={{ marginBottom: 12 }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: 12 }}>
+              <span>
+                Publication{' '}
+                <code>{publication.publication_name || extra.publication_name || '—'}</code>
+              </span>
+              {(publication.slot_name || extra.slot_name) && (
+                <span style={{ color: '#8c8c8c', fontSize: 12 }}>
+                  Slot: <code>{publication.slot_name || extra.slot_name}</code>
+                </span>
+              )}
+              <span style={{ color: '#8c8c8c', fontSize: 12 }}>
+                已发布 {publishedTableNames.length} 张表
+                {pubDisplayRows.length > 0 && pubDisplayRows.length < publishedTableNames.length
+                  ? `（${pubDisplayRows.length} 组）`
+                  : ''}
+                {pubKeyword.trim()
+                  ? ` · 显示 ${pubFilteredRows.length} / ${pubDisplayRows.length} 组`
+                  : ''}
+              </span>
             </div>
-          }
-        >
+            <Space wrap>
+              <Input.Search
+                allowClear
+                placeholder="搜索源表、目标表或分表模式"
+                style={{ width: 220 }}
+                value={pubKeyword}
+                onChange={(e) => setPubKeyword(e.target.value)}
+              />
+              <Button
+                onClick={() => {
+                  void loadPublication()
+                  void reloadTables()
+                }}
+              >
+                刷新
+              </Button>
+              {!pending && (
+                <Button type="primary" onClick={() => openPub('add')}>
+                  添加表
+                </Button>
+              )}
+              {!pending && (
+                <Button danger onClick={() => openPub('remove')}>
+                  移除表
+                </Button>
+              )}
+            </Space>
+          </div>
           {publication.message && <Alert type="warning" showIcon className="mb" message={publication.message} />}
           <ResponsiveTable
-            rowKey="name"
-            dataSource={pubTableRows}
-            pagination={false}
-            locale={{ emptyText: '暂无 Publication 表' }}
-            columns={[
-              { title: '表名', dataIndex: 'name' },
-              { title: '来源', width: 140, render: (_, r) => (r.live ? 'PG 实时' : '任务记录') },
-            ]}
+            rowKey="key"
+            size="small"
+            dataSource={pubFilteredRows}
+            columns={pubColumns}
+            pagination={{ pageSize: 15, showSizeChanger: false }}
+            locale={{
+              emptyText:
+                pubDisplayRows.length > 0 && pubKeyword.trim()
+                  ? '无匹配的已发布表'
+                  : '暂无 Publication 表',
+            }}
           />
         </Card>
       )}
@@ -1399,9 +1498,9 @@ export default function CdcDetail() {
         onOk={submitPub}
         destroyOnClose
       >
-        {pubMode === 'add' && availablePubTables.length > 0 && (
+        {availablePubTables.length > 0 && (
           <div style={{ marginBottom: 12 }}>
-            <div style={{ marginBottom: 6 }}>可选表</div>
+            <div style={{ marginBottom: 6 }}>{pubMode === 'add' ? '可选表' : '选择要移除的表'}</div>
             <Checkbox.Group
               value={pubSelected}
               onChange={(v) => setPubSelected(v as string[])}
@@ -1410,7 +1509,7 @@ export default function CdcDetail() {
           </div>
         )}
         <div style={{ marginBottom: 12 }}>
-          <div style={{ marginBottom: 6 }}>{pubMode === 'add' ? '或手动输入表名（逗号分隔）' : '表名（逗号分隔）'}</div>
+          <div style={{ marginBottom: 6 }}>{pubMode === 'add' ? '或手动输入表名（逗号分隔）' : '或手动输入表名（逗号分隔）'}</div>
           <Input.TextArea rows={3} placeholder="如 orders, users" value={pubTables} onChange={(e) => setPubTables(e.target.value)} />
         </div>
         <div>

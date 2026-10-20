@@ -49,6 +49,7 @@ import Connectors from '../views/config/Connectors'
 import MonitorTargets from '../views/config/MonitorTargets'
 import FeAdmin from '../views/config/FeAdmin'
 import DsAdmin from '../views/config/DsAdmin'
+import ScheduledJobs from '../views/config/ScheduledJobs'
 import AuthConfig from '../views/config/AuthConfig'
 import ReviewRules from '../views/config/ReviewRules'
 import Instances from '../views/config/Instances'
@@ -242,6 +243,7 @@ const router = createHashRouter([
       { path: 'config/monitor-targets', element: <MonitorTargets /> },
       { path: 'config/fe-admin', element: <FeAdmin /> },
       { path: 'config/ds-admin', element: <DsAdmin /> },
+      { path: 'config/scheduled-jobs', element: <ScheduledJobs /> },
       { path: 'metadata/database/manage/connector', element: <Navigate to="/config/connectors" replace /> },
       { path: 'config/databases', element: <Databases /> },
       { path: 'config/domains', element: <AccessDomains /> },

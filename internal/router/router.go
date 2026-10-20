@@ -28,6 +28,7 @@ type Deps struct {
 	Env                *handler.EnvironmentHandler
 	Connector          *handler.ConnectorHandler
 	Args               *handler.GlobalArgHandler
+	Jobs               *handler.JobsHandler
 	Ticket             *handler.TicketHandler
 	CreateDB           *handler.CreateDBHandler
 	Account            *handler.AccountHandler
@@ -435,6 +436,18 @@ func Init(e *gin.Engine, d Deps) {
 	secured.POST("/global-args", requireURN(store.URNArgsCreate), d.Args.Create)
 	secured.PUT("/global-args", requireURN(store.URNArgsEdit), d.Args.Update)
 	secured.DELETE("/global-args/:key", requireURN(store.URNArgsDelete), d.Args.Delete)
+
+	if d.Jobs != nil {
+		jg := secured.Group("/jobs")
+		jgURN := requireURN("um.sidebar.config-scheduled-jobs")
+		jg.GET("", jgURN, d.Jobs.List)
+		jg.GET("/cluster", jgURN, d.Jobs.Cluster)
+		jg.GET("/business-schedules", jgURN, d.Jobs.BusinessSchedules)
+		jg.GET("/:key", jgURN, d.Jobs.Get)
+		jg.PUT("/:key", jgURN, d.Jobs.Update)
+		jg.POST("/:key/trigger", jgURN, d.Jobs.Trigger)
+		jg.GET("/:key/runs", jgURN, d.Jobs.Runs)
+	}
 
 	t := secured.Group("/tickets")
 	t.GET("/targets", d.Ticket.GetTargets)

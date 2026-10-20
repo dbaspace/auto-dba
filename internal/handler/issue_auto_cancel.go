@@ -23,7 +23,7 @@ func StartIssueAutoCancel(ctx context.Context, h *TicketHandler) {
 	if h == nil || h.Store == nil {
 		return
 	}
-	runIssueAutoCancelOnce(ctx, h)
+	_ = RunIssueAutoCancelOnce(ctx, h)
 	ticker := time.NewTicker(issuePendingAutoCancelInterval)
 	defer ticker.Stop()
 	for {
@@ -31,20 +31,22 @@ func StartIssueAutoCancel(ctx context.Context, h *TicketHandler) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			runIssueAutoCancelOnce(ctx, h)
+			_ = RunIssueAutoCancelOnce(ctx, h)
 		}
 	}
 }
 
-func runIssueAutoCancelOnce(ctx context.Context, h *TicketHandler) {
+// RunIssueAutoCancelOnce 供 jobreg 调用。
+func RunIssueAutoCancelOnce(ctx context.Context, h *TicketHandler) error {
 	n, err := h.closeStalePendingIssues(ctx, time.Now())
 	if err != nil {
 		log.Printf("issue_pending_auto_cancel: %v", err)
-		return
+		return err
 	}
 	if n > 0 {
 		log.Printf("issue_pending_auto_cancel: closed=%d", n)
 	}
+	return nil
 }
 
 func (h *TicketHandler) closeStalePendingIssues(ctx context.Context, now time.Time) (int, error) {

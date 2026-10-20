@@ -11,8 +11,8 @@ import (
 
 // 启动引导版本：修改 migrate.go / seed.go 后请递增对应常量，否则已初始化库会跳过重跑。
 const (
-	SchemaVersion = "2026-10-16.user-sessions"
-	SeedVersion   = "2026-10-16.login-sessions-menu"
+	SchemaVersion = "2026-10-20.job-registry"
+	SeedVersion   = "2026-10-20.scheduled-jobs-menu"
 )
 
 const (
@@ -87,6 +87,9 @@ func (d *DB) migrateFast() error {
 			if err := d.ensureUserSessionsTable(); err != nil {
 				return err
 			}
+			if err := d.ensureJobRegTables(); err != nil {
+				return err
+			}
 			log.Printf("migrate: skip (schema_version=%s) in %s", SchemaVersion, time.Since(t0).Round(time.Millisecond))
 			return nil
 		}
@@ -134,6 +137,9 @@ func (d *DB) seedFast() error {
 			}
 			// 登录会话菜单须在 skip 路径幂等补齐
 			if err := d.ensureLoginSessionsMenu(now); err != nil {
+				return err
+			}
+			if err := d.ensureScheduledJobsMenu(now); err != nil {
 				return err
 			}
 			if err := d.SyncDefaultTenantMemberships(); err != nil {

@@ -91,6 +91,7 @@ export const PAGE_ROUTES = [
   { path: '/config/monitor-targets', title: '监控目标注册' },
   { path: '/config/fe-admin', title: 'FE管理' },
   { path: '/config/ds-admin', title: '海豚配置' },
+  { path: '/config/scheduled-jobs', title: '定时任务' },
   { path: '/config/databases', title: '已登记库' },
   { path: '/config/domains', title: '域名管理' },
   { path: '/config/accounts', title: '账号管理' },

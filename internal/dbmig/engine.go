@@ -347,23 +347,31 @@ func (e *Engine) StartScheduler(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-tick.C:
-				list, err := e.Store.ListDueScheduledMigrations()
-				if err != nil {
-					continue
-				}
-				for _, t := range list {
-					if !store.MigrationApproved(&t) {
-						continue
-					}
-					if err := e.Start(t.ID); err != nil {
-						e.logf(t.ID, "WARN", "定时启动失败: %s", err.Error())
-					} else {
-						e.logf(t.ID, "INFO", "定时任务已触发")
-					}
-				}
+				e.ScanDue()
 			}
 		}
 	}()
+}
+
+// ScanDue 扫描到期迁移任务（供 jobreg 调用）。
+func (e *Engine) ScanDue() {
+	if e == nil {
+		return
+	}
+	list, err := e.Store.ListDueScheduledMigrations()
+	if err != nil {
+		return
+	}
+	for _, t := range list {
+		if !store.MigrationApproved(&t) {
+			continue
+		}
+		if err := e.Start(t.ID); err != nil {
+			e.logf(t.ID, "WARN", "定时启动失败: %s", err.Error())
+		} else {
+			e.logf(t.ID, "INFO", "定时任务已触发")
+		}
+	}
 }
 
 func BuildObjects(engine, sourceDB, targetDB string, tables []string) []store.MigrationObject {

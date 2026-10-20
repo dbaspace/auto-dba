@@ -255,6 +255,7 @@ DBA 域配置管理门面：统一目录（含 SR/部署/代理/账号/CDC）、
 | 连接器 | `/config/connectors` | CDC、迁移等外部组件的连接信息。可按环境、Kafka 地址、Debezium 地址筛选 |
 | 平台 Agent | `/config/agents` | 平台级执行面登记 / 下发；备份、RDB、高可用按归属引用 |
 | FE 管理 | `/config/fe-admin` | StarRocks FE 运维凭据；「从监控同步」拉取任务/环境/域名/全部 FE 节点，账号密码事后编辑补全 |
+| 定时任务 | `/config/scheduled-jobs` | 平台周期任务统一管理：启停、改调度、立即执行、执行史、多副本租约；业务侧备份/归档/CMDB/迁移调度聚合深链（不替代海豚工作流） |
 | 对象存储 | `/config/oss` | 按环境 + 云产品维护；分片上传/断点续传/后台 SHA-256 校验。详见 [oss-upload.md](oss-upload.md) |
 
 ## 使用上的共同约束

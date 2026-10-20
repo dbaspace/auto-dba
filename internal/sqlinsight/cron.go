@@ -62,12 +62,21 @@ func (s *Service) maybeFireDailyCron() {
 	}
 	cronLastFire = day
 	log.Printf("sql_insight: daily cron triggered (%s)", spec)
-
-	prev := now.In(time.Local).AddDate(0, 0, -1)
-	prev = time.Date(prev.Year(), prev.Month(), prev.Day(), 0, 0, 0, 0, time.Local)
-	if _, err := s.ExecuteRun(context.Background(), prev, "", 0, "cron", "system", nil); err != nil {
+	if err := s.RunDailyCron(context.Background()); err != nil {
 		log.Printf("sql_insight: daily analysis failed: %v", err)
 	}
+}
+
+// RunDailyCron 执行前一日智能分析（供 jobreg 调用）。
+func (s *Service) RunDailyCron(ctx context.Context) error {
+	if s == nil {
+		return nil
+	}
+	now := time.Now()
+	prev := now.In(time.Local).AddDate(0, 0, -1)
+	prev = time.Date(prev.Year(), prev.Month(), prev.Day(), 0, 0, 0, 0, time.Local)
+	_, err := s.ExecuteRun(ctx, prev, "", 0, "cron", "system", nil)
+	return err
 }
 
 func (s *Service) cronEnabled() bool {

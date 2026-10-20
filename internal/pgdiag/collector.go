@@ -23,7 +23,7 @@ func StartCollector(ctx context.Context, meta *store.DB, appSecret *string) {
 		return
 	case <-time.After(firstDelay):
 	}
-	runOnce(ctx, meta, derefSecret(appSecret))
+	RunOnce(ctx, meta, derefSecret(appSecret))
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -31,7 +31,7 @@ func StartCollector(ctx context.Context, meta *store.DB, appSecret *string) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			runOnce(ctx, meta, derefSecret(appSecret))
+			RunOnce(ctx, meta, derefSecret(appSecret))
 		}
 	}
 }
@@ -43,7 +43,13 @@ func derefSecret(p *string) string {
 	return *p
 }
 
-func runOnce(ctx context.Context, meta *store.DB, appSecret string) {
+// RunOnce 执行一轮活动快照采集与清理（供 jobreg 调用）。
+func RunOnce(ctx context.Context, meta *store.DB, appSecret string) error {
+	runOnceInner(ctx, meta, appSecret)
+	return nil
+}
+
+func runOnceInner(ctx context.Context, meta *store.DB, appSecret string) {
 	res, warns, err := Collect(ctx, meta, appSecret, "")
 	if err != nil {
 		log.Printf("pg activity snapshot collect: %v", err)
