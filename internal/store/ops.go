@@ -246,32 +246,131 @@ func (d *DB) DeleteSlotsByName(name string) error {
 	return err
 }
 
-// ReplaceHostSlots 用本次采集结果替换同一实例主机（含域名和多地址）上的旧槽。
+// ReplaceHostSlots 用本次采集结果更新同一实例主机（含域名/多地址）上的槽：
+// 按 (host|alias, port, slot_name) 原地 UPDATE 保留 id；仅删除本次未再出现的槽。
 func (d *DB) ReplaceHostSlots(displayHost string, port int, aliases []string, slots []SyncSlot) error {
-	seen := map[string]struct{}{}
-	for _, h := range append([]string{displayHost}, aliases...) {
+	hosts := make([]string, 0, 1+len(aliases))
+	seenHost := map[string]struct{}{}
+	addHost := func(h string) {
+		h = strings.TrimSpace(h)
+		if h == "" {
+			return
+		}
+		key := strings.ToLower(h)
+		if _, ok := seenHost[key]; ok {
+			return
+		}
+		seenHost[key] = struct{}{}
+		hosts = append(hosts, h)
+	}
+	addHost(displayHost)
+	for _, h := range aliases {
+		addHost(h)
+	}
+	if len(hosts) == 0 {
+		return nil
+	}
+
+	keep := map[string]struct{}{}
+	now := time.Now().UTC().Format(time.RFC3339)
+	for i := range slots {
+		s := &slots[i]
+		s.Host = displayHost
+		s.Port = port
+		name := strings.TrimSpace(s.SlotName)
+		if name == "" {
+			continue
+		}
+		keep[strings.ToLower(name)] = struct{}{}
+		active := 0
+		if s.Active {
+			active = 1
+		}
+		existID := d.findSlotIDOnHosts(hosts, port, name)
+		if existID != "" {
+			_, err := d.Exec(`UPDATE tbl_sync_slots SET host=?, port=?, database_name=?, active=?, active_pid=?, restart_lsn=?, confirmed_flush_lsn=?, lag_bytes=?, plugin=?, updated_at=? WHERE id=?`,
+				displayHost, port, s.Database, active, s.ActivePID, s.RestartLSN, s.ConfirmedFlushLSN, s.LagBytes, s.Plugin, now, existID)
+			if err != nil {
+				return err
+			}
+			s.ID = existID
+			continue
+		}
+		s.ID = ""
+		if err := d.UpsertSlot(s); err != nil {
+			return err
+		}
+	}
+
+	// 删除同实例主机上本次未采集到的槽
+	for _, h := range hosts {
+		rows, err := d.Query(`SELECT id, slot_name FROM tbl_sync_slots WHERE host=? AND port=?`, h, port)
+		if err != nil {
+			return err
+		}
+		var drop []string
+		for rows.Next() {
+			var id, sn string
+			if err := rows.Scan(&id, &sn); err != nil {
+				rows.Close()
+				return err
+			}
+			if _, ok := keep[strings.ToLower(strings.TrimSpace(sn))]; !ok {
+				drop = append(drop, id)
+			}
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		for _, id := range drop {
+			if err := d.DeleteSlot(id); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (d *DB) findSlotIDOnHosts(hosts []string, port int, slotName string) string {
+	slotName = strings.TrimSpace(slotName)
+	if slotName == "" || port <= 0 {
+		return ""
+	}
+	for _, h := range hosts {
 		h = strings.TrimSpace(h)
 		if h == "" {
 			continue
 		}
-		key := strings.ToLower(h)
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		if _, err := d.Exec(`DELETE FROM tbl_sync_slots WHERE host=? AND port=?`, h, port); err != nil {
-			return err
+		var id string
+		err := d.QueryRow(`SELECT id FROM tbl_sync_slots WHERE host=? AND port=? AND slot_name=?`, h, port, slotName).Scan(&id)
+		if err == nil && strings.TrimSpace(id) != "" {
+			return id
 		}
 	}
-	for i := range slots {
-		slots[i].ID = ""
-		slots[i].Host = displayHost
-		slots[i].Port = port
-		if err := d.UpsertSlot(&slots[i]); err != nil {
-			return err
-		}
+	return ""
+}
+
+// GetSyncSlotByKey 按主机+端口+槽名取槽（稳定键，不受采集换 id 影响）。
+func (d *DB) GetSyncSlotByKey(host string, port int, slotName string) (*SyncSlot, error) {
+	host = strings.TrimSpace(host)
+	slotName = strings.TrimSpace(slotName)
+	if host == "" || port <= 0 || slotName == "" {
+		return nil, nil
 	}
-	return nil
+	s := &SyncSlot{}
+	var active int
+	err := d.QueryRow(`SELECT id, host, port, slot_name, database_name, active, COALESCE(active_pid,0), restart_lsn, COALESCE(confirmed_flush_lsn,''), COALESCE(lag_bytes,0), plugin, updated_at FROM tbl_sync_slots WHERE host=? AND port=? AND slot_name=?`,
+		host, port, slotName).
+		Scan(&s.ID, &s.Host, &s.Port, &s.SlotName, &s.Database, &active, &s.ActivePID, &s.RestartLSN, &s.ConfirmedFlushLSN, &s.LagBytes, &s.Plugin, &s.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	s.Active = active == 1
+	return s, nil
 }
 
 func (d *DB) CreateArchive(t *ArchiveTask) error {

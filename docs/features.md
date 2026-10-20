@@ -101,7 +101,7 @@ Client Secret（及 LDAP Bind 密码）用字段加密密钥落库（优先 `app
 
 | 页面 | 路径 | 说明 |
 |------|------|------|
-| 同步列表 | `/ops/slots` | 采集并查看 PostgreSQL 复制槽（pid、flush LSN、滞后字节）。可按状态、积压、域名、任务名筛选；支持手动采集（显示进度）。平台定时任务 `sync.slots.collect` 按全局参数 `slot_monitor_collect_interval_sec`（默认 60 秒）周期采集。建 CDC 任务只登记槽名，不覆盖已采集的 LSN |
+| 同步列表 | `/ops/slots` | 采集并查看 PostgreSQL 复制槽（pid、flush LSN、滞后字节）。可按状态、积压、域名、任务名筛选；支持手动采集（显示进度）。平台定时任务 `sync.slots.collect` 按全局参数 `slot_monitor_collect_interval_sec`（默认 60 秒）周期采集。建 CDC 任务只登记槽名，不覆盖已采集的 LSN。采集按 `(host/alias, port, slot_name)` **原地更新保留 id**，避免重启因 id 失效被跳过。**批量重启**（对齐 Hub）：提交 `items[{host,port,slot_name}]`（稳定键，兼容旧 `ids`）；确认后异步执行——先对业务库 `UPDATE tbl_heartbeat_table`，再 `POST .../connectors/{name}/tasks/0/restart`（不走 CDC 任务页的 includeTasks 全量重启）；页面显示重启进度。采集与重启互斥；操作日志写入 `tbl_sync_slot_op_logs` 持久化，同页「查看操作日志」可查看。不删除 PostgreSQL 复制槽 |
 | CDC 同步任务 | `/ops/cdc` | 创建、启动、停止同步任务，查看链路、表映射、加表与运行日志。列表 description 瘦身（`list_table_counts`）；运行中初始化任务按当前页探测链路；后台周期扫表结构差异。详情页签懒加载。Debezium Connector 缺失时可[重新初始化](cdc-reinit.md) |
 | 数据迁移 | `/ops/migration` | 库表或整库迁移，支持对象选择、预检、执行与校验 |
 | 表结构对比 | `/ops/migration/compare` | 同族实例异步对比结构，生成只增不删的修复 SQL |

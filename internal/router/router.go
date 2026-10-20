@@ -559,6 +559,8 @@ func Init(e *gin.Engine, d Deps) {
 	secured.POST("/sync-slots/collect", d.Slot.Collect)
 	secured.GET("/sync-slots/collect", d.Slot.CollectProgress)
 	secured.POST("/sync-slots/restart", d.Slot.Restart)
+	secured.GET("/sync-slots/restart", d.Slot.RestartProgress)
+	secured.GET("/sync-slots/logs", d.Slot.OpLogs)
 	secured.POST("/sync-slots/delete", d.Slot.Delete)
 
 	mig := secured.Group("/migration")

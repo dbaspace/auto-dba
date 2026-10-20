@@ -1540,6 +1540,9 @@ func (d *DB) ensureFlashbackSchema() error {
 	if err := d.ensureSyncSlotColumns(); err != nil {
 		return err
 	}
+	if err := d.ensureSyncSlotOpLogsTable(); err != nil {
+		return err
+	}
 	if err := d.ensureAccessDomainsTable(); err != nil {
 		return err
 	}

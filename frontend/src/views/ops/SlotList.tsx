@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Button, Input, InputNumber, Popconfirm, Progress, Select, Space, Tag, message } from 'antd'
+import { Button, Drawer, Input, InputNumber, Modal, Popconfirm, Progress, Select, Space, Tag, message } from 'antd'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import api from '../../api/request'
 import './SlotList.css'
@@ -16,15 +16,48 @@ type SlotRow = {
   confirmed_flush_lsn?: string
   lag_bytes?: number
   connector?: string
+  connector_name?: string
+  connect_base?: string
   task_name?: string
   topic?: string
   heartbeat?: string
+}
+
+type CollectJob = {
+  status?: string
+  percent?: number
+  message?: string
+  skipped?: number
+  started?: boolean
+}
+
+type RestartJob = {
+  status?: string
+  percent?: number
+  message?: string
+  current?: string
+  succeeded?: number
+  failed?: number
+  skipped?: number
+  started?: boolean
+  logs?: string[]
+}
+
+type OpLogRow = {
+  id?: string
+  kind?: string
+  line?: string
+  created_at?: string
 }
 
 function lagMB(bytes?: number) {
   const n = Number(bytes || 0) / 1024 / 1024
   if (!Number.isFinite(n) || n <= 0) return '0 MB'
   return `${n.toFixed(2)} MB`
+}
+
+function canRestart(row: SlotRow) {
+  return !!(row.connect_base || row.connector) && !!(row.connector_name || row.task_name)
 }
 
 export default function SlotList() {
@@ -37,8 +70,13 @@ export default function SlotList() {
   const [hostQ, setHostQ] = useState('')
   const [taskQ, setTaskQ] = useState('')
   const [applied, setApplied] = useState({ status: '', lag: null as number | null, host: '', task: '' })
-  const [job, setJob] = useState<{ status?: string; percent?: number; message?: string; skipped?: number; started?: boolean } | null>(null)
+  const [job, setJob] = useState<CollectJob | null>(null)
+  const [restartJob, setRestartJob] = useState<RestartJob | null>(null)
+  const [logOpen, setLogOpen] = useState(false)
+  const [opLogs, setOpLogs] = useState<OpLogRow[]>([])
+  const [opLogsLoading, setOpLogsLoading] = useState(false)
   const wasRunning = useRef(false)
+  const wasRestartRunning = useRef(false)
 
   const load = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true)
@@ -59,14 +97,43 @@ export default function SlotList() {
     return data?.status === 'running'
   }, [])
 
+  const pollRestart = useCallback(async () => {
+    const { data } = await api.get('/sync-slots/restart')
+    setRestartJob(data)
+    return data?.status === 'running'
+  }, [])
+
+  const loadOpLogs = useCallback(async () => {
+    setOpLogsLoading(true)
+    try {
+      const { data } = await api.get('/sync-slots/logs', { params: { limit: 800 } })
+      setOpLogs(data.data || [])
+    } catch {
+      setOpLogs([])
+    } finally {
+      setOpLogsLoading(false)
+    }
+  }, [])
+
   async function collect() {
-    const { data } = await api.post('/sync-slots/collect')
-    setJob(data)
-    if (data?.started && data?.status === 'running') {
-      message.info(data.message || '已开始采集')
-    } else if (data?.status === 'done' && data?.message) {
-      message.info(data.message)
-      await load(true)
+    if (restartJob?.status === 'running') {
+      message.warning('重启进行中，请等待完成后再采集')
+      return
+    }
+    try {
+      const { data } = await api.post('/sync-slots/collect')
+      setJob(data)
+      if (data?.started && data?.status === 'running') {
+        message.info(data.message || '已开始采集')
+      } else if (data?.status === 'running') {
+        message.warning(data.message || '采集进行中')
+      } else if (data?.message) {
+        message.info(data.message)
+        if (data?.status === 'done') await load(true)
+      }
+    } catch (e: unknown) {
+      const msg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message
+      message.error(msg || '启动采集失败')
     }
   }
 
@@ -76,10 +143,66 @@ export default function SlotList() {
     await load()
   }
 
-  async function restart(ids: string[]) {
-    const { data } = await api.post('/sync-slots/restart', { ids })
-    message.info(data.message || '已处理')
-    await load()
+  function confirmRestart(ids: string[]) {
+    if (job?.status === 'running') {
+      message.warning('采集进行中，请等待完成后再重启')
+      return
+    }
+    const records = rows.filter((r) => ids.includes(r.id))
+    if (!records.length) {
+      message.warning('请先勾选要重启的数据')
+      return
+    }
+    const invalid = records.filter((r) => !canRestart(r))
+    if (invalid.length) {
+      message.warning(`有 ${invalid.length} 条缺少 Kafka 连接器或任务名，无法重启，请调整勾选`)
+      return
+    }
+    const names = records.map((r) => r.task_name || r.connector_name || r.slot_name)
+    Modal.confirm({
+      title: `确认批量重启 ${records.length} 个同步任务？`,
+      content: (
+        <div>
+          <div style={{ marginBottom: 8 }}>将写业务库 heartbeat 并重启 Connect task 0；不删除 PostgreSQL 复制槽。</div>
+          <div style={{ maxHeight: 200, overflow: 'auto', fontSize: 12, color: 'rgba(0,0,0,0.65)' }}>
+            {names.map((n, i) => (
+              <div key={`${i}-${n}`}>{n}</div>
+            ))}
+          </div>
+        </div>
+      ),
+      okText: '确认重启',
+      cancelText: '取消',
+      onOk: () => startRestart(records),
+    })
+  }
+
+  async function startRestart(records: SlotRow[]) {
+    const items = records.map((r) => ({
+      id: r.id,
+      host: r.host,
+      port: r.port,
+      slot_name: r.slot_name,
+      database: r.database,
+    }))
+    try {
+      const { data } = await api.post('/sync-slots/restart', { items })
+      setRestartJob(data)
+      if (data?.started && data?.status === 'running') {
+        message.info(data.message || '已开始批量重启')
+        setLogOpen(true)
+        void loadOpLogs()
+      } else if (data?.status === 'running') {
+        message.warning(data.message || '重启进行中')
+        setLogOpen(true)
+        void loadOpLogs()
+      } else if (data?.message) {
+        message.info(data.message)
+      }
+    } catch (e: unknown) {
+      const msg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message
+      message.error(msg || '启动重启失败')
+    }
   }
 
   useEffect(() => {
@@ -87,14 +210,31 @@ export default function SlotList() {
     if (wasRunning.current && job?.status === 'done') {
       wasRunning.current = false
       message.info(job.message || '采集完成')
+      setSelected([])
       void load(true)
+      if (logOpen) void loadOpLogs()
     }
-  }, [job, load])
+  }, [job, load, logOpen, loadOpLogs])
+
+  useEffect(() => {
+    if (restartJob?.status === 'running') wasRestartRunning.current = true
+    if (wasRestartRunning.current && restartJob?.status === 'done') {
+      wasRestartRunning.current = false
+      const failed = Number(restartJob.failed || 0)
+      const ok = Number(restartJob.succeeded || 0)
+      if (failed === 0 && ok > 0) message.success(restartJob.message || '重启完成')
+      else if (ok === 0 && failed > 0) message.error(restartJob.message || '重启全部失败')
+      else message.warning(restartJob.message || '重启已结束')
+      void load(true)
+      void loadOpLogs()
+    }
+  }, [restartJob, load, loadOpLogs])
 
   useEffect(() => {
     void load()
     pollCollect().catch(() => {})
-  }, [load, pollCollect])
+    pollRestart().catch(() => {})
+  }, [load, pollCollect, pollRestart])
 
   useEffect(() => {
     if (job?.status !== 'running') return
@@ -116,6 +256,27 @@ export default function SlotList() {
     }
   }, [job?.status, pollCollect])
 
+  useEffect(() => {
+    if (restartJob?.status !== 'running') return
+    let timer = 0
+    let stop = false
+    async function tick() {
+      if (stop) return
+      try {
+        const running = await pollRestart()
+        if (logOpen) void loadOpLogs()
+        if (!stop && running) timer = window.setTimeout(tick, 1200)
+      } catch {
+        if (!stop) timer = window.setTimeout(tick, 2500)
+      }
+    }
+    timer = window.setTimeout(tick, 600)
+    return () => {
+      stop = true
+      window.clearTimeout(timer)
+    }
+  }, [restartJob?.status, pollRestart, logOpen, loadOpLogs])
+
   const shown = useMemo(() => {
     const host = applied.host.trim().toLowerCase()
     const task = applied.task.trim().toLowerCase()
@@ -131,6 +292,22 @@ export default function SlotList() {
       return true
     })
   }, [rows, applied])
+
+  const collectRunning = job?.status === 'running'
+  const restartRunning = restartJob?.status === 'running'
+  // line 已含「HH:MM:SS [采集|重启] …」，勿再叠 kind 前缀
+  const opLogText = useMemo(
+    () =>
+      opLogs
+        .map((row) => {
+          const ts = row.created_at ? `${row.created_at} ` : ''
+          return `${ts}${row.line || ''}`
+        })
+        .join('\n'),
+    [opLogs],
+  )
+  const liveRestartLogText = useMemo(() => (restartJob?.logs || []).join('\n'), [restartJob?.logs])
+  const showRestartInLog = !!(restartJob && restartJob.status && restartJob.status !== 'idle')
 
   return (
     <div className="ops-page slot-list">
@@ -185,11 +362,23 @@ export default function SlotList() {
             >
               重置
             </Button>
-            <Button loading={job?.status === 'running'} onClick={collect}>
+            <Button loading={collectRunning} disabled={restartRunning} onClick={collect}>
               手动采集
             </Button>
-            <Button disabled={!selected.length} onClick={() => restart(selected)}>
+            <Button
+              disabled={!selected.length || restartRunning || collectRunning}
+              loading={restartRunning}
+              onClick={() => confirmRestart(selected)}
+            >
               批量重启
+            </Button>
+            <Button
+              onClick={() => {
+                setLogOpen(true)
+                void loadOpLogs()
+              }}
+            >
+              查看操作日志
             </Button>
             <Popconfirm title="只删除同步列表记录，不删除 PostgreSQL 复制槽" onConfirm={() => remove(selected)} disabled={!selected.length}>
               <Button danger disabled={!selected.length}>
@@ -204,6 +393,9 @@ export default function SlotList() {
       </div>
       {job && job.status && job.status !== 'idle' ? (
         <div style={{ width: '100%', marginBottom: 8 }}>
+          <div className="hint" style={{ marginBottom: 4 }}>
+            采集进度
+          </div>
           <Progress
             percent={job.percent || 0}
             size="small"
@@ -248,6 +440,79 @@ export default function SlotList() {
           ]}
         />
       </div>
+      <Drawer
+        title="操作日志（采集 / 重启）"
+        open={logOpen}
+        onClose={() => setLogOpen(false)}
+        width={640}
+        extra={
+          <Space>
+            <Button size="small" loading={opLogsLoading} onClick={() => void loadOpLogs()}>
+              刷新
+            </Button>
+            <Button
+              size="small"
+              disabled={!opLogText && !liveRestartLogText}
+              onClick={() => {
+                const text = [liveRestartLogText, opLogText].filter(Boolean).join('\n\n')
+                void navigator.clipboard.writeText(text).then(
+                  () => message.success('已复制'),
+                  () => message.error('复制失败'),
+                )
+              }}
+            >
+              复制
+            </Button>
+          </Space>
+        }
+      >
+        {showRestartInLog ? (
+          <div style={{ marginBottom: 16 }}>
+            <div className="hint" style={{ marginBottom: 4 }}>
+              重启进度
+              {restartRunning ? '（进行中）' : ''}
+            </div>
+            <Progress
+              percent={restartJob?.percent || 0}
+              size="small"
+              status={
+                restartRunning
+                  ? 'active'
+                  : Number(restartJob?.failed || 0) > 0
+                    ? 'exception'
+                    : 'success'
+              }
+            />
+            <div className="hint" style={{ marginTop: 4 }}>
+              {restartJob?.message ||
+                (restartRunning ? `正在重启${restartJob?.current ? `：${restartJob.current}` : ''}` : '')}
+            </div>
+            {liveRestartLogText ? (
+              <pre
+                style={{
+                  margin: '8px 0 0',
+                  maxHeight: 220,
+                  overflow: 'auto',
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                  fontSize: 12,
+                  lineHeight: 1.5,
+                  background: 'rgba(0,0,0,0.02)',
+                  padding: 8,
+                }}
+              >
+                {liveRestartLogText}
+              </pre>
+            ) : null}
+          </div>
+        ) : null}
+        <div className="hint" style={{ marginBottom: 4 }}>
+          历史操作日志
+        </div>
+        <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 12, lineHeight: 1.5 }}>
+          {opLogsLoading && !opLogText ? '加载中…' : opLogText || '暂无操作日志（采集与重启会写入此处并持久化）'}
+        </pre>
+      </Drawer>
     </div>
   )
 }

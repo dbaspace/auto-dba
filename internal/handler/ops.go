@@ -821,6 +821,9 @@ type SlotHandler struct {
 
 	collectMu   sync.Mutex
 	collectJobs map[string]*slotCollectJob
+
+	restartMu   sync.Mutex
+	restartJobs map[string]*slotRestartJob
 }
 
 type slotCollectJob struct {
@@ -931,6 +934,18 @@ func (h *SlotHandler) beginSlotCollect(tid string) (
 		}
 	}
 	job = h.collectJob(tid)
+	if rj := h.restartJob(tid); rj != nil {
+		rj.mu.Lock()
+		restartBusy := rj.Status == "running"
+		rj.mu.Unlock()
+		if restartBusy {
+			job.mu.Lock()
+			view = job.viewLocked(false)
+			view.Message = "重启进行中，请等待完成后再采集"
+			job.mu.Unlock()
+			return job, nil, nil, nil, false, view, nil
+		}
+	}
 	job.mu.Lock()
 	if job.Status == "running" {
 		view = job.viewLocked(false)
@@ -973,7 +988,7 @@ func (h *SlotHandler) Collect(c *gin.Context) {
 		return
 	}
 	if started && len(insts) > 0 {
-		go h.runSlotCollect(context.Background(), job, insts, tasks, known)
+		go h.runSlotCollect(context.Background(), tid, job, insts, tasks, known)
 	}
 	c.JSON(http.StatusOK, snap)
 }
@@ -995,16 +1010,18 @@ func RunSlotCollectOnce(parent context.Context, h *SlotHandler) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	h.runSlotCollect(ctx, job, insts, tasks, known)
+	h.runSlotCollect(ctx, "", job, insts, tasks, known)
 	return nil
 }
 
-func (h *SlotHandler) runSlotCollect(parent context.Context, job *slotCollectJob, insts []store.Instance, tasks []store.CDCTask, known []store.SyncSlot) {
+func (h *SlotHandler) runSlotCollect(parent context.Context, tid string, job *slotCollectJob, insts []store.Instance, tasks []store.CDCTask, known []store.SyncSlot) {
 	if parent == nil {
 		parent = context.Background()
 	}
 	ctx, cancel := context.WithTimeout(parent, 10*time.Minute)
 	defer cancel()
+
+	h.persistSlotOpLog(tid, store.SyncSlotOpCollect, formatSlotOpLine("采集", fmt.Sprintf("开始采集，共 %d 个实例", len(insts))))
 
 	const workers = 4
 	sem := make(chan struct{}, workers)
@@ -1039,6 +1056,7 @@ func (h *SlotHandler) runSlotCollect(parent context.Context, job *slotCollectJob
 			note := ""
 			nSlots := 0
 			fail := false
+			var slotNames []string
 			if qerr != nil {
 				fail = true
 				note = fmt.Sprintf("%s 采集失败：%s", target, qerr.Error())
@@ -1047,16 +1065,32 @@ func (h *SlotHandler) runSlotCollect(parent context.Context, job *slotCollectJob
 				note = fmt.Sprintf("%s 写入失败：%s", target, err.Error())
 			} else {
 				nSlots = len(slots)
+				for _, s := range slots {
+					if sn := strings.TrimSpace(s.SlotName); sn != "" {
+						slotNames = append(slotNames, sn)
+					}
+				}
 			}
 
+			logLine := ""
 			mu.Lock()
 			if fail {
 				skipped++
 				if note != "" {
 					notes = append(notes, note)
+					logLine = formatSlotOpLine("采集", note)
 				}
 			} else {
 				collected += nSlots
+				detail := fmt.Sprintf("%s 采集成功：%d 个槽", target, nSlots)
+				if len(slotNames) > 0 {
+					shown := slotNames
+					if len(shown) > 8 {
+						shown = append(append([]string{}, slotNames[:8]...), fmt.Sprintf("…共%d个", len(slotNames)))
+					}
+					detail += " [" + strings.Join(shown, ", ") + "]"
+				}
+				logLine = formatSlotOpLine("采集", detail)
 			}
 			// 与 job 进度同一把锁顺序：先 mu 再 job.mu，避免 Collected 被并发写乱序覆盖
 			job.mu.Lock()
@@ -1068,6 +1102,9 @@ func (h *SlotHandler) runSlotCollect(parent context.Context, job *slotCollectJob
 			}
 			job.mu.Unlock()
 			mu.Unlock()
+			if logLine != "" {
+				h.persistSlotOpLog(tid, store.SyncSlotOpCollect, logLine)
+			}
 		}()
 	}
 	wg.Wait()
@@ -1098,6 +1135,7 @@ func (h *SlotHandler) runSlotCollect(parent context.Context, job *slotCollectJob
 	job.Message = msg
 	job.FinishedAt = time.Now().Format("2006-01-02 15:04:05")
 	job.mu.Unlock()
+	h.persistSlotOpLog(tid, store.SyncSlotOpCollect, formatSlotOpLine("采集", msg))
 }
 
 func slotDBNames(inst *store.Instance, tasks []store.CDCTask, slots []store.SyncSlot) []string {
@@ -1159,59 +1197,6 @@ func (h *SlotHandler) Delete(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true, "deleted": deleted})
-}
-
-func (h *SlotHandler) Restart(c *gin.Context) {
-	ids := slotIDs(c)
-	if len(ids) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "id 必填"})
-		return
-	}
-	tid := effectiveListTenantID(h.Store, c)
-	tasks, err := h.Store.ListCDCInTenant(tid, "", "")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
-		return
-	}
-	insts, err := h.Store.ListInstancesInTenant(tid, "", "")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
-		return
-	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Minute)
-	defer cancel()
-	restarted, skipped := 0, 0
-	var notes []string
-	for _, id := range ids {
-		ok, err := h.Store.GetSlotInTenant(id, tid)
-		if err != nil || !ok {
-			skipped++
-			continue
-		}
-		slot, err := h.Store.GetSyncSlot(id)
-		if err != nil || slot == nil {
-			skipped++
-			continue
-		}
-		rows := cdc.AttachSlotCDC([]store.SyncSlot{*slot}, tasks, insts)
-		if len(rows) == 0 || rows[0].ConnectorName == "" || rows[0].ConnectBase == "" {
-			skipped++
-			continue
-		}
-		if err := cdc.RestartDebeziumConnector(ctx, rows[0].ConnectBase, rows[0].ConnectorName); err != nil {
-			notes = append(notes, rows[0].ConnectorName+"："+err.Error())
-			continue
-		}
-		restarted++
-	}
-	msg := fmt.Sprintf("已重启 %d 个连接器", restarted)
-	if skipped > 0 {
-		msg += fmt.Sprintf("，跳过 %d 条未匹配连接器的记录", skipped)
-	}
-	if len(notes) > 0 {
-		msg += "；失败：" + strings.Join(notes, "；")
-	}
-	c.JSON(http.StatusOK, gin.H{"ok": restarted > 0 || len(notes) == 0, "restarted": restarted, "skipped": skipped, "message": msg})
 }
 
 func slotIDs(c *gin.Context) []string {
