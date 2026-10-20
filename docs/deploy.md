@@ -27,13 +27,13 @@ KeePlus（进程 `auto-dba`）支持多种打包方式。**构建在有 Node 18+
 
 一体包与后端包解压后工作目录须为**包根**（存在 `deploy/node-agent/bin/node-agent` 等），集群部署 SSH 下发无需再本机构建 Agent。
 
-可选环境变量：`GOOS` `GOARCH`（默认 `linux`/`amd64`）、`STAMP`（默认时间戳；发版用 `STAMP=v1.12.19`）、`IMAGE_TAG`、`SKIP_PNPM_INSTALL=1`（已有 `node_modules` 时）。
+可选环境变量：`GOOS` `GOARCH`（默认 `linux`/`amd64`）、`STAMP`（默认时间戳；发版用 `STAMP=v1.12.20`）、`IMAGE_TAG`、`SKIP_PNPM_INSTALL=1`（已有 `node_modules` 时）。
 
 ```bash
-STAMP=v1.12.19 ./scripts/pack_release.sh all
-STAMP=v1.12.19 ./scripts/pack_release.sh backend
-STAMP=v1.12.19 ./scripts/pack_release.sh frontend
-IMAGE_TAG=auto-dba:v1.12.19 ./scripts/pack_release.sh docker
+STAMP=v1.12.20 ./scripts/pack_release.sh all
+STAMP=v1.12.20 ./scripts/pack_release.sh backend
+STAMP=v1.12.20 ./scripts/pack_release.sh frontend
+IMAGE_TAG=auto-dba:v1.12.20 ./scripts/pack_release.sh docker
 ```
 
 ## 发布到 GitHub Release（固定流程）
@@ -46,13 +46,13 @@ IMAGE_TAG=auto-dba:v1.12.19 ./scripts/pack_release.sh docker
 # 已 push 的提交 + 写好 docs/changelog-vX.Y.Z.md 后：
 
 # 推荐：打包 + 打 tag + 创建 Release（一体包）
-PACK=1 ./scripts/publish_github_release.sh v1.12.19
+PACK=1 ./scripts/publish_github_release.sh v1.12.20
 
-# 已有 dist/*-v1.12.19.tgz 时只发版
-./scripts/publish_github_release.sh v1.12.19
+# 已有 dist/*-v1.12.20.tgz 时只发版
+./scripts/publish_github_release.sh v1.12.20
 
 # 发版前顺带删若干旧 Release（不删受仓库 Rules 保护的 tag）
-DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12.19
+DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12.20
 ```
 
 前提：本机能 `git push origin HEAD`；已安装 `gh`。若 Keychain 无凭据，先手动 push 一次或导出 `GH_TOKEN=...`。
@@ -61,7 +61,8 @@ DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12
 
 | 版本 | 要点 |
 |------|------|
-| [v1.12.19](changelog-v1.12.19.md) | **当前推荐**。CDC 列表按页探测链路；工单列表补环境/类型；DQL 已下载与导出超时 |
+| [v1.12.20](changelog-v1.12.20.md) | **当前推荐**。CDC 详情页签标题；任务 id 支持 Hub 迁移非 UUID |
+| [v1.12.19](changelog-v1.12.19.md) | CDC 列表按页探测链路；工单列表补环境/类型；DQL 已下载与导出超时 |
 | [v1.12.18](changelog-v1.12.18.md) | 复制槽真实采集与筛选；CDC 按页签筛状态；连接器与用户名搜索；显示名去掉工号 |
 | [v1.12.17](changelog-v1.12.17.md) | 用户管理同步飞书身份；工单私聊不再用企业邮箱 |
 | [v1.12.16](changelog-v1.12.16.md) | 工单提交回列表并关页签；SMTP 支持 LOGIN 与发信限速 |

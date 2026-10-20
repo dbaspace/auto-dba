@@ -446,9 +446,20 @@ export default function CdcList() {
       width: 200,
       fixed: 'left',
       ellipsis: true,
-      render: (_: any, row: any) => (
-        <a onClick={() => navigate('/ops/cdc/' + row.id)}>{row.name || '(未命名)'}</a>
-      ),
+      render: (_: any, row: any) => {
+        const href = '/ops/cdc/' + row.id
+        return (
+          <a
+            href={href}
+            onClick={(e) => {
+              e.preventDefault()
+              navigate(href)
+            }}
+          >
+            {row.name || '(未命名)'}
+          </a>
+        )
+      },
     })
   }
   if (colOn('type')) {

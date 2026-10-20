@@ -1,8 +1,11 @@
 const META_PREFIX = '-- auto-dba-cdc:'
-const TASK_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+/** 与前端路由静态段冲突的 id（如 /ops/cdc/create） */
+const CDC_RESERVED_IDS = new Set(['create'])
 
 export function isValidCdcTaskID(id: any): boolean {
-  return TASK_ID_RE.test(String(id || '').trim())
+  const s = String(id || '').trim()
+  if (!s || /[/?#]/.test(s)) return false
+  return !CDC_RESERVED_IDS.has(s.toLowerCase())
 }
 
 export function normalizeKafkaBootstrap(s: any): string {

@@ -41,6 +41,13 @@ function ticketDetailTitle(path: string): string {
   return /^\/ops\/tickets\/[^/]+$/.test(normPath(path)) ? '工单详情' : ''
 }
 
+/** /ops/cdc/:id → CDC 任务详情（排除 create，勿沿用「CDC 同步任务」） */
+function cdcDetailTitle(path: string): string {
+  const p = normPath(path)
+  if (p === '/ops/cdc/create') return ''
+  return /^\/ops\/cdc\/[^/]+$/.test(p) ? 'CDC 任务详情' : ''
+}
+
 /** 数据查询等固定页：菜单短名会被 PAGE_ROUTES 纠正（勿作用于 /config/instances?db_type=） */
 const QUERY_TAB_ROUTE_PATHS = new Set(['/ops/redis-query', '/ops/kafka-query', '/ops/query'])
 
@@ -52,6 +59,8 @@ export function resolveOpenTabTitle(path: string, title: string | undefined, men
   const p = normPath(path)
   const ticketTitle = ticketDetailTitle(p)
   if (ticketTitle) return ticketTitle
+  const cdcTitle = cdcDetailTitle(p)
+  if (cdcTitle) return cdcTitle
   const routeTitle = pageRouteTitle(p)
   const t = (title || '').trim()
   if (routeTitle && QUERY_TAB_ROUTE_PATHS.has(p)) return routeTitle
@@ -65,6 +74,8 @@ function normalizeCachedTabTitle(path: string, title: string, menus?: MenuNode[]
   const p = normPath(path)
   const ticketTitle = ticketDetailTitle(p)
   if (ticketTitle) return ticketTitle
+  const cdcTitle = cdcDetailTitle(p)
+  if (cdcTitle) return cdcTitle
   const routeTitle = pageRouteTitle(p)
   if (routeTitle && QUERY_TAB_ROUTE_PATHS.has(p)) return routeTitle
   return clusterDeployEngineTitle(p) || title || titleForPath(p, menus)
@@ -76,6 +87,8 @@ export function titleForPath(path: string, menus?: MenuNode[]): string {
   if (p === HOME_PATH || p === '/metadata/database/search/dashboard') return '工作台'
   const ticketTitle = ticketDetailTitle(p)
   if (ticketTitle) return ticketTitle
+  const cdcTitle = cdcDetailTitle(p)
+  if (cdcTitle) return cdcTitle
   const engineTitle = clusterDeployEngineTitle(p)
   if (engineTitle) return engineTitle
   const exactRoute = PAGE_ROUTES.find((r) => r.path === p)
