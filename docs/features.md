@@ -102,7 +102,7 @@ Client Secret（及 LDAP Bind 密码）用字段加密密钥落库（优先 `app
 | 页面 | 路径 | 说明 |
 |------|------|------|
 | 同步列表 | `/ops/slots` | 采集并查看 PostgreSQL 复制槽（pid、flush LSN、滞后字节）。可按状态、积压、域名、任务名筛选；手动采集显示进度。建 CDC 任务只登记槽名，不覆盖已采集的 LSN |
-| CDC 同步任务 | `/ops/cdc` | 创建、启动、停止同步任务，查看链路、表映射、加表与运行日志。运行列表、待审核、审批结果各自按本页状态筛选；运行中初始化任务按**当前页**探测链路健康。详情页签标题为「CDC 任务详情」；任务 id 支持 Hub 迁移的非 UUID。Debezium Connector 缺失时可[重新初始化](cdc-reinit.md) |
+| CDC 同步任务 | `/ops/cdc` | 创建、启动、停止同步任务，查看链路、表映射、加表与运行日志。列表 description 瘦身（`list_table_counts`）；运行中初始化任务按当前页探测链路；后台周期扫表结构差异。详情页签懒加载。Debezium Connector 缺失时可[重新初始化](cdc-reinit.md) |
 | 数据迁移 | `/ops/migration` | 库表或整库迁移，支持对象选择、预检、执行与校验 |
 | 表结构对比 | `/ops/migration/compare` | 同族实例异步对比结构，生成只增不删的修复 SQL |
 

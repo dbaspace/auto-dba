@@ -96,6 +96,7 @@ func Run(cfg *config.Config, configPath string) {
 			log.Printf("secret_decrypt ok=%v format=%s", ok, format)
 		}
 	})
+	warnIfInstanceSecretsUnreadable(db, fieldCrypto)
 	migEngine := dbmig.New(db, fieldCrypto)
 	arcEngine := archive.New(db, fieldCrypto)
 	bakEngine := backup.New(db, fieldCrypto, backup.Config{
@@ -140,6 +141,7 @@ func Run(cfg *config.Config, configPath string) {
 	}
 	authH := &handler.AuthHandler{Store: db, Cfg: cfg, Sessions: sessStore}
 	loginSessH := &handler.LoginSessionHandler{Store: db, Sessions: sessStore}
+	cdcH := &handler.CDCHandler{Store: db, Cfg: cfg, Secret: fieldCrypto}
 	deps := router.Deps{
 		Cfg:                cfg,
 		Auth:               authH,
@@ -155,7 +157,7 @@ func Run(cfg *config.Config, configPath string) {
 		CreateDB:           &handler.CreateDBHandler{Store: db, Secret: fieldCrypto},
 		Account:            &handler.AccountHandler{Store: db, Secret: fieldCrypto},
 		Review:             &handler.ReviewRuleHandler{Store: db, Secret: fieldCrypto},
-		CDC:                &handler.CDCHandler{Store: db, Cfg: cfg, Secret: fieldCrypto},
+		CDC:                cdcH,
 		Slot:               &handler.SlotHandler{Store: db, Secret: fieldCrypto},
 		Migration:          &handler.MigrationHandler{Store: db, Cfg: cfg, Secret: fieldCrypto, Engine: migEngine},
 		Flashback:          &handler.FlashbackHandler{Store: db, Secret: fieldCrypto, Cfg: cfg, Engine: fbEngine},
@@ -291,6 +293,7 @@ func Run(cfg *config.Config, configPath string) {
 	}
 	go handler.StartIssueAutoCancel(collectCtx, ticketH)
 	go handler.StartAwaitExecStuckNotify(collectCtx, ticketH)
+	go handler.StartSchemaDriftCron(collectCtx, cdcH)
 	alert.Start(collectCtx, db, alert.DefaultInterval, cryptoLive)
 
 	addr := fmt.Sprintf("%s:%d", cfg.HTTP.Host, cfg.HTTP.Port)

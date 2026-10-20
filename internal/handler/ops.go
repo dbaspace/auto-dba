@@ -62,8 +62,9 @@ func (h *CDCHandler) List(c *gin.Context) {
 	}
 	// 对齐 Hub CdcSyncList：列表只读 DB，can_reinit 按状态规则；不在列表同步探测 Connect。
 	// connector_missing / Connect 存在性仍由 Get / reinit candidates 的 AnnotateReinit 负责。
+	// description 瘦身：去掉 mappings 等大字段，写入 list_table_counts，减轻首屏 payload。
 	for i := range list {
-		list[i].Description = normalizeCDCDescription(list[i].Description)
+		list[i].Description = slimCDCDescriptionForList(normalizeCDCDescription(list[i].Description))
 		if ok, _ := cdc.ReinitEligibleStatus(&list[i]); ok {
 			list[i].CanReinit = true
 		}
@@ -77,12 +78,12 @@ func (h *CDCHandler) Get(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"message": "任务不存在"})
 		return
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
-	one := []store.CDCTask{*t}
-	h.orch().AnnotateReinit(ctx, one)
-	cancel()
-	t.CanReinit, t.ConnectorMissing = one[0].CanReinit, one[0].ConnectorMissing
+	// 对齐 List：详情 Get 不同步探 Connect；can_reinit 按状态规则。
+	// connector_missing 仍由 reinit preview / candidates 的 AnnotateReinit 负责。
 	t.Description = normalizeCDCDescription(t.Description)
+	if ok, _ := cdc.ReinitEligibleStatus(t); ok {
+		t.CanReinit = true
+	}
 	c.JSON(http.StatusOK, gin.H{"data": t})
 }
 
@@ -318,6 +319,85 @@ func normalizeCDCDescription(desc string) string {
 		text = strings.TrimSpace(desc[:idx])
 	}
 	return encodeCDCExtraJSON(text, extra)
+}
+
+// slimCDCDescriptionForList 列表专用：保留展示用小字段 + list_table_counts，去掉 mappings 等大 payload。
+// 详情 Get 仍返回完整 description。
+func slimCDCDescriptionForList(desc string) string {
+	extra := parseCDCExtraMap(desc)
+	if extra == nil {
+		return desc
+	}
+	for _, key := range []string{"mappings", "tables", "source_db_names"} {
+		_ = normalizeCDCExtraArray(extra, key)
+	}
+	extra["list_table_counts"] = cdcListTableCounts(extra)
+	for _, key := range []string{"mappings", "tables", "table_map", "alter_schema_tables", "sql_overrides"} {
+		delete(extra, key)
+	}
+	text := desc
+	if idx := strings.Index(desc, cdcExtraPrefix); idx >= 0 {
+		text = strings.TrimSpace(desc[:idx])
+	}
+	return encodeCDCExtraJSON(text, extra)
+}
+
+// cdcListTableCounts 与前端 syncTableCountView 口径一致。
+func cdcListTableCounts(extra map[string]any) map[string]int {
+	tables := jsonAnySlice(extra["tables"])
+	maps := jsonAnySlice(extra["mappings"])
+	shard, sourceFromMaps := 0, 0
+	for _, item := range maps {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		srcs := jsonAnyStringSlice(m["source_tables"])
+		if jsonAnyBool(m["is_shard_group"]) || len(srcs) > 1 {
+			shard++
+		}
+		sourceFromMaps += len(srcs)
+	}
+	source := len(tables)
+	if source == 0 {
+		source = sourceFromMaps
+	}
+	target := len(maps)
+	if target == 0 {
+		target = len(tables)
+	}
+	return map[string]int{"source": source, "target": target, "shard": shard}
+}
+
+func jsonAnySlice(v any) []any {
+	switch x := v.(type) {
+	case nil:
+		return nil
+	case []any:
+		return x
+	case string:
+		s := strings.TrimSpace(x)
+		if s == "" {
+			return nil
+		}
+		if strings.HasPrefix(s, "[") {
+			var arr []any
+			if json.Unmarshal([]byte(s), &arr) == nil {
+				return arr
+			}
+		}
+		parts := strings.FieldsFunc(s, func(r rune) bool { return r == ',' || r == '，' })
+		out := make([]any, 0, len(parts))
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				out = append(out, p)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 func normalizeCDCExtraArray(extra map[string]any, key string) bool {

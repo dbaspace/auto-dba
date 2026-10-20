@@ -166,6 +166,19 @@ export function normalizeCdcExtra(raw: any): CdcExtra {
 }
 
 export function syncTableCountView(extra: CdcExtra) {
+  const pre = (extra as any)?.list_table_counts
+  if (pre && typeof pre === 'object') {
+    const source = Number(pre.source)
+    const target = Number(pre.target)
+    const shard = Number(pre.shard)
+    if (Number.isFinite(source) || Number.isFinite(target) || Number.isFinite(shard)) {
+      return {
+        source: Number.isFinite(source) ? source : 0,
+        target: Number.isFinite(target) ? target : 0,
+        shard: Number.isFinite(shard) ? shard : 0,
+      }
+    }
+  }
   const tables = Array.isArray(extra?.tables) ? extra.tables : []
   const maps = Array.isArray(extra?.mappings) ? extra.mappings : []
   const shard = maps.filter((m: any) => m.is_shard_group || (m.source_tables || []).length > 1).length

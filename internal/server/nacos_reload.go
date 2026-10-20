@@ -12,6 +12,7 @@ import (
 	"auto-dba/internal/dbdeploy"
 	"auto-dba/internal/flashback"
 	"auto-dba/internal/notify"
+	"auto-dba/internal/secret"
 	"auto-dba/internal/sessionstore"
 	"auto-dba/internal/srcluster"
 	"auto-dba/internal/sshx"
@@ -28,11 +29,29 @@ type hotReloadTargets struct {
 	cdc      *cdc.Orchestrator
 	sr       *srcluster.Engine
 	dbdeploy *dbdeploy.Engine
+	// pendingPrevCrypto：JWT 回退加密场景下，热更前旧 FieldCrypto，并入 previous 环
+	pendingPrevCrypto string
 }
 
 // beforeApply 在写入 live 前执行；DSN 变更时先 Reopen，失败则整次热更中止。
 func (t *hotReloadTargets) beforeApply(live, next *config.Config, diff config.ReloadDiff) error {
-	_ = live
+	if t != nil {
+		t.pendingPrevCrypto = ""
+	}
+	// 未配独立 crypto_secret 时字段加密回退 jwt：JWT 变更前保留旧密钥以便 Decrypt
+	if t != nil && live != nil && next != nil && diff.JWTSecret && strings.TrimSpace(next.App.CryptoSecret) == "" {
+		oldKey := strings.TrimSpace(config.FieldCryptoFromApp(live.App))
+		newKey := strings.TrimSpace(config.FieldCryptoFromApp(next.App))
+		if oldKey != "" && oldKey != newKey {
+			t.pendingPrevCrypto = oldKey
+			if strings.TrimSpace(next.App.CryptoSecretPrevious) == "" {
+				next.App.CryptoSecretPrevious = oldKey
+				log.Printf("nacos reload: jwt 回退加密场景，已将旧 FieldCrypto 写入 crypto_secret_previous（进程内）")
+			} else if strings.TrimSpace(next.App.CryptoSecretPrevious) != oldKey {
+				log.Printf("nacos reload: jwt 回退加密场景，将旧 FieldCrypto 并入 previous 环（配置已有 previous）")
+			}
+		}
+	}
 	if t == nil || t.db == nil || !diff.DBDSN {
 		return nil
 	}
@@ -59,6 +78,10 @@ func (t *hotReloadTargets) apply(diff config.ReloadDiff) {
 	}
 	if diff.CryptoSecret || (diff.JWTSecret && strings.TrimSpace(t.cfg.App.CryptoSecret) == "") {
 		config.SyncFieldCrypto(t.cfg)
+		if t.pendingPrevCrypto != "" {
+			secret.MergePreviousSecrets([]string{t.pendingPrevCrypto})
+			t.pendingPrevCrypto = ""
+		}
 		sec := t.cfg.FieldCrypto()
 		for _, p := range t.secrets {
 			if p != nil {

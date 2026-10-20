@@ -131,10 +131,10 @@ nacos:
 
 ```yaml
 app:
-  jwt_secret: "<至少 32 位随机串>"          # 仅签 JWT
+  jwt_secret: "<至少 32 位随机串>"          # 仅签 JWT（可轮换）
   jwt_ttl_hours: 24
-  crypto_secret: "<另一段至少 32 位随机串>" # 实例密码等字段加密；勿与 jwt 共用同一串
-  # crypto_secret_previous: "<旧 crypto_secret>"  # 轮换窗口
+  crypto_secret: "<另一段至少 32 位随机串>" # 实例密码等字段加密；长期固定，勿与 jwt 共用/同改
+  # crypto_secret_previous: "<旧 crypto_secret 或旧 jwt>"  # 轮换窗口；缺则旧密文解不开
   # crypto_key_id: k1
 db:
   driver: postgres
@@ -358,8 +358,8 @@ DataId 内全部业务顶层段参与 diff。段内任意字段都会写入内�
 
 | 变更 | 真实行为 |
 |------|----------|
-| `jwt_secret` | 仅签 JWT（atomic）；**旧 token 立即失效**。字段加密请用 `crypto_secret`（见下） |
-| `crypto_secret` / `crypto_secret_previous` / `crypto_key_id` | 实例密码、SSO/LDAP/SMTP 等字段 AES（`enc:v2`）；热更后刷新各 handler Secret。轮换：先把旧值写入 `crypto_secret_previous`，再改 `crypto_secret`。未配置 `crypto_secret` 时回退 `jwt_secret`（兼容旧部署）。换密钥后若 previous 未保留，须到「认证配置」重存 SSO/LDAP Secret（见 [功能说明 · SSO](features.md#sso)） |
+| `jwt_secret` | 仅签 JWT（atomic）；**旧 token 立即失效**。字段加密请用独立的 `crypto_secret`（见下），**不要**用改 JWT 的方式轮换实例密码密钥 |
+| `crypto_secret` / `crypto_secret_previous` / `crypto_key_id` | 实例密码、SSO/LDAP/SMTP 等字段 AES（`enc:v2`）；热更后刷新各 handler Secret。**生产务必固定 `crypto_secret`**，与 JWT 分离。轮换：先把旧值写入 `crypto_secret_previous`，再改 `crypto_secret`。未配置 `crypto_secret` 时回退 `jwt_secret`（兼容旧部署）；此时若热更只改 JWT，进程会把旧 FieldCrypto 自动并入 previous 环以便仍能解密。换密钥后若 previous 未保留，须重填实例密码，并到「认证配置」重存 SSO/LDAP Secret（见 [功能说明 · SSO](features.md#sso)） |
 | `copilot.*` | 写入 cfg；下次 `LoadConfig` 即生效（Chat/Models 每次现读 Live）；**不读**库表 `copilot_*` |
 | `db` 池参数 | `ApplyPool` |
 | `db.dsn` | **先** `Reopen`（migrate/seed），成功后再提交配置；失败则**整次热更中止**，内存 DSN 保持旧值 |

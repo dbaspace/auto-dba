@@ -53,6 +53,21 @@ import {
 
 const { Title, Text } = Typography
 
+/** 编排进行中：列表才静默轮询（对齐 universe-fe） */
+const PROVISIONING_STATUSES = new Set([
+  'init',
+  'creating',
+  'provisioning',
+  'configuring',
+  'reinitializing',
+  'adding',
+  'removing',
+  'altering',
+])
+
+/** 手动刷新最短间隔（对齐 universe-fe CDC_LIST_MANUAL_REFRESH_MIN_MS） */
+const CDC_LIST_MANUAL_REFRESH_MIN_MS = 2000
+
 const RUNNING_STATUSES = new Set([
   'init', 'running', 'paused', 'error', 'failed', 'creating', 'provisioning', 'configuring', 'reinitializing',
 ])
@@ -137,6 +152,11 @@ export default function CdcList() {
   const [batchOpen, setBatchOpen] = useState(false)
   const { isAdmin } = usePermission()
   const probeGenRef = useRef(0)
+  const probeAbortRef = useRef<AbortController | null>(null)
+  const lastManualRefreshRef = useRef(0)
+  const silentRefreshInFlightRef = useRef(false)
+  /** 手动刷新 / 首屏 load 后递增，触发当前页 pipeline 重探 */
+  const [probeEpoch, setProbeEpoch] = useState(0)
 
   const instMap = useMemo(() => {
     const m = new Map<string, any>()
@@ -166,6 +186,7 @@ export default function CdcList() {
     return instMap.get(id)
   }
   function extraOf(row: any) {
+    if (row?._extra) return row._extra
     return decodeCdcExtra(row?.description).extra
   }
   function driftOf(row: any) {
@@ -248,19 +269,21 @@ export default function CdcList() {
     setDriftById(m)
   }
 
-  /** 对齐 Hub：仅对当前页 init 运行任务有界并发探测 pipeline，不挡首屏 */
-  async function probePagePipelines(rows: any[], gen: number) {
-    const targets = rows.filter((r) => isRunning(r) && r.task_type === 'init' && isValidCdcTaskID(r.id))
+  /** 对齐 Hub：仅对当前页 init 运行任务有界并发探测 pipeline，不挡首屏；已有 _pipeline 则跳过；翻页 abort 在途请求 */
+  async function probePagePipelines(rows: any[], gen: number, signal: AbortSignal) {
+    const targets = rows.filter(
+      (r) => isRunning(r) && r.task_type === 'init' && isValidCdcTaskID(r.id) && !r._pipeline,
+    )
     if (!targets.length) return
     const chunk = 8
     for (let i = 0; i < targets.length; i += chunk) {
-      if (gen !== probeGenRef.current) return
+      if (gen !== probeGenRef.current || signal.aborted) return
       const part = targets.slice(i, i + chunk)
       // eslint-disable-next-line no-await-in-loop
       const updates = await Promise.all(
         part.map(async (row) => {
           const { data } = await api
-            .get(`/cdc-sync/tasks/${row.id}/status`, { silent: true })
+            .get(`/cdc-sync/tasks/${row.id}/status`, { silent: true, signal })
             .catch(() => ({ data: {} as any }))
           const pipe = data.data || {}
           return {
@@ -269,7 +292,7 @@ export default function CdcList() {
           }
         }),
       )
-      if (gen !== probeGenRef.current) return
+      if (gen !== probeGenRef.current || signal.aborted) return
       const byId = new Map(updates.map((u) => [u.id, u._pipeline]))
       setAllRows((prev) =>
         prev.map((r) => (byId.has(r.id) ? { ...r, _pipeline: byId.get(r.id) } : r)),
@@ -277,28 +300,42 @@ export default function CdcList() {
     }
   }
 
-  async function load() {
+  async function loadSideData() {
+    const [inst, envRes] = await Promise.all([
+      api.get('/instances').catch(() => ({ data: { data: [] } })),
+      api.get('/environments').catch(() => ({ data: { data: [] } })),
+    ])
+    setInstances(inst.data.data || [])
+    const envs = envRes.data.data || []
+    let opts = envs
+      .map((e: any) => ({ value: e.code || e.name, label: e.name || e.code }))
+      .filter((e: any) => e.value)
+    if (!opts.length) opts = [{ value: 'test', label: 'test' }, { value: 'prod', label: 'prod' }]
+    setEnvOptions(opts)
+  }
+
+  async function load(opts?: { force?: boolean }) {
+    const now = Date.now()
+    if (!opts?.force && now - lastManualRefreshRef.current < CDC_LIST_MANUAL_REFRESH_MIN_MS) {
+      return
+    }
+    lastManualRefreshRef.current = now
     setLoading(true)
     setLoadError('')
     try {
-      const [tasksRes, inst, envRes] = await Promise.all([
-        api.get('/cdc-sync/tasks'),
-        api.get('/instances'),
-        api.get('/environments').catch(() => ({ data: { data: [] } })),
-      ])
-      const rows = tasksRes.data.data || []
+      const tasksRes = await api.get('/cdc-sync/tasks')
+      const rows = (tasksRes.data.data || []).map((r: any) => ({
+        ...r,
+        _extra: decodeCdcExtra(r?.description).extra,
+      }))
+      // 不带 _pipeline：清空探测缓存，配合 probeEpoch 强制重探当前页
       setAllRows(rows)
-      setInstances(inst.data.data || [])
-      const envs = envRes.data.data || []
-      let opts = envs
-        .map((e: any) => ({ value: e.code || e.name, label: e.name || e.code }))
-        .filter((e: any) => e.value)
-      if (!opts.length) opts = [{ value: 'test', label: 'test' }, { value: 'prod', label: 'prod' }]
-      setEnvOptions(opts)
+      setProbeEpoch((n) => n + 1)
+      setLoading(false)
+      void loadSideData()
       void loadDriftCache()
     } catch (e: any) {
       setLoadError(e?.response?.data?.message || e?.message || '加载失败')
-    } finally {
       setLoading(false)
     }
   }
@@ -312,7 +349,7 @@ export default function CdcList() {
       const { data } = await api.post(`/cdc-sync/tasks/${row.id}/${kind}`)
       if (data?.data?.status === 'reinitializing') message.success('已提交，正在重新初始化')
       else message.info(data.message || '已更新')
-      await load()
+      await load({ force: true })
     }
     if (kind === 'pause') {
       Modal.confirm({
@@ -358,23 +395,34 @@ export default function CdcList() {
         const { data } = await api.post(`/cdc-sync/tasks/${row.id}/delete`, { reviewer, approver: reviewer })
         message.success('已提交删除审批')
         if (data.data?.issue_id) navigate('/ops/tickets/' + data.data.issue_id)
-        else await load()
+        else await load({ force: true })
       },
     })
   }
 
   async function refreshTasks() {
-    const { data } = await api.get('/cdc-sync/tasks', { silent: true }).catch(() => ({ data: null as any }))
-    if (!data) return
-    setAllRows((prev) => {
-      const pipes = new Map(prev.map((r) => [r.id, r._pipeline]))
-      return (data.data || []).map((r: any) => ({ ...r, _pipeline: pipes.get(r.id) }))
-    })
+    if (silentRefreshInFlightRef.current || loading) return
+    silentRefreshInFlightRef.current = true
+    try {
+      const { data } = await api.get('/cdc-sync/tasks', { silent: true }).catch(() => ({ data: null as any }))
+      if (!data) return
+      setAllRows((prev) => {
+        const pipes = new Map(prev.map((r) => [r.id, r._pipeline]))
+        const extras = new Map(prev.map((r) => [r.id, r._extra]))
+        return (data.data || []).map((r: any) => ({
+          ...r,
+          _pipeline: pipes.get(r.id),
+          _extra: extras.get(r.id) || decodeCdcExtra(r?.description).extra,
+        }))
+      })
+    } finally {
+      silentRefreshInFlightRef.current = false
+    }
   }
 
   // 初始化 & tab 切换
   useEffect(() => {
-    load()
+    void load({ force: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -390,21 +438,26 @@ export default function CdcList() {
 
   useEffect(() => {
     if (tab !== 'running' || !pageProbeKey) return
+    probeAbortRef.current?.abort()
+    const ac = new AbortController()
+    probeAbortRef.current = ac
     const gen = ++probeGenRef.current
-    void probePagePipelines(pageRows, gen)
+    void probePagePipelines(pageRows, gen, ac.signal)
     return () => {
       probeGenRef.current += 1
+      ac.abort()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, pageProbeKey])
+  }, [tab, pageProbeKey, probeEpoch])
 
-  const hasReinitializing = allRows.some((r) => r.status === 'reinitializing')
+  /** 对齐 universe-fe：仅编排中任务静默轮询列表，稳定 running 靠「刷新」 */
+  const shouldPollStatus = allRows.some((r) => PROVISIONING_STATUSES.has(String(r.status || '')))
   useEffect(() => {
-    if (!hasReinitializing) return
-    const id = window.setInterval(() => void refreshTasks(), 3000)
+    if (!shouldPollStatus) return
+    const id = window.setInterval(() => void refreshTasks(), 10000)
     return () => window.clearInterval(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasReinitializing])
+  }, [shouldPollStatus])
 
   useEffect(() => {
     const t = searchParams.get('tab')
@@ -824,7 +877,7 @@ export default function CdcList() {
               <Button type="primary" disabled={loading} onClick={() => setPage(1)}>
                 查询
               </Button>
-              <Button icon={<ReloadOutlined />} disabled={loading} onClick={load}>
+              <Button icon={<ReloadOutlined />} disabled={loading} onClick={() => void load()}>
                 刷新
               </Button>
             </Space>

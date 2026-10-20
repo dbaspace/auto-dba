@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import {
-  useNavigate,
-  useParams } from 'react-router-dom'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
+import { useAppDispatch, useAppSelector } from '../../store'
+import { closeTab, openTab, tabKey } from '../../store/tabsSlice'
 import {
   Alert,
   Badge,
@@ -59,8 +59,18 @@ import './cdc.css'
 
 export default function CdcDetail() {
   const navigate = useNavigate()
+  const location = useLocation()
   const params = useParams()
+  const dispatch = useAppDispatch()
+  const menus = useAppSelector((s) => s.auth.menus)
   const id = String(params.id || '')
+
+  const backToCdcList = (opts?: { replace?: boolean }) => {
+    const detailKey = tabKey(location.pathname, location.search)
+    dispatch(openTab({ path: '/ops/cdc', menus, title: 'CDC 同步任务' }))
+    dispatch(closeTab(detailKey))
+    navigate('/ops/cdc', opts?.replace ? { replace: true } : undefined)
+  }
 
   const [loading, setLoading] = useState(false)
   const [task, setTask] = useState<any>({})
@@ -116,6 +126,9 @@ export default function CdcDetail() {
   const pollRef = useRef<number>(0)
   const tabRef = useRef(tab)
   tabRef.current = tab
+  const tablesLoadedRef = useRef(false)
+  const publicationLoadedRef = useRef(false)
+  const pipelineLoadedRef = useRef(false)
 
   const extra = useMemo(() => decodeCdcExtra(task.description).extra, [task])
   const note = useMemo(() => decodeCdcExtra(task.description).text, [task])
@@ -382,14 +395,16 @@ export default function CdcDetail() {
     )
   }
 
-  async function loadPublication() {
-    if (!task.id) return
+  async function loadPublication(tid?: string) {
+    const id0 = tid || task.id || id
+    if (!isValidCdcTaskID(id0)) return
     const [{ data }, synced] = await Promise.all([
-      api.get(`/cdc-sync/tasks/${task.id}/publication`).catch(() => ({ data: {} as any })),
-      api.get(`/cdc-sync/tasks/${task.id}/synced-tables`).catch(() => ({ data: {} as any })),
+      api.get(`/cdc-sync/tasks/${id0}/publication`, { silent: true }).catch(() => ({ data: {} as any })),
+      api.get(`/cdc-sync/tasks/${id0}/synced-tables`, { silent: true }).catch(() => ({ data: {} as any })),
     ])
     setPublication(data.data || {})
     setSyncedTables(synced.data.data || [])
+    publicationLoadedRef.current = true
   }
 
   function mergeRLFromPipeline(rowsIn: any[], pipeObj: any) {
@@ -407,51 +422,80 @@ export default function CdcDetail() {
     })
   }
 
+  async function loadPipelineStatus(tid: string, showSpin = false) {
+    if (showSpin) setPipelineLoading(true)
+    try {
+      const { data } = await api.get(`/cdc-sync/tasks/${tid}/status`, { silent: true }).catch(() => ({ data: {} as any }))
+      const pipeObj = data.data || {}
+      setPipeline(pipeObj)
+      setPipelineRefreshedAt(new Date().toLocaleTimeString('zh-CN', { hour12: false }))
+      pipelineLoadedRef.current = true
+      return pipeObj
+    } finally {
+      if (showSpin) setPipelineLoading(false)
+    }
+  }
+
+  async function reloadTables() {
+    if (!id) return
+    const { data } = await api
+      .get(`/cdc-sync/tasks/${id}/tables`, { params: tableQuery(), silent: true })
+      .catch(() => ({ data: {} as any }))
+    const raw = data.data || []
+    let rows0 = raw.map((x: any) =>
+      typeof x === 'string' ? { name: x, target_table: x, source_tables: [x] } : { name: (x.source_tables || [])[0], ...x },
+    )
+    rows0 = mergeRLFromPipeline(rows0, pipelineBundle(pipeline))
+    if (schemaAlerts?.items?.length) {
+      const by = new Map(
+        (schemaAlerts.items || []).map((it: any) => [String(it.target_table || '').toLowerCase(), it]),
+      )
+      rows0 = rows0.map((row) => {
+        const it: any = by.get(String(row.target_table || '').toLowerCase())
+        if (!it) return row
+        return { ...row, schema_has_drift: !!it.has_drift, schema_missing_columns: it.missing_columns || [] }
+      })
+    }
+    setTableRows(rows0)
+    tablesLoadedRef.current = true
+  }
+
+  /** 对齐 universe-fe：首屏只等任务本体，重请求后台/按 Tab 懒加载 */
   const load = useCallback(async () => {
     const tid = isValidCdcTaskID(id) ? id : ''
     if (!tid) {
       window.clearInterval(pollRef.current)
       return
     }
+    tablesLoadedRef.current = false
+    publicationLoadedRef.current = false
+    pipelineLoadedRef.current = false
     setLoading(true)
     try {
-      const [t, inst, st, tb] = await Promise.all([
-        api.get(`/cdc-sync/tasks/${tid}`),
-        api.get('/instances'),
-        api.get(`/cdc-sync/tasks/${tid}/status`, { silent: true }).catch(() => ({ data: {} as any })),
-        api
-          .get(`/cdc-sync/tasks/${tid}/tables`, { params: tableQuery(), silent: true })
-          .catch(() => ({ data: {} as any })),
-      ])
-      const t0 = t.data.data || {}
+      const { data } = await api.get(`/cdc-sync/tasks/${tid}`)
+      const t0 = data.data || {}
       setTask(t0)
-      setInstances(inst.data.data || [])
-      const pipeObj = st.data.data || {}
-      setPipeline(pipeObj)
-      setPipelineRefreshedAt(new Date().toLocaleTimeString('zh-CN', { hour12: false }))
-      const raw = tb.data.data || []
-      let rows0 = raw.map((x: any) =>
-        typeof x === 'string' ? { name: x, target_table: x, source_tables: [x] } : { name: (x.source_tables || [])[0], ...x },
-      )
-      rows0 = mergeRLFromPipeline(rows0, pipelineBundle(pipeObj))
-      setTableRows(rows0)
-      await loadLogs(1, logPageSize)
-      if (t0.task_type === 'init' || t0.parent_id) await loadSchemaAlerts(false)
-      if (t0.task_type === 'init') await loadPublication()
-    } finally {
+      setLoading(false)
+      void api
+        .get('/instances')
+        .then((res) => setInstances(res.data.data || []))
+        .catch(() => {})
+      void loadPipelineStatus(tid)
+      if (t0.task_type === 'init' || t0.parent_id) void loadSchemaAlerts(false)
+    } catch {
       setLoading(false)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id])
 
-  // 轮询
+  // 仅编排中 / 待审批轮询；稳定 running 停轮询（对齐 universe-fe）
+  const PROVISIONING = useMemo(
+    () => new Set(['init', 'creating', 'provisioning', 'configuring', 'reinitializing', 'adding', 'removing', 'altering']),
+    [],
+  )
   useEffect(() => {
     window.clearInterval(pollRef.current)
-    const should =
-      pending ||
-      ['running', 'init', 'creating', 'configuring', 'provisioning', 'failed', 'error', 'reinitializing'].includes(
-        task.status,
-      )
+    const should = pending || PROVISIONING.has(String(task.status || ''))
     if (!should || !taskID()) return
     pollRef.current = window.setInterval(() => {
       const tid = taskID()
@@ -459,26 +503,20 @@ export default function CdcDetail() {
         window.clearInterval(pollRef.current)
         return
       }
-      api
-        .get(`/cdc-sync/tasks/${tid}/status`, { silent: true })
-        .then(({ data }) => {
-          setPipeline(data.data || {})
-          setPipelineRefreshedAt(new Date().toLocaleTimeString('zh-CN', { hour12: false }))
-        })
-        .catch(() => {})
+      void loadPipelineStatus(tid)
       api
         .get(`/cdc-sync/tasks/${tid}`, { silent: true })
         .then(({ data }) => setTask((prev: any) => data.data || prev))
         .catch(() => {})
-      if (tabRef.current === 'logs') loadLogs()
-    }, task.status === 'reinitializing' ? 3000 : 8000)
+      if (tabRef.current === 'logs') void loadLogs()
+    }, 10000)
     return () => window.clearInterval(pollRef.current)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [task.status, task.approval_status, task.id])
+  }, [task.status, task.approval_status, task.id, pending])
 
   useEffect(() => {
     if (!isValidCdcTaskID(id)) {
-      navigate('/ops/cdc', { replace: true })
+      backToCdcList({ replace: true })
       return
     }
     load()
@@ -488,27 +526,24 @@ export default function CdcDetail() {
   async function refreshPipeline() {
     const tid = taskID()
     if (!tid) return
-    setPipelineLoading(true)
-    try {
-      const { data } = await api.get(`/cdc-sync/tasks/${tid}/status`, { silent: true })
-      setPipeline(data.data || {})
-      setPipelineRefreshedAt(new Date().toLocaleTimeString('zh-CN', { hour12: false }))
-    } finally {
-      setPipelineLoading(false)
-    }
+    await loadPipelineStatus(tid, true)
   }
 
-  async function reloadTables() {
-    if (!id) return
-    const { data } = await api
-      .get(`/cdc-sync/tasks/${id}/tables`, { params: tableQuery() })
-      .catch(() => ({ data: {} as any }))
-    const raw = data.data || []
-    let rows0 = raw.map((x: any) =>
-      typeof x === 'string' ? { name: x, target_table: x, source_tables: [x] } : { name: (x.source_tables || [])[0], ...x },
-    )
-    rows0 = mergeRLFromPipeline(rows0, pipe)
-    setTableRows(rows0)
+  async function ensureTablesLoaded() {
+    if (tablesLoadedRef.current || !id) return
+    await reloadTables()
+  }
+
+  async function ensurePublicationLoaded() {
+    if (publicationLoadedRef.current) return
+    await loadPublication(id)
+  }
+
+  async function ensurePipelineLoaded() {
+    if (pipelineLoadedRef.current) return
+    const tid = taskID()
+    if (!tid) return
+    await loadPipelineStatus(tid, true)
   }
 
   async function showMappingDDL(row: any) {
@@ -661,7 +696,7 @@ export default function CdcDetail() {
       message.success(isDeleteApproval ? '删除审批已通过，任务已清理' : '已通过审批')
       setApproveOpen(false)
       if (isDeleteApproval) {
-        navigate('/ops/cdc')
+        backToCdcList()
         return
       }
       await load()
@@ -814,7 +849,7 @@ export default function CdcDetail() {
   return (
     <div className="cdc-shell cdc-detail" style={{ overflow: 'auto' }}>
       <div className="cdc-back">
-        <Button type="link" onClick={() => navigate('/ops/cdc')}>
+        <Button type="link" onClick={() => backToCdcList()}>
           ← 返回列表
         </Button>
       </div>
@@ -960,7 +995,10 @@ export default function CdcDetail() {
         activeKey={tab}
         onChange={(k) => {
           setTab(k)
-          if (k === 'logs') loadLogs()
+          if (k === 'logs') void loadLogs()
+          if (k === 'tables') void ensureTablesLoaded()
+          if (k === 'publication') void ensurePublicationLoaded()
+          if (k === 'pipeline') void ensurePipelineLoaded()
         }}
         items={[
           { key: 'overview', label: '基本信息' },

@@ -227,7 +227,7 @@ func (h *InstanceHandler) TestConnection(c *gin.Context) {
 		}
 		plain, err := secret.Decrypt(h.Secret, stored.Password)
 		if err != nil {
-			c.JSON(http.StatusOK, gin.H{"ok": false, "message": "解密已存密码失败：密钥可能已变更，请重新填写密码"})
+			c.JSON(http.StatusOK, gin.H{"ok": false, "message": "解密已存密码失败：密钥可能已变更，请重新填写密码（请确认 app.crypto_secret 与入库时一致，或配置 crypto_secret_previous）"})
 			return
 		}
 		password = plain

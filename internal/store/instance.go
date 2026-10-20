@@ -284,6 +284,33 @@ func (d *DB) ListInstancesInTenant(tenantID, dbType, q string) ([]Instance, erro
 	return out, rows.Err()
 }
 
+// SampleEncryptedInstancePasswords 抽样已加密的实例密码密文（启动密钥健康检查用）。
+func (d *DB) SampleEncryptedInstancePasswords(limit int) ([]string, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := d.Query(
+		`SELECT password FROM tbl_instances WHERE password LIKE 'enc:%' ORDER BY updated_at DESC LIMIT ?`,
+		limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out, rows.Err()
+}
+
 func (d *DB) GetInstance(id string) (*Instance, error) {
 	row := d.QueryRow(`SELECT `+instanceCols+` FROM tbl_instances WHERE id=?`, id)
 	it, err := scanInstance(row)

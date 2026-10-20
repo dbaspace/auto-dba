@@ -18,11 +18,13 @@ app:
   name: auto-dba
   run_mode: debug
   # enabled=true 时由 Nacos 覆盖；本地开发可填
-  jwt_secret: change-me-in-production   # 仅签 JWT
+  jwt_secret: change-me-in-production   # 仅签 JWT；可轮换。勿单独靠它长期加密实例密码
   jwt_ttl_hours: 24
-  # 字段加密（实例密码等）主密钥；生产务必单独配置。空则回退 jwt_secret
+  # 字段加密（实例密码等）主密钥：生产务必单独固定配置，且勿随 jwt_secret 一起改。
+  # 空则回退 jwt_secret——改 JWT / Nacos 热更后会出现「解密已存密码失败」。
   # crypto_secret: "另一段至少32位随机串"
-  # crypto_secret_previous: ""   # 轮换时填旧 crypto_secret，Decrypt 窗口
+  # 轮换窗口：先填旧主密钥（旧 crypto 或曾回退时的旧 jwt），再改 crypto_secret / jwt
+  # crypto_secret_previous: ""
   # crypto_key_id: k1            # 写入 enc:v2:<kid>:…
 
 http:

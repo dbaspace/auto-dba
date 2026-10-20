@@ -88,3 +88,33 @@ func TestNormalizeCDCDescriptionKeepsPlainText(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestSlimCDCDescriptionForList(t *testing.T) {
+	t.Parallel()
+	desc := `-- auto-dba-cdc:{"env":"beijing","debezium_mode":"before_after","tables":["a","b","c"],"mappings":[{"target_table":"t1","source_tables":["a"],"is_shard_group":false},{"target_table":"t2","source_tables":["b0","b1"],"is_shard_group":true}],"sql_overrides":{"t1":{"create":"x"}}}`
+	got := slimCDCDescriptionForList(normalizeCDCDescription(desc))
+	extra := parseCDCExtraMap(got)
+	if extra == nil {
+		t.Fatal("extra missing")
+	}
+	if _, ok := extra["mappings"]; ok {
+		t.Fatal("mappings should be stripped")
+	}
+	if _, ok := extra["tables"]; ok {
+		t.Fatal("tables should be stripped")
+	}
+	if _, ok := extra["sql_overrides"]; ok {
+		t.Fatal("sql_overrides should be stripped")
+	}
+	if extra["env"] != "beijing" || extra["debezium_mode"] != "before_after" {
+		t.Fatalf("kept fields %#v", extra)
+	}
+	counts, ok := extra["list_table_counts"].(map[string]any)
+	if !ok {
+		t.Fatalf("list_table_counts=%#v", extra["list_table_counts"])
+	}
+	// tables len=3 → source=3; mappings len=2 → target=2; one shard group → shard=1
+	if int(counts["source"].(float64)) != 3 || int(counts["target"].(float64)) != 2 || int(counts["shard"].(float64)) != 1 {
+		t.Fatalf("counts=%#v", counts)
+	}
+}

@@ -49,6 +49,15 @@ func TestDecryptWithPreviousKey(t *testing.T) {
 	}
 }
 
+func TestMergePreviousSecrets(t *testing.T) {
+	SetPreviousSecrets([]string{"a"})
+	MergePreviousSecrets([]string{"b", "a", ""})
+	got := previousSecrets()
+	if len(got) != 2 || got[0] != "a" || got[1] != "b" {
+		t.Fatalf("merge previous: %#v", got)
+	}
+}
+
 func TestDecryptPlainLegacy(t *testing.T) {
 	SetPreviousSecrets(nil)
 	plain, err := Decrypt("any", "not-encrypted")

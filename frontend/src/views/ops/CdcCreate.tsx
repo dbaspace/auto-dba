@@ -234,8 +234,11 @@ export default function CdcCreate() {
 
   const parentTables = useMemo(() => {
     const p = selectedParents[0] || parentTasks.find((t) => t.id === form.parent_id)
+    if (!p) return []
+    const fromSynced = syncedByParent[p.id]
+    if (fromSynced?.length) return fromSynced
     return parentTablesOf(p)
-  }, [selectedParents, parentTasks, form.parent_id])
+  }, [selectedParents, parentTasks, form.parent_id, syncedByParent])
 
   const parentMappings = useMemo(() => {
     const live = (parentMappingRows || []).filter((m) => m.status !== 'deleted')

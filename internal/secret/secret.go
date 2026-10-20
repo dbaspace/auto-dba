@@ -68,6 +68,15 @@ func SetPreviousSecrets(keys []string) {
 	prevMu.Unlock()
 }
 
+// MergePreviousSecrets 将额外旧密钥并入当前 previous 环（去重），不清空已有项。
+func MergePreviousSecrets(keys []string) {
+	if len(keys) == 0 {
+		return
+	}
+	cur := previousSecrets()
+	SetPreviousSecrets(append(cur, keys...))
+}
+
 func previousSecrets() []string {
 	prevMu.RLock()
 	defer prevMu.RUnlock()

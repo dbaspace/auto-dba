@@ -49,6 +49,8 @@ export function shouldRemountOnTabActivate(path: string): boolean {
   }
   // 已登记库：元数据列表保活，避免顶栏切 Tab 反复 loadInitial
   if (p === '/config/databases') return false
+  // CDC 列表保活：切详情再回来不重挂载，避免反复 /status 探测风暴
+  if (p === '/ops/cdc') return false
   // 工作台、工单、配置、CMDB、告警、运维列表等
   if (p === '/ops/dashboard' || p === '/metadata/database/search/dashboard') return true
   if (p === '/ops/tickets' || /^\/ops\/tickets\/[^/]+$/.test(p)) return true
@@ -57,7 +59,6 @@ export function shouldRemountOnTabActivate(path: string): boolean {
   if (p.startsWith('/ops/alerts')) return true
   if (p.startsWith('/ops/todo')) return true
   if (
-    p === '/ops/cdc' ||
     p === '/ops/migration' ||
     p === '/ops/slots' ||
     p.startsWith('/ops/archive') ||

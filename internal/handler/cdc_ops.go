@@ -39,15 +39,22 @@ func (h *CDCHandler) InitList(c *gin.Context) {
 		if t.Status == store.StatusDeleted {
 			continue
 		}
-		extra := cdc.ParseTaskExtra(t.Description)
-		tables := extraCSVTables(t.Description)
+		// 瘦身：不回完整 mappings/tables；表名需走 /synced-tables。description 仅保留展示小字段。
+		norm := normalizeCDCDescription(t.Description)
+		counts := cdcListTableCounts(parseCDCExtraMap(norm))
+		desc := slimCDCDescriptionForList(norm)
+		extra := cdc.ParseTaskExtra(desc)
+		synced := counts["target"]
+		if synced == 0 {
+			synced = counts["source"]
+		}
 		out = append(out, gin.H{
-			"id": t.ID, "name": t.Name, "status": t.Status,
+			"id": t.ID, "name": t.Name, "status": t.Status, "task_type": t.TaskType,
 			"source_instance_id": t.SourceID, "target_instance_id": t.TargetID,
 			"source_db": t.SourceDB, "target_db": t.TargetDB,
-			"synced_table_count": len(tables), "tables": tables,
-			"publication_name": extra["publication_name"], "env": extra["env"],
-			"description": t.Description,
+			"synced_table_count": synced,
+			"publication_name":  extra["publication_name"], "env": extra["env"],
+			"description": desc,
 		})
 	}
 	c.JSON(http.StatusOK, gin.H{"data": out})
