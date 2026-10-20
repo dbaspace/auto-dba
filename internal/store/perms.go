@@ -110,6 +110,38 @@ const (
 	URNDomainsSync          = "um.action.domains.sync"
 	URNDomainsAssign        = "um.action.domains.assign"
 	URNDomainsEdit          = "um.action.domains.edit"
+
+	// K8s 管理
+	URNSidebarK8sClusters   = "um.sidebar.k8s-clusters"
+	URNSidebarK8sOverview   = "um.sidebar.k8s-overview"
+	URNSidebarK8sNodes      = "um.sidebar.k8s-nodes"
+	URNSidebarK8sWorkloads  = "um.sidebar.k8s-workloads"
+	URNSidebarK8sNetwork    = "um.sidebar.k8s-network"
+	URNSidebarK8sStorage    = "um.sidebar.k8s-storage"
+	URNSidebarK8sResources  = "um.sidebar.k8s-resources"
+	URNSidebarK8sOperators  = "um.sidebar.k8s-operators"
+	URNSidebarK8sDBClusters = "um.sidebar.k8s-db-clusters"
+	URNSidebarK8sApps       = "um.sidebar.k8s-apps"
+
+	URNK8sClusterCreate = "um.action.k8s.cluster.create"
+	URNK8sClusterEdit   = "um.action.k8s.cluster.edit"
+	URNK8sClusterDelete = "um.action.k8s.cluster.delete"
+	URNK8sClusterAssign = "um.action.k8s.cluster.assign"
+	URNK8sPodLog        = "um.action.k8s.pod.log"
+	URNK8sPodExec       = "um.action.k8s.pod.exec"
+	URNK8sWorkloadScale    = "um.action.k8s.workload.scale"
+	URNK8sWorkloadRestart  = "um.action.k8s.workload.restart"
+	URNK8sWorkloadRollback = "um.action.k8s.workload.rollback"
+	URNK8sWorkloadDelete   = "um.action.k8s.workload.delete"
+	URNK8sYAMLApply        = "um.action.k8s.yaml.apply"
+	URNK8sNodeDrain        = "um.action.k8s.node.drain"
+	URNK8sSecretView       = "um.action.k8s.secret.view"
+	URNK8sQuotaEdit        = "um.action.k8s.quota.edit"
+	URNK8sDBCreate         = "um.action.k8s.db.create"
+	URNK8sDBScale          = "um.action.k8s.db.scale"
+	URNK8sDBUpgrade        = "um.action.k8s.db.upgrade"
+	URNK8sDBSwitchover     = "um.action.k8s.db.switchover"
+	URNK8sDBDelete         = "um.action.k8s.db.delete"
 )
 
 func IsActionURN(urn string) bool {

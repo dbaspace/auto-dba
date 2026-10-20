@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keeplus-k8s-agent
+  labels:
+    app: keeplus-k8s-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: keeplus-k8s-agent
+  template:
+    metadata:
+      labels:
+        app: keeplus-k8s-agent
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      containers:
+        - name: agent
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - -platform={{ .Values.platformURL }}
+            - -agent-id={{ .Values.agentId }}
+            - -token={{ .Values.agentToken }}
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi

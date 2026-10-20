@@ -6,7 +6,7 @@
 
 **KeePlus**（工程仓库 / 进程名 `auto-dba`）是面向 DBA 与开发的运维自助工作台。业务对象（实例、库、账号、审批人）登记在平台内，工单、查询、同步、迁移、闪回、归档、集群部署与告警都围绕这些登记对象执行。页面权限按菜单树授予，写操作另有独立的操作权限；业务数据按**多租户**行级隔离。
 
-侧栏按下面的目录组织。目录本身不可进入，子项才是页面。模块关系总览见 [architecture.html](architecture.html)。集群部署（StarRocks 等工作台）方案见 [sr-cluster.md](sr-cluster.md)。
+侧栏按下面的目录组织。目录本身不可进入，子项才是页面。模块关系总览见 [architecture.html](architecture.html)。集群部署（StarRocks 等工作台）方案见 [sr-cluster.md](sr-cluster.md)。**K8s 多集群纳管与数据库上 K8s** 产品与分期方案见 [k8s.md](k8s.md)。
 
 **部署与配置**：元数据为 PostgreSQL。本地可只用 `config/config.yaml`；生产推荐敏感项进 **Nacos**（本地仅引导），见 [nacos-config.md](nacos-config.md)。**打包部署**（一体 / 仅后端 / 仅前端 / Docker）见 [deploy.md](deploy.md)（勿在 CentOS 7 上装 Node 构建）。**多租户**模型、划拨、跨租授权与 ACL 见 [tenancy.md](tenancy.md)。日常怎么用见 [ops-manual.md](ops-manual.md)。
 
@@ -177,6 +177,22 @@ Client Secret（及 LDAP Bind 密码）用字段加密密钥落库（优先 `app
 | 值班排班 | `/ops/alerts/oncall` | 按星期与时段指定接收人 |
 
 依赖：`awr_prometheus_base_url`（SQL 洞察设置）；外发在认证配置 → 通知 Tab。
+
+## 容器管理（K8s）
+
+多集群纳管与数据库上 K8s。方案与分期见 [k8s.md](k8s.md)。
+
+| 页面 | 路径 | 说明 |
+|------|------|------|
+| 集群管理 | `/k8s/clusters` | 纳管、探测、命名空间划拨 |
+| 集群概览 | `/k8s/overview` | 节点/Pod 水位与异常 |
+| 节点 | `/k8s/nodes` | 节点列表；cordon/drain |
+| 工作负载 | `/k8s/workloads` | Deploy/STS/Pod 等；日志、扩缩、重启 |
+| 网络 / 存储 | `/k8s/network` `/k8s/storage` | Service、PVC 等 |
+| 资源浏览器 | `/k8s/resources` | CRD 浏览、YAML apply |
+| Operator 中心 | `/k8s/operators` | 检测已装 Operator |
+| 数据库服务 | `/k8s/db-clusters` | 模板化创建与运维，自动登记实例 |
+| Helm 应用 | `/k8s/apps` | 增强期占位 |
 
 ## 平台运维
 

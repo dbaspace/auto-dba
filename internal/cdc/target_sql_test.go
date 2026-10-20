@@ -14,6 +14,8 @@ func TestBuildTargetSQLItems_usesMappingKeysAndPartition(t *testing.T) {
 		RoutineLoadConc:    3,
 		KafkaBrokers:       "k1:9092",
 		TopicPrefix:        "test_db",
+		Env:                "test",
+		SourceDB:           "db",
 		SourceSchema:       "public",
 		DebeziumMode:       "after_only",
 		MessageSchemaMode:  "with_schema",
@@ -53,6 +55,12 @@ func TestBuildTargetSQLItems_usesMappingKeysAndPartition(t *testing.T) {
 	}
 	if !strings.Contains(items[0].Load, "jsonpaths") {
 		t.Fatalf("with_schema should have jsonpaths: %s", items[0].Load)
+	}
+	if !strings.Contains(items[0].Load, "`rl_test_db_orders`") {
+		t.Fatalf("routine load name should be rl_test_db_orders: %s", items[0].Load)
+	}
+	if strings.Contains(items[0].Load, "orders_rl") {
+		t.Fatalf("routine load must not use _rl suffix: %s", items[0].Load)
 	}
 }
 

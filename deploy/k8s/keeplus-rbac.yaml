@@ -1,0 +1,43 @@
+# 可选：在目标集群安装 Impersonate 映射角色（平台开启 impersonate_enabled 时使用）
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: keeplus:viewer
+rules:
+  - apiGroups: ["", "apps", "batch", "networking.k8s.io", "storage.k8s.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: keeplus:operator
+rules:
+  - apiGroups: ["", "apps", "batch", "networking.k8s.io", "storage.k8s.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["postgresql.cnpg.io", "pxc.percona.com", "redis.redis.opstreelabs.in", "starrocks.com"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: keeplus:admin
+rules:
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["*"]
+---
+# 将平台服务账号绑定为可 impersonate 上述用户（示例，按现场 SA 调整）
+# apiVersion: rbac.authorization.k8s.io/v1
+# kind: ClusterRole
+# metadata:
+#   name: keeplus:impersonator
+# rules:
+#   - apiGroups: [""]
+#     resources: ["users", "groups", "serviceaccounts"]
+#     verbs: ["impersonate"]
+#   - apiGroups: ["authentication.k8s.io"]
+#     resources: ["userextras/scopes"]
+#     verbs: ["impersonate"]

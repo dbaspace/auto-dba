@@ -5,6 +5,20 @@ import (
 	"testing"
 )
 
+func TestRoutineLoadNameFor_prefixRl(t *testing.T) {
+	if got := GenerateRoutineLoadName("test", "order_db", "tbl_order"); got != "rl_test_order_db_tbl_order" {
+		t.Fatalf("GenerateRoutineLoadName: %s", got)
+	}
+	// 自定义 topic_prefix 与默认不同 → rl_{topic_prefix}_{target}
+	if got := RoutineLoadNameFor("test", "order_db", "rt_test_db_order_master", "tbl_order"); got != "rl_rt_test_db_order_master_tbl_order" {
+		t.Fatalf("custom prefix: %s", got)
+	}
+	// 默认前缀与 {env}_{db} 相同 → 与 GenerateRoutineLoadName 一致
+	if got := RoutineLoadNameFor("test", "order_db", "test_order_db", "tbl_order"); got != "rl_test_order_db_tbl_order" {
+		t.Fatalf("default prefix: %s", got)
+	}
+}
+
 func TestResolveInitNaming_defaults(t *testing.T) {
 	n := ResolveInitNaming(InitNamingInput{Env: "test", SourceDB: "db_ai"})
 	if n.PublicationName != "test_db_ai" || n.ConnectorName != "test_db_ai" || n.TopicPrefix != "test_db_ai" {

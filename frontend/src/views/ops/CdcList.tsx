@@ -43,6 +43,9 @@ import {
   envTagColor,
   formatSourceScopeLabel,
   instEnv,
+  isCdcManualDDL,
+  isDebeziumConnectorAbnormal,
+  isPipelineUnhealthy,
   isValidCdcTaskID,
   statusTagColor,
   statusText,
@@ -93,9 +96,16 @@ const APPROVAL_STATUS_OPTIONS = [
   { label: '已撤销', value: '已撤销' },
 ]
 
+function listPipelineUnhealthy(row: any): boolean {
+  if (row.status === 'reinitializing') return false
+  if (!row._pipeline) return false
+  return isPipelineUnhealthy(row._pipeline, {
+    auto_create_table: decodeCdcExtra(row?.description).extra.auto_create_table,
+  })
+}
+
 function runningStatusLabel(row: any): string {
-  const unhealthy = row._pipeline?.healthy === false && row.status !== 'reinitializing'
-  if (unhealthy) return '异常'
+  if (listPipelineUnhealthy(row)) return '异常'
   return statusText(row.status)
 }
 
@@ -218,7 +228,7 @@ export default function CdcList() {
 
   const pendingCount = allRows.filter(isPending).length
   const abnormalCount = allRows.filter(
-    (r) => isRunning(r) && (r.status === 'error' || r.status === 'failed' || r._pipeline?.healthy === false),
+    (r) => isRunning(r) && (r.status === 'error' || r.status === 'failed' || listPipelineUnhealthy(r)),
   ).length
   const runningCount = allRows.filter(isRunning).length
 
@@ -286,9 +296,19 @@ export default function CdcList() {
             .get(`/cdc-sync/tasks/${row.id}/status`, { silent: true, signal })
             .catch(() => ({ data: {} as any }))
           const pipe = data.data || {}
+          const body = pipe.pipeline || pipe
           return {
             id: row.id,
-            _pipeline: { healthy: pipe.healthy, unhealthy_reason: pipe.unhealthy_reason },
+            _pipeline: {
+              healthy: pipe.healthy,
+              unhealthy_reason: pipe.unhealthy_reason,
+              connector: pipe.connector || body.connector,
+              kafka: pipe.kafka || body.kafka,
+              slot: pipe.slot || body.slot,
+              starrocks: pipe.starrocks || body.starrocks,
+              routine_loads: pipe.routine_loads || body.routine_loads,
+              publication: pipe.publication || body.publication,
+            },
           }
         }),
       )
@@ -614,10 +634,16 @@ export default function CdcList() {
       key: 'status',
       width: 100,
       render: (_: any, row: any) => {
-        const unhealthy = row._pipeline?.healthy === false && row.status !== 'reinitializing'
-        return (
-          <Tag color={unhealthy ? 'error' : statusTagColor(row.status)}>{runningStatusLabel(row)}</Tag>
-        )
+        const unhealthy = listPipelineUnhealthy(row)
+        const label = runningStatusLabel(row)
+        const tip = unhealthy
+          ? row._pipeline?.unhealthy_reason ||
+            (isCdcManualDDL(decodeCdcExtra(row?.description).extra)
+              ? '链路上游异常'
+              : '链路未完全就绪')
+          : undefined
+        const tag = <Tag color={unhealthy ? 'error' : statusTagColor(row.status)}>{label}</Tag>
+        return tip ? <Tooltip title={tip}>{tag}</Tooltip> : tag
       },
     })
   }
@@ -723,8 +749,10 @@ export default function CdcList() {
               重试
             </Button>
           )}
-          {row.can_reinit && !isPending(row) && (
-            <Tooltip title="按原配置重新初始化（执行前校验 Connector 是否缺失）">
+          {row.can_reinit &&
+            !isPending(row) &&
+            isDebeziumConnectorAbnormal(row._pipeline) && (
+            <Tooltip title="Debezium Connector 异常或缺失（如 404），可按原配置重新初始化">
               <Button
                 type="link"
                 size="small"

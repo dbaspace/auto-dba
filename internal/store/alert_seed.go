@@ -122,6 +122,57 @@ func DefaultAlertRules() []AlertRule {
 			},
 			Scope: global, NotifyPolicy: notify, Enabled: true, CreatedBy: "system",
 		},
+		// K8s（依赖 kube-state-metrics / cadvisor）
+		{
+			ID: "rule-seed-k8s-node-notready", Name: "K8s 节点 NotReady", Severity: AlertSeverityP1, ForDuration: "5m",
+			Expr: `kube_node_status_condition{condition="Ready",status="true"} == 0`,
+			Labels: map[string]string{"team": "DBA", "service": "k8s", "alertname": "K8sNodeNotReady", "sc_tmp": "k8s"},
+			Annotations: map[string]string{"summary": "Kubernetes 节点 NotReady", "threshold": "Ready=false 持续 5m"},
+			Scope: global, NotifyPolicy: notify, Enabled: true, CreatedBy: "system",
+		},
+		{
+			ID: "rule-seed-k8s-pod-crashloop", Name: "K8s Pod CrashLoopBackOff", Severity: AlertSeverityP1, ForDuration: "10m",
+			Expr: `increase(kube_pod_container_status_restarts_total[15m]) > 3`,
+			Labels: map[string]string{"team": "DBA", "service": "k8s", "alertname": "K8sPodCrashLoop", "sc_tmp": "k8s"},
+			Annotations: map[string]string{"summary": "Pod 容器重启频繁（疑似 CrashLoop）", "threshold": "15m 内重启 > 3"},
+			Scope: global, NotifyPolicy: notify, Enabled: true, CreatedBy: "system",
+		},
+		{
+			ID: "rule-seed-k8s-pod-oom", Name: "K8s 容器 OOMKilled", Severity: AlertSeverityP1, ForDuration: "5m",
+			Expr: `kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} == 1`,
+			Labels: map[string]string{"team": "DBA", "service": "k8s", "alertname": "K8sOOMKilled", "sc_tmp": "k8s"},
+			Annotations: map[string]string{"summary": "容器因 OOM 被杀死", "threshold": "OOMKilled=1"},
+			Scope: global, NotifyPolicy: notify, Enabled: true, CreatedBy: "system",
+		},
+		{
+			ID: "rule-seed-k8s-pvc-usage", Name: "K8s PVC 使用率过高", Severity: AlertSeverityP2, ForDuration: "10m",
+			MetricExpr: `kubelet_volume_stats_used_bytes / clamp_min(kubelet_volume_stats_capacity_bytes, 1)`,
+			Expr:      `kubelet_volume_stats_used_bytes / clamp_min(kubelet_volume_stats_capacity_bytes, 1)`,
+			Tiers: []AlertTier{
+				{Op: ">=", Value: 0.85, Severity: AlertSeverityP2, For: "10m"},
+				{Op: ">=", Value: 0.95, Severity: AlertSeverityP1, For: "5m"},
+			},
+			Labels: map[string]string{"team": "DBA", "service": "k8s", "alertname": "K8sPVCHigh", "sc_tmp": "k8s"},
+			Annotations: map[string]string{"summary": "PVC 使用率过高", "threshold": "≥85% P2 / ≥95% P1"},
+			Scope: global, NotifyPolicy: notify, Enabled: true, CreatedBy: "system",
+		},
+		{
+			ID: "rule-seed-k8s-deploy-unavailable", Name: "K8s Deployment 副本不足", Severity: AlertSeverityP1, ForDuration: "10m",
+			Expr: `kube_deployment_status_replicas_unavailable > 0`,
+			Labels: map[string]string{"team": "DBA", "service": "k8s", "alertname": "K8sDeployUnavailable", "sc_tmp": "k8s"},
+			Annotations: map[string]string{"summary": "Deployment 存在不可用副本", "threshold": "unavailable > 0"},
+			Scope: global, NotifyPolicy: notify, Enabled: true, CreatedBy: "system",
+		},
+		{
+			ID: "rule-seed-k8s-cert-expiry", Name: "K8s API Server 证书即将过期", Severity: AlertSeverityP2, ForDuration: "1h",
+			Expr: `(apiserver_client_certificate_expiration_seconds_count > 0) and on() (time() > 0)`,
+			Labels: map[string]string{"team": "DBA", "service": "k8s", "alertname": "K8sCertExpiryHint", "sc_tmp": "k8s"},
+			Annotations: map[string]string{
+				"summary": "请结合证书监控确认 API Server / kubelet 证书剩余有效期",
+				"threshold": "需配合证书 exporter；本规则为占位提示",
+			},
+			Scope: global, NotifyPolicy: notify, Enabled: false, CreatedBy: "system",
+		},
 	}
 }
 

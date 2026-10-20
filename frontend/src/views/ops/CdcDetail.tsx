@@ -19,6 +19,7 @@ import {
   Switch,
   Tabs,
   Tag,
+  Tooltip,
   message,
 } from 'antd'
 import ResponsiveTable from '../../components/ResponsiveTable'
@@ -49,6 +50,7 @@ import {
   keyModelLabel,
   LOG_STEP_OPTIONS,
   logStepText,
+  isDebeziumConnectorAbnormal,
   mappingSourceTagColor,
   mappingSourceText,
   pipelineBundle,
@@ -226,7 +228,7 @@ export default function CdcDetail() {
     const rls = p.routine_loads || []
     const runningRL = rls.filter((j: any) => String(j.state || '').toUpperCase() === 'RUNNING').length
     const lag = slot.replication_lag_bytes ?? slot.lag_bytes
-    const manual = extra.auto_create_table === false && !task.target_instance_id
+    const manual = extra.auto_create_table === false
     return [
       {
         id: 'pg',
@@ -785,19 +787,22 @@ export default function CdcDetail() {
     {
       title: '源表',
       key: 'src',
-      width: 320,
+      width: 360,
+      onCell: () => ({ className: 'cdc-map-src-cell' }),
       render: (_, row) => {
         const srcs: string[] = row.source_tables?.length ? row.source_tables : row.name ? [row.name] : []
         const isShard = !!(row.is_shard_group || srcs.length > 1)
         return isShard ? (
-          <div>
-            <Tag color="orange">分表 {srcs.length}</Tag>
-            {row.shard_pattern ? <code style={{ marginLeft: 4 }}>{row.shard_pattern}</code> : null}
+          <div className="cdc-map-src-cell">
+            <div className="cdc-map-src-meta">
+              <Tag color="orange">分表 {srcs.length}</Tag>
+              {row.shard_pattern ? <code>{row.shard_pattern}</code> : null}
+            </div>
             <ShardSourceTablesGrid tables={srcs} />
           </div>
         ) : (
-          <div>
-            <Tag color="blue">单表</Tag>{' '}
+          <div className="cdc-map-src-meta">
+            <Tag color="blue">单表</Tag>
             <code>{srcs[0] || '—'}</code>
           </div>
         )
@@ -806,21 +811,28 @@ export default function CdcDetail() {
     {
       title: '目标表',
       key: 'tgt',
-      width: 160,
+      width: 140,
       ellipsis: true,
       render: (_, row) => (
-        <span>
-          <code style={{ color: row.status === 'deleted' ? '#909399' : undefined, wordBreak: 'break-all' }}>
-            {row.target_table}
-          </code>
-          {row.status === 'deleted' && <Tag style={{ marginLeft: 4 }}>已移除</Tag>}
-        </span>
+        <Tooltip title={row.target_table}>
+          <span>
+            <code
+              style={{
+                color: row.status === 'deleted' ? '#909399' : undefined,
+                fontSize: 11,
+              }}
+            >
+              {row.target_table}
+            </code>
+            {row.status === 'deleted' && <Tag style={{ marginLeft: 4 }}>已移除</Tag>}
+          </span>
+        </Tooltip>
       ),
     },
     {
       title: 'KEY 列',
       key: 'keys',
-      width: 160,
+      width: 100,
       render: (_, row) => {
         const ks = row.key_columns || row.primary_keys || []
         if (!ks.length) return <span style={{ color: '#c0c4cc' }}>—</span>
@@ -838,25 +850,31 @@ export default function CdcDetail() {
     {
       title: 'Kafka Topic',
       key: 'topic',
-      width: 220,
-      render: (_, row) =>
-        (row.topic_names || []).length ? (
-          <div className="cdc-map-topic-wrap">
-            {row.topic_names.slice(0, 3).map((t: string) => (
-              <code key={t}>{t}</code>
-            ))}
-            {row.topic_names.length > 3 ? (
-              <span style={{ color: '#8c8c8c' }}>共 {row.topic_names.length} 个</span>
-            ) : null}
-          </div>
-        ) : (
-          <span style={{ color: '#c0c4cc' }}>—</span>
-        ),
+      width: 200,
+      ellipsis: true,
+      render: (_, row) => {
+        const topics: string[] = row.topic_names || []
+        if (!topics.length) return <span style={{ color: '#c0c4cc' }}>—</span>
+        const tip =
+          topics.length > 1 ? (
+            <span style={{ whiteSpace: 'pre-wrap' }}>{topics.join('\n')}</span>
+          ) : (
+            topics[0]
+          )
+        return (
+          <Tooltip title={tip}>
+            <div className="cdc-map-topic-wrap">
+              <code>{topics[0]}</code>
+              {topics.length > 1 ? <span style={{ color: '#8c8c8c' }}> +{topics.length - 1}</span> : null}
+            </div>
+          </Tooltip>
+        )
+      },
     },
     {
       title: '结构差异',
       key: 'drift',
-      width: 120,
+      width: 100,
       render: (_, row) =>
         row.schema_has_drift ? (
           <Tag color="warning">缺列 {(row.schema_missing_columns || []).length || ''}</Tag>
@@ -869,21 +887,29 @@ export default function CdcDetail() {
     {
       title: 'Routine Load',
       key: 'rl',
-      width: 200,
-      render: (_, row) => (
-        <code style={{ wordBreak: 'break-all', fontSize: 12 }}>{row.routine_load_name || '—'}</code>
-      ),
+      width: 160,
+      ellipsis: true,
+      render: (_, row) => {
+        const name = row.routine_load_name || '—'
+        return (
+          <Tooltip title={name === '—' ? undefined : name}>
+            <span className="cdc-map-rl-cell">
+              <code>{name}</code>
+            </span>
+          </Tooltip>
+        )
+      },
     },
     {
       title: '来源',
       key: 'source',
-      width: 90,
+      width: 80,
       render: (_, row) => <Tag color={mappingSourceTagColor(row.source)}>{mappingSourceText(row.source)}</Tag>,
     },
     {
       title: '操作',
       key: 'op',
-      width: 200,
+      width: 180,
       fixed: 'right',
       render: (_, row) => (
         <Space size={4}>
@@ -940,7 +966,9 @@ export default function CdcDetail() {
               重试
             </Button>
           )}
-          {task.can_reinit && !pending && <Button onClick={() => setReinitOpen(true)}>重新初始化</Button>}
+          {task.can_reinit && !pending && isDebeziumConnectorAbnormal(pipe) && (
+            <Button onClick={() => setReinitOpen(true)}>重新初始化</Button>
+          )}
         </div>
       </div>
       <CdcReinitModal open={reinitOpen} task={task} onClose={() => setReinitOpen(false)} onSubmitted={load} />
@@ -1285,12 +1313,13 @@ export default function CdcDetail() {
           }
         >
           <ResponsiveTable
+            className="cdc-map-table"
             rowKey={(r) => r.target_table || r.name}
             size="small"
             columns={mapColumns}
             dataSource={pagedTableRows}
             pagination={false}
-            scroll={{ x: 'max-content' }}
+            scroll={{ x: 1320 }}
             locale={{ emptyText: '暂无映射表' }}
           />
           <div className="cdc-pager">

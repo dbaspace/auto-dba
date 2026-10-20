@@ -621,6 +621,8 @@ func PreviewTargetSQLItems(ctx context.Context, st *store.DB, secret string, t *
 		RoutineLoadConc:    extraAtoi(extra["routine_load_parallelism"], extraAtoi(extra["sync_sr_routine_load_desired_concurrent"], 3)),
 		KafkaBrokers:       ResolveKafkaBootstrap(extra["kafka_bootstrap_servers"], connHost, ""),
 		TopicPrefix:        extra["topic_prefix"],
+		Env:                extra["env"],
+		SourceDB:           t.SourceDB,
 		SourceSchema:       schema,
 		DebeziumMode:       extra["debezium_mode"],
 		MessageSchemaMode:  schemaMode,
@@ -826,7 +828,7 @@ func (o *Orchestrator) routineLoadAction(ctx context.Context, t *store.CDCTask, 
 		if table == "" {
 			return
 		}
-		names[table+"_rl"] = struct{}{}
+		names[RoutineLoadNameFor(extra["env"], t.SourceDB, extra["topic_prefix"], table)] = struct{}{}
 	}
 	for _, m := range maps {
 		if strings.EqualFold(m.Status, "deleted") {
@@ -865,7 +867,7 @@ func (o *Orchestrator) routineLoadActionForTables(ctx context.Context, t *store.
 		if tb == "" {
 			continue
 		}
-		names[tb+"_rl"] = struct{}{}
+		names[RoutineLoadNameFor(extra["env"], t.SourceDB, extra["topic_prefix"], tb)] = struct{}{}
 	}
 	o.execRoutineLoadNames(ctx, db, t, t.TargetDB, names, action)
 }

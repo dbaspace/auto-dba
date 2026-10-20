@@ -62,8 +62,7 @@ func SplitMappings(mappings []TableMapping, fallbackTables []string) (plain []st
 		if tgt == "" && len(src) > 0 {
 			tgt = src[0]
 		}
-		isShard := m.IsShardGroup || len(src) > 1 || strings.TrimSpace(m.ShardPattern) != ""
-		if isShard {
+		if IsShardMapping(m) {
 			shards = append(shards, ShardGroup{
 				LogicalName: tgt,
 				Regex:       deriveShardRegexPart(tgt, m.ShardPattern, src),

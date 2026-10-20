@@ -315,6 +315,7 @@ func AllKnowledgeCases() []KnowledgeCase {
 	out = append(out, MySQLKnowledgeCases()...)
 	out = append(out, RedisKnowledgeCases()...)
 	out = append(out, StarRocksKnowledgeCases()...)
+	out = append(out, K8sKnowledgeCases()...)
 	out = append(out, GeneralKnowledgeCases()...)
 	return out
 }

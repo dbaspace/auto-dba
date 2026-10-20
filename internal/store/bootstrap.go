@@ -11,8 +11,8 @@ import (
 
 // 启动引导版本：修改 migrate.go / seed.go 后请递增对应常量，否则已初始化库会跳过重跑。
 const (
-	SchemaVersion = "2026-10-20.job-registry"
-	SeedVersion   = "2026-10-20.scheduled-jobs-menu"
+	SchemaVersion = "2026-10-20.k8s-mgmt"
+	SeedVersion   = "2026-10-20.k8s-menus"
 )
 
 const (

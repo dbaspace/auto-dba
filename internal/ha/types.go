@@ -356,11 +356,17 @@ func SwitchoverChecklist(engine, mode string) []string {
 			"按 Galera 手册摘写并切换流量",
 			"勿对未加入组的节点 promote",
 		}
-	case e == "mysql" && (m == "shared_storage" || m == "k8s_operator"):
+	case e == "mysql" && m == "shared_storage":
 		return []string{
-			"按现网 Pacemaker / Operator 手册执行计划切换",
+			"按现网 Pacemaker 手册执行计划切换",
 			"平台仅更新登记角色，不直接操作集群",
 			"切换后核对 VIP / Service 端点",
+		}
+	case e == "mysql" && m == "k8s_operator":
+		return []string{
+			"确认 Percona/Operator CR 状态正常",
+			"经平台「容器管理 → 数据库服务」发起切换（按 Operator 语义）",
+			"切换后核对 Service 端点与实例登记",
 		}
 	case e == "postgres" && m == "pg_autofailover":
 		return []string{
@@ -387,9 +393,9 @@ func SwitchoverChecklist(engine, mode string) []string {
 		}
 	case e == "postgres" && m == "k8s_operator":
 		return []string{
-			"按 CloudNativePG / Operator 手册执行计划切换",
-			"平台仅更新登记角色，不直接操作集群",
-			"切换后核对 Service / 连接串",
+			"确认 CloudNativePG Cluster 状态 Ready",
+			"经平台「容器管理 → 数据库服务」调用 Operator Switchover（或 patch targetPrimary）",
+			"切换后核对 Service / 连接串与实例登记",
 		}
 	case e == "redis" && m == "sentinel":
 		return []string{

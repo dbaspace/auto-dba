@@ -36,6 +36,16 @@ export const PAGE_ROUTES = [
   { path: '/ops/backup/policies', title: '备份策略' },
   { path: '/ops/backup/runs', title: '备份执行记录' },
   { path: '/ops/backup/settings', title: '备份存储' },
+  { path: '/k8s/clusters', title: 'K8s 集群管理' },
+  { path: '/k8s/overview', title: 'K8s 集群概览' },
+  { path: '/k8s/nodes', title: 'K8s 节点' },
+  { path: '/k8s/workloads', title: 'K8s 工作负载' },
+  { path: '/k8s/network', title: 'K8s 网络' },
+  { path: '/k8s/storage', title: 'K8s 存储' },
+  { path: '/k8s/resources', title: 'K8s 资源浏览器' },
+  { path: '/k8s/operators', title: 'K8s Operator' },
+  { path: '/k8s/db-clusters', title: 'K8s 数据库服务' },
+  { path: '/k8s/apps', title: 'K8s Helm 应用' },
   { path: '/ops/sql-insight', title: 'SQL 洞察' },
   { path: '/ops/redis-rdb', title: 'Redis 内存分析' },
   { path: '/ops/db-monitor/postgres', title: 'Postgres监控' },
@@ -150,6 +160,7 @@ export function pathAllowed(path: string, allowed: string[]): boolean {
   if (path === '/config/monitor-targets' || path === '/config/fe-admin' || path === '/config/ds-admin') return true
   if (path.startsWith('/ops/archive') || path.startsWith('/metadata/database/search/archiverManager')) return true
   if (path.startsWith('/ops/backup')) return true
+  if (path.startsWith('/k8s/')) return true
   if (path === '/ops/sql-insight' || path.includes('/serviceOperations/activitysnapshot')) return true
   if (path === '/ops/redis-rdb') return true
   if (path === '/ops/db-monitor' || path.startsWith('/ops/db-monitor/')) return true

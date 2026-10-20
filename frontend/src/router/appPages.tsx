@@ -69,6 +69,14 @@ import HaMaintain from '../views/ops/HaMaintain'
 import BackupPolicies from '../views/backup/Policies'
 import BackupRuns from '../views/backup/Runs'
 import BackupSettings from '../views/backup/Settings'
+import K8sClusters from '../views/k8s/Clusters'
+import K8sOverview from '../views/k8s/Overview'
+import K8sWorkloads from '../views/k8s/Workloads'
+import { K8sNetwork, K8sNodes, K8sStorage } from '../views/k8s/ResourceList'
+import K8sResources from '../views/k8s/Resources'
+import K8sOperators from '../views/k8s/Operators'
+import K8sDBClusters from '../views/k8s/DBClusters'
+import K8sApps from '../views/k8s/Apps'
 import PlatformAgent from '../views/config/PlatformAgent'
 import OssUpload from '../views/config/OssUpload'
 import CmdbAssets from '../views/cmdb/Assets'
@@ -194,6 +202,17 @@ export function TabPagePanel({ pathname, search }: { pathname: string; search?: 
       <Route path="/ops/backup/policies" element={<BackupPolicies />} />
       <Route path="/ops/backup/runs" element={<BackupRuns />} />
       <Route path="/ops/backup/settings" element={<BackupSettings />} />
+
+      <Route path="/k8s/clusters" element={<K8sClusters />} />
+      <Route path="/k8s/overview" element={<K8sOverview />} />
+      <Route path="/k8s/nodes" element={<K8sNodes />} />
+      <Route path="/k8s/workloads" element={<K8sWorkloads />} />
+      <Route path="/k8s/network" element={<K8sNetwork />} />
+      <Route path="/k8s/storage" element={<K8sStorage />} />
+      <Route path="/k8s/resources" element={<K8sResources />} />
+      <Route path="/k8s/operators" element={<K8sOperators />} />
+      <Route path="/k8s/db-clusters" element={<K8sDBClusters />} />
+      <Route path="/k8s/apps" element={<K8sApps />} />
 
       <Route path="/ops/sql-insight" element={<SqlInsight />} />
       <Route path="/ops/redis-rdb" element={<RedisRdb />} />

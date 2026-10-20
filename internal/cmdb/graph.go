@@ -250,6 +250,41 @@ func (s *Service) derivedEdges(ciType, ciID string, ctx graphExpandCtx) ([]Edge,
 				out = append(out, Edge{SrcType: TypeCDCTask, SrcID: t.ID, RelType: "data_flow", DstType: TypeInstance, DstID: it.ID, Source: "derived"})
 			}
 		}
+		for _, tag := range it.Tags {
+			if strings.HasPrefix(tag, "k8s_cluster_id=") {
+				cid := strings.TrimPrefix(tag, "k8s_cluster_id=")
+				if cid != "" {
+					out = append(out, Edge{SrcType: TypeInstance, SrcID: it.ID, RelType: "runs_on", DstType: TypeK8sCluster, DstID: cid, Source: "derived"})
+				}
+			}
+		}
+		k8sDBs, _ := s.Store.ListK8sDBClustersInTenant(it.TenantID, "")
+		for _, dbc := range k8sDBs {
+			if dbc.InstanceID == it.ID {
+				out = append(out, Edge{SrcType: TypeK8sDBCluster, SrcID: dbc.ID, RelType: "owns", DstType: TypeInstance, DstID: it.ID, Source: "derived"})
+				out = append(out, Edge{SrcType: TypeK8sDBCluster, SrcID: dbc.ID, RelType: "hosted_on", DstType: TypeK8sCluster, DstID: dbc.ClusterID, Source: "derived"})
+			}
+		}
+	case TypeK8sCluster:
+		binds, _ := s.Store.ListK8sNamespaceBindings(ciID, "")
+		for _, b := range binds {
+			out = append(out, Edge{SrcType: TypeK8sCluster, SrcID: ciID, RelType: "contains", DstType: TypeK8sNamespace, DstID: b.ID, Source: "derived"})
+		}
+		dbcList, _ := s.Store.ListK8sDBClustersInTenant("", ciID)
+		for _, dbc := range dbcList {
+			out = append(out, Edge{SrcType: TypeK8sCluster, SrcID: ciID, RelType: "hosts", DstType: TypeK8sDBCluster, DstID: dbc.ID, Source: "derived"})
+			if dbc.InstanceID != "" {
+				out = append(out, Edge{SrcType: TypeK8sDBCluster, SrcID: dbc.ID, RelType: "owns", DstType: TypeInstance, DstID: dbc.InstanceID, Source: "derived"})
+			}
+		}
+	case TypeK8sDBCluster:
+		dbc, _ := s.Store.GetK8sDBCluster(ciID)
+		if dbc != nil {
+			out = append(out, Edge{SrcType: TypeK8sDBCluster, SrcID: ciID, RelType: "hosted_on", DstType: TypeK8sCluster, DstID: dbc.ClusterID, Source: "derived"})
+			if dbc.InstanceID != "" {
+				out = append(out, Edge{SrcType: TypeK8sDBCluster, SrcID: ciID, RelType: "owns", DstType: TypeInstance, DstID: dbc.InstanceID, Source: "derived"})
+			}
+		}
 	case TypeHACluster:
 		members, _ := s.Store.ListHAMembers(ciID)
 		for _, m := range members {

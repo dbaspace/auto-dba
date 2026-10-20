@@ -12,9 +12,17 @@ import {
   Tag,
   message,
 } from 'antd'
+import dayjs from 'dayjs'
 import { Link } from 'react-router-dom'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import api from '../../api/request'
+
+/** 统一展示为本地时间 YYYY-MM-DD HH:mm:ss（兼容 UTC Z / 带偏移 RFC3339） */
+function formatJobTime(raw?: string): string {
+  if (!raw || !String(raw).trim()) return '—'
+  const d = dayjs(raw)
+  return d.isValid() ? d.format('YYYY-MM-DD HH:mm:ss') : String(raw)
+}
 
 type JobView = {
   key: string
@@ -229,11 +237,11 @@ export default function ScheduledJobs() {
       {
         title: '上次',
         key: 'last',
-        width: 120,
+        width: 160,
         render: (_: any, r: JobView) => (
           <Space direction="vertical" size={0}>
             {statusTag(r.last_status)}
-            <span style={{ fontSize: 12, color: '#888' }}>{r.last_started_at || ''}</span>
+            <span style={{ fontSize: 12, color: '#888' }}>{formatJobTime(r.last_started_at)}</span>
           </Space>
         ),
       },
@@ -241,7 +249,7 @@ export default function ScheduledJobs() {
         title: '下次',
         dataIndex: 'next_fire_at',
         width: 160,
-        render: (v: string) => v || '—',
+        render: (v: string) => formatJobTime(v),
       },
       {
         title: '24h',
@@ -297,7 +305,7 @@ export default function ScheduledJobs() {
       render: (v: boolean) => (v ? <Tag color="success">是</Tag> : <Tag>否</Tag>),
     },
     { title: '状态', dataIndex: 'status', width: 100 },
-    { title: '最近执行', dataIndex: 'last_run_at', width: 180 },
+    { title: '最近执行', dataIndex: 'last_run_at', width: 180, render: (v: string) => formatJobTime(v) },
     {
       title: '操作',
       key: 'go',
@@ -391,7 +399,8 @@ export default function ScheduledJobs() {
           columns={[
             { title: '触发', dataIndex: 'trigger', width: 80 },
             { title: '状态', dataIndex: 'status', width: 100, render: (s: string) => statusTag(s) },
-            { title: '开始', dataIndex: 'started_at', width: 180 },
+            { title: '开始', dataIndex: 'started_at', width: 180, render: (v: string) => formatJobTime(v) },
+            { title: '结束', dataIndex: 'ended_at', width: 180, render: (v: string) => formatJobTime(v) },
             { title: '耗时ms', dataIndex: 'duration_ms', width: 80 },
             { title: '节点', dataIndex: 'owner_host', width: 120 },
             { title: '错误', dataIndex: 'error' },

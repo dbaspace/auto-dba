@@ -361,6 +361,90 @@ export function pipelineNodeTone(state: any): string {
   return 'is-run'
 }
 
+/** 手动 DDL：不自动建表 / Routine Load（与详情横幅一致，不论是否配置目标端） */
+export function isCdcManualDDL(extraOrTask?: { auto_create_table?: any } | null): boolean {
+  return extraOrTask?.auto_create_table === false
+}
+
+/**
+ * Debezium Connector 是否异常（对齐老项目 isDebeziumConnectorAbnormal）。
+ * 用于决定是否展示「重新初始化」：仅 FAILED / NOT_FOUND(404) / task 全挂时为 true；
+ * 探测未完成（无 connector）返回 false，不展示按钮。
+ */
+export function isDebeziumConnectorAbnormal(
+  pipelineOrConnector?: {
+    connector?: { state?: string; tasks?: { state?: string }[] } | null
+    state?: string
+    tasks?: { state?: string }[]
+  } | null,
+): boolean {
+  if (!pipelineOrConnector) return false
+  const conn =
+    pipelineOrConnector.connector !== undefined
+      ? pipelineOrConnector.connector
+      : (pipelineOrConnector as { state?: string; tasks?: { state?: string }[] })
+  if (!conn) return false
+  const st = String(conn.state || '').toUpperCase()
+  if (st === 'FAILED' || st === 'NOT_FOUND' || st === 'ERROR') return true
+  const tasks = conn.tasks || []
+  if (st === 'RUNNING' && tasks.length) {
+    const running = tasks.filter((t) => String(t.state || '').toUpperCase() === 'RUNNING').length
+    if (running === 0) return true
+  }
+  return false
+}
+
+/**
+ * 列表「异常」判定，对齐老项目 isPipelineUnhealthy：
+ * - Kafka MISSING/PARTIAL 不降级为异常（仅 UNREACHABLE/FAILED/ERROR）
+ * - 手动 DDL 豁免 SR/RL
+ */
+export function isPipelineUnhealthy(
+  pipeline?: {
+    connector?: { state?: string; tasks?: { state?: string }[] } | null
+    kafka?: { state?: string } | null
+    slot?: { active?: boolean; state?: string } | null
+    starrocks?: { state?: string } | null
+    routine_loads?: { state?: string }[] | null
+    healthy?: boolean
+  } | null,
+  opts?: { auto_create_table?: any },
+): boolean {
+  if (!pipeline) return false
+  const slot = pipeline.slot
+  if (slot && slot.active === false) return true
+
+  const conn = pipeline.connector
+  if (conn) {
+    const st = String(conn.state || '').toUpperCase()
+    if (st === 'FAILED' || st === 'NOT_FOUND' || st === 'ERROR') return true
+    const tasks = conn.tasks || []
+    if (st === 'RUNNING' && tasks.length) {
+      const running = tasks.filter((t) => String(t.state || '').toUpperCase() === 'RUNNING').length
+      if (running === 0) return true
+    }
+  }
+
+  const kafkaSt = String(pipeline.kafka?.state || '').toUpperCase()
+  if (['UNREACHABLE', 'FAILED', 'ERROR'].includes(kafkaSt)) return true
+  // MISSING / PARTIAL：不刷列表异常（与老项目一致）
+
+  if (isCdcManualDDL(opts)) return false
+
+  const srSt = String(pipeline.starrocks?.state || '').toUpperCase()
+  if (['UNREACHABLE', 'FAILED', 'ERROR', 'DEGRADED'].includes(srSt)) return true
+
+  const loads = pipeline.routine_loads || []
+  if (loads.length) {
+    const bad = loads.some((l) => {
+      const s = String(l.state || '').toUpperCase()
+      return s === 'STOPPED' || s === 'FAILED' || s === 'CANCELLED' || s === 'CANCELED'
+    })
+    if (bad) return true
+  }
+  return false
+}
+
 export function formatLagBytes(n: any): string {
   const b = Number(n)
   if (!Number.isFinite(b) || b < 0) return '—'
@@ -794,6 +878,15 @@ export function buildSqlPreview(form: any, mappingList: any[], kafkaBrokers: str
   const rl = positiveInt(form.routine_load_parallelism, CDC_INFRA_DEFAULTS.routine_load_parallelism)
   const prefix = form.topic_prefix || form.name || 'cdc'
   const schema = form.source_schema || 'public'
+  const env = String(form.env || '').trim()
+  const sourceDb = String(form.source_db || '').trim()
+  const defaultPrefix = [env, sourceDb].filter(Boolean).join('_')
+  const rlNameOf = (tgt: string) => {
+    const table = String(tgt || '').trim() || 'table'
+    if (prefix && defaultPrefix && prefix !== defaultPrefix) return `rl_${prefix}_${table}`
+    if (env || sourceDb) return `rl_${[env, sourceDb, table].filter(Boolean).join('_')}`
+    return `rl_${table}`
+  }
   const brokers = String(kafkaBrokers || form.kafka_bootstrap_servers || '').trim() || 'kafka:9092'
   const dpOn = !!form.sr_dynamic_partition_enable
   const dpObj = dpOn ? buildSrDynamicPartitionObject(form) || { ...CDC_DYNAMIC_PARTITION_DEFAULTS } : null
@@ -828,8 +921,9 @@ export function buildSqlPreview(form: any, mappingList: any[], kafkaBrokers: str
           },
         )
       }
+      const rlName = rlNameOf(tgt)
       const load = [
-        `CREATE ROUTINE LOAD \`${db}\`.\`${tgt}_rl\` ON \`${tgt}\``,
+        `CREATE ROUTINE LOAD \`${db}\`.\`${rlName}\` ON \`${tgt}\``,
         `COLUMNS(${keys.join(', ')}, __op)`,
         `PROPERTIES (`,
         `  "format" = "json",`,
@@ -839,7 +933,7 @@ export function buildSqlPreview(form: any, mappingList: any[], kafkaBrokers: str
         `FROM KAFKA (`,
         `  "kafka_broker_list" = "${brokers}",`,
         `  "kafka_topic" = "${topics}",`,
-        `  "property.group.id" = "${tgt}_rl",`,
+        `  "property.group.id" = "${rlName}",`,
         `  "property.kafka_default_offsets" = "OFFSET_BEGINNING"`,
         `);`,
       ]

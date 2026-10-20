@@ -27,6 +27,9 @@ const (
 	TypeProxyService     = "proxy_service"
 	TypeDBAccount        = "db_account"
 	TypeCDCTask          = "cdc_task"
+	TypeK8sCluster       = "k8s_cluster"
+	TypeK8sNamespace     = "k8s_namespace"
+	TypeK8sDBCluster     = "k8s_db_cluster"
 )
 
 // CI 统一目录条目。
@@ -127,6 +130,12 @@ func (s *Service) ListCIs(opts ListOpts) ([]CI, error) {
 		all, err = s.listDBAccounts(opts)
 	case TypeCDCTask:
 		all, err = s.listCDCTasks(opts)
+	case TypeK8sCluster:
+		all, err = s.listK8sClusters(opts)
+	case TypeK8sNamespace:
+		all, err = s.listK8sNamespaces(opts)
+	case TypeK8sDBCluster:
+		all, err = s.listK8sDBClusters(opts)
 	default:
 		return []CI{}, nil
 	}
@@ -523,6 +532,72 @@ func (s *Service) listCDCTasks(opts ListOpts) ([]CI, error) {
 				"source_db": t.SourceDB, "target_db": t.TargetDB, "task_type": t.TaskType,
 			},
 			UpdatedAt: t.UpdatedAt, EditPath: "/ops/cdc",
+		})
+	}
+	return out, nil
+}
+
+func (s *Service) listK8sClusters(opts ListOpts) ([]CI, error) {
+	list, err := s.Store.ListK8sClustersInTenant(opts.TenantID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]CI, 0, len(list))
+	for _, c := range list {
+		badge := []string{}
+		switch c.Status {
+		case store.K8sStatusHealthy:
+			badge = append(badge, "healthy")
+		case store.K8sStatusDegraded:
+			badge = append(badge, "degraded")
+		case store.K8sStatusUnreachable:
+			badge = append(badge, "unreachable")
+		}
+		out = append(out, CI{
+			ID: c.ID, Type: TypeK8sCluster, Name: firstNonEmpty(c.Name, c.ID), Status: c.Status,
+			EnvID: c.EnvID, RegionID: c.RegionID, HealthBadges: badge,
+			Attrs: map[string]any{
+				"tenant_id": c.TenantID, "version": c.Version, "node_count": c.NodeCount,
+				"access_mode": c.AccessMode, "api_server": c.APIServer,
+			},
+			UpdatedAt: c.UpdatedAt, EditPath: "/k8s/clusters",
+		})
+	}
+	return out, nil
+}
+
+func (s *Service) listK8sNamespaces(opts ListOpts) ([]CI, error) {
+	binds, err := s.Store.ListK8sNamespaceBindings("", opts.TenantID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]CI, 0, len(binds))
+	for _, b := range binds {
+		out = append(out, CI{
+			ID: b.ID, Type: TypeK8sNamespace, Name: b.Namespace, Status: "bound",
+			Attrs: map[string]any{
+				"cluster_id": b.ClusterID, "tenant_id": b.TenantID, "visibility": b.Visibility,
+			},
+			UpdatedAt: b.CreatedAt, EditPath: "/k8s/clusters",
+		})
+	}
+	return out, nil
+}
+
+func (s *Service) listK8sDBClusters(opts ListOpts) ([]CI, error) {
+	list, err := s.Store.ListK8sDBClustersInTenant(opts.TenantID, "")
+	if err != nil {
+		return nil, err
+	}
+	out := make([]CI, 0, len(list))
+	for _, c := range list {
+		out = append(out, CI{
+			ID: c.ID, Type: TypeK8sDBCluster, Name: c.CRName, Status: c.Status,
+			Attrs: map[string]any{
+				"tenant_id": c.TenantID, "cluster_id": c.ClusterID, "namespace": c.Namespace,
+				"engine": c.Engine, "instance_id": c.InstanceID, "endpoint": c.Endpoint,
+			},
+			UpdatedAt: c.UpdatedAt, EditPath: "/k8s/db-clusters",
 		})
 	}
 	return out, nil

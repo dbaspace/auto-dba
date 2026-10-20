@@ -60,6 +60,7 @@ type Deps struct {
 	HA                 *handler.HAHandler
 	Proxy              *handler.ProxyHandler
 	Backup             *handler.BackupHandler
+	K8s                *handler.K8sHandler
 	SrCluster          *handler.SrClusterHandler
 	DbDeploy           *handler.DbDeployHandler
 	Cmdb               *handler.CmdbHandler
@@ -112,6 +113,7 @@ func Init(e *gin.Engine, d Deps) {
 		"/api/v1/auth/login", "/api/v1/auth/captcha", "/api/v1/info",
 		"/api/v1/auth/sso/",
 		"/api/v1/auth/password/forgot", "/api/v1/auth/password/reset",
+		"/api/v1/k8s/agents/",
 	)
 	secured := e.Group("/api/v1")
 	secured.Use(auth)
@@ -768,6 +770,56 @@ func Init(e *gin.Engine, d Deps) {
 		pg.POST("/:id/start", d.Backup.StartAgent)
 		pg.POST("/:id/stop", d.Backup.StopAgent)
 		pg.POST("/:id/redeploy", d.Backup.RedeployAgent)
+	}
+
+	if d.K8s != nil {
+		kg := secured.Group("/k8s")
+		kg.GET("/meta", d.K8s.Meta)
+		kg.GET("/summary", d.K8s.MultiClusterSummary)
+		kg.GET("/cost", d.K8s.CostEstimate)
+		kg.GET("/db-clusters", d.K8s.ListDBClusters)
+		kg.GET("/db-clusters/:dbId", d.K8s.GetDBCluster)
+		kg.POST("/db-clusters/:dbId/scale", requireURN(store.URNK8sDBScale), d.K8s.ScaleDBCluster)
+		kg.POST("/db-clusters/:dbId/upgrade", requireURN(store.URNK8sDBUpgrade), d.K8s.UpgradeDBCluster)
+		kg.POST("/db-clusters/:dbId/switchover", requireURN(store.URNK8sDBSwitchover), d.K8s.SwitchoverDBCluster)
+		kg.POST("/db-clusters/:dbId/backup", d.K8s.BackupDBCluster)
+		kg.DELETE("/db-clusters/:dbId", requireURN(store.URNK8sDBDelete), d.K8s.DeleteDBCluster)
+
+		kg.GET("/clusters", d.K8s.ListClusters)
+		kg.POST("/clusters", requireURN(store.URNK8sClusterCreate), d.K8s.CreateCluster)
+		kg.GET("/clusters/:id", d.K8s.GetCluster)
+		kg.PATCH("/clusters/:id", requireURN(store.URNK8sClusterEdit), d.K8s.UpdateCluster)
+		kg.DELETE("/clusters/:id", requireURN(store.URNK8sClusterDelete), d.K8s.DeleteCluster)
+		kg.POST("/clusters/:id/probe", d.K8s.ProbeCluster)
+		kg.GET("/clusters/:id/overview", d.K8s.Overview)
+		kg.GET("/clusters/:id/audits", d.K8s.ListAudits)
+		kg.GET("/clusters/:id/namespaces/bindings", d.K8s.ListNamespaceBindings)
+		kg.POST("/clusters/:id/namespaces/assign", requireURN(store.URNK8sClusterAssign), d.K8s.AssignNamespace)
+		kg.DELETE("/clusters/:id/namespaces/bindings/:bindId", requireURN(store.URNK8sClusterAssign), d.K8s.DeleteNamespaceBinding)
+
+		kg.GET("/clusters/:id/resources/:gvr", d.K8s.ListResources)
+		kg.GET("/clusters/:id/resources/:gvr/:ns/:name", d.K8s.GetResource)
+		kg.DELETE("/clusters/:id/resources/:gvr/:ns/:name", requireURN(store.URNK8sWorkloadDelete), d.K8s.DeleteResource)
+		kg.GET("/clusters/:id/api-resources", d.K8s.DiscoverResources)
+		kg.POST("/clusters/:id/apply", requireURN(store.URNK8sYAMLApply), d.K8s.ApplyYAML)
+
+		kg.GET("/clusters/:id/pods/:ns/:name/log", requireURN(store.URNK8sPodLog), d.K8s.GetPodLog)
+		kg.GET("/clusters/:id/pods/:ns/:name/exec", requireURN(store.URNK8sPodExec), d.K8s.ExecPod)
+
+		kg.POST("/clusters/:id/workloads/:kind/:ns/:name/scale", requireURN(store.URNK8sWorkloadScale), d.K8s.ScaleWorkload)
+		kg.POST("/clusters/:id/workloads/:kind/:ns/:name/restart", requireURN(store.URNK8sWorkloadRestart), d.K8s.RestartWorkload)
+		kg.POST("/clusters/:id/nodes/:name/cordon", d.K8s.CordonNode)
+		kg.POST("/clusters/:id/nodes/:name/drain", requireURN(store.URNK8sNodeDrain), d.K8s.DrainNode)
+
+		kg.POST("/clusters/:id/operators/detect", d.K8s.DetectOperators)
+		kg.GET("/clusters/:id/operators", d.K8s.ListOperators)
+		kg.POST("/clusters/:id/db-clusters", requireURN(store.URNK8sDBCreate), d.K8s.CreateDBCluster)
+		kg.GET("/clusters/:id/apps", d.K8s.ListHelmApps)
+	}
+
+	if d.K8s != nil {
+		// Agent 反向隧道：免 JWT（生产应校验 agent token）
+		api.GET("/k8s/agents/:agentId/tunnel", d.K8s.AgentTunnel)
 	}
 
 	if d.SrCluster != nil {

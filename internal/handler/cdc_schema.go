@@ -184,7 +184,7 @@ func (h *CDCHandler) SchemaMigrateSQL(c *gin.Context) {
 			topic = prefix + "." + schema + "." + target
 		}
 		offset := firstNonEmpty(req.KafkaDefaultOffsets, extra["kafka_default_offsets"], "OFFSET_BEGINNING")
-		plan := cdc.BuildAlterMigratePlanOpts(targetDB, target, brokers, topic, mode, nil, cols, conc, offset, extra["message_schema_mode"])
+		plan := cdc.BuildAlterMigratePlanOpts(targetDB, target, brokers, topic, mode, nil, cols, conc, offset, extra["message_schema_mode"], extra["env"], init.SourceDB, prefix)
 		items = append(items, migrateItem{
 			TargetTable:    target,
 			ExecutionOrder: []string{"pause", "stop", "alter", "create"},

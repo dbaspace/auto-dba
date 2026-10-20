@@ -7,8 +7,12 @@ import {
   CarryOutOutlined,
   CheckOutlined,
   ClockCircleOutlined,
+  CloudOutlined,
   CloudUploadOutlined,
   ClusterOutlined,
+  CodeOutlined,
+  GlobalOutlined,
+  ToolOutlined,
   DashboardOutlined,
   DatabaseOutlined,
   DeleteOutlined,
@@ -90,6 +94,14 @@ const byKey: Record<string, React.ComponentType<{ style?: React.CSSProperties }>
   swap: SwapOutlined,
   table: TableOutlined,
   'todo-list': CarryOutOutlined,
+  cluster: ClusterOutlined,
+  cloud: CloudOutlined,
+  server: ClusterOutlined,
+  appstore: AppstoreOutlined,
+  global: GlobalOutlined,
+  code: CodeOutlined,
+  tool: ToolOutlined,
+  database: DatabaseOutlined,
 }
 
 export type MenuIconTone = { color: string; background: string }

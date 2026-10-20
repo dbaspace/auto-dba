@@ -172,30 +172,72 @@
   color: #595959;
 }
 
-/* 表映射明细：分表源表两列网格，避免 join 单行撑破布局 */
+/* 表映射明细：分表源表自适应列数；长文本列防溢出叠字 */
+.cdc-map-table .ant-table-cell {
+  overflow: hidden;
+  vertical-align: top;
+}
+.cdc-map-src-cell {
+  min-width: 0;
+  max-width: 100%;
+}
+.cdc-map-src-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 2px;
+  font-size: 12px;
+}
+.cdc-map-src-meta code {
+  font-size: 11px;
+  word-break: break-all;
+}
 .shard-src-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  column-gap: 12px;
-  row-gap: 4px;
+  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  column-gap: 8px;
+  row-gap: 2px;
   margin-top: 4px;
   max-width: 100%;
 }
 .shard-src-item {
-  font-size: 12px !important;
+  font-size: 11px !important;
+  line-height: 1.35 !important;
   word-break: break-all;
   white-space: normal;
+  margin: 0 !important;
 }
 .cdc-map-key-wrap {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
 }
-.cdc-map-topic-wrap {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  font-size: 12px;
-  max-width: 220px;
-  word-break: break-all;
+.cdc-map-topic-wrap,
+.cdc-map-rl-cell {
+  display: block;
+  max-width: 100%;
+  min-width: 0;
+  font-size: 11px;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cdc-map-topic-wrap code,
+.cdc-map-rl-cell code {
+  font-size: 11px;
+}
+@media (min-width: 1400px) {
+  .shard-src-grid {
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  }
+}
+@media (max-width: 900px) {
+  .shard-src-grid {
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  }
+  .shard-src-item {
+    font-size: 10px !important;
+  }
 }

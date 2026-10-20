@@ -604,6 +604,9 @@ func (d *DB) ensureLoginLogsTable() error {
 	if err := d.ensureBackupTables(); err != nil {
 		return err
 	}
+	if err := d.ensureK8sTables(); err != nil {
+		return err
+	}
 	if err := d.ensureSrClusterTables(); err != nil {
 		return err
 	}

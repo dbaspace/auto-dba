@@ -189,6 +189,7 @@ func Run(cfg *config.Config, configPath string) {
 		HA:                 &handler.HAHandler{Store: db, Secret: fieldCrypto},
 		Proxy:              &handler.ProxyHandler{Store: db, Secret: fieldCrypto},
 		Backup:             &handler.BackupHandler{Store: db, Secret: fieldCrypto, Engine: bakEngine},
+		K8s:                func() *handler.K8sHandler { h := handler.NewK8sHandler(db, fieldCrypto); h.StartProbeLoop(); return h }(),
 		SrCluster:          &handler.SrClusterHandler{Store: db, Secret: fieldCrypto, Engine: srEng},
 		DbDeploy:           &handler.DbDeployHandler{Store: db, Secret: fieldCrypto, Engine: dbDeployEng},
 		Cmdb:               &handler.CmdbHandler{Store: db, Secret: fieldCrypto},

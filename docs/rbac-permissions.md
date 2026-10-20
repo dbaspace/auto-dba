@@ -14,6 +14,10 @@
 
 内置种子通过 `ensureActionMenus` 写入；也可在「菜单管理」手工新建（类型选「操作权限」）。编辑已有节点时类型只读，不可一键改类型。
 
+## K8s 容器管理（已种子）
+
+目录 `m-k8s`（容器管理），页面 URN：`um.sidebar.k8s-*`；操作 URN：`um.action.k8s.*`（cluster/pod/workload/yaml/node/db 等）。详见 [k8s.md](k8s.md) 与 `ensureK8sMenus`。
+
 ## 新增页面清单（必做）
 
 以「区域管理」为例：`/config/regions` + 新建 / 编辑 / 绑定环境 / 删除。

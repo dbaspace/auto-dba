@@ -126,7 +126,7 @@ func (c *Client) GetOverview(ctx context.Context, nsAllow []string) (*Overview, 
 	evts, err := c.Clientset.CoreV1().Events("").List(ctx, metav1.ListOptions{Limit: 100})
 	if err == nil {
 		sort.Slice(evts.Items, func(i, j int) bool {
-			return eventTime(evts.Items[i]).After(eventTime(evts.Items[j]))
+			return eventTime(evts.Items[i]).After(eventTime(evts.Items[j]).Time)
 		})
 		for _, e := range evts.Items {
 			if e.Type != "Warning" {

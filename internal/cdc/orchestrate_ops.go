@@ -335,7 +335,7 @@ func (o *Orchestrator) applyAlterSchema(ctx context.Context, t *store.CDCTask) e
 		}
 		offset := defaultStr(extra["kafka_default_offsets"], "OFFSET_BEGINNING")
 		schemaMode := defaultStr(extra["message_schema_mode"], parentExtra["message_schema_mode"])
-		plan := BuildAlterMigratePlanOpts(targetDB, item.TargetTable, brokers, topic, mode, srCols, selectedAlterColumns(item.Columns), conc, offset, schemaMode)
+		plan := BuildAlterMigratePlanOpts(targetDB, item.TargetTable, brokers, topic, mode, srCols, selectedAlterColumns(item.Columns), conc, offset, schemaMode, extra["env"], t.SourceDB, prefix)
 		for _, stmt := range []string{plan["pause_sql"], plan["stop_sql"]} {
 			if strings.TrimSpace(stmt) == "" {
 				continue
@@ -348,7 +348,7 @@ func (o *Orchestrator) applyAlterSchema(ctx context.Context, t *store.CDCTask) e
 			if _, err := db.ExecContext(ctx, strings.TrimSuffix(create, ";")); err != nil {
 				o.appendLog(t, "WARN", "starrocks", "重建 RL 失败: "+err.Error())
 			} else {
-				o.appendLog(t, "INFO", "starrocks", "已重建 Routine Load "+item.TargetTable+"_rl")
+				o.appendLog(t, "INFO", "starrocks", "已重建 Routine Load "+RoutineLoadNameFor(extra["env"], t.SourceDB, extra["topic_prefix"], item.TargetTable))
 				sqls = append(sqls, create)
 			}
 		}

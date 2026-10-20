@@ -116,6 +116,22 @@ func generateTopicPrefix(env, dbName string) string {
 	return joinIdent(env, dbName)
 }
 
+// GenerateRoutineLoadName 对齐 hub：rl_{env}_{src_db}_{target_table}（rl 在前缀）。
+func GenerateRoutineLoadName(env, srcDbName, targetTable string) string {
+	return "rl_" + joinIdent(env, srcDbName, targetTable)
+}
+
+// RoutineLoadNameFor 对齐 hub routineLoadNameFor：
+// topic_prefix 非空且与默认 {env}_{src_db} 不同时用 rl_{topic_prefix}_{target}，否则 rl_{env}_{src_db}_{target}。
+func RoutineLoadNameFor(env, srcDb, topicPrefix, target string) string {
+	tp := strings.TrimSpace(topicPrefix)
+	def := generateTopicPrefix(env, srcDb)
+	if tp != "" && tp != def {
+		return "rl_" + joinIdent(tp, target)
+	}
+	return GenerateRoutineLoadName(env, srcDb, target)
+}
+
 // InitNaming 预检/创建最终生效的四项命名。
 type InitNaming struct {
 	Env             string

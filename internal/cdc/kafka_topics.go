@@ -31,11 +31,33 @@ func BuildKafkaTopicName(prefix, schema, table string) string {
 	return prefix + "." + schema + "." + table
 }
 
+// IsShardMapping 对齐 hub isShardMapping：分表组走 logical topic（目标表名）。
+// 条件：is_shard_group / 多源表 / shard_pattern / 任一 source 与 target 不等（如 tbl_x0→tbl_x）。
+func IsShardMapping(m TableMapping) bool {
+	src := cleanStringSlice(m.SourceTables)
+	if m.IsShardGroup || len(src) > 1 || strings.TrimSpace(m.ShardPattern) != "" {
+		return true
+	}
+	tgt := strings.ToLower(strings.TrimSpace(m.TargetTable))
+	if tgt == "" {
+		return false
+	}
+	for _, s := range src {
+		s = strings.ToLower(strings.TrimSpace(s))
+		if s == "" {
+			continue
+		}
+		if s != tgt {
+			return true
+		}
+	}
+	return false
+}
+
 func CollectMappingKafkaTopics(prefix, schema string, m TableMapping) []string {
 	src := cleanStringSlice(m.SourceTables)
 	tgt := strings.TrimSpace(m.TargetTable)
-	isShard := m.IsShardGroup || len(src) > 1 || strings.TrimSpace(m.ShardPattern) != ""
-	if isShard {
+	if IsShardMapping(m) {
 		name := tgt
 		if name == "" && len(src) > 0 {
 			name = src[0]
@@ -86,6 +108,44 @@ func CollectTaskKafkaTopics(prefix, schema string, maps []TableMapping, fallback
 		}
 	}
 	sort.Strings(out)
+	return out
+}
+
+// CollectPipelineTopicNames 对齐 hub collectPipelineTopicNames：先按 mapping 计算，空则回退落库 kafka_topics。
+func CollectPipelineTopicNames(prefix, schema string, maps []TableMapping, fallbackTables []string) []string {
+	out := CollectTaskKafkaTopics(prefix, schema, maps, fallbackTables)
+	if len(out) > 0 {
+		return out
+	}
+	seen := map[string]struct{}{}
+	var stored []string
+	for _, m := range maps {
+		for _, t := range m.KafkaTopics {
+			t = strings.TrimSpace(t)
+			if t == "" {
+				continue
+			}
+			if _, ok := seen[t]; ok {
+				continue
+			}
+			seen[t] = struct{}{}
+			stored = append(stored, t)
+		}
+	}
+	sort.Strings(stored)
+	return stored
+}
+
+// PipelineActiveMappings 全链路状态用：排除 deleted / failed（对齐 hub activeMappings）。
+func PipelineActiveMappings(maps []TableMapping) []TableMapping {
+	out := make([]TableMapping, 0, len(maps))
+	for _, m := range maps {
+		st := strings.ToLower(strings.TrimSpace(m.Status))
+		if st == "deleted" || st == "failed" {
+			continue
+		}
+		out = append(out, m)
+	}
 	return out
 }
 
@@ -177,9 +237,18 @@ func ProbeKafkaTopics(ctx context.Context, brokers string, topics []string) (map
 		return out, fmt.Errorf("kafka dial: %w", err)
 	}
 	defer conn.Close()
-	parts, err := conn.ReadPartitions()
+	// 先按待查列表拉元数据，避免全集群 ReadPartitions 漏检；失败再回退全量。
+	names := make([]string, 0, len(out))
+	for t := range out {
+		names = append(names, t)
+	}
+	sort.Strings(names)
+	parts, err := conn.ReadPartitions(names...)
 	if err != nil {
-		return out, err
+		parts, err = conn.ReadPartitions()
+		if err != nil {
+			return out, err
+		}
 	}
 	for _, p := range parts {
 		if _, ok := out[p.Topic]; ok {

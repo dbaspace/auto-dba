@@ -145,15 +145,16 @@ func DropReplicationSlot(ctx context.Context, db *sql.DB, slot string) error {
 }
 
 func BuildRoutineLoadSQL(db, table string, keys []string, conc int, brokers string, topics []string, mode string) string {
-	return buildRoutineLoadSQL(db, table, keys, conc, brokers, topics, mode, "OFFSET_BEGINNING", "")
+	rl := RoutineLoadNameFor("", "", "", table)
+	return buildRoutineLoadSQL(db, table, rl, keys, conc, brokers, topics, mode, "OFFSET_BEGINNING", "")
 }
 
 func BuildAlterMigratePlan(targetDB, targetTable, brokers, topic, mode string, existingCols []string, addCols []SchemaDiffColumn, conc int) map[string]string {
-	return BuildAlterMigratePlanOpts(targetDB, targetTable, brokers, topic, mode, existingCols, addCols, conc, "OFFSET_BEGINNING", "")
+	return BuildAlterMigratePlanOpts(targetDB, targetTable, brokers, topic, mode, existingCols, addCols, conc, "OFFSET_BEGINNING", "", "", "", "")
 }
 
-func BuildAlterMigratePlanOpts(targetDB, targetTable, brokers, topic, mode string, existingCols []string, addCols []SchemaDiffColumn, conc int, kafkaOffset, schemaMode string) map[string]string {
-	rl := targetTable + "_rl"
+func BuildAlterMigratePlanOpts(targetDB, targetTable, brokers, topic, mode string, existingCols []string, addCols []SchemaDiffColumn, conc int, kafkaOffset, schemaMode, env, sourceDB, topicPrefix string) map[string]string {
+	rl := RoutineLoadNameFor(env, sourceDB, topicPrefix, targetTable)
 	if conc <= 0 {
 		conc = 3
 	}
@@ -181,7 +182,7 @@ func BuildAlterMigratePlanOpts(targetDB, targetTable, brokers, topic, mode strin
 	}
 	create := ""
 	if len(keys) > 0 && strings.TrimSpace(topic) != "" {
-		create = buildRoutineLoadSQL(targetDB, targetTable, keys, conc, brokers, []string{topic}, mode, NormalizeKafkaOffset(kafkaOffset), schemaMode)
+		create = buildRoutineLoadSQL(targetDB, targetTable, rl, keys, conc, brokers, []string{topic}, mode, NormalizeKafkaOffset(kafkaOffset), schemaMode)
 	}
 	return map[string]string{
 		"pause_sql":  pause,

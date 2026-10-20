@@ -42,8 +42,8 @@ func srTableExists(ctx context.Context, db *sql.DB, targetDB, table string) (boo
 	return false, rows.Err()
 }
 
-func routineLoadStateOf(ctx context.Context, db *sql.DB, targetDB, table string) string {
-	states := ListRoutineLoadStates(ctx, db, targetDB, []string{table})
+func routineLoadStateOf(ctx context.Context, db *sql.DB, targetDB, table, env, sourceDB, topicPrefix string) string {
+	states := ListRoutineLoadStates(ctx, db, targetDB, []string{table}, env, sourceDB, topicPrefix)
 	if len(states) == 0 {
 		return "UNKNOWN"
 	}
@@ -74,7 +74,8 @@ func (o *Orchestrator) previewStarRocks(ctx context.Context, t *store.CDCTask, e
 	db, err := o.openTargetDB(ctx, t)
 	if err != nil {
 		for _, tb := range targets {
-			res.add(ReinitItem{Resource: "routine_load", Name: tb + "_rl", Action: ReinitActionUnknown, Message: err.Error()})
+			rlName := RoutineLoadNameFor(extra["env"], t.SourceDB, extra["topic_prefix"], tb)
+			res.add(ReinitItem{Resource: "routine_load", Name: rlName, Action: ReinitActionUnknown, Message: err.Error()})
 		}
 		res.warn("probe_failed", "StarRocks 探测失败："+err.Error())
 		return
@@ -92,9 +93,10 @@ func (o *Orchestrator) previewStarRocks(ctx context.Context, t *store.CDCTask, e
 				continue
 			}
 			exists, _ := srTableExists(ctx, db, t.TargetDB, it.Table)
-			state := routineLoadStateOf(ctx, db, t.TargetDB, it.Table)
+			state := routineLoadStateOf(ctx, db, t.TargetDB, it.Table, extra["env"], t.SourceDB, extra["topic_prefix"])
 			rlExists := state != "NOT_FOUND" && state != "UNKNOWN"
-			item := ReinitItem{Resource: "routine_load", Name: it.Table + "_rl", Exists: exists && rlExists}
+			rlName := RoutineLoadNameFor(extra["env"], t.SourceDB, extra["topic_prefix"], it.Table)
+			item := ReinitItem{Resource: "routine_load", Name: rlName, Exists: exists && rlExists}
 			switch {
 			case exists && rlExists:
 				item.Action, item.Message = ReinitActionSkip, fmt.Sprintf("目标表 %s 与 Routine Load 已存在（%s），跳过", it.Table, state)
@@ -108,7 +110,7 @@ func (o *Orchestrator) previewStarRocks(ctx context.Context, t *store.CDCTask, e
 		return
 	}
 
-	for _, rl := range ListRoutineLoadStates(ctx, db, t.TargetDB, targets) {
+	for _, rl := range ListRoutineLoadStates(ctx, db, t.TargetDB, targets, extra["env"], t.SourceDB, extra["topic_prefix"]) {
 		state := strings.ToUpper(strings.TrimSpace(rl.State))
 		item := ReinitItem{Resource: "routine_load", Name: rl.Name, Exists: state != "NOT_FOUND"}
 		switch state {
@@ -160,7 +162,7 @@ func (o *Orchestrator) reinitStarRocks(ctx context.Context, t *store.CDCTask, ex
 	}
 	defer db.Close()
 	targets := collectTargetTables(ActiveMappings(ParseMappingsJSON(extra["mappings"])), splitCSV(extra["tables"]))
-	for _, rl := range ListRoutineLoadStates(ctx, db, t.TargetDB, targets) {
+	for _, rl := range ListRoutineLoadStates(ctx, db, t.TargetDB, targets, extra["env"], t.SourceDB, extra["topic_prefix"]) {
 		switch strings.ToUpper(strings.TrimSpace(rl.State)) {
 		case "PAUSED":
 			if !resume {
@@ -211,15 +213,16 @@ func (o *Orchestrator) provisionStarRocks(ctx context.Context, t *store.CDCTask,
 			}
 			o.reinitLog(t, "INFO", "已按原配置创建目标表 "+it.Table, op)
 		}
-		state := routineLoadStateOf(ctx, db, t.TargetDB, it.Table)
+		rlName := RoutineLoadNameFor(extra["env"], t.SourceDB, extra["topic_prefix"], it.Table)
+		state := routineLoadStateOf(ctx, db, t.TargetDB, it.Table, extra["env"], t.SourceDB, extra["topic_prefix"])
 		if state != "NOT_FOUND" && state != "UNKNOWN" {
-			o.reinitLog(t, "INFO", fmt.Sprintf("Routine Load %s_rl 已存在（%s），跳过", it.Table, state), op)
+			o.reinitLog(t, "INFO", fmt.Sprintf("Routine Load %s 已存在（%s），跳过", rlName, state), op)
 			continue
 		}
 		if err := execSRStatement(ctx, db, it.Load); err != nil {
-			return fmt.Errorf("创建 Routine Load %s_rl 失败: %w", it.Table, err)
+			return fmt.Errorf("创建 Routine Load %s 失败: %w", rlName, err)
 		}
-		o.reinitLog(t, "INFO", fmt.Sprintf("已按原配置创建 Routine Load %s_rl", it.Table), op)
+		o.reinitLog(t, "INFO", fmt.Sprintf("已按原配置创建 Routine Load %s", rlName), op)
 	}
 	return nil
 }

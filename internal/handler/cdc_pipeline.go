@@ -102,7 +102,7 @@ func (h *CDCHandler) Tables(c *gin.Context) {
 				} else {
 					targets = append(targets, tables...)
 				}
-				for _, rl := range cdc.ListRoutineLoadStates(ctx, db, t.TargetDB, targets) {
+				for _, rl := range cdc.ListRoutineLoadStates(ctx, db, t.TargetDB, targets, firstNonEmpty(extra["env"], rootExtra["env"]), t.SourceDB, prefix) {
 					rlByTable[strings.ToLower(rl.Table)] = rl
 				}
 				_ = db.Close()
@@ -134,7 +134,7 @@ func (h *CDCHandler) Tables(c *gin.Context) {
 			row := gin.H{
 				"id":           fmt.Sprintf("m%d", i),
 				"target_table": tgt, "source_tables": m.SourceTables,
-				"is_shard_group": m.IsShardGroup || len(m.SourceTables) > 1, "key_columns": m.KeyColumns,
+				"is_shard_group": cdc.IsShardMapping(m), "key_columns": m.KeyColumns,
 				"primary_keys": m.KeyColumns, "shard_keys": m.ShardKeys, "partition_column": m.PartitionColumn,
 				"shard_pattern":   m.ShardPattern,
 				"sync_table_mode": cdc.NormalizeSyncTableMode(m.SyncTableMode),
@@ -142,7 +142,11 @@ func (h *CDCHandler) Tables(c *gin.Context) {
 				"status":              firstNonEmpty(m.Status, "active"),
 				"source":              src,
 				"topic_names":         topics,
-				"routine_load_name":   firstNonEmpty(rl.Name, m.RoutineLoadName, tgt+"_rl"),
+				"routine_load_name": firstNonEmpty(
+					rl.Name,
+					m.RoutineLoadName,
+					cdc.RoutineLoadNameFor(firstNonEmpty(extra["env"], rootExtra["env"]), t.SourceDB, prefix, tgt),
+				),
 				"routine_load_status": firstNonEmpty(rl.State, m.RoutineLoadStatus),
 			}
 			if it, ok := driftBy[strings.ToLower(tgt)]; ok {
@@ -162,8 +166,11 @@ func (h *CDCHandler) Tables(c *gin.Context) {
 				"id":           fmt.Sprintf("m%d", i),
 				"target_table": name, "source_tables": []string{name}, "status": "active",
 				"source": "init", "key_columns": []string{}, "primary_keys": []string{},
-				"topic_names":         topics,
-				"routine_load_name":   firstNonEmpty(rl.Name, name+"_rl"),
+				"topic_names": topics,
+				"routine_load_name": firstNonEmpty(
+					rl.Name,
+					cdc.RoutineLoadNameFor(firstNonEmpty(extra["env"], rootExtra["env"]), t.SourceDB, prefix, name),
+				),
 				"routine_load_status": rl.State,
 			})
 		}

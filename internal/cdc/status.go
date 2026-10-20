@@ -75,7 +75,7 @@ func AggregatePipelineStatus(ctx context.Context, st *store.DB, secret string, o
 	connector := extra["connector_name"]
 	prefix := extra["topic_prefix"]
 	schema := defaultStr(extra["source_schema"], "public")
-	maps := ParseMappingsJSON(extra["mappings"])
+	maps := PipelineActiveMappings(ParseMappingsJSON(extra["mappings"]))
 	tables := splitCSV(extra["tables"])
 	bindings := ResolveOrBuildShardBindings(extra, t.SourceDB, pub, slot, connector)
 	if len(bindings) == 0 {
@@ -185,7 +185,7 @@ func AggregatePipelineStatus(ctx context.Context, st *store.DB, secret string, o
 	} else {
 		brokers = extra["kafka_bootstrap_servers"]
 	}
-	topics := CollectTaskKafkaTopics(prefix, schema, maps, tables)
+	topics := CollectPipelineTopicNames(prefix, schema, maps, tables)
 	kafka := &PipelineKafka{State: "UNKNOWN", Brokers: brokers}
 	var kafkaTopics []PipelineKafkaTopic
 	if brokers == "" {
@@ -230,7 +230,7 @@ func AggregatePipelineStatus(ctx context.Context, st *store.DB, secret string, o
 		sr.Message = err.Error()
 	} else {
 		targets := collectTargetTables(maps, tables)
-		rls = ListRoutineLoadStates(ctx, db, t.TargetDB, targets)
+		rls = ListRoutineLoadStates(ctx, db, t.TargetDB, targets, extra["env"], t.SourceDB, prefix)
 		db.Close()
 		sr.State = "READY"
 		bad := 0
@@ -245,10 +245,15 @@ func AggregatePipelineStatus(ctx context.Context, st *store.DB, secret string, o
 		}
 	}
 
-	healthy := strings.EqualFold(pg.State, "READY") && publication.Exists &&
-		(strings.EqualFold(worst, "RUNNING") || worst == "" || worst == "UNKNOWN" && extra["connector_name"] == "") &&
-		(kafka.State == "READY" || kafka.State == "SKIPPED") &&
-		(sr.State == "READY" || sr.State == "SKIPPED")
+	// healthy 对齐老项目列表口径：Kafka MISSING/PARTIAL 不判全局不健康；手动 DDL 豁免 SR/RL。
+	manualDDL := extra["auto_create_table"] == "false"
+	connectorOK := strings.EqualFold(worst, "RUNNING") ||
+		worst == "" ||
+		(strings.EqualFold(worst, "UNKNOWN") && extra["connector_name"] == "")
+	kafkaOK := kafka.State == "READY" || kafka.State == "SKIPPED" ||
+		kafka.State == "MISSING" || kafka.State == "PARTIAL" || kafka.State == "UNKNOWN"
+	srOK := manualDDL || sr.State == "READY" || sr.State == "SKIPPED"
+	healthy := strings.EqualFold(pg.State, "READY") && publication.Exists && connectorOK && kafkaOK && srOK
 	reason := ""
 	if !healthy {
 		switch {
@@ -260,9 +265,9 @@ func AggregatePipelineStatus(ctx context.Context, st *store.DB, secret string, o
 			reason = "Debezium Connector 缺失，需重新初始化"
 		case strings.EqualFold(worst, "FAILED") || strings.EqualFold(worst, "PAUSED"):
 			reason = "Debezium Connector " + worst
-		case kafka.State == "UNREACHABLE" || kafka.State == "MISSING":
+		case kafka.State == "UNREACHABLE":
 			reason = kafka.Message
-		case sr.State == "UNREACHABLE" || sr.State == "DEGRADED":
+		case !manualDDL && (sr.State == "UNREACHABLE" || sr.State == "DEGRADED"):
 			reason = sr.Message
 		default:
 			reason = "链路未完全就绪"
@@ -465,13 +470,13 @@ func slotState(s *PipelineSlot) string {
 	return "PAUSED"
 }
 
-func ListRoutineLoadStates(ctx context.Context, db *sql.DB, targetDB string, tables []string) []PipelineRoutineLoad {
+func ListRoutineLoadStates(ctx context.Context, db *sql.DB, targetDB string, tables []string, env, sourceDB, topicPrefix string) []PipelineRoutineLoad {
 	out := make([]PipelineRoutineLoad, 0, len(tables))
 	if db == nil {
 		return out
 	}
 	for _, table := range tables {
-		name := table + "_rl"
+		name := RoutineLoadNameFor(env, sourceDB, topicPrefix, table)
 		item := PipelineRoutineLoad{Name: name, Table: table, State: "UNKNOWN"}
 		rows, err := db.QueryContext(ctx, fmt.Sprintf("SHOW ROUTINE LOAD FOR `%s`.`%s`", targetDB, name))
 		if err != nil {

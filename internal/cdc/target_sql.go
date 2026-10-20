@@ -13,6 +13,8 @@ type TargetSQLParams struct {
 	RoutineLoadConc    int
 	KafkaBrokers       string
 	TopicPrefix        string
+	Env                string
+	SourceDB           string
 	SourceSchema       string
 	DebeziumMode       string
 	MessageSchemaMode  string
@@ -164,10 +166,7 @@ func BuildTargetSQLItems(p TargetSQLParams, colsByTable map[string][]pgCol, pksB
 			}
 		}
 		item.DDL = buildCreateTableSQL(db, tgt, cols, keys, shard, keyClause, buckets, repl, partCol, dp)
-		topics := make([]string, 0, len(src))
-		for _, s := range src {
-			topics = append(topics, prefix+"."+schema+"."+s)
-		}
+		topics := CollectMappingKafkaTopics(prefix, schema, m)
 		if len(topics) == 0 {
 			topics = []string{prefix + "." + schema + "." + tgt}
 		}
@@ -175,7 +174,8 @@ func BuildTargetSQLItems(p TargetSQLParams, colsByTable map[string][]pgCol, pksB
 		if strings.TrimSpace(p.KafkaDefaultOffset) != "" {
 			offset = NormalizeKafkaOffset(p.KafkaDefaultOffset)
 		}
-		item.Load = buildRoutineLoadSQL(db, tgt, keys, conc, p.KafkaBrokers, topics, p.DebeziumMode, offset, p.MessageSchemaMode)
+		rlName := RoutineLoadNameFor(p.Env, p.SourceDB, prefix, tgt)
+		item.Load = buildRoutineLoadSQL(db, tgt, rlName, keys, conc, p.KafkaBrokers, topics, p.DebeziumMode, offset, p.MessageSchemaMode)
 		out = append(out, item)
 	}
 	return ApplySQLOverrides(out, p.SQLOverrides)
@@ -245,13 +245,17 @@ func buildCreateTableSQL(db, table string, cols []pgCol, keys, shard []string, k
 	return b.String()
 }
 
-func buildRoutineLoadSQL(db, table string, keys []string, conc int, brokers string, topics []string, mode, kafkaOffset, schemaMode string) string {
+func buildRoutineLoadSQL(db, table, rlName string, keys []string, conc int, brokers string, topics []string, mode, kafkaOffset, schemaMode string) string {
 	cols := append(append([]string{}, keys...), "__op")
 	broker := strings.TrimSpace(brokers)
 	if broker == "" {
 		broker = "kafka:9092"
 	}
 	offset := defaultStr(NormalizeKafkaOffset(kafkaOffset), "OFFSET_BEGINNING")
+	rlName = strings.TrimSpace(rlName)
+	if rlName == "" {
+		rlName = RoutineLoadNameFor("", "", "", table)
+	}
 	props := []string{`"format" = "json"`, `"strip_outer_array" = "false"`, fmt.Sprintf(`"desired_concurrent_number" = "%d"`, conc)}
 	if !IsWithoutSchema(schemaMode) || strings.TrimSpace(mode) == ModeBeforeAfter {
 		paths := make([]string, 0, len(cols))
@@ -272,7 +276,7 @@ func buildRoutineLoadSQL(db, table string, keys []string, conc int, brokers stri
 		}
 		props = append([]string{props[0], fmt.Sprintf(`"jsonpaths" = "[%s]"`, strings.Join(paths, ",")), props[1], props[2]})
 	}
-	return fmt.Sprintf(`CREATE ROUTINE LOAD `+"`%s`.`%s_rl`"+` ON `+"`%s`"+`
+	return fmt.Sprintf(`CREATE ROUTINE LOAD `+"`%s`.`%s`"+` ON `+"`%s`"+`
 COLUMNS(%s)
 PROPERTIES (
   %s
@@ -280,9 +284,9 @@ PROPERTIES (
 FROM KAFKA (
   "kafka_broker_list" = "%s",
   "kafka_topic" = "%s",
-  "property.group.id" = "%s_rl",
+  "property.group.id" = "%s",
   "property.kafka_default_offsets" = "%s"
-);`, db, table, table, strings.Join(cols, ", "), strings.Join(props, ",\n  "), broker, strings.Join(topics, ","), table, offset)
+);`, db, rlName, table, strings.Join(cols, ", "), strings.Join(props, ",\n  "), broker, strings.Join(topics, ","), rlName, offset)
 }
 
 func NormalizeMessageSchemaMode(s string) string {

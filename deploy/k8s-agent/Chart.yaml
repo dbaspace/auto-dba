@@ -1,0 +1,6 @@
+apiVersion: v2
+name: keeplus-k8s-agent
+description: KeePlus K8s reverse-tunnel agent (skeleton)
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

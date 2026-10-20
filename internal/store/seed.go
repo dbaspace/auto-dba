@@ -200,6 +200,9 @@ func (d *DB) seedRBAC(now string) error {
 	if err := d.ensureBackupMenuTree(now); err != nil {
 		return err
 	}
+	if err := d.ensureK8sMenus(now); err != nil {
+		return err
+	}
 	if err := d.ensureRegionEnvMenus(now); err != nil {
 		return err
 	}
@@ -1798,6 +1801,76 @@ func (d *DB) ensureTodoMenus(now string) error {
 	return nil
 }
 
+func (d *DB) ensureK8sMenus(now string) error {
+	items := []seedMenu{
+		{"m-k8s", "", "容器管理", "", "um.sidebar.k8s", "查看容器管理", "cluster", 45},
+		{"m-k8s-clusters", "m-k8s", "集群管理", "/k8s/clusters", URNSidebarK8sClusters, "查看 K8s 集群", "cloud", 1},
+		{"m-k8s-overview", "m-k8s", "集群概览", "/k8s/overview", URNSidebarK8sOverview, "查看集群概览", "dashboard", 2},
+		{"m-k8s-nodes", "m-k8s", "节点", "/k8s/nodes", URNSidebarK8sNodes, "查看节点", "server", 3},
+		{"m-k8s-workloads", "m-k8s", "工作负载", "/k8s/workloads", URNSidebarK8sWorkloads, "查看工作负载", "appstore", 4},
+		{"m-k8s-network", "m-k8s", "网络", "/k8s/network", URNSidebarK8sNetwork, "查看网络", "global", 5},
+		{"m-k8s-storage", "m-k8s", "存储", "/k8s/storage", URNSidebarK8sStorage, "查看存储", "database", 6},
+		{"m-k8s-resources", "m-k8s", "资源浏览器", "/k8s/resources", URNSidebarK8sResources, "浏览 CRD", "code", 7},
+		{"m-k8s-operators", "m-k8s", "Operator 中心", "/k8s/operators", URNSidebarK8sOperators, "查看 Operator", "tool", 8},
+		{"m-k8s-db", "m-k8s", "数据库服务", "/k8s/db-clusters", URNSidebarK8sDBClusters, "查看数据库服务", "database", 9},
+		{"m-k8s-apps", "m-k8s", "Helm 应用", "/k8s/apps", URNSidebarK8sApps, "查看 Helm 应用", "appstore", 10},
+	}
+	for _, it := range items {
+		m := &Menu{
+			ID: it.ID, ParentID: it.Parent, Title: it.Title, Path: it.Path,
+			URN: it.URN, PermissionDesc: it.Perm, Icon: it.Icon, SortOrder: it.Sort, Enabled: true,
+			CreatedAt: now, UpdatedAt: now,
+		}
+		if err := d.EnsureMenu(m); err != nil {
+			return err
+		}
+		if it.Parent != "" {
+			if err := d.GrantMenuFollowingParent(it.ID, it.Parent); err != nil {
+				return err
+			}
+		}
+		if err := d.GrantMenuToAllRoles(it.ID); err != nil {
+			return err
+		}
+	}
+	actions := []seedMenu{
+		{"m-act-k8s-cluster-create", "m-k8s-clusters", "纳管集群", "", URNK8sClusterCreate, "纳管 K8s 集群", "", 1},
+		{"m-act-k8s-cluster-edit", "m-k8s-clusters", "编辑集群", "", URNK8sClusterEdit, "编辑 K8s 集群", "", 2},
+		{"m-act-k8s-cluster-delete", "m-k8s-clusters", "删除集群", "", URNK8sClusterDelete, "删除 K8s 集群", "", 3},
+		{"m-act-k8s-cluster-assign", "m-k8s-clusters", "划拨命名空间", "", URNK8sClusterAssign, "划拨命名空间", "", 4},
+		{"m-act-k8s-pod-log", "m-k8s-workloads", "查看 Pod 日志", "", URNK8sPodLog, "查看 Pod 日志", "", 1},
+		{"m-act-k8s-pod-exec", "m-k8s-workloads", "Pod 终端", "", URNK8sPodExec, "进入 Pod 终端", "", 2},
+		{"m-act-k8s-wl-scale", "m-k8s-workloads", "扩缩容", "", URNK8sWorkloadScale, "工作负载扩缩", "", 3},
+		{"m-act-k8s-wl-restart", "m-k8s-workloads", "重启", "", URNK8sWorkloadRestart, "工作负载重启", "", 4},
+		{"m-act-k8s-wl-rollback", "m-k8s-workloads", "回滚", "", URNK8sWorkloadRollback, "工作负载回滚", "", 5},
+		{"m-act-k8s-wl-delete", "m-k8s-workloads", "删除资源", "", URNK8sWorkloadDelete, "删除工作负载", "", 6},
+		{"m-act-k8s-yaml-apply", "m-k8s-resources", "YAML Apply", "", URNK8sYAMLApply, "应用 YAML", "", 1},
+		{"m-act-k8s-node-drain", "m-k8s-nodes", "Drain 节点", "", URNK8sNodeDrain, "驱逐节点", "", 1},
+		{"m-act-k8s-secret-view", "m-k8s-storage", "查看 Secret 明文", "", URNK8sSecretView, "查看 Secret", "", 1},
+		{"m-act-k8s-quota-edit", "m-k8s-overview", "编辑配额", "", URNK8sQuotaEdit, "编辑 ResourceQuota", "", 1},
+		{"m-act-k8s-db-create", "m-k8s-db", "创建数据库集群", "", URNK8sDBCreate, "创建数据库服务", "", 1},
+		{"m-act-k8s-db-scale", "m-k8s-db", "扩缩数据库", "", URNK8sDBScale, "扩缩数据库服务", "", 2},
+		{"m-act-k8s-db-upgrade", "m-k8s-db", "升级数据库", "", URNK8sDBUpgrade, "升级数据库服务", "", 3},
+		{"m-act-k8s-db-switch", "m-k8s-db", "切换主库", "", URNK8sDBSwitchover, "数据库切换", "", 4},
+		{"m-act-k8s-db-delete", "m-k8s-db", "删除数据库集群", "", URNK8sDBDelete, "删除数据库服务", "", 5},
+	}
+	for _, it := range actions {
+		m := &Menu{
+			ID: it.ID, ParentID: it.Parent, Title: it.Title, Path: "",
+			URN: it.URN, PermissionDesc: it.Perm, Icon: it.Icon, SortOrder: it.Sort, Enabled: true,
+			CreatedAt: now, UpdatedAt: now,
+		}
+		if err := d.EnsureMenu(m); err != nil {
+			return err
+		}
+		if err := d.GrantMenuFollowingParent(it.ID, it.Parent); err != nil {
+			return err
+		}
+	}
+	log.Printf("seed: k8s menus ensured")
+	return nil
+}
+
 // ensureTopLevelMenuSort 回写一级目录 sort_order，与侧栏正常顺序一致。
 func (d *DB) ensureTopLevelMenuSort(now string) error {
 	tops := []struct {
@@ -1816,6 +1889,7 @@ func (d *DB) ensureTopLevelMenuSort(now string) error {
 		{"m-sync", "同步与迁移", "um.sidebar.sync", "refresh", 20},
 		{"m-safe", "数据安全", "um.sidebar.safe", "lock", 30},
 		{"m-diag", "诊断", "um.sidebar.diag", "monitor", 40},
+		{"m-k8s", "容器管理", "um.sidebar.k8s", "cluster", 45},
 		{"m-plat", "平台运维", "um.sidebar.platform", "grid", 50},
 		{"m-rbac", "用户权限", "um.sidebar.rbac", "lock", 55},
 		{"m-alert", "告警管理", "um.sidebar.alerts", "bell", 70},

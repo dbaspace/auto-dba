@@ -465,7 +465,7 @@ func (r *Registry) buildView(j *registered, since string) (*JobView, error) {
 		MisfirePolicy: j.desc.MisfirePolicy, Version: ver,
 	}
 	if nf := nextFireAt(j.desc.ScheduleKind, spec, time.Now()); !nf.IsZero() {
-		v.NextFireAt = nf.Format(time.RFC3339)
+		v.NextFireAt = nf.UTC().Format(time.RFC3339)
 	}
 	if last, err := r.Store.LastJobRun(j.desc.Key); err == nil && last != nil {
 		v.LastStatus = last.Status
