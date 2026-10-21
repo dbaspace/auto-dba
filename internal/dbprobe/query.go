@@ -21,6 +21,24 @@ import (
 const DefaultExportLimit = 5000
 const MaxExportLimit = 20000
 
+type readOnlyKey struct{}
+
+// WithReadOnlySession 让本次查询在会话上打开只读（PG default_transaction_read_only / MySQL transaction_read_only）。
+func WithReadOnlySession(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, readOnlyKey{}, true)
+}
+
+func readOnlySession(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	v, _ := ctx.Value(readOnlyKey{}).(bool)
+	return v
+}
+
 type QueryResult struct {
 	Columns      []string `json:"columns"`
 	Rows         [][]any  `json:"rows"`
@@ -421,6 +439,11 @@ func queryMySQL(ctx context.Context, host string, port int, user, password, dbNa
 	if err := db.PingContext(ctx); err != nil {
 		return nil, err
 	}
+	if readOnlySession(ctx) {
+		if _, err := db.ExecContext(ctx, "SET SESSION transaction_read_only = 1"); err != nil {
+			return nil, fmt.Errorf("设置 transaction_read_only: %w", err)
+		}
+	}
 	return scanQuery(ctx, db, rawSQL, limit)
 }
 
@@ -440,6 +463,11 @@ func queryPostgres(ctx context.Context, host string, port int, user, password, d
 		}
 		if _, err := db.ExecContext(ctx, fmt.Sprintf("SET statement_timeout = %d", ms)); err != nil {
 			return nil, fmt.Errorf("设置 statement_timeout: %w", err)
+		}
+	}
+	if readOnlySession(ctx) {
+		if _, err := db.ExecContext(ctx, "SET default_transaction_read_only = on"); err != nil {
+			return nil, fmt.Errorf("设置 default_transaction_read_only: %w", err)
 		}
 	}
 	return scanQuery(ctx, db, rawSQL, limit)

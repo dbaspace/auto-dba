@@ -79,14 +79,17 @@ func (d *DB) AppendSyncSlotOpLog(tenantID, kind, line string) error {
 	return nil
 }
 
-// ListSyncSlotOpLogs 按时间升序返回最近 limit 条（便于日志阅读）；kind 空则全部。
-func (d *DB) ListSyncSlotOpLogs(tenantID, kind string, limit int) ([]SyncSlotOpLog, error) {
+// ListSyncSlotOpLogs 按时间倒序分页返回操作日志（第 1 页为最新）；kind 空则全部。
+func (d *DB) ListSyncSlotOpLogs(tenantID, kind string, limit, offset int) ([]SyncSlotOpLog, int, error) {
 	if d == nil {
-		return nil, nil
+		return nil, 0, nil
 	}
 	_ = d.ensureSyncSlotOpLogsTable()
-	if limit <= 0 || limit > 2000 {
-		limit = 500
+	if limit <= 0 || limit > 200 {
+		limit = 20
+	}
+	if offset < 0 {
+		offset = 0
 	}
 	tenantID = strings.TrimSpace(tenantID)
 	kind = strings.TrimSpace(kind)
@@ -96,24 +99,25 @@ func (d *DB) ListSyncSlotOpLogs(tenantID, kind string, limit int) ([]SyncSlotOpL
 		where += ` AND kind=?`
 		args = append(args, kind)
 	}
-	// 先取最新 limit 条，再按时间升序返回
-	q := `SELECT id, tenant_id, kind, line, created_at FROM (
-		SELECT id, tenant_id, kind, line, created_at FROM tbl_sync_slot_op_logs ` + where + `
-		ORDER BY created_at DESC LIMIT ?
-	) t ORDER BY created_at ASC`
-	args = append(args, limit)
-	rows, err := d.Query(q, args...)
+	var total int
+	if err := d.QueryRow(`SELECT COUNT(1) FROM tbl_sync_slot_op_logs `+where, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	q := `SELECT id, tenant_id, kind, line, created_at FROM tbl_sync_slot_op_logs ` + where + `
+		ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`
+	pageArgs := append(append([]any{}, args...), limit, offset)
+	rows, err := d.Query(q, pageArgs...)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 	var out []SyncSlotOpLog
 	for rows.Next() {
 		var it SyncSlotOpLog
 		if err := rows.Scan(&it.ID, &it.TenantID, &it.Kind, &it.Line, &it.CreatedAt); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		out = append(out, it)
 	}
-	return out, rows.Err()
+	return out, total, rows.Err()
 }

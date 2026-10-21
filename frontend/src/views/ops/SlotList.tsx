@@ -1,5 +1,6 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Button, Drawer, Input, InputNumber, Modal, Popconfirm, Progress, Select, Space, Tag, message } from 'antd'
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Button, Drawer, Input, InputNumber, Modal, Pagination, Popconfirm, Progress, Select, Space, Tag, message } from 'antd'
+import { EyeOutlined } from '@ant-design/icons'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import api from '../../api/request'
 import './SlotList.css'
@@ -20,7 +21,6 @@ type SlotRow = {
   connect_base?: string
   task_name?: string
   topic?: string
-  heartbeat?: string
 }
 
 type CollectJob = {
@@ -60,6 +60,58 @@ function canRestart(row: SlotRow) {
   return !!(row.connect_base || row.connector) && !!(row.connector_name || row.task_name)
 }
 
+function SlotPeek({
+  title,
+  value,
+  onView,
+}: {
+  title: string
+  value?: string
+  onView: (title: string, text: string) => void
+}) {
+  const wrapRef = useRef<HTMLSpanElement>(null)
+  const textRef = useRef<HTMLSpanElement>(null)
+  const [overflow, setOverflow] = useState(false)
+  const text = String(value ?? '').trim()
+
+  useLayoutEffect(() => {
+    const wrap = wrapRef.current
+    const el = textRef.current
+    if (!wrap || !el) return
+    const measure = () => {
+      if (wrap.clientWidth <= 0) return
+      setOverflow(el.scrollWidth > wrap.clientWidth + 1)
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(wrap)
+    return () => ro.disconnect()
+  }, [text])
+
+  if (!text) return <>—</>
+  return (
+    <span ref={wrapRef} className="slot-cell-text">
+      <span ref={textRef} className="slot-cell-text-main">
+        {text}
+      </span>
+      {overflow ? (
+        <button
+          type="button"
+          className="slot-cell-view"
+          title="查看数据"
+          aria-label="查看数据"
+          onClick={(e) => {
+            e.stopPropagation()
+            onView(title, text)
+          }}
+        >
+          <EyeOutlined />
+        </button>
+      ) : null}
+    </span>
+  )
+}
+
 export default function SlotList() {
   const [rows, setRows] = useState<SlotRow[]>([])
   const [loading, setLoading] = useState(false)
@@ -75,6 +127,13 @@ export default function SlotList() {
   const [logOpen, setLogOpen] = useState(false)
   const [opLogs, setOpLogs] = useState<OpLogRow[]>([])
   const [opLogsLoading, setOpLogsLoading] = useState(false)
+  const [opLogPage, setOpLogPage] = useState(1)
+  const [opLogPageSize, setOpLogPageSize] = useState(20)
+  const [opLogTotal, setOpLogTotal] = useState(0)
+  const [cellView, setCellView] = useState<{ title: string; text: string } | null>(null)
+  const [tablePage, setTablePage] = useState(1)
+  const [tablePageSize, setTablePageSize] = useState(20)
+  const opLogQuery = useRef({ page: 1, pageSize: 20 })
   const wasRunning = useRef(false)
   const wasRestartRunning = useRef(false)
 
@@ -103,13 +162,20 @@ export default function SlotList() {
     return data?.status === 'running'
   }, [])
 
-  const loadOpLogs = useCallback(async () => {
+  const loadOpLogs = useCallback(async (page?: number, pageSize?: number) => {
+    const p = page ?? opLogQuery.current.page
+    const ps = pageSize ?? opLogQuery.current.pageSize
+    opLogQuery.current = { page: p, pageSize: ps }
+    setOpLogPage(p)
+    setOpLogPageSize(ps)
     setOpLogsLoading(true)
     try {
-      const { data } = await api.get('/sync-slots/logs', { params: { limit: 800 } })
+      const { data } = await api.get('/sync-slots/logs', { params: { page: p, page_size: ps } })
       setOpLogs(data.data || [])
+      setOpLogTotal(Number(data.total || 0))
     } catch {
       setOpLogs([])
+      setOpLogTotal(0)
     } finally {
       setOpLogsLoading(false)
     }
@@ -125,8 +191,12 @@ export default function SlotList() {
       setJob(data)
       if (data?.started && data?.status === 'running') {
         message.info(data.message || '已开始采集')
+        setLogOpen(true)
+        void loadOpLogs(1)
       } else if (data?.status === 'running') {
         message.warning(data.message || '采集进行中')
+        setLogOpen(true)
+        void loadOpLogs(1)
       } else if (data?.message) {
         message.info(data.message)
         if (data?.status === 'done') await load(true)
@@ -191,11 +261,11 @@ export default function SlotList() {
       if (data?.started && data?.status === 'running') {
         message.info(data.message || '已开始批量重启')
         setLogOpen(true)
-        void loadOpLogs()
+        void loadOpLogs(1)
       } else if (data?.status === 'running') {
         message.warning(data.message || '重启进行中')
         setLogOpen(true)
-        void loadOpLogs()
+        void loadOpLogs(1)
       } else if (data?.message) {
         message.info(data.message)
       }
@@ -244,6 +314,7 @@ export default function SlotList() {
       if (stop) return
       try {
         const running = await pollCollect()
+        if (logOpen) void loadOpLogs()
         if (!stop && running) timer = window.setTimeout(tick, 1500)
       } catch {
         if (!stop) timer = window.setTimeout(tick, 3000)
@@ -254,7 +325,7 @@ export default function SlotList() {
       stop = true
       window.clearTimeout(timer)
     }
-  }, [job?.status, pollCollect])
+  }, [job?.status, pollCollect, logOpen, loadOpLogs])
 
   useEffect(() => {
     if (restartJob?.status !== 'running') return
@@ -294,6 +365,7 @@ export default function SlotList() {
   }, [rows, applied])
 
   const collectRunning = job?.status === 'running'
+  const openCell = useCallback((title: string, text: string) => setCellView({ title, text }), [])
   const restartRunning = restartJob?.status === 'running'
   // line 已含「HH:MM:SS [采集|重启] …」，勿再叠 kind 前缀
   const opLogText = useMemo(
@@ -308,6 +380,7 @@ export default function SlotList() {
   )
   const liveRestartLogText = useMemo(() => (restartJob?.logs || []).join('\n'), [restartJob?.logs])
   const showRestartInLog = !!(restartJob && restartJob.status && restartJob.status !== 'idle')
+  const showCollectInLog = !!(job && job.status && job.status !== 'idle')
 
   return (
     <div className="ops-page slot-list">
@@ -375,7 +448,7 @@ export default function SlotList() {
             <Button
               onClick={() => {
                 setLogOpen(true)
-                void loadOpLogs()
+                void loadOpLogs(1)
               }}
             >
               查看操作日志
@@ -391,55 +464,89 @@ export default function SlotList() {
           </span>
         </div>
       </div>
-      {job && job.status && job.status !== 'idle' ? (
-        <div style={{ width: '100%', marginBottom: 8 }}>
-          <div className="hint" style={{ marginBottom: 4 }}>
-            采集进度
-          </div>
-          <Progress
-            percent={job.percent || 0}
-            size="small"
-            status={job.status === 'running' ? 'active' : job.skipped ? 'exception' : 'success'}
-          />
-          <div className="hint">{job.message || (job.status === 'running' ? '正在采集' : '')}</div>
-        </div>
-      ) : null}
       <div className="ops-table">
         <ResponsiveTable
           rowKey="id"
+          size="small"
           loading={loading}
           dataSource={shown}
           bordered
           rowSelection={{ selectedRowKeys: selected, onChange: (keys) => setSelected(keys.map(String)) }}
-          pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (n) => `共 ${n} 条` }}
-          scroll={{ x: 'max-content', y: 'calc(100% - 47px)' }}
+          pagination={{
+            current: tablePage,
+            pageSize: tablePageSize,
+            showSizeChanger: true,
+            pageSizeOptions: ['20', '50', '100'],
+            showTotal: (n) => `共 ${n} 条`,
+            onChange: (page, size) => {
+              setTablePage(page)
+              setTablePageSize(size)
+            },
+          }}
+          tableLayout="fixed"
+          scroll={{ x: 1900, y: 'calc(100% - 47px)' }}
           style={{ height: '100%' }}
           columns={[
-            { title: 'Kafka连接器', dataIndex: 'connector', width: 180, ellipsis: true, render: (v) => v || '—' },
+            { title: 'Kafka连接器', dataIndex: 'connector', width: 156, ellipsis: true, render: (v) => v || '—' },
             {
               title: '实例(主机:端口)',
-              width: 180,
-              ellipsis: true,
-              render: (_, row: SlotRow) => (row.host ? `${row.host}:${row.port}` : '—'),
+              width: 210,
+              onHeaderCell: () => ({ className: 'slot-host-col' }),
+              onCell: () => ({ className: 'slot-peek-cell slot-host-col' }),
+              render: (_, row: SlotRow) => (
+                <SlotPeek title="实例(主机:端口)" value={row.host ? `${row.host}:${row.port}` : ''} onView={openCell} />
+              ),
             },
-            { title: '数据库', dataIndex: 'database', width: 140, ellipsis: true },
-            { title: '任务名', dataIndex: 'task_name', width: 160, ellipsis: true, render: (v) => v || '—' },
-            { title: '数据槽', dataIndex: 'slot_name', width: 180, ellipsis: true },
+            {
+              title: '数据库',
+              dataIndex: 'database',
+              width: 140,
+              onCell: () => ({ className: 'slot-peek-cell', style: { maxWidth: 140 } }),
+              render: (v: string) => <SlotPeek title="数据库" value={v} onView={openCell} />,
+            },
+            {
+              title: '任务名',
+              dataIndex: 'task_name',
+              width: 160,
+              onCell: () => ({ className: 'slot-peek-cell', style: { maxWidth: 160 } }),
+              render: (v: string) => <SlotPeek title="任务名" value={v} onView={openCell} />,
+            },
+            {
+              title: '数据槽',
+              dataIndex: 'slot_name',
+              width: 180,
+              onCell: () => ({ className: 'slot-peek-cell', style: { maxWidth: 180 } }),
+              render: (v: string) => <SlotPeek title="数据槽" value={v} onView={openCell} />,
+            },
             {
               title: 'Slot状态(活动)',
               dataIndex: 'active',
               width: 130,
               render: (v: boolean) => (v ? <Tag color="green">活动</Tag> : <Tag>非活动</Tag>),
             },
-            { title: 'dbz心跳', dataIndex: 'heartbeat', width: 100, render: (v) => v || '—' },
             { title: 'slot pid', dataIndex: 'active_pid', width: 100, render: (v) => (v ? v : '—') },
             { title: 'restart_lsn', dataIndex: 'restart_lsn', width: 140, ellipsis: true, render: (v) => v || '—' },
             { title: 'confirmed_flush_lsn', dataIndex: 'confirmed_flush_lsn', width: 170, ellipsis: true, render: (v) => v || '—' },
             { title: 'replication_lag(MB)', width: 160, render: (_, row: SlotRow) => lagMB(row.lag_bytes) },
-            { title: 'topic', dataIndex: 'topic', width: 160, ellipsis: true, render: (v) => v || '—' },
+            {
+              title: 'topic',
+              dataIndex: 'topic',
+              width: 160,
+              onCell: () => ({ className: 'slot-peek-cell', style: { maxWidth: 160 } }),
+              render: (v: string) => <SlotPeek title="topic" value={v} onView={openCell} />,
+            },
           ]}
         />
       </div>
+      <Modal
+        open={!!cellView}
+        title={cellView ? `查看数据 · ${cellView.title}` : '查看数据'}
+        footer={null}
+        onCancel={() => setCellView(null)}
+        destroyOnClose
+      >
+        <pre className="slot-cell-full">{cellView?.text || ''}</pre>
+      </Modal>
       <Drawer
         title="操作日志（采集 / 重启）"
         open={logOpen}
@@ -466,6 +573,22 @@ export default function SlotList() {
           </Space>
         }
       >
+        {showCollectInLog ? (
+          <div style={{ marginBottom: 16 }}>
+            <div className="hint" style={{ marginBottom: 4 }}>
+              采集进度
+              {collectRunning ? '（进行中）' : ''}
+            </div>
+            <Progress
+              percent={job?.percent || 0}
+              size="small"
+              status={collectRunning ? 'active' : job?.skipped ? 'exception' : 'success'}
+            />
+            <div className="hint" style={{ marginTop: 4 }}>
+              {job?.message || (collectRunning ? '正在采集' : '')}
+            </div>
+          </div>
+        ) : null}
         {showRestartInLog ? (
           <div style={{ marginBottom: 16 }}>
             <div className="hint" style={{ marginBottom: 4 }}>
@@ -509,9 +632,31 @@ export default function SlotList() {
         <div className="hint" style={{ marginBottom: 4 }}>
           历史操作日志
         </div>
-        <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 12, lineHeight: 1.5 }}>
-          {opLogsLoading && !opLogText ? '加载中…' : opLogText || '暂无操作日志（采集与重启会写入此处并持久化）'}
-        </pre>
+        <div className="slot-op-log-list">
+          {opLogsLoading && !opLogs.length ? (
+            <div className="slot-op-log-empty">加载中…</div>
+          ) : opLogs.length ? (
+            opLogs.map((row, i) => (
+              <div key={row.id || `${opLogPage}-${i}`} className="slot-op-log-line">
+                {row.created_at ? `${row.created_at} ` : ''}
+                {row.line || ''}
+              </div>
+            ))
+          ) : (
+            <div className="slot-op-log-empty">暂无操作日志（采集与重启会写入此处并持久化）</div>
+          )}
+        </div>
+        <Pagination
+          className="slot-op-log-pager"
+          size="small"
+          current={opLogPage}
+          pageSize={opLogPageSize}
+          total={opLogTotal}
+          showSizeChanger
+          pageSizeOptions={['20', '50', '100']}
+          showTotal={(n) => `共 ${n} 条`}
+          onChange={(p, ps) => void loadOpLogs(p, ps)}
+        />
       </Drawer>
     </div>
   )

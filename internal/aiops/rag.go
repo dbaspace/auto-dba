@@ -102,28 +102,18 @@ func StrongRAGHit(hits []RAGHit) bool {
 	return hits[0].Score >= StrongRAGThreshold
 }
 
-// FilterRelevantRAGHits 去掉仅靠「数据库/原因」等停用词凑分的无关命中。
+// FilterRelevantRAGHits 只保留整句语意都覆盖得住的案例。
+// 对象、时间、引擎、症状任一段对不上，或没有症状专名，则整批放弃，交给大模型。
 func FilterRelevantRAGHits(q string, hits []RAGHit) []RAGHit {
-	content := contentTokens(tokenize(q))
-	if len(content) == 0 {
+	u := ParseUtterance(q)
+	if u.Write || u.Symptom == "" || u.Time != "" {
 		return nil
 	}
 	var out []RAGHit
 	for _, h := range hits {
-		hay := strings.ToLower(strings.Join([]string{
-			h.Title, h.MetricKey, h.AlertNames, h.Snippet, h.RootCause, h.Action,
-		}, " "))
-		ok := false
-		for _, t := range content {
-			if strings.Contains(hay, t) {
-				ok = true
-				break
-			}
+		if utteranceCovers(u, h) {
+			out = append(out, h)
 		}
-		if !ok {
-			continue
-		}
-		out = append(out, h)
 	}
 	return out
 }
@@ -131,6 +121,9 @@ func FilterRelevantRAGHits(q string, hits []RAGHit) []RAGHit {
 // FormatRAGAnswer 把高分命中格式化为中文直答。
 func FormatRAGAnswer(q string, hits []RAGHit) string {
 	hits = FilterRelevantRAGHits(q, hits)
+	if len(hits) == 0 {
+		return ""
+	}
 	var b strings.Builder
 	b.WriteString("【知识库直答】已命中内置/库内案例（未调用大模型）。\n")
 	b.WriteString("问题：" + strings.TrimSpace(q) + "\n")
@@ -195,33 +188,33 @@ var ragTechBoost = map[string]float64{
 
 // 运维同义词：口语 → 知识库常见词。
 var ragSynonyms = map[string][]string{
-	"打满":      {"连接", "连接使用率", "max_connections", "pgconnhigh", "remaining connection"},
-	"连不上":     {"连接", "连接使用率", "max_connections"},
-	"连接满":     {"连接使用率", "连接接近打满", "pgconnhigh"},
-	"膨胀":      {"死元组", "bloat", "vacuum"},
-	"延迟":      {"复制", "lag", "replication"},
-	"慢sql":     {"慢查询", "slow_query"},
-	"慢查询":     {"slow_query", "topsql"},
-	"死锁":      {"deadlock", "锁"},
-	"长事务":     {"xact", "idle in transaction"},
-	"空闲事务":    {"idle in transaction", "长事务"},
-	"复制槽":     {"slot", "wal", "replication"},
-	"磁盘满":     {"存储", "disk", "pg_wal"},
-	"wraparound":  {"xid", "冻结", "vacuum"},
-	"wal":       {"pg_wal", "wal_retain_bytes", "复制槽"},
-	"wal大":     {"wal", "pg_wal", "wal_retain_bytes", "复制槽"},
-	"wal高":     {"wal", "pg_wal", "wal_retain_bytes", "复制槽"},
-	"wal涨":     {"wal", "pg_wal", "archive", "复制槽"},
-	"大key":     {"bigkey", "unlink", "redis"},
-	"热key":     {"hotkey", "redis"},
-	"主从延迟":    {"replication", "lag", "复制"},
+	"打满":                   {"连接", "连接使用率", "max_connections", "pgconnhigh", "remaining connection"},
+	"连不上":                  {"连接", "连接使用率", "max_connections"},
+	"连接满":                  {"连接使用率", "连接接近打满", "pgconnhigh"},
+	"膨胀":                   {"死元组", "bloat", "vacuum"},
+	"延迟":                   {"复制", "lag", "replication"},
+	"慢sql":                 {"慢查询", "slow_query"},
+	"慢查询":                  {"slow_query", "topsql"},
+	"死锁":                   {"deadlock", "锁"},
+	"长事务":                  {"xact", "idle in transaction"},
+	"空闲事务":                 {"idle in transaction", "长事务"},
+	"复制槽":                  {"slot", "wal", "replication"},
+	"磁盘满":                  {"存储", "disk", "pg_wal"},
+	"wraparound":           {"xid", "冻结", "vacuum"},
+	"wal":                  {"pg_wal", "wal_retain_bytes", "复制槽"},
+	"wal大":                 {"wal", "pg_wal", "wal_retain_bytes", "复制槽"},
+	"wal高":                 {"wal", "pg_wal", "wal_retain_bytes", "复制槽"},
+	"wal涨":                 {"wal", "pg_wal", "archive", "复制槽"},
+	"大key":                 {"bigkey", "unlink", "redis"},
+	"热key":                 {"hotkey", "redis"},
+	"主从延迟":                 {"replication", "lag", "复制"},
 	"too many connections": {"连接", "max_connections", "mysql"},
-	"binlog":    {"mysql", "disk", "replication"},
-	"starrocks": {"be", "fe", "tablet", "导入"},
-	"导入失败":    {"load", "starrocks", "broker"},
-	"be宕机":     {"be", "starrocks", "heartbeat"},
-	"mha":       {"mysql", "高可用", "主从", "切换"},
-	"高可用":     {"ha", "mha", "切换"},
+	"binlog":               {"mysql", "disk", "replication"},
+	"starrocks":            {"be", "fe", "tablet", "导入"},
+	"导入失败":                 {"load", "starrocks", "broker"},
+	"be宕机":                 {"be", "starrocks", "heartbeat"},
+	"mha":                  {"mysql", "高可用", "主从", "切换"},
+	"高可用":                  {"ha", "mha", "切换"},
 }
 
 func tokenize(q string) []string {

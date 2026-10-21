@@ -100,6 +100,7 @@ const (
 	URNRunbookExecute  = "um.action.runbook.execute"
 	URNSidebarAIOpsKB        = "um.sidebar.ops-aiops-knowledge"
 	URNSidebarAIOpsIncidents = "um.sidebar.ops-aiops-incidents"
+	URNSidebarAIAssistant    = "um.sidebar.ops-ai-assistant"
 
 	URNTenantsCreate      = "um.action.tenants.create"
 	URNTenantsEdit        = "um.action.tenants.edit"

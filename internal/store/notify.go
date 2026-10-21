@@ -40,6 +40,12 @@ type NotifyConfig struct {
 	SMSOnAlert         bool `json:"sms_on_alert"`
 	DingtalkOnAlert    bool `json:"dingtalk_on_alert"`
 	RobotLarkOnAlert   bool `json:"robot_lark_on_alert"`
+	// CopilotDangerAlert AI 助手危险操作对话是否外发。默认关闭。
+	CopilotDangerAlert bool `json:"copilot_danger_alert"`
+	// CopilotDangerUsers 危险操作通知的平台用户（邮件 / 飞书私聊 / 企微按其档案发送）。
+	CopilotDangerUsers []string `json:"copilot_danger_users,omitempty"`
+	// CopilotDangerEmails 额外收件邮箱，走已启用的 SMTP。
+	CopilotDangerEmails []string `json:"copilot_danger_emails,omitempty"`
 	// RobotsOnTicketCreate 工单待审时是否向「方向含 ticket」的群机器人发送。
 	RobotsOnTicketCreate bool `json:"robots_on_ticket_create"`
 	// RobotRoutes 每条 Nacos robots 下标的方向（页面配置，不进 Nacos）。
@@ -66,6 +72,30 @@ func NormalizeRobotFor(s string) string {
 	default:
 		return "alert"
 	}
+}
+
+func cleanNotifyList(in []string, email bool) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, s := range in {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		if email && !strings.Contains(s, "@") {
+			continue
+		}
+		key := strings.ToLower(s)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, s)
+	}
+	if out == nil {
+		out = []string{}
+	}
+	return out
 }
 
 // RobotRouteFor 返回指定下标的方向；未配置默认 alert。
@@ -196,6 +226,9 @@ func (d *DB) SetNotifyConfig(c *NotifyConfig) error {
 		SMSOnAlert:              c.SMSOnAlert,
 		DingtalkOnAlert:         c.DingtalkOnAlert,
 		RobotLarkOnAlert:        c.RobotLarkOnAlert,
+		CopilotDangerAlert:      c.CopilotDangerAlert,
+		CopilotDangerUsers:      cleanNotifyList(c.CopilotDangerUsers, false),
+		CopilotDangerEmails:     cleanNotifyList(c.CopilotDangerEmails, true),
 		RobotsOnTicketCreate:    c.RobotsOnTicketCreate,
 		RobotRoutes:             SanitizeRobotRoutes(c.RobotRoutes),
 		AlertNotifyMaxFire:      c.AlertNotifyMaxFire,
@@ -235,6 +268,9 @@ func (c *NotifyConfig) Public() map[string]any {
 		"sms_on_alert":                     c.SMSOnAlert,
 		"dingtalk_on_alert":                c.DingtalkOnAlert,
 		"robot_lark_on_alert":              c.RobotLarkOnAlert,
+		"copilot_danger_alert":             c.CopilotDangerAlert,
+		"copilot_danger_users":             cleanNotifyList(c.CopilotDangerUsers, false),
+		"copilot_danger_emails":            cleanNotifyList(c.CopilotDangerEmails, true),
 		"robots_on_ticket_create":          c.RobotsOnTicketCreate,
 		"robot_routes":                     SanitizeRobotRoutes(c.RobotRoutes),
 		"alert_notify_max_fire":            c.AlertNotifyMaxFire,

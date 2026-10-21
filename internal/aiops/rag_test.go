@@ -110,6 +110,32 @@ func TestRAGSearchMultiEngine(t *testing.T) {
 	}
 }
 
+func TestInstanceStatusNotBuiltin(t *testing.T) {
+	svc := &Service{}
+	q := "分析下dorisdb.bj.restosuite.cn 实例最近1小时运行情况"
+	u := ParseUtterance(q)
+	if u.Symptom != "" || u.Object == "" || u.Time == "" {
+		t.Fatalf("parse=%+v meaning=%s", u, u.Meaning())
+	}
+	if !strings.Contains(u.Meaning(), "查看") || !strings.Contains(u.Meaning(), u.Object) || !strings.Contains(u.Meaning(), "运行情况") {
+		t.Fatalf("meaning=%s", u.Meaning())
+	}
+	hits, err := svc.RAGSearch(nil, q, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hits = FilterRelevantRAGHits(q, hits)
+	if StrongRAGHit(hits) {
+		t.Fatalf("status question must not direct-answer, hits=%+v", hits)
+	}
+	ans := FormatRAGAnswer(q, hits)
+	for _, bad := range []string{"NotReady", "慢查询"} {
+		if strings.Contains(ans, bad) {
+			t.Fatalf("unrelated case leaked: %s", ans)
+		}
+	}
+}
+
 func TestRAGSearchWALNotCPU(t *testing.T) {
 	svc := &Service{}
 	q := "postgresql 数据库wal大的原因"

@@ -1739,6 +1739,7 @@ func (d *DB) ensureAlertMenus(now string) error {
 		{"m-alert-oncall", "m-alert", "值班排班", "/ops/alerts/oncall", "um.sidebar.ops-alerts-oncall", "查看值班排班", "team", 7},
 		{"m-alert-aiops-kb", "m-alert", "AIOps 知识库", "/ops/aiops/knowledge", URNSidebarAIOpsKB, "查看 AIOps 知识库", "book", 8},
 		{"m-alert-aiops-incidents", "m-alert", "AIOps 关联", "/ops/aiops/incidents", URNSidebarAIOpsIncidents, "查看告警关联事故", "cluster", 9},
+		{"m-ai-assistant", "", "AI助手", "/ops/ai-assistant", URNSidebarAIAssistant, "查看 AI助手", "robot", 71},
 		{"m-act-alert-claim", "m-alert-active", "认领告警", "", URNAlertClaim, "认领 / 转派 / 处理中", "user", 90},
 		{"m-act-alert-resolve", "m-alert-active", "关闭告警", "", URNAlertResolve, "恢复 / 误报关闭", "check", 91},
 		{"m-act-alert-silence", "m-alert-active", "静默告警", "", URNAlertSilence, "新建 / 取消静默", "pause", 92},
@@ -1924,6 +1925,7 @@ func (d *DB) ensureTopLevelMenuSort(now string) error {
 		{"m-plat", "平台运维", "um.sidebar.platform", "grid", 50},
 		{"m-rbac", "用户权限", "um.sidebar.rbac", "lock", 55},
 		{"m-alert", "告警管理", "um.sidebar.alerts", "bell", 70},
+		{"m-ai-assistant", "AI助手", "um.sidebar.ops-ai-assistant", "robot", 71},
 	}
 	for _, it := range tops {
 		exist, err := d.GetMenu(it.id)

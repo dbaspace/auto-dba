@@ -162,14 +162,23 @@ func (d *DB) UpsertSlotMeta(s *SyncSlot) error {
 	if s.Active {
 		active = 1
 	}
-	var exists string
-	err := d.QueryRow(`SELECT id FROM tbl_sync_slots WHERE host=? AND port=? AND slot_name=?`, s.Host, s.Port, s.SlotName).Scan(&exists)
-	if err == nil && exists != "" {
-		_, err = d.Exec(`UPDATE tbl_sync_slots SET database_name=?, active=?, plugin=?, updated_at=? WHERE id=?`,
-			s.Database, active, s.Plugin, now, exists)
+	exists, err := d.findSlotIDByName(s.SlotName)
+	if err != nil {
 		return err
 	}
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	if exists == "" {
+		err = d.QueryRow(`SELECT id FROM tbl_sync_slots WHERE host=? AND port=? AND slot_name=?`, s.Host, s.Port, s.SlotName).Scan(&exists)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if errors.Is(err, sql.ErrNoRows) {
+			exists = ""
+			err = nil
+		}
+	}
+	if exists != "" {
+		_, err = d.Exec(`UPDATE tbl_sync_slots SET database_name=?, active=?, plugin=?, updated_at=? WHERE id=?`,
+			s.Database, active, s.Plugin, now, exists)
 		return err
 	}
 	_, err = d.Exec(
@@ -246,8 +255,8 @@ func (d *DB) DeleteSlotsByName(name string) error {
 	return err
 }
 
-// ReplaceHostSlots 用本次采集结果更新同一实例主机（含域名/多地址）上的槽：
-// 按 (host|alias, port, slot_name) 原地 UPDATE 保留 id；仅删除本次未再出现的槽。
+// ReplaceHostSlots 用本次采集结果更新槽。槽名全局唯一：按 slot_name 覆盖同一行的
+// pid、LSN、滞后，并删掉同名重复行。仅删除本实例主机上本次未再出现的槽。
 func (d *DB) ReplaceHostSlots(displayHost string, port int, aliases []string, slots []SyncSlot) error {
 	hosts := make([]string, 0, 1+len(aliases))
 	seenHost := map[string]struct{}{}
@@ -286,14 +295,32 @@ func (d *DB) ReplaceHostSlots(displayHost string, port int, aliases []string, sl
 		if s.Active {
 			active = 1
 		}
-		existID := d.findSlotIDOnHosts(hosts, port, name)
-		if existID != "" {
-			_, err := d.Exec(`UPDATE tbl_sync_slots SET host=?, port=?, database_name=?, active=?, active_pid=?, restart_lsn=?, confirmed_flush_lsn=?, lag_bytes=?, plugin=?, updated_at=? WHERE id=?`,
-				displayHost, port, s.Database, active, s.ActivePID, s.RestartLSN, s.ConfirmedFlushLSN, s.LagBytes, s.Plugin, now, existID)
+		hits, err := d.listSlotsByName(name)
+		if err != nil {
+			return err
+		}
+		if len(hits) > 0 {
+			keepID := hits[0].ID
+			for _, h := range hits {
+				if hostInList(h.Host, hosts) {
+					keepID = h.ID
+					break
+				}
+			}
+			_, err = d.Exec(`UPDATE tbl_sync_slots SET host=?, port=?, database_name=?, active=?, active_pid=?, restart_lsn=?, confirmed_flush_lsn=?, lag_bytes=?, plugin=?, updated_at=? WHERE id=?`,
+				displayHost, port, s.Database, active, s.ActivePID, s.RestartLSN, s.ConfirmedFlushLSN, s.LagBytes, s.Plugin, now, keepID)
 			if err != nil {
 				return err
 			}
-			s.ID = existID
+			for _, h := range hits {
+				if h.ID == keepID {
+					continue
+				}
+				if err := d.DeleteSlot(h.ID); err != nil {
+					return err
+				}
+			}
+			s.ID = keepID
 			continue
 		}
 		s.ID = ""
@@ -332,23 +359,52 @@ func (d *DB) ReplaceHostSlots(displayHost string, port int, aliases []string, sl
 	return nil
 }
 
-func (d *DB) findSlotIDOnHosts(hosts []string, port int, slotName string) string {
-	slotName = strings.TrimSpace(slotName)
-	if slotName == "" || port <= 0 {
-		return ""
+type namedSlotHit struct {
+	ID   string
+	Host string
+}
+
+func hostInList(host string, hosts []string) bool {
+	host = strings.ToLower(strings.TrimSpace(host))
+	if host == "" {
+		return false
 	}
 	for _, h := range hosts {
-		h = strings.TrimSpace(h)
-		if h == "" {
-			continue
-		}
-		var id string
-		err := d.QueryRow(`SELECT id FROM tbl_sync_slots WHERE host=? AND port=? AND slot_name=?`, h, port, slotName).Scan(&id)
-		if err == nil && strings.TrimSpace(id) != "" {
-			return id
+		if strings.ToLower(strings.TrimSpace(h)) == host {
+			return true
 		}
 	}
-	return ""
+	return false
+}
+
+// listSlotsByName 按槽名取全部行（槽名全局唯一，主机写法不同视为同一槽）。
+func (d *DB) listSlotsByName(slotName string) ([]namedSlotHit, error) {
+	slotName = strings.TrimSpace(slotName)
+	if slotName == "" {
+		return nil, nil
+	}
+	rows, err := d.Query(`SELECT id, host FROM tbl_sync_slots WHERE slot_name=? ORDER BY updated_at ASC, id ASC`, slotName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []namedSlotHit
+	for rows.Next() {
+		var h namedSlotHit
+		if err := rows.Scan(&h.ID, &h.Host); err != nil {
+			return nil, err
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
+}
+
+func (d *DB) findSlotIDByName(slotName string) (string, error) {
+	hits, err := d.listSlotsByName(slotName)
+	if err != nil || len(hits) == 0 {
+		return "", err
+	}
+	return hits[0].ID, nil
 }
 
 // GetSyncSlotByKey 按主机+端口+槽名取槽（稳定键，不受采集换 id 影响）。

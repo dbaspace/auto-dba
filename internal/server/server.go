@@ -199,7 +199,7 @@ func Run(cfg *config.Config, configPath string) {
 		Cmdb:               &handler.CmdbHandler{Store: db, Secret: fieldCrypto},
 		Todo:               &handler.TodoHandler{Store: db},
 		Alert:              &handler.AlertHandler{Store: db, Secret: fieldCrypto},
-		Copilot:            &handler.CopilotHandler{Svc: copilot.New(db)},
+		Copilot:            &handler.CopilotHandler{Svc: func() *copilot.Service { s := copilot.New(db); s.Secret = fieldCrypto; return s }()},
 		Runbook:            &handler.RunbookHandler{Svc: runbook.New(db)},
 		DCL:                &handler.DCLHandler{Store: db, Secret: fieldCrypto},
 		ResourceApply:      &handler.ResourceApplyHandler{Store: db, Secret: fieldCrypto},
@@ -212,12 +212,12 @@ func Run(cfg *config.Config, configPath string) {
 			Secret:   func() string { return cfg.App.JWTSecret },
 			Sessions: sessStore,
 		},
-		Ldap:               &handler.LdapHandler{Store: db, Cfg: cfg},
-		Sso:                &handler.SsoHandler{Store: db, Cfg: cfg},
-		SMTP:               &handler.SMTPHandler{Store: db, Cfg: cfg},
-		Notify:             &handler.NotifyHandler{Store: db, Cfg: cfg},
-		Terminal:           &terminal.Handler{Store: db, Cfg: cfg, Secret: fieldCrypto},
-		Static:             staticRoot,
+		Ldap:     &handler.LdapHandler{Store: db, Cfg: cfg},
+		Sso:      &handler.SsoHandler{Store: db, Cfg: cfg},
+		SMTP:     &handler.SMTPHandler{Store: db, Cfg: cfg},
+		Notify:   &handler.NotifyHandler{Store: db, Cfg: cfg},
+		Terminal: &terminal.Handler{Store: db, Cfg: cfg, Secret: fieldCrypto},
+		Static:   staticRoot,
 	}
 
 	// 数据库监控：remote 代理到独立服务；embed 内嵌；off 关闭

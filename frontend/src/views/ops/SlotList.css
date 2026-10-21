@@ -21,6 +21,80 @@
 .slot-list .ops-table .ant-table {
   flex: 1;
   min-height: 0;
+  font-size: 12px;
+}
+
+.slot-list .ops-table .slot-host-col {
+  width: 210px !important;
+  max-width: 210px !important;
+}
+
+.slot-list .ops-table .slot-peek-cell {
+  overflow: hidden;
+}
+
+.slot-list .slot-cell-text {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.slot-list .slot-cell-text-main {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.slot-list .slot-cell-view {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid #d9d9d9;
+  border-radius: 50%;
+  background: #fafafa;
+  color: rgba(0, 0, 0, 0.45);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.slot-list .slot-cell-view:hover {
+  color: #1677ff;
+  border-color: #91caff;
+  background: #f0f7ff;
+}
+
+.slot-cell-full {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.slot-list .ops-table .ant-table-thead > tr > th,
+.slot-list .ops-table .ant-table-tbody > tr > td {
+  font-size: 12px;
+  padding: 4px 8px;
+}
+
+.slot-list .ops-table .ant-table-thead > tr > th {
+  text-align: center !important;
+}
+
+.slot-list .ops-table .ant-table-tbody > tr > td .ant-tag {
+  font-size: 12px;
+  line-height: 18px;
 }
 
 .slot-list .ops-table .ant-table-container {
@@ -29,6 +103,31 @@
 
 .slot-list .ops-table .ant-table-body {
   overflow: auto !important;
+}
+
+.slot-op-log-list {
+  max-height: 360px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.slot-op-log-line {
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.slot-op-log-empty {
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+  padding: 8px 0;
+}
+
+.slot-op-log-pager {
+  margin-top: 12px;
+  text-align: right;
 }
 
 .slot-list .ops-table .ant-table-pagination.ant-pagination {

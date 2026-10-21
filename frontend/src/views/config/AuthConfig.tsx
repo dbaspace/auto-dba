@@ -780,6 +780,7 @@ function NotifyPanel() {
   const [smtpConfigured, setSmtpConfigured] = useState(false)
   const [testTo, setTestTo] = useState<Record<string, string>>({})
   const [robotRoutes, setRobotRoutes] = useState<RobotRouteRow[]>([])
+  const [userOptions, setUserOptions] = useState<{ value: string; label: string }[]>([])
 
   function routeFor(index: number): RobotRouteRow['for'] {
     const hit = robotRoutes.find((r) => r.index === index)
@@ -796,7 +797,16 @@ function NotifyPanel() {
   async function load() {
     setLoading(true)
     try {
-      const { data } = await api.get('/settings/notify')
+      const [res, uRes] = await Promise.all([
+        api.get('/settings/notify'),
+        api.get('/users').catch(() => ({ data: { data: [] } })),
+      ])
+      const { data } = res
+      const list = (uRes.data?.data || []) as { username?: string; display_name?: string }[]
+      setUserOptions(list.map((u) => ({
+        value: u.username || '',
+        label: u.display_name ? `${u.display_name} (${u.username})` : (u.username || ''),
+      })).filter((x) => x.value))
       const d = data?.data || {}
       setProviders(d.providers || {})
       setSmtpReady(!!d.smtp_ready)
@@ -827,6 +837,9 @@ function NotifyPanel() {
         sms_on_alert: !!d.sms_on_alert,
         dingtalk_on_alert: !!d.dingtalk_on_alert,
         robot_lark_on_alert: !!d.robot_lark_on_alert,
+        copilot_danger_alert: !!d.copilot_danger_alert,
+        copilot_danger_users: Array.isArray(d.copilot_danger_users) ? d.copilot_danger_users : [],
+        copilot_danger_emails: Array.isArray(d.copilot_danger_emails) ? d.copilot_danger_emails : [],
         robots_on_ticket_create: !!d.robots_on_ticket_create,
         alert_notify_max_fire: Number(d.alert_notify_max_fire) >= 0 ? Number(d.alert_notify_max_fire) : 3,
         alert_notify_window: d.alert_notify_window || '15m',
@@ -877,6 +890,9 @@ function NotifyPanel() {
         sms_on_alert: !!f.sms_on_alert,
         dingtalk_on_alert: !!f.dingtalk_on_alert,
         robot_lark_on_alert: !!f.robot_lark_on_alert,
+        copilot_danger_alert: !!f.copilot_danger_alert,
+        copilot_danger_users: Array.isArray(f.copilot_danger_users) ? f.copilot_danger_users : [],
+        copilot_danger_emails: Array.isArray(f.copilot_danger_emails) ? f.copilot_danger_emails : [],
         robots_on_ticket_create: !!f.robots_on_ticket_create,
         robot_routes: robotRoutes,
         alert_notify_max_fire: Number(f.alert_notify_max_fire) >= 0 ? Number(f.alert_notify_max_fire) : 3,
@@ -943,8 +959,35 @@ function NotifyPanel() {
           <code>docs/nacos-config.md</code>。
         </p>
         <Collapse
-          defaultActiveKey={['email', 'alert_rate', 'lark', 'wecom']}
+          defaultActiveKey={['copilot_danger', 'email', 'alert_rate', 'lark', 'wecom']}
           items={[
+            {
+              key: 'copilot_danger',
+              label: 'AI助手危险操作',
+              children: (
+                <>
+                  <Form.Item label="危险操作告警" name="copilot_danger_alert" valuePropName="checked"
+                    extra={<span className="field-hint">开启后，写操作、KILL、恢复、改配置会被拒绝，并通知下面指定的人和邮箱。已配置的群机器人也会收到。关闭时仍然拒绝执行，只是不外发。</span>}>
+                    <Switch />
+                  </Form.Item>
+                  <Form.Item label="通知接收人" name="copilot_danger_users"
+                    extra={<span className="field-hint">平台用户。有邮箱则发邮件，有飞书身份则发飞书私聊，有企微身份则发企微应用。</span>}>
+                    <Select
+                      mode="multiple"
+                      allowClear
+                      showSearch
+                      optionFilterProp="label"
+                      options={userOptions}
+                      placeholder="选择要通知的用户"
+                    />
+                  </Form.Item>
+                  <Form.Item label="通知邮箱" name="copilot_danger_emails"
+                    extra={<span className="field-hint">额外邮箱，走已就绪的 SMTP。可与接收人同时填写。</span>}>
+                    <Select mode="tags" tokenSeparators={[',', ' ', ';']} placeholder="name@example.com，回车添加" />
+                  </Form.Item>
+                </>
+              ),
+            },
             {
               key: 'alert_rate',
               label: '告警发送频率',

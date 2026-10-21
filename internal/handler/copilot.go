@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -8,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"auto-dba/internal/copilot"
+	"auto-dba/internal/middleware"
 )
 
 type CopilotHandler struct {
@@ -35,12 +37,44 @@ func (h *CopilotHandler) Chat(c *gin.Context) {
 		return
 	}
 	req.TenantID = effectiveListTenantID(h.Svc.Store, c)
+	req.Username = middleware.Username(c)
+	if req.Stream {
+		h.chatStream(c, req)
+		return
+	}
 	resp, err := h.Svc.Chat(c.Request.Context(), req)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": resp})
+}
+
+func (h *CopilotHandler) chatStream(c *gin.Context, req copilot.ChatRequest) {
+	c.Writer.Header().Set("Content-Type", "application/x-ndjson; charset=utf-8")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("X-Accel-Buffering", "no")
+	c.Status(http.StatusOK)
+	flusher, _ := c.Writer.(http.Flusher)
+	write := func(v any) {
+		raw, err := json.Marshal(v)
+		if err != nil {
+			return
+		}
+		_, _ = c.Writer.Write(append(raw, '\n'))
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+	req.OnStep = func(step copilot.TaskStep) {
+		write(gin.H{"type": "step", "step": step})
+	}
+	resp, err := h.Svc.Chat(c.Request.Context(), req)
+	if err != nil {
+		write(gin.H{"type": "error", "message": err.Error()})
+		return
+	}
+	write(gin.H{"type": "done", "data": resp})
 }
 
 // ListSessions GET /copilot/sessions?limit=50
@@ -90,6 +124,7 @@ func (h *CopilotHandler) GetSessionTurns(c *gin.Context) {
 // CopilotChat 告警上下文快捷入口 POST /alerts/:id/copilot
 func (h *AlertHandler) CopilotChat(c *gin.Context) {
 	svc := copilot.New(h.Store)
+	svc.Secret = h.Secret
 	var req copilot.ChatRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
@@ -99,6 +134,7 @@ func (h *AlertHandler) CopilotChat(c *gin.Context) {
 		req.AlertID = c.Param("id")
 	}
 	req.TenantID = effectiveListTenantID(h.Store, c)
+	req.Username = middleware.Username(c)
 	resp, err := svc.Chat(c.Request.Context(), req)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})

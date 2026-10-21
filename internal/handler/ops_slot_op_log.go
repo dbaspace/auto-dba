@@ -23,12 +23,22 @@ func (h *SlotHandler) persistSlotOpLog(tenantID, kind, line string) {
 	_ = h.Store.AppendSyncSlotOpLog(tenantID, kind, line)
 }
 
-// OpLogs GET /sync-slots/logs — 持久化的采集/重启操作日志。
+// OpLogs GET /sync-slots/logs — 持久化的采集/重启操作日志（分页，第 1 页为最新）。
 func (h *SlotHandler) OpLogs(c *gin.Context) {
 	tid := effectiveListTenantID(h.Store, c)
 	kind := strings.TrimSpace(c.Query("kind"))
-	limit, _ := strconv.Atoi(c.Query("limit"))
-	list, err := h.Store.ListSyncSlotOpLogs(tid, kind, limit)
+	page, _ := strconv.Atoi(c.Query("page"))
+	pageSize, _ := strconv.Atoi(c.Query("page_size"))
+	if page < 1 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	if pageSize > 200 {
+		pageSize = 200
+	}
+	list, total, err := h.Store.ListSyncSlotOpLogs(tid, kind, pageSize, (page-1)*pageSize)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -36,7 +46,12 @@ func (h *SlotHandler) OpLogs(c *gin.Context) {
 	if list == nil {
 		list = []store.SyncSlotOpLog{}
 	}
-	c.JSON(http.StatusOK, gin.H{"data": list})
+	c.JSON(http.StatusOK, gin.H{
+		"data":      list,
+		"total":     total,
+		"page":      page,
+		"page_size": pageSize,
+	})
 }
 
 func formatSlotOpTS() string {

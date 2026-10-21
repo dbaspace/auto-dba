@@ -37,10 +37,10 @@ type AlertPayload struct {
 	GroupSize   int               `json:"group_size,omitempty"`
 	At          string            `json:"at"`
 	// AIOps Phase0：上下文摘要（可选）
-	InstanceID    string              `json:"instance_id,omitempty"`
-	ImpactSummary string              `json:"impact_summary,omitempty"`
-	ContextSummary string             `json:"context_summary,omitempty"`
-	CaseHints     []AlertCaseHint     `json:"case_hints,omitempty"`
+	InstanceID     string          `json:"instance_id,omitempty"`
+	ImpactSummary  string          `json:"impact_summary,omitempty"`
+	ContextSummary string          `json:"context_summary,omitempty"`
+	CaseHints      []AlertCaseHint `json:"case_hints,omitempty"`
 }
 
 // AlertCaseHint Webhook 中的案例提示（与 aiops.CaseHint 字段对齐，避免 notify↔aiops 循环依赖）。
@@ -61,9 +61,9 @@ type AlertContextOpts struct {
 
 // AlertDispatchOpts 外发选项（路由 / 值班覆盖默认渠道）。
 type AlertDispatchOpts struct {
-	Channels []string // webhook|wecom|phone|email；空则用全局开关
-	ToUsers  []string // 邮件 / 企微接收人（用户名）
-	GroupKey string
+	Channels  []string // webhook|wecom|phone|email；空则用全局开关
+	ToUsers   []string // 邮件 / 企微接收人（用户名）
+	GroupKey  string
 	GroupSize int
 }
 
@@ -164,6 +164,8 @@ func dispatchAlert(db *store.DB, encKey string, p AlertPayload, opts *AlertDispa
 			SendVia(ChannelRobot, robotAlertMessage(ncfg, title, text, md, "dingtalk"))
 		case "robot_lark":
 			SendVia(ChannelRobot, robotAlertMessage(ncfg, title, text, md, "lark"))
+		case "robot_wechat":
+			SendVia(ChannelRobot, robotAlertMessage(ncfg, title, text, md, "wechat"))
 		}
 	}
 	log.Printf("alert-notify: dispatched event=%s alert=%s channels=%v text=%s", p.Event, p.AlertID, channels, text)
