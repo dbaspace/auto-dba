@@ -233,6 +233,9 @@ func (d *DB) seedRBAC(now string) error {
 	if err := d.ensureDbMonitorMenu(now); err != nil {
 		return err
 	}
+	if err := d.ensureInstanceOverviewMenu(now); err != nil {
+		return err
+	}
 	if err := d.ensureSqlInsightActionMenus(now); err != nil {
 		return err
 	}
@@ -1610,6 +1613,25 @@ func (d *DB) ensureSqlInsightActionMenus(now string) error {
 		}
 	}
 	log.Printf("seed: sql-insight action menus ensured")
+	return nil
+}
+
+func (d *DB) ensureInstanceOverviewMenu(now string) error {
+	m := &Menu{
+		ID: "m-diag-overview", ParentID: "m-diag-perf", Title: "实例总览", Path: "/ops/instance-overview",
+		URN: "um.sidebar.ops-instance-overview", PermissionDesc: "查看实例总览", Icon: "databoard",
+		SortOrder: 0, Enabled: true, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := d.EnsureMenu(m); err != nil {
+		return err
+	}
+	if err := d.GrantMenuFollowingParent(m.ID, m.ParentID); err != nil {
+		return err
+	}
+	if err := d.grantMenuToRoleCode(m.ID, "admin"); err != nil {
+		return err
+	}
+	log.Printf("seed: instance overview menu ensured")
 	return nil
 }
 
