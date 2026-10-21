@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { Button, DatePicker, Empty, Input, Select, Space, Spin, Typography, message } from 'antd'
 import { ReloadOutlined, SearchOutlined } from '@ant-design/icons'
 import dayjs, { Dayjs } from 'dayjs'
@@ -203,6 +204,8 @@ function MonitorTimeseriesChart(props: {
 }
 
 export default function DbMonitor({ engine = 'postgres' }: Props) {
+  const [searchParams] = useSearchParams()
+  const presetInstance = searchParams.get('instance') || ''
   const isSR = engine === 'starrocks'
   const isRedis = engine === 'redis'
   const isHost = engine === 'host'
@@ -376,6 +379,22 @@ export default function DbMonitor({ engine = 'postgres' }: Props) {
   }, [useDomainInstance, idc, domainFilter, filteredByIdc, tagFilters])
 
   useEffect(() => {
+    if (!presetInstance || !instances.length || isSR) return
+    const it = instances.find((i) => i.id === presetInstance)
+    if (!it) return
+    const idcVal = resolveInstanceIdc(it)
+    if (idcVal) setIdc(idcVal)
+    if (useDomainInstance) {
+      const domain = resolveInstanceDomain(it)
+      if (domain) setDomainFilter(domain)
+    } else {
+      const tags = resolveInstanceTagLabels(it)
+      if (tags[0]) setTagFilters([tags[0]])
+    }
+    setInstanceId(it.id)
+  }, [presetInstance, instances, isSR, useDomainInstance])
+
+  useEffect(() => {
     if (isSR) {
       if (!filteredClusters.length) {
         if (clusterId) setClusterId('')
@@ -389,13 +408,15 @@ export default function DbMonitor({ engine = 'postgres' }: Props) {
       return
     }
     if (!filteredInstances.length) {
-      if (instanceId) setInstanceId('')
+      const pending = presetInstance && instances.some((i) => i.id === presetInstance)
+      if (!pending && instanceId) setInstanceId('')
       return
     }
     if (!filteredInstances.some((i) => i.id === instanceId)) {
-      setInstanceId(filteredInstances[0].id)
+      const preferred = filteredInstances.find((i) => i.id === presetInstance)
+      setInstanceId((preferred || filteredInstances[0]).id)
     }
-  }, [isSR, filteredClusters, clusterId, filteredInstances, instanceId])
+  }, [isSR, filteredClusters, clusterId, filteredInstances, instanceId, presetInstance, instances])
 
   const runQuery = useCallback(
     async (opts?: { silent?: boolean }) => {

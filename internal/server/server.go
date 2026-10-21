@@ -176,6 +176,7 @@ func Run(cfg *config.Config, configPath string) {
 		Kafka:              &handler.KafkaHandler{Store: db, Secret: fieldCrypto},
 		Redis:              &handler.RedisHandler{Store: db, Secret: fieldCrypto},
 		Insight:            &handler.InsightHandler{Store: db, Secret: fieldCrypto},
+		InstanceOverview:   &handler.OverviewHandler{Store: db, Secret: fieldCrypto},
 		Session:            &handler.SessionHandler{Store: db, Secret: fieldCrypto},
 		PgSpace:            &handler.PgSpaceHandler{Svc: pgSpaceSvc},
 		RedisRDB:           &handler.RedisRDBHandler{Svc: redisRDBSvc},

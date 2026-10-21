@@ -48,6 +48,7 @@ export const PAGE_ROUTES = [
   { path: '/k8s/db-clusters', title: 'K8s 数据库服务' },
   { path: '/k8s/apps', title: 'K8s Helm 应用' },
   { path: '/ops/sql-insight', title: 'SQL 洞察' },
+  { path: '/ops/instance-overview', title: '实例总览' },
   { path: '/ops/redis-rdb', title: 'Redis 内存分析' },
   { path: '/ops/db-monitor/postgres', title: 'Postgres监控' },
   { path: '/ops/db-monitor/mysql', title: 'MySQL监控' },

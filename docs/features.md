@@ -159,6 +159,7 @@ Client Secret（及 LDAP Bind 密码）用字段加密密钥落库（优先 `app
 |------|------|------|
 | SQL 洞察 | `/ops/sql-insight` | 六 Tab：SQL洞察 / 洞察分析 / 可视汇总 / AWR报告 / 表空间分析 / 智能分析；壳上统一「设置」入口（`/config/sql-insight`）。写操作权限：活动快照采集 / AWR 生成 / 表空间采集 / 智能分析（见 rbac-permissions） |
 | 会话管理 | `/ops/sessions` | 查看会话与锁，可定时刷新，并结束异常会话（PostgreSQL / MySQL 族） |
+| 实例总览 | `/ops/instance-overview` | 已登记实例的横向一览。打开只读元库；点刷新才限流采集 PostgreSQL / Redis 的版本、角色、连接、内存、从库延迟。不是监控曲线 |
 | MySQL 慢 SQL | `/ops/mysql-slow` | performance_schema digest Top SQL（只读） |
 
 ## 告警管理

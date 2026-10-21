@@ -27,6 +27,7 @@ import DolphinOps from '../views/ops/DolphinOps'
 import SrNodes from '../views/ops/SrNodes'
 import Sessions from '../views/ops/Sessions'
 import SqlInsight from '../views/ops/SqlInsight'
+import InstanceOverview from '../views/ops/InstanceOverview'
 import DbMonitor from '../views/ops/DbMonitor'
 import RedisRdb from '../views/ops/redis-rdb/RedisRdb'
 import Migration from '../views/ops/Migration'
@@ -192,6 +193,7 @@ const router = createHashRouter([
       { path: 'ops/backup/settings', element: <BackupSettings /> },
 
       { path: 'ops/sql-insight', element: <SqlInsight /> },
+      { path: 'ops/instance-overview', element: <InstanceOverview /> },
       { path: 'ops/redis-rdb', element: <RedisRdb /> },
       { path: 'ops/db-monitor', element: <Navigate to="/ops/db-monitor/postgres" replace /> },
       { path: 'ops/db-monitor/postgres', element: <DbMonitor engine="postgres" /> },

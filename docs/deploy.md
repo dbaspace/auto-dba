@@ -61,7 +61,7 @@ DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12
 
 | 版本 | 要点 |
 |------|------|
-| [v1.12.27](changelog-v1.12.27.md) | **当前推荐**。整页 AI 助手、危险操作通知、复制槽按 slot_name 去重、操作日志分页 |
+| [v1.12.27](changelog-v1.12.27.md) | **当前推荐**。整页 AI 助手、实例总览、复制槽按 slot_name 去重、操作日志分页 |
 | [v1.12.26](changelog-v1.12.26.md) | 同步列表批量重启对齐 Hub（heartbeat + task0）、操作日志持久化、采集保留 id |
 | [v1.12.25](changelog-v1.12.25.md) | 备份恢复工单、CDC MySQL、MySQL 慢 SQL/会话、工单预约执行、HA/闪回/K8s 缺口补齐 |
 | [v1.12.24](changelog-v1.12.24.md) | 工单 SQL 美化/高亮、检测分页与状态过滤、缺分号规则、执行明细全文 |

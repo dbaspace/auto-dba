@@ -1,0 +1,15 @@
+.instance-overview-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin: 8px 0 12px;
+  font-size: 13px;
+}
+
+.instance-overview-note {
+  color: rgba(0, 0, 0, 0.45);
+}
+
+.instance-overview-stale td {
+  color: rgba(0, 0, 0, 0.35);
+}

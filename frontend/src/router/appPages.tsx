@@ -23,6 +23,7 @@ import ClusterDeployEngine from '../views/ops/ClusterDeployEngine'
 import Sessions from '../views/ops/Sessions'
 import MysqlSlow from '../views/ops/MysqlSlow'
 import SqlInsight from '../views/ops/SqlInsight'
+import InstanceOverview from '../views/ops/InstanceOverview'
 import DbMonitor from '../views/ops/DbMonitor'
 import RedisRdb from '../views/ops/redis-rdb/RedisRdb'
 import Migration from '../views/ops/Migration'
@@ -219,6 +220,7 @@ export function TabPagePanel({ pathname, search }: { pathname: string; search?: 
       <Route path="/k8s/apps" element={<K8sApps />} />
 
       <Route path="/ops/sql-insight" element={<SqlInsight />} />
+      <Route path="/ops/instance-overview" element={<InstanceOverview />} />
       <Route path="/ops/redis-rdb" element={<RedisRdb />} />
       <Route path="/ops/db-monitor" element={<Navigate to="/ops/db-monitor/postgres" replace />} />
       <Route path="/ops/db-monitor/postgres" element={<DbMonitor engine="postgres" />} />

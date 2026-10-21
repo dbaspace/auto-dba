@@ -47,6 +47,7 @@ type Deps struct {
 	AWR                *handler.AWRHandler
 	SqlInsightAnalysis *handler.SqlInsightAnalysisHandler
 	DbMonitor          *handler.DbMonitorHandler
+	InstanceOverview   *handler.OverviewHandler
 	DbMonitorProxy     gin.HandlerFunc // mode=remote 时反向代理到独立 db-monitor 服务
 	Multilang          *handler.MultilangHandler
 	External           *handler.ExternalHandler
@@ -562,6 +563,11 @@ func Init(e *gin.Engine, d Deps) {
 	secured.GET("/sync-slots/restart", d.Slot.RestartProgress)
 	secured.GET("/sync-slots/logs", d.Slot.OpLogs)
 	secured.POST("/sync-slots/delete", d.Slot.Delete)
+
+	if d.InstanceOverview != nil {
+		secured.GET("/instance-overview", d.InstanceOverview.List)
+		secured.POST("/instance-overview/collect", d.InstanceOverview.Collect)
+	}
 
 	mig := secured.Group("/migration")
 	mig.GET("/settings", d.Migration.GetSettings)
