@@ -16,7 +16,7 @@ func ValidIssueType(t string) bool {
 	case IssueTypeDDL, IssueTypeDML, IssueTypeDCL, IssueTypeDQL, IssueTypeKafka,
 		IssueTypeCDC, IssueTypeArchive, IssueTypeFlashback, IssueTypeMigration, IssueTypeMullang, IssueTypeCreateDB,
 		IssueTypeHA, IssueTypeRedis, IssueTypeBackupRestore, IssueTypeSrCluster, IssueTypeDbDeploy,
-		IssueTypeResourceApply, IssueTypeK8sChange:
+		IssueTypeResourceApply, IssueTypeK8sChange, IssueTypeDnsChange:
 		return true
 	default:
 		return false

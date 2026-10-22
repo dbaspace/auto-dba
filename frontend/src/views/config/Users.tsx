@@ -1,10 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { Button, Form, Input, Modal, Popconfirm, Select, Space, Tag, Tooltip, message } from 'antd'
 import ResponsiveTable from '../../components/ResponsiveTable'
-import api from '../../api/request'
+import api, { beginLogout } from '../../api/request'
 import Auth from '../../components/Auth'
 import { Perm } from '../../hooks/usePermission'
-import { useAppSelector } from '../../store'
+import { useAppDispatch, useAppSelector } from '../../store'
+import { clearAuth } from '../../store/authSlice'
+import { resetTabs } from '../../store/tabsSlice'
 
 function renderRoleTags(ids: string[], names: Record<string, string>, fallback?: string) {
   if (!ids.length) return fallback || '-'
@@ -89,6 +91,7 @@ function deleteConfirmCopy(row: any): { title: string; description: string } {
 }
 
 export default function Users() {
+  const dispatch = useAppDispatch()
   const authUser = useAppSelector((s) => s.auth.user)
   const currentTenantId =
     (authUser as { current_tenant?: { id?: string } })?.current_tenant?.id || ''
@@ -259,10 +262,19 @@ export default function Users() {
     }
     setPwdSaving(true)
     try {
+      const self = String(authUser?.id || '') !== '' && String(authUser?.id || '') === String(pwdTarget.id || '')
       const { data } = await api.put('/users/' + pwdTarget.id + '/password', { password: pwd })
-      message.success(data.message || '密码已更新')
       setPwdOpen(false)
       setPwdTarget(null)
+      if (self) {
+        message.success('密码已更新，请使用新密码登录')
+        beginLogout()
+        dispatch(clearAuth())
+        dispatch(resetTabs({}))
+        location.hash = '#/login'
+        return
+      }
+      message.success(data.message || '密码已更新')
       await load()
     } catch (e: any) {
       message.error(e?.response?.data?.message || e?.message || '修改失败')

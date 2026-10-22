@@ -1,14 +1,17 @@
 import React, { useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Select, Tag, message } from 'antd'
 import api from '../api/request'
 import { useAppDispatch, useAppSelector } from '../store'
 import { setUser } from '../store/authSlice'
-import { resetTabs } from '../store/tabsSlice'
+import { HOME_PATH, resetTabs } from '../store/tabsSlice'
+import { clearQueryTreeCache } from '../views/query/queryTreeCache'
 
 type Tenant = { id: string; code: string; name: string }
 
 export default function TenantSwitcher() {
   const dispatch = useAppDispatch()
+  const navigate = useNavigate()
   const user = useAppSelector((s) => s.auth.user)
   const [switching, setSwitching] = useState(false)
 
@@ -33,13 +36,13 @@ export default function TenantSwitcher() {
     setSwitching(true)
     try {
       const { data } = await api.post('/tenants/switch', { tenant_id: tenantId })
+      const next = data.user || {}
       localStorage.setItem('token', data.token)
-      localStorage.setItem('user', JSON.stringify(data.user))
-      dispatch(setUser(data.user))
-      dispatch(resetTabs({}))
-      message.success(`已切换到 ${data.user?.current_tenant?.name || tenantId}`)
-      location.hash = '#/'
-      location.reload()
+      clearQueryTreeCache()
+      dispatch(setUser(next))
+      dispatch(resetTabs({ menus: next.menus || [] }))
+      message.success(`已切换到 ${next.current_tenant?.name || tenantId}`)
+      navigate(HOME_PATH, { replace: true })
     } finally {
       setSwitching(false)
     }

@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"net"
+	"strconv"
 	"strings"
 	"time"
 
@@ -11,22 +13,22 @@ import (
 )
 
 type MonitorJob struct {
-	ID             string              `json:"id"`
-	TenantID       string              `json:"tenant_id,omitempty"`
-	Name           string              `json:"name"`
-	Template       string              `json:"template"`
-	Collector      string              `json:"collector"`
-	Scheme         string              `json:"scheme"`
-	Status         string              `json:"status"`
-	MonitorType    string              `json:"monitor_type"`
-	MetricsPath    string              `json:"metrics_path"`
-	ScrapeInterval string              `json:"scrape_interval"`
-	ScrapeTimeout  string              `json:"scrape_timeout"`
-	Labels         map[string]string   `json:"labels"`
-	Description    string              `json:"description"`
+	ID             string               `json:"id"`
+	TenantID       string               `json:"tenant_id,omitempty"`
+	Name           string               `json:"name"`
+	Template       string               `json:"template"`
+	Collector      string               `json:"collector"`
+	Scheme         string               `json:"scheme"`
+	Status         string               `json:"status"`
+	MonitorType    string               `json:"monitor_type"`
+	MetricsPath    string               `json:"metrics_path"`
+	ScrapeInterval string               `json:"scrape_interval"`
+	ScrapeTimeout  string               `json:"scrape_timeout"`
+	Labels         map[string]string    `json:"labels"`
+	Description    string               `json:"description"`
 	TargetGroups   []MonitorTargetGroup `json:"target_groups,omitempty"`
-	CreatedAt      string              `json:"created_at"`
-	UpdatedAt      string              `json:"updated_at"`
+	CreatedAt      string               `json:"created_at"`
+	UpdatedAt      string               `json:"updated_at"`
 }
 
 type MonitorTargetGroup struct {
@@ -327,17 +329,83 @@ func normalizeMonitorJob(it *MonitorJob) {
 	}
 }
 
-func labelsContain(labels map[string]string, needle string) bool {
-	needle = strings.ToLower(strings.TrimSpace(needle))
-	if needle == "" {
-		return false
+// starRocksPreviewRole 区分监控目标是 FE 还是 BE。端口优先于 app 标签；
+// 只看 app/component/role，避免 idc=beijing 这类值里的 “be” 被当成 BE。
+func starRocksPreviewRole(endpoint string, labels map[string]string) string {
+	switch monitorEndpointPort(endpoint) {
+	case 8030, 8031, 9010, 9020:
+		return "fe"
+	case 8040, 8041, 8060, 9050, 9060, 9070:
+		return "be"
 	}
-	for k, v := range labels {
-		if strings.Contains(strings.ToLower(k), needle) || strings.Contains(strings.ToLower(v), needle) {
-			return true
+	app := monitorRoleLabel(labels)
+	switch {
+	case appLooksBE(app):
+		return "be"
+	case appLooksFE(app):
+		return "fe"
+	default:
+		return ""
+	}
+}
+
+func monitorRoleLabel(labels map[string]string) string {
+	if labels == nil {
+		return ""
+	}
+	for _, k := range []string{"app", "component", "role", "group", "job"} {
+		if v := strings.TrimSpace(labels[k]); v != "" {
+			return v
 		}
 	}
-	return false
+	return ""
+}
+
+func appLooksBE(app string) bool {
+	app = strings.ToLower(strings.TrimSpace(app))
+	if app == "" {
+		return false
+	}
+	// be-StarRocks / be / starrocks-be；fe-StarRocks 不能算 BE
+	return strings.Contains(app, "be-") || strings.HasPrefix(app, "be") || strings.Contains(app, "-be") || app == "be"
+}
+
+func appLooksFE(app string) bool {
+	app = strings.ToLower(strings.TrimSpace(app))
+	if app == "" || appLooksBE(app) {
+		return false
+	}
+	return strings.Contains(app, "fe")
+}
+
+func monitorEndpointPort(endpoint string) int {
+	ep := strings.TrimSpace(endpoint)
+	if ep == "" {
+		return 0
+	}
+	_, port, err := net.SplitHostPort(ep)
+	if err != nil {
+		i := strings.LastIndex(ep, ":")
+		if i < 0 {
+			return 0
+		}
+		port = ep[i+1:]
+	}
+	n, err := strconv.Atoi(port)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+func starRocksPreviewEndpoints(role string, endpoints []string, labels map[string]string) []string {
+	var out []string
+	for _, ep := range endpoints {
+		if starRocksPreviewRole(ep, labels) == role {
+			out = append(out, ep)
+		}
+	}
+	return out
 }
 
 func pickLabel(labels ...map[string]string) (env, domain, loginURL string) {
@@ -412,15 +480,20 @@ func (d *DB) PreviewMonitorTargets(kind string) ([]MonitorPreviewItem, error) {
 		}
 		nameLower := strings.ToLower(job.Name)
 		switch kind {
-		case "starrocks-fe", "fe":
+		case "starrocks-fe", "fe", "starrocks-be", "be":
 			if !strings.Contains(nameLower, "starrocks") {
 				continue
 			}
+			want := "fe"
+			if kind == "starrocks-be" || kind == "be" {
+				want = "be"
+			}
 			for _, g := range groups {
-				if !labelsContain(g.Labels, "fe") {
+				merged := mergeLabels(job.Labels, g.Labels)
+				eps := starRocksPreviewEndpoints(want, splitEndpoints(g.Endpoints), merged)
+				if len(eps) == 0 {
 					continue
 				}
-				merged := mergeLabels(job.Labels, g.Labels)
 				env, domain, _ := pickLabel(merged)
 				if env == "" {
 					env = job.Collector
@@ -430,29 +503,7 @@ func (d *DB) PreviewMonitorTargets(kind string) ([]MonitorPreviewItem, error) {
 					Env:       env,
 					Domain:    domain,
 					Version:   pickVersionLabel(merged),
-					Endpoints: splitEndpoints(g.Endpoints),
-					Labels:    merged,
-				})
-			}
-		case "starrocks-be", "be":
-			if !strings.Contains(nameLower, "starrocks") {
-				continue
-			}
-			for _, g := range groups {
-				if !labelsContain(g.Labels, "be") {
-					continue
-				}
-				merged := mergeLabels(job.Labels, g.Labels)
-				env, domain, _ := pickLabel(merged)
-				if env == "" {
-					env = job.Collector
-				}
-				out = append(out, MonitorPreviewItem{
-					TaskName:  job.Name,
-					Env:       env,
-					Domain:    domain,
-					Version:   pickVersionLabel(merged),
-					Endpoints: splitEndpoints(g.Endpoints),
+					Endpoints: eps,
 					Labels:    merged,
 				})
 			}

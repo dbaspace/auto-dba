@@ -78,11 +78,12 @@ func (d *DB) GetUserByUsername(username string) (*User, error) {
 	var lockedAt string
 	err := d.QueryRow(
 		`SELECT id, username, display_name, role, role_id, password_hash, source, created_at,
-			COALESCE(login_disabled,0), COALESCE(failed_login_count,0), COALESCE(locked_at,'')
+			COALESCE(login_disabled,0), COALESCE(failed_login_count,0), COALESCE(locked_at,''),
+			COALESCE(password_changed_at,'')
 		 FROM tbl_users WHERE username=?`,
 		username,
 	).Scan(&u.ID, &u.Username, &u.DisplayName, &u.Role, &roleID, &u.PasswordHash, &source, &u.CreatedAt,
-		&disabled, &failed, &lockedAt)
+		&disabled, &failed, &lockedAt, &u.PasswordChangedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -106,11 +107,12 @@ func (d *DB) GetUserByID(id string) (*User, error) {
 	var lockedAt string
 	err := d.QueryRow(
 		`SELECT id, username, display_name, role, role_id, password_hash, source, created_at,
-			COALESCE(login_disabled,0), COALESCE(failed_login_count,0), COALESCE(locked_at,'')
+			COALESCE(login_disabled,0), COALESCE(failed_login_count,0), COALESCE(locked_at,''),
+			COALESCE(password_changed_at,'')
 		 FROM tbl_users WHERE id=?`,
 		id,
 	).Scan(&u.ID, &u.Username, &u.DisplayName, &u.Role, &roleID, &u.PasswordHash, &source, &u.CreatedAt,
-		&disabled, &failed, &lockedAt)
+		&disabled, &failed, &lockedAt, &u.PasswordChangedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}

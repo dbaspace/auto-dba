@@ -34,6 +34,12 @@ import MigrationSchemaCompare from '../views/ops/MigrationSchemaCompare'
 import Flashback from '../views/flashback/Flashback'
 import FlashbackCloud from '../views/flashback/FlashbackCloud'
 import Environments from '../views/config/Environments'
+import DnsRecords from '../views/dns/DnsRecords'
+import DnsZones from '../views/dns/DnsZones'
+import DnsNodes from '../views/dns/DnsNodes'
+import DnsChanges from '../views/dns/DnsChanges'
+import DnsTools from '../views/dns/DnsTools'
+import DnsInspect from '../views/dns/DnsInspect'
 import Regions from '../views/config/Regions'
 import Users from '../views/config/Users'
 import Tenants from '../views/config/Tenants'
@@ -266,6 +272,14 @@ export function TabPagePanel({ pathname, search }: { pathname: string; search?: 
       <Route path="/config/instances" element={<Instances />} />
       <Route path="/config/regions" element={<Regions />} />
       <Route path="/config/environments" element={<Environments />} />
+      <Route path="/dns" element={<Navigate to="/dns/records" replace />} />
+      <Route path="/dns/records" element={<DnsRecords />} />
+      <Route path="/dns/zones" element={<DnsZones />} />
+      <Route path="/dns/nodes" element={<DnsNodes />} />
+      <Route path="/dns/changes" element={<DnsChanges />} />
+      <Route path="/dns/tools" element={<DnsTools />} />
+      <Route path="/dns/inspect" element={<DnsInspect />} />
+      <Route path="/config/dns" element={<Navigate to="/dns/records" replace />} />
       <Route path="/config/tags" element={<Navigate to="/cmdb/tags" replace />} />
       <Route path="/config/connectors" element={<Connectors />} />
       <Route path="/config/agents" element={<PlatformAgent />} />

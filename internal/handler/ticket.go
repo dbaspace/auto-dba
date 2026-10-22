@@ -37,6 +37,7 @@ type TicketHandler struct {
 	Archive   *archive.Engine
 	CDC       *cdc.Orchestrator
 	Backup    *backup.Engine
+	DNS       *DNSHandler
 }
 
 type ticketCheckReq struct {
@@ -1362,6 +1363,12 @@ func (h *TicketHandler) executeTicket(ctx context.Context, it *store.Issue) erro
 	if it.IssueType == store.IssueTypeK8sChange {
 		return h.executeK8sChangeTicket(ctx, it)
 	}
+	if it.IssueType == store.IssueTypeDnsChange {
+		if h.DNS == nil {
+			return h.persistExec(it, &ticketexec.Result{Success: false, Message: "DNS 管理未启用"})
+		}
+		return h.persistExec(it, h.DNS.ExecuteDnsChangeTicket(ctx, it))
+	}
 	if it.IssueType == store.IssueTypeSrCluster {
 		return h.executeSrClusterTicket(ctx, it)
 	}
@@ -1680,6 +1687,9 @@ func (h *TicketHandler) actorCanApproveIssue(c *gin.Context, it *store.Issue) bo
 	priv := middleware.IsPrivileged(middleware.Role(c))
 	if it.IssueType == store.IssueTypeResourceApply {
 		return h.Store.CanApproveResourceApply(it, user, middleware.UserID(c), priv)
+	}
+	if it.IssueType == store.IssueTypeDnsChange && h.DNS != nil && h.DNS.IsDNSApprover(user) {
+		return true
 	}
 	return h.Store.CanApproveIssue(it, user, priv)
 }

@@ -145,6 +145,9 @@ func (d *DB) seedFast() error {
 			if err := d.ensureScheduledJobsActionMenus(now); err != nil {
 				return err
 			}
+			if err := d.ensureDNSMenus(now); err != nil {
+				return err
+			}
 			// 实例总览须在 skip 路径幂等补齐，否则已有库不会写入菜单
 			if err := d.ensureInstanceOverviewMenu(now); err != nil {
 				return err

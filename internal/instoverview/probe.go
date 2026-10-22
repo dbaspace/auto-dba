@@ -33,7 +33,12 @@ type Sample struct {
 	LagSecKnown bool    `json:"lag_sec_known,omitempty"`
 	HitRate     float64 `json:"hit_rate,omitempty"`
 	HitKnown    bool    `json:"hit_known,omitempty"`
-	CollectedAt string  `json:"collected_at,omitempty"`
+	// DataBytes 是当前账号可见的非模板库文件合计，不含 WAL。
+	DataBytes        int64   `json:"data_bytes,omitempty"`
+	DataKnown        bool    `json:"data_known,omitempty"`
+	StorageRate      float64 `json:"storage_rate,omitempty"`
+	StorageRateKnown bool    `json:"storage_rate_known,omitempty"`
+	CollectedAt      string  `json:"collected_at,omitempty"`
 }
 
 // Classify 把连库失败分成连不上、认证失败、超时、权限不足。
@@ -89,6 +94,7 @@ func probePostgres(ctx context.Context, inst *store.Instance, secretKey, pass st
 	s, err := scanPostgres(ctx, db, false)
 	if err == nil {
 		s.Reachable = true
+		fillDataBytes(ctx, db, &s)
 		return s
 	}
 	kind, msg := Classify(err)
@@ -104,7 +110,26 @@ func probePostgres(ctx context.Context, inst *store.Instance, secretKey, pass st
 	s.Partial = true
 	s.ErrorKind = "permission"
 	s.Error = msg
+	fillDataBytes(ctx, db, &s)
 	return s
+}
+
+func fillDataBytes(ctx context.Context, db *sql.DB, s *Sample) {
+	if s == nil || db == nil {
+		return
+	}
+	var n sql.NullFloat64
+	err := db.QueryRowContext(ctx, `
+SELECT COALESCE(sum(pg_database_size(d.datname)), 0)
+FROM pg_database d
+WHERE NOT d.datistemplate
+  AND d.datallowconn
+  AND has_database_privilege(current_user, d.datname, 'CONNECT')`).Scan(&n)
+	if err != nil || !n.Valid {
+		return
+	}
+	s.DataKnown = true
+	s.DataBytes = int64(n.Float64)
 }
 
 func scanPostgres(ctx context.Context, db *sql.DB, basic bool) (Sample, error) {

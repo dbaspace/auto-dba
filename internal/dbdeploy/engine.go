@@ -9,18 +9,23 @@ import (
 	"strings"
 	"time"
 
+	"auto-dba/internal/dns"
 	"auto-dba/internal/secret"
 	"auto-dba/internal/store"
 )
 
 type Config struct {
-	DryRun          bool
-	AgentArtifact   string
-	AgentRemoteDir  string
-	AgentListenPort int
+	DryRun             bool
+	AgentArtifact      string
+	AgentRemoteDir     string
+	AgentListenPort    int
 	SSHUser            string
 	SSHIdentityFile    string
 	SSHInsecureHostKey bool
+	DNSDSN             string
+	DNSNodeUser        string
+	DNSNodePassword    string
+	DNSNodeDB          string
 }
 
 // Engine 通用 DB 集群部署编排（对齐 StarRocks 变更单模式）。
@@ -74,11 +79,16 @@ func (e *Engine) StartDeploy(clusterID, operator string) (string, error) {
 	if err := AssertAllowDeploy(cl.Engine); err != nil {
 		return "", err
 	}
-	if cl.Status == store.DbDeployStatusReady {
+	if cl.Status == store.DbDeployStatusReady && cl.Engine != store.DbDeployEngineDNS {
 		return "", fmt.Errorf("集群已为 ready，无需再部署；如需装机请新建集群")
 	}
-	if strings.TrimSpace(cl.ReleaseID) == "" {
+	if cl.Engine != store.DbDeployEngineDNS && strings.TrimSpace(cl.ReleaseID) == "" {
 		return "", fmt.Errorf("请先绑定版本目录 release_id")
+	}
+	if cl.Engine == store.DbDeployEngineDNS {
+		if _, err := dns.ParseDeployOptions(cl.HaOptionsJSON); err != nil {
+			return "", err
+		}
 	}
 	nodes, err := e.Store.ListDbDeployNodes(cl.ID)
 	if err != nil {
@@ -95,8 +105,10 @@ func (e *Engine) StartDeploy(clusterID, operator string) (string, error) {
 			return "", fmt.Errorf("节点 %s 未绑定 agent_id", n.Host)
 		}
 	}
-	if _, _, _, err := e.Svc.PresignRelease(cl.Engine, cl.ReleaseID, time.Hour); err != nil {
-		return "", fmt.Errorf("制品签发失败: %w", err)
+	if cl.Engine != store.DbDeployEngineDNS {
+		if _, _, _, err := e.Svc.PresignRelease(cl.Engine, cl.ReleaseID, time.Hour); err != nil {
+			return "", fmt.Errorf("制品签发失败: %w", err)
+		}
 	}
 	if list, err := e.Store.ListDbDeployChanges(cl.ID, 20); err == nil {
 		for _, ch := range list {
@@ -197,6 +209,9 @@ func (e *Engine) buildDeploySteps(cl *store.DbDeployCluster, nodes []store.DbDep
 		seq++
 		steps = append(steps, store.DbDeployChangeStep{Seq: seq, StepKey: key, Title: title, NodeID: nodeID})
 	}
+	if cl.Engine == store.DbDeployEngineDNS {
+		return e.buildDNSSteps(nodes)
+	}
 	add("agents_health", "探活全部 Db Agent", "")
 	ordered := orderNodesForDeploy(cl, nodes)
 	for _, n := range ordered {
@@ -244,6 +259,7 @@ func (e *Engine) runChange(ctx context.Context, changeID string) error {
 	if err != nil {
 		return err
 	}
+	var dnsFailed []string
 	for i := range steps {
 		step := &steps[i]
 		if step.Status == store.DbStepSuccess || step.Status == store.DbStepSkipped {
@@ -257,6 +273,14 @@ func (e *Engine) runChange(ctx context.Context, changeID string) error {
 			step.LogText = err.Error()
 			step.EndedAt = time.Now().UTC().Format(time.RFC3339)
 			_ = e.Store.UpdateDbDeployChangeStep(step)
+			if cl.Engine == store.DbDeployEngineDNS && step.NodeID != "" {
+				host := step.NodeID
+				if n := nodeByID[step.NodeID]; n != nil {
+					host = n.Host
+				}
+				dnsFailed = append(dnsFailed, host+": "+err.Error())
+				continue
+			}
 			_ = e.Store.UpdateDbDeployChangeStatus(changeID, store.DbChangeFailed, "步骤失败: "+step.StepKey+": "+err.Error())
 			if ch.Type == store.DbChangeClusterDeploy {
 				if cl.HaEnabled && haStepFailedAfterInstall(step.StepKey) {
@@ -278,6 +302,13 @@ func (e *Engine) runChange(ctx context.Context, changeID string) error {
 		step.Status = store.DbStepSuccess
 		step.EndedAt = time.Now().UTC().Format(time.RFC3339)
 		_ = e.Store.UpdateDbDeployChangeStep(step)
+	}
+	if len(dnsFailed) > 0 {
+		msg := "失败主机: " + strings.Join(dnsFailed, "；")
+		_ = e.Store.UpdateDbDeployChangeStatus(changeID, store.DbChangeFailed, msg)
+		cl.Status = store.DbDeployStatusFailed
+		_ = e.Store.UpsertDbDeployCluster(cl)
+		return fmt.Errorf("%s", msg)
 	}
 	_ = e.Store.UpdateDbDeployChangeStatus(changeID, store.DbChangeSuccess, "全部步骤完成")
 	if ch.Type == store.DbChangeClusterDeploy || ch.Type == store.DbChangeHaInit {
@@ -312,11 +343,17 @@ func (e *Engine) execStep(ctx context.Context, cl *store.DbDeployCluster, nodeBy
 		if n == nil {
 			return fmt.Errorf("节点不存在")
 		}
+		if cl.Engine == store.DbDeployEngineDNS {
+			return e.stepDNSPrecheck(ctx, cl, n, step)
+		}
 		return e.stepPrecheck(ctx, cl, n, step)
 	case strings.HasPrefix(key, "install_"):
 		n := nodeByID[step.NodeID]
 		if n == nil {
 			return fmt.Errorf("节点不存在")
+		}
+		if cl.Engine == store.DbDeployEngineDNS {
+			return e.stepDNSInstall(ctx, n, step)
 		}
 		return e.stepInstall(ctx, cl, n, step)
 	case strings.HasPrefix(key, "ensure_fs_"):
@@ -330,11 +367,17 @@ func (e *Engine) execStep(ctx context.Context, cl *store.DbDeployCluster, nodeBy
 		if n == nil {
 			return fmt.Errorf("节点不存在")
 		}
+		if cl.Engine == store.DbDeployEngineDNS {
+			return e.stepDNSCorefile(ctx, cl, n, step)
+		}
 		return e.stepPutConf(ctx, cl, n, nodes, step)
 	case strings.HasPrefix(key, "systemd_"):
 		n := nodeByID[step.NodeID]
 		if n == nil {
 			return fmt.Errorf("节点不存在")
+		}
+		if cl.Engine == store.DbDeployEngineDNS {
+			return e.stepDNSSystemd(ctx, n, step)
 		}
 		return e.stepSystemdInstall(ctx, cl, n, step)
 	case strings.HasPrefix(key, "start_"):
@@ -376,6 +419,12 @@ func (e *Engine) execStep(ctx context.Context, cl *store.DbDeployCluster, nodeBy
 		return e.stepHACtrlEnv(ctx, cl, step, "repmgr")
 	case key == "ha_pgaf_probe", key == "ha_patroni_probe", key == "ha_repmgr_probe":
 		return e.stepHAOrchProbe(ctx, cl, step)
+	case strings.HasPrefix(key, "heartbeat_"):
+		n := nodeByID[step.NodeID]
+		if n == nil {
+			return fmt.Errorf("节点不存在")
+		}
+		return e.stepDNSHeartbeat(ctx, n, step)
 	case key == "finalize":
 		step.LogText = "ok"
 		return nil

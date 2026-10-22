@@ -91,7 +91,7 @@ func ShouldAutoRun(issueType string) bool {
 	switch strings.ToLower(strings.TrimSpace(issueType)) {
 	case store.IssueTypeDDL, store.IssueTypeDML, store.IssueTypeCreateDB, store.IssueTypeHA,
 		store.IssueTypeSrCluster, store.IssueTypeDbDeploy, store.IssueTypeResourceApply, store.IssueTypeRedis,
-		store.IssueTypeK8sChange, store.IssueTypeBackupRestore:
+		store.IssueTypeK8sChange, store.IssueTypeBackupRestore, store.IssueTypeDnsChange:
 		return true
 	default:
 		return false

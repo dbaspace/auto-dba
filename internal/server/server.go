@@ -23,6 +23,7 @@ import (
 	"auto-dba/internal/dbdeploy"
 	"auto-dba/internal/dbmig"
 	"auto-dba/internal/dbmonitor"
+	"auto-dba/internal/dns"
 	"auto-dba/internal/flashback"
 	"auto-dba/internal/handler"
 	"auto-dba/internal/jobboot"
@@ -134,7 +135,16 @@ func Run(cfg *config.Config, configPath string) {
 		SSHUser:            cfg.Terminal.SSHUser,
 		SSHIdentityFile:    cfg.Terminal.SSHIdentityFile,
 		SSHInsecureHostKey: cfg.Terminal.SSHInsecureHostKey,
+		DNSDSN:             cfg.DNS.DSN,
+		DNSNodeUser:        cfg.DNS.NodeUser,
+		DNSNodePassword:    cfg.DNS.NodePassword,
+		DNSNodeDB:          cfg.DNS.NodeDB,
 	})
+	dnsH := &handler.DNSHandler{
+		Store: db, Secret: fieldCrypto, Engine: dbDeployEng,
+		DNS: &dns.Provider{DSN: cfg.DNS.DSN, NodeUser: cfg.DNS.NodeUser, NodePass: cfg.DNS.NodePassword, NodeDB: cfg.DNS.NodeDB},
+	}
+	ticketH.DNS = dnsH
 	sessStore := sessionstore.New(cfg.Redis, cfg.App.JWTTTLHours)
 	if cfg.Redis.Enabled {
 		sessStore.Reconfigure(cfg.Redis, cfg.App.JWTTTLHours, true)
@@ -148,6 +158,7 @@ func Run(cfg *config.Config, configPath string) {
 		DB: db, Sessions: sessStore, PgSpace: pgSpaceSvc, AWR: awrSvc, SQLInsight: siSvc,
 		Migration: migEngine, Archive: arcEngine, Backup: bakEngine,
 		Ticket: ticketH, CDC: cdcH, Slot: slotH, AlertSecret: fieldCrypto, PgSecret: &cryptoLive,
+		DNS: dnsH,
 	})
 	jobReg.OnFailure = func(jobKey, jobName, runID, errMsg string) {
 		notify.JobFailed(db, fieldCrypto, jobKey, jobName, runID, errMsg)
@@ -197,6 +208,7 @@ func Run(cfg *config.Config, configPath string) {
 		K8s:                func() *handler.K8sHandler { h := handler.NewK8sHandler(db, fieldCrypto); h.StartProbeLoop(); return h }(),
 		SrCluster:          &handler.SrClusterHandler{Store: db, Secret: fieldCrypto, Engine: srEng},
 		DbDeploy:           &handler.DbDeployHandler{Store: db, Secret: fieldCrypto, Engine: dbDeployEng},
+		DNS:                dnsH,
 		Cmdb:               &handler.CmdbHandler{Store: db, Secret: fieldCrypto},
 		Todo:               &handler.TodoHandler{Store: db},
 		Alert:              &handler.AlertHandler{Store: db, Secret: fieldCrypto},
@@ -204,7 +216,7 @@ func Run(cfg *config.Config, configPath string) {
 		Runbook:            &handler.RunbookHandler{Svc: runbook.New(db)},
 		DCL:                &handler.DCLHandler{Store: db, Secret: fieldCrypto},
 		ResourceApply:      &handler.ResourceApplyHandler{Store: db, Secret: fieldCrypto},
-		RBAC:               &handler.RBACHandler{Store: db, Secret: fieldCrypto},
+		RBAC:               &handler.RBACHandler{Store: db, Secret: fieldCrypto, Sessions: sessStore},
 		Tenant: &handler.TenantHandler{
 			Store: db,
 			CfgTTL: func() time.Duration {

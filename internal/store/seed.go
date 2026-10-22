@@ -79,6 +79,9 @@ func (d *DB) seed() error {
 		{Key: GlobalArgTicketReviewRules, Value: reviewRules, Description: descTicketReviewRules},
 		{Key: "awr_prometheus_base_url", Value: "", Description: "Prometheus 地址（必填，为空则不生成报告）"},
 		{Key: "awr_prometheus_auth_token", Value: "", Description: "可选鉴权 token"},
+		{Key: "dns_approvers", Value: "admin", Description: "DNS 变更工单审批人登录名，逗号分隔；为空时为 admin"},
+		{Key: "dns_metrics_selector", Value: "", Description: `CoreDNS 指标标签选择器，为空时为 job="auto-dba-coredns"`},
+		{Key: "dns_servfail_ratio", Value: "0.05", Description: "DNS 节点 SERVFAIL 占比告警阈值（0~1）"},
 		{Key: "awr_prom_instance_label", Value: "id", Description: "库指标关联标签名"},
 		{Key: "awr_prom_host_label", Value: "instance", Description: "主机指标关联标签名"},
 		{Key: "awr_enabled", Value: "true", Description: "AWR 总开关"},
@@ -270,6 +273,9 @@ func (d *DB) seedRBAC(now string) error {
 		return err
 	}
 	if err := d.ensureScheduledJobsActionMenus(now); err != nil {
+		return err
+	}
+	if err := d.ensureDNSMenus(now); err != nil {
 		return err
 	}
 	if err := d.ensureQueryAuditsMenu(now); err != nil {
@@ -1457,6 +1463,48 @@ func (d *DB) ensureScheduledJobsActionMenus(now string) error {
 	return nil
 }
 
+func (d *DB) ensureDNSMenus(now string) error {
+	m := &Menu{
+		ID: "m-cfg-dns", ParentID: "", Title: "DNS管理", Path: "",
+		URN: URNSidebarDNS, PermissionDesc: "查看 DNS管理", Icon: "global",
+		SortOrder: 60, Enabled: true, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := d.EnsureMenu(m); err != nil {
+		return err
+	}
+	if err := d.grantMenuToRoleCode(m.ID, "admin"); err != nil {
+		return err
+	}
+	items := []seedMenu{
+		{"m-dns-records", "m-cfg-dns", "解析记录", "/dns/records", URNSidebarDNSRecords, "查看解析记录", "list", 1},
+		{"m-dns-zones", "m-cfg-dns", "域与范围", "/dns/zones", URNSidebarDNSZones, "查看解析域与解析范围", "folder", 2},
+		{"m-dns-nodes", "m-cfg-dns", "节点", "/dns/nodes", URNSidebarDNSNodes, "查看 DNS 节点与指标", "cluster", 3},
+		{"m-dns-changes", "m-cfg-dns", "变更记录", "/dns/changes", URNSidebarDNSChanges, "查看 DNS 变更记录", "clock", 4},
+		{"m-dns-tools", "m-cfg-dns", "解析测试", "/dns/tools", URNSidebarDNSTools, "模拟与实查解析", "search", 5},
+		{"m-dns-inspect", "m-cfg-dns", "解析体检", "/dns/inspect", URNSidebarDNSInspect, "全量规则检查与实例比对", "safety", 6},
+		{"m-act-dns-create", "m-dns-records", "新建 DNS", "", URNDNSCreate, "新建解析域、解析范围和记录", "plus", 90},
+		{"m-act-dns-edit", "m-dns-records", "编辑 DNS", "", URNDNSEdit, "修改与启停 DNS 记录、预降 TTL", "edit", 91},
+		{"m-act-dns-delete", "m-dns-records", "删除 DNS", "", URNDNSDelete, "删除解析域、解析范围和记录", "delete", 92},
+		{"m-act-dns-import", "m-dns-records", "导入 DNS", "", URNDNSImport, "批量导入解析记录", "upload", 93},
+		{"m-act-dns-rollback", "m-dns-changes", "回滚 DNS 变更", "", URNDNSRollback, "按批次回滚 DNS 变更", "refresh", 94},
+		{"m-act-dns-policy", "m-dns-zones", "DNS 域策略", "", URNDNSPolicy, "设置解析域的审批与可编辑角色", "lock", 95},
+	}
+	for _, it := range items {
+		am := &Menu{
+			ID: it.ID, ParentID: it.Parent, Title: it.Title, Path: it.Path,
+			URN: it.URN, PermissionDesc: it.Perm, Icon: it.Icon, SortOrder: it.Sort, Enabled: true,
+			CreatedAt: now, UpdatedAt: now,
+		}
+		if err := d.EnsureMenu(am); err != nil {
+			return err
+		}
+		if err := d.GrantMenuFollowingParent(it.ID, it.Parent); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (d *DB) ensureQueryAuditsMenu(now string) error {
 	m := &Menu{
 		ID: "m-cfg-query-audits", ParentID: "m-rbac", Title: "查询审计", Path: "/config/query-audits",
@@ -1948,6 +1996,7 @@ func (d *DB) ensureTopLevelMenuSort(now string) error {
 		{"m-k8s", "容器管理", "um.sidebar.k8s", "cluster", 45},
 		{"m-plat", "平台运维", "um.sidebar.platform", "grid", 50},
 		{"m-rbac", "用户权限", "um.sidebar.rbac", "lock", 55},
+		{"m-cfg-dns", "DNS管理", URNSidebarDNS, "global", 60},
 		{"m-alert", "告警管理", "um.sidebar.alerts", "bell", 70},
 		{"m-ai-assistant", "AI助手", "um.sidebar.ops-ai-assistant", "robot", 71},
 	}

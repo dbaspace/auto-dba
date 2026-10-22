@@ -115,8 +115,16 @@ export default function UserAccountMenu({ user }: Props) {
         old_password: values.old_password,
         new_password: values.new_password,
       })
-      message.success('密码已更新')
+      message.success('密码已更新，请使用新密码登录')
       setPwdOpen(false)
+      beginLogout()
+      clearLastActivity()
+      dispatch(clearAuth())
+      dispatch(resetTabs({}))
+      sessionStorage.removeItem('auto-dba-dml-prefill')
+      sessionStorage.removeItem('auto-dba-query-workspace')
+      clearSharedLegacyDrafts()
+      navigate('/login')
     } catch (e: any) {
       if (e?.errorFields) return
       message.error(e?.response?.data?.message || '修改失败')

@@ -3,6 +3,7 @@ import { Button, Input, Select, Space, Table, Tag, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useNavigate } from 'react-router-dom'
 import api from '../../api/request'
+import { groupInstanceTypes, parseInstanceTypes, type InstanceTypeOption } from '../../utils/instanceTypes'
 import './InstanceOverview.css'
 
 type Sample = {
@@ -23,6 +24,10 @@ type Sample = {
   lag_sec_known?: boolean
   hit_rate?: number
   hit_known?: boolean
+  data_bytes?: number
+  data_known?: boolean
+  storage_rate?: number
+  storage_rate_known?: boolean
   collected_at?: string
 }
 
@@ -76,6 +81,33 @@ function uptimeText(sec?: number) {
   return `${m}分`
 }
 
+function memSizeGb(max?: number) {
+  if (!max) return '—'
+  const gb = max / 1024 ** 3
+  const rounded = Math.round(gb * 100) / 100
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(2)
+}
+
+function usedStorage(s?: Sample) {
+  if (!s?.data_known) return '—'
+  return bytesText(s.data_bytes || 0)
+}
+
+function storageRateText(s?: Sample) {
+  if (!s?.storage_rate_known) return '—'
+  return (s.storage_rate || 0).toFixed(2)
+}
+
+function approxTotal(s?: Sample) {
+  if (!s?.data_known || !s.storage_rate_known || !s.storage_rate) return '—'
+  return bytesText((s.data_bytes || 0) / (s.storage_rate / 100))
+}
+
+function memUsage(used?: number, max?: number) {
+  if (!max || used == null) return '—'
+  return ((used / max) * 100).toFixed(2)
+}
+
 function lagText(s?: Sample) {
   if (!s || s.role !== 'replica') return '—'
   const parts: string[] = []
@@ -116,12 +148,24 @@ function anomalyTags(row: Row, mixed: Set<string>) {
   else if (s.error_kind === 'permission') tags.push('权限不足')
   if (s.conn_max && s.conn_used != null && s.conn_used / s.conn_max >= 0.8) tags.push('连接偏高')
   if (s.mem_max && s.mem_used != null && s.mem_used / s.mem_max >= 0.8) tags.push('内存偏高')
+  if (s.storage_rate_known && (s.storage_rate || 0) >= 80) tags.push('存储偏高')
   if ((s.lag_known && (s.lag_bytes || 0) >= LAG_BYTES) || (s.lag_sec_known && (s.lag_seconds || 0) >= 10)) {
     tags.push('复制延迟')
   }
   if (s.version && mixed.has(`${row.env_id}|${row.db_type}`)) tags.push('版本不一致')
   return tags
 }
+
+function normEngine(t: string) {
+  const n = t.trim().toLowerCase()
+  if (n === 'postgresql' || n === 'pg' || n === 'pgsql') return 'postgres'
+  return n
+}
+
+const FALLBACK_TYPES: InstanceTypeOption[] = [
+  { value: 'postgres', label: 'PostgreSQL' },
+  { value: 'redis', label: 'Redis' },
+]
 
 function csvCell(v: string) {
   if (/[",\n]/.test(v)) return `"${v.replace(/"/g, '""')}"`
@@ -133,6 +177,7 @@ export default function InstanceOverview() {
   const [dbType, setDbType] = useState('postgres')
   const [env, setEnv] = useState<string | undefined>()
   const [q, setQ] = useState('')
+  const [typeOptions, setTypeOptions] = useState<InstanceTypeOption[]>(FALLBACK_TYPES)
   const [envs, setEnvs] = useState<EnvOpt[]>([])
   const [rows, setRows] = useState<Row[]>([])
   const [collect, setCollect] = useState<CollectState>({})
@@ -158,6 +203,16 @@ export default function InstanceOverview() {
       .get('/environments')
       .then(({ data }) => setEnvs((data?.data || []) as EnvOpt[]))
       .catch(() => setEnvs([]))
+    api
+      .get('/global-args')
+      .then(({ data }) => {
+        const raw = ((data?.data || []) as { key?: string; value?: string }[]).find((a) => a.key === 'ticket_instance_types')?.value || ''
+        const opts = parseInstanceTypes(raw)
+        if (!opts.length) return
+        setTypeOptions(opts)
+        setDbType((cur) => opts.find((o) => o.value === cur || normEngine(o.value) === normEngine(cur))?.value || opts[0].value)
+      })
+      .catch(() => {})
   }, [])
 
   useEffect(() => {
@@ -208,8 +263,17 @@ export default function InstanceOverview() {
     return { total: rows.length, down, primary, replica, versions: versions.size }
   }, [rows])
 
-  const showRedis = dbType === 'redis'
-  const showRuntime = dbType === 'postgres' || dbType === 'redis'
+  const engine = normEngine(dbType)
+  const showRedis = engine === 'redis'
+  const showRuntime = engine === 'postgres' || engine === 'redis'
+  const typeGroups = useMemo(
+    () =>
+      groupInstanceTypes(typeOptions).map((g) => ({
+        label: g.title,
+        options: g.items.map((t) => ({ value: t.value, label: t.label })),
+      })),
+    [typeOptions],
+  )
 
   const columns: ColumnsType<Row> = [
     { title: '实例名', dataIndex: 'name', width: 180, ellipsis: true },
@@ -262,7 +326,8 @@ export default function InstanceOverview() {
   }
   if (showRedis) {
     columns.push(
-      { title: '内存', width: 160, render: (_, row) => (row.sample ? `${bytesText(row.sample.mem_used)}/${row.sample.mem_max ? bytesText(row.sample.mem_max) : '不限'}` : '—') },
+      { title: '内存大小GB', width: 110, render: (_, row) => memSizeGb(row.sample?.mem_max) },
+      { title: '使用率', width: 90, render: (_, row) => memUsage(row.sample?.mem_used, row.sample?.mem_max) },
       {
         title: '命中率',
         width: 90,
@@ -270,15 +335,17 @@ export default function InstanceOverview() {
       },
     )
   }
+  if (engine === 'postgres') {
+    columns.push(
+      { title: '已用存储', width: 110, render: (_, row) => usedStorage(row.sample) },
+      { title: '使用率', width: 90, render: (_, row) => storageRateText(row.sample) },
+      { title: '大约总量', width: 110, render: (_, row) => approxTotal(row.sample) },
+    )
+  }
   if (showRuntime) {
     columns.push({ title: '从库延迟', width: 140, render: (_, row) => lagText(row.sample) })
   }
   columns.push(
-    {
-      title: '采集时间',
-      width: 170,
-      render: (_, row) => row.sample?.collected_at?.replace('T', ' ').slice(0, 19) || '—',
-    },
     {
       title: '操作',
       width: 150,
@@ -303,7 +370,7 @@ export default function InstanceOverview() {
   )
 
   const exportCsv = () => {
-    const header = ['实例名', '地址', '环境', '类型', '版本', '角色', '状态', '连接', '内存', '从库延迟', '采集时间']
+    const header = ['实例名', '地址', '环境', '类型', '版本', '角色', '状态', '连接', '已用存储', '存储使用率', '大约总量', '内存大小GB', '使用率', '从库延迟']
     const lines = [header.join(',')]
     for (const row of sorted) {
       const tags = anomalyTags(row, mixed)
@@ -317,14 +384,25 @@ export default function InstanceOverview() {
           roleText(row.sample?.role),
           tags.join(' ') || (row.sample ? '正常' : '未采集'),
           row.sample ? ratio(row.sample.conn_used, row.sample.conn_max) : '',
-          row.sample?.mem_used != null ? bytesText(row.sample.mem_used) : '',
+          usedStorage(row.sample),
+          storageRateText(row.sample),
+          approxTotal(row.sample),
+          memSizeGb(row.sample?.mem_max),
+          memUsage(row.sample?.mem_used, row.sample?.mem_max),
           lagText(row.sample),
-          row.sample?.collected_at || '',
         ]
           .map((v) => csvCell(String(v)))
           .join(','),
       )
     }
+    let latest = ''
+    for (const row of sorted) {
+      const t = row.sample?.collected_at || ''
+      if (t > latest) latest = t
+    }
+    const stamp = latest ? latest.replace('T', ' ').slice(0, 19) : '未采集'
+    lines.push('')
+    lines.push(['采集时间', stamp].map((v) => csvCell(v)).join(','))
     const blob = new Blob([`\uFEFF${lines.join('\n')}`], { type: 'text/csv;charset=utf-8' })
     const a = document.createElement('a')
     a.href = URL.createObjectURL(blob)
@@ -342,14 +420,11 @@ export default function InstanceOverview() {
         <div className="filter-item">
           <span className="label">类型</span>
           <Select
-            style={{ width: 140 }}
+            style={{ width: 180 }}
+            popupMatchSelectWidth={false}
             value={dbType}
             onChange={setDbType}
-            options={[
-              { value: 'postgres', label: 'PostgreSQL' },
-              { value: 'redis', label: 'Redis' },
-              { value: 'other', label: '其它' },
-            ]}
+            options={typeGroups}
           />
         </div>
         <div className="filter-item">
@@ -383,7 +458,10 @@ export default function InstanceOverview() {
         <span>主库 {summary.primary}</span>
         <span>从库 {summary.replica}</span>
         <span>版本种类 {summary.versions}</span>
-        <span className="instance-overview-note">数字是当前一次采样，不是监控图里的区间平均。超过约 5 分钟会变淡。</span>
+        <span className="instance-overview-note">
+          数字是当前一次采样，不是监控图里的区间平均。超过约 5 分钟会变淡。
+          {engine === 'postgres' ? ' 已用存储是各库文件合计。使用率是云监控最近值。大约总量 = 已用存储 / 使用率。' : ''}
+        </span>
       </div>
       <Table
         rowKey="id"

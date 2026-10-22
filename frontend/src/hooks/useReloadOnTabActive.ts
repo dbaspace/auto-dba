@@ -24,54 +24,7 @@ export function useReloadOnTabActive(
   }, [matched, activeKey])
 }
 
-/** 切回 Tab 时适合重挂载刷新的页面（表单/查询编辑器除外，以免丢输入） */
-export function shouldRemountOnTabActivate(path: string): boolean {
-  const p = (path || '').split('?')[0]
-  if (!p) return false
-  // 保活表单 / 编辑器
-  if (
-    p === '/ops/query' ||
-    p === '/ops/kafka-query' ||
-    p === '/ops/redis-query' ||
-    p === '/ops/ddl' ||
-    p === '/ops/dml' ||
-    p === '/ops/dql' ||
-    p === '/ops/dcl' ||
-    p === '/ops/createdb' ||
-    p === '/ops/resource-apply' ||
-    p === '/ops/kafka' ||
-    p === '/ops/redis' ||
-    p.startsWith('/ops/cdc/create') ||
-    p.startsWith('/ops/migration/create') ||
-    p.startsWith('/ops/terminal')
-  ) {
-    return false
-  }
-  // 已登记库：元数据列表保活，避免顶栏切 Tab 反复 loadInitial
-  if (p === '/config/databases') return false
-  // CDC 列表保活：切详情再回来不重挂载，避免反复 /status 探测风暴
-  if (p === '/ops/cdc') return false
-  // 工作台、工单、配置、CMDB、告警、运维列表等
-  if (p === '/ops/dashboard' || p === '/metadata/database/search/dashboard') return true
-  if (p === '/ops/tickets' || /^\/ops\/tickets\/[^/]+$/.test(p)) return true
-  if (p.startsWith('/config/')) return true
-  if (p.startsWith('/cmdb/')) return true
-  if (p.startsWith('/ops/alerts')) return true
-  if (p.startsWith('/ops/todo')) return true
-  if (
-    p === '/ops/migration' ||
-    p === '/ops/slots' ||
-    p.startsWith('/ops/archive') ||
-    p.startsWith('/ops/backup') ||
-    p.startsWith('/ops/flashback') ||
-    p.startsWith('/ops/db-monitor') ||
-    p === '/ops/sessions' ||
-    p === '/ops/ha' ||
-    p === '/ops/sr' ||
-    p.startsWith('/ops/sr-cluster') ||
-    p.startsWith('/ops/cluster-deploy')
-  ) {
-    return true
-  }
+/** 页签切走后保持挂载。新数据用页面上的刷新，避免来回切换重新请求。 */
+export function shouldRemountOnTabActivate(_path: string): boolean {
   return false
 }

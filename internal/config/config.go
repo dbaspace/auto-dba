@@ -14,25 +14,32 @@ import (
 )
 
 type Config struct {
-	Nacos     NacosConfig     `yaml:"nacos"`
-	App       AppConfig       `yaml:"app"`
-	HTTP      HTTPConfig      `yaml:"http"`
-	Frontend  FrontendConfig  `yaml:"frontend"` // 开发态 Vite；可放 Nacos，与后端端口一并管理
-	Log       LogConfig       `yaml:"log"`
-	DB        DBConfig        `yaml:"db"`
-	Redis     RedisConfig     `yaml:"redis"` // 平台登录会话；生产放 Nacos，默认关闭不影响现网
-	CDC       CDCConfig       `yaml:"cdc"`
-	Migration MigrationConfig `yaml:"migration"`
-	Flashback FlashbackConfig `yaml:"flashback"`
-	Backup    BackupConfig    `yaml:"backup"`
-	External  ExternalConfig  `yaml:"external"`
-	Terminal  TerminalConfig  `yaml:"terminal"`
-	Services  ServicesConfig  `yaml:"services"`
-	Copilot   CopilotConfig       `yaml:"copilot"` // DBA Copilot；密钥放 Nacos，不读库表全局参数
-	Notify    NotifyModuleConfig  `yaml:"notify"`  // 通知渠道能力（飞书/企微/短信/电话/机器人）；密钥放 Nacos；不含邮件
+	Nacos     NacosConfig        `yaml:"nacos"`
+	App       AppConfig          `yaml:"app"`
+	HTTP      HTTPConfig         `yaml:"http"`
+	Frontend  FrontendConfig     `yaml:"frontend"` // 开发态 Vite；可放 Nacos，与后端端口一并管理
+	Log       LogConfig          `yaml:"log"`
+	DB        DBConfig           `yaml:"db"`
+	Redis     RedisConfig        `yaml:"redis"` // 平台登录会话；生产放 Nacos，默认关闭不影响现网
+	CDC       CDCConfig          `yaml:"cdc"`
+	Migration MigrationConfig    `yaml:"migration"`
+	Flashback FlashbackConfig    `yaml:"flashback"`
+	Backup    BackupConfig       `yaml:"backup"`
+	External  ExternalConfig     `yaml:"external"`
+	Terminal  TerminalConfig     `yaml:"terminal"`
+	Services  ServicesConfig     `yaml:"services"`
+	Copilot   CopilotConfig      `yaml:"copilot"` // DBA Copilot；密钥放 Nacos，不读库表全局参数
+	Notify    NotifyModuleConfig `yaml:"notify"`  // 通知渠道能力（飞书/企微/短信/电话/机器人）；密钥放 Nacos；不含邮件
+	DNS       DNSConfig          `yaml:"dns"`     // 独立解析库；节点账号写入 Corefile
 }
 
-// RedisConfig 平台登录会话 Redis（与实例 Redis 工单无关）。enabled=false 时行为与改造前一致。
+// DNSConfig 解析库。DSN 给平台读写；节点账号只授予 hdns 需要的表。
+type DNSConfig struct {
+	DSN          string `yaml:"dsn"`
+	NodeUser     string `yaml:"node_user"`
+	NodePassword string `yaml:"node_password"`
+	NodeDB       string `yaml:"node_db"`
+}
 type RedisConfig struct {
 	Enabled              bool   `yaml:"enabled"`
 	Addr                 string `yaml:"addr"`
@@ -41,8 +48,8 @@ type RedisConfig struct {
 	KeyPrefix            string `yaml:"key_prefix"`
 	SessionTTLHours      int    `yaml:"session_ttl_hours"` // 0 = 回退 app.jwt_ttl_hours
 	SlidingExpire        bool   `yaml:"sliding_expire"`
-	FailMode             string `yaml:"fail_mode"`               // closed | open；open=鉴权不强制 Redis（不推荐生产）
-	MaxSessionsPerUser   int    `yaml:"max_sessions_per_user"`   // 0=不限制；1=新登录踢旧
+	FailMode             string `yaml:"fail_mode"`              // closed | open；open=鉴权不强制 Redis（不推荐生产）
+	MaxSessionsPerUser   int    `yaml:"max_sessions_per_user"`  // 0=不限制；1=新登录踢旧
 	ReconcileIntervalMin int    `yaml:"reconcile_interval_min"` // 默认 5
 }
 
@@ -282,6 +289,12 @@ func applyDefaults(cfg *Config, path string) {
 	if cfg.HTTP.WriteTimeout <= 0 {
 		// Copilot Cursor Agent 轮询最长约 180s，默认写超时需覆盖
 		cfg.HTTP.WriteTimeout = 200
+	}
+	if strings.TrimSpace(cfg.DNS.NodeDB) == "" {
+		cfg.DNS.NodeDB = "auto_dba_dns"
+	}
+	if strings.TrimSpace(cfg.DNS.NodeUser) == "" {
+		cfg.DNS.NodeUser = "auto_dba_dns"
 	}
 	if cfg.App.JWTTTLHours <= 0 {
 		cfg.App.JWTTTLHours = 24

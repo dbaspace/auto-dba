@@ -1,3 +1,17 @@
+.instance-overview .ops-filters {
+  gap: 8px;
+}
+
+.instance-overview .ops-filters .filter-item {
+  flex: 0 0 auto;
+}
+
+.instance-overview .ops-filters .filter-item .label {
+  min-width: 0;
+  text-align: left;
+  padding-right: 6px;
+}
+
 .instance-overview-summary {
   display: flex;
   flex-wrap: wrap;

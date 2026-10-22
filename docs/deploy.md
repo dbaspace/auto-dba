@@ -27,13 +27,13 @@ KeePlus（进程 `auto-dba`）支持多种打包方式。**构建在有 Node 18+
 
 一体包与后端包解压后工作目录须为**包根**（存在 `deploy/node-agent/bin/node-agent` 等），集群部署 SSH 下发无需再本机构建 Agent。
 
-可选环境变量：`GOOS` `GOARCH`（默认 `linux`/`amd64`）、`STAMP`（默认时间戳；发版用 `STAMP=v1.12.27`）、`IMAGE_TAG`、`SKIP_PNPM_INSTALL=1`（已有 `node_modules` 时）。
+可选环境变量：`GOOS` `GOARCH`（默认 `linux`/`amd64`）、`STAMP`（默认时间戳；发版用 `STAMP=v1.12.28`）、`IMAGE_TAG`、`SKIP_PNPM_INSTALL=1`（已有 `node_modules` 时）。
 
 ```bash
-STAMP=v1.12.27 ./scripts/pack_release.sh all
-STAMP=v1.12.27 ./scripts/pack_release.sh backend
-STAMP=v1.12.27 ./scripts/pack_release.sh frontend
-IMAGE_TAG=auto-dba:v1.12.27 ./scripts/pack_release.sh docker
+STAMP=v1.12.28 ./scripts/pack_release.sh all
+STAMP=v1.12.28 ./scripts/pack_release.sh backend
+STAMP=v1.12.28 ./scripts/pack_release.sh frontend
+IMAGE_TAG=auto-dba:v1.12.28 ./scripts/pack_release.sh docker
 ```
 
 ## 发布到 GitHub Release（固定流程）
@@ -46,13 +46,13 @@ IMAGE_TAG=auto-dba:v1.12.27 ./scripts/pack_release.sh docker
 # 已 push 的提交 + 写好 docs/changelog-vX.Y.Z.md 后：
 
 # 推荐：打包 + 打 tag + 创建 Release（一体包）
-PACK=1 ./scripts/publish_github_release.sh v1.12.27
+PACK=1 ./scripts/publish_github_release.sh v1.12.28
 
-# 已有 dist/*-v1.12.27.tgz 时只发版
-./scripts/publish_github_release.sh v1.12.27
+# 已有 dist/*-v1.12.28.tgz 时只发版
+./scripts/publish_github_release.sh v1.12.28
 
 # 发版前顺带删若干旧 Release（不删受仓库 Rules 保护的 tag）
-DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12.27
+DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12.28
 ```
 
 前提：本机能 `git push origin HEAD`；已安装 `gh`。若 Keychain 无凭据，先手动 push 一次或导出 `GH_TOKEN=...`。
@@ -61,7 +61,8 @@ DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12
 
 | 版本 | 要点 |
 |------|------|
-| [v1.12.27](changelog-v1.12.27.md) | **当前推荐**。整页 AI 助手、实例总览、复制槽按 slot_name 去重、操作日志分页 |
+| [v1.12.28](changelog-v1.12.28.md) | **当前推荐**。DNS 管理与变更工单、实例总览存储使用率、审核规则 JSON、改密踢会话 |
+| [v1.12.27](changelog-v1.12.27.md) | 整页 AI 助手、实例总览、复制槽按 slot_name 去重、操作日志分页 |
 | [v1.12.26](changelog-v1.12.26.md) | 同步列表批量重启对齐 Hub（heartbeat + task0）、操作日志持久化、采集保留 id |
 | [v1.12.25](changelog-v1.12.25.md) | 备份恢复工单、CDC MySQL、MySQL 慢 SQL/会话、工单预约执行、HA/闪回/K8s 缺口补齐 |
 | [v1.12.24](changelog-v1.12.24.md) | 工单 SQL 美化/高亮、检测分页与状态过滤、缺分号规则、执行明细全文 |

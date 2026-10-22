@@ -17,6 +17,7 @@ const (
 	DbDeployEnginePostgres = "postgres"
 	DbDeployEngineRedis    = "redis"
 	DbDeployEngineCodis    = "codis"
+	DbDeployEngineDNS      = "dns"
 
 	DbDeployStatusDraft     = "draft"
 	DbDeployStatusDeploying = "deploying"
@@ -939,6 +940,10 @@ func validateDbDeployClusterShape(c *DbDeployCluster) error {
 	case "oracle":
 		if c.Topology != DbDeployTopoStandalone {
 			return fmt.Errorf("自建 oracle 拓扑仅支持 standalone")
+		}
+	case DbDeployEngineDNS:
+		if c.Topology != DbDeployTopoStandalone && c.Topology != DbDeployTopoMultiNode {
+			return fmt.Errorf("DNS 拓扑仅支持 standalone / multi_node")
 		}
 	default:
 		return fmt.Errorf("未知部署引擎: %s", eng)

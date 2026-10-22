@@ -1,6 +1,7 @@
 import { Navigate, useParams } from 'react-router-dom'
 import SrCluster from './SrCluster'
 import DbDeployWorkbench from './DbDeployWorkbench'
+import DnsDeploy from './DnsDeploy'
 import ProxyWorkbench from './ProxyWorkbench'
 
 /** 动态引擎工作台：starrocks → SR；haproxy/nginx/lvs → 代理；其余 → DbDeployWorkbench。 */
@@ -15,6 +16,9 @@ export default function ClusterDeployEngine() {
   }
   if (id === 'haproxy' || id === 'nginx' || id === 'lvs') {
     return <ProxyWorkbench kind={id} />
+  }
+  if (id === 'dns') {
+    return <DnsDeploy />
   }
   return <DbDeployWorkbench engine={id} />
 }

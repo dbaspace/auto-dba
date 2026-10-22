@@ -1396,7 +1396,30 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
+	kickUserSessions(c, h.Sessions, h.Store, u.ID, "password_changed")
 	c.JSON(http.StatusOK, gin.H{"ok": true, "message": "密码已更新"})
+}
+
+// kickUserSessions 改密后下线该账号全部会话。Redis 未启用时由 password_changed_at 在鉴权处拒绝旧 JWT。
+func kickUserSessions(c *gin.Context, sessions *sessionstore.Store, db *store.DB, userID, reason string) {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return
+	}
+	actor := middleware.UserID(c)
+	if actor == "" {
+		actor = userID
+	}
+	if sessions != nil && sessions.Enabled() {
+		if err := sessions.RevokeUser(c.Request.Context(), userID); err != nil {
+			log.Printf("password change revoke sessions uid=%s: %v", userID, err)
+		}
+	}
+	if db != nil {
+		if err := db.MarkUserSessionsOfflineAll(userID, reason, actor); err != nil {
+			log.Printf("password change mirror offline uid=%s: %v", userID, err)
+		}
+	}
 }
 
 const forgotPasswordOKMsg = "重置邮件已发送"
@@ -1575,7 +1598,12 @@ func (h *AuthHandler) ResetPassword(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 			return
 		}
+		if err := h.Store.MarkPasswordChanged(u.ID); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+			return
+		}
 		_ = h.Store.ClearLoginFailures(u.ID)
+		kickUserSessions(c, h.Sessions, h.Store, u.ID, "password_reset")
 		c.JSON(http.StatusOK, gin.H{"ok": true, "message": "密码已重置，请使用新密码登录"})
 		return
 	}
@@ -1589,6 +1617,7 @@ func (h *AuthHandler) ResetPassword(c *gin.Context) {
 		return
 	}
 	_ = h.Store.ClearLoginFailures(u.ID)
+	kickUserSessions(c, h.Sessions, h.Store, u.ID, "password_reset")
 	c.JSON(http.StatusOK, gin.H{"ok": true, "message": "密码已重置，请使用新密码登录"})
 }
 

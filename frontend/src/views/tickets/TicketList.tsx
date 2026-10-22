@@ -21,6 +21,7 @@ const TYPES = [
   { value: 'ha', label: '高可用变更' },
   { value: 'sr_cluster', label: 'StarRocks 集群变更' },
   { value: 'db_deploy', label: '数据库集群部署' },
+  { value: 'dns_change', label: 'DNS 变更' },
 ]
 const STATUSES = [
   { value: 'pending', label: '待审批' },
@@ -51,6 +52,7 @@ function typeText(t: string) {
       sr_cluster: 'StarRocks 集群变更',
       db_deploy: '数据库集群部署',
       resource_apply: '平台资源申请',
+      dns_change: 'DNS 变更',
     }[t] ||
     t ||
     '-'

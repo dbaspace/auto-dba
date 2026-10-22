@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -10,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"auto-dba/internal/instoverview"
+	"auto-dba/internal/promclient"
 	"auto-dba/internal/store"
 )
 
@@ -123,6 +125,7 @@ func (h *OverviewHandler) runCollect(tid string, targets []overviewRow) {
 		}(row.ID)
 	}
 	wg.Wait()
+	h.attachStorageRates(tid, targets)
 	h.mu.Lock()
 	if job := h.jobs[tid]; job != nil {
 		job.Status = "done"
@@ -214,6 +217,150 @@ func (h *OverviewHandler) rows(tid, dbType, env, q string) ([]overviewRow, error
 		out = append(out, row)
 	}
 	return out, nil
+}
+
+func (h *OverviewHandler) attachStorageRates(tid string, targets []overviewRow) {
+	var ids []string
+	for _, row := range targets {
+		if store.NormalizeDBType(row.DBType) == "postgres" {
+			ids = append(ids, row.ID)
+		}
+	}
+	if len(ids) == 0 || h.Store == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	cli, err := h.promClient()
+	if err != nil || cli == nil {
+		return
+	}
+	samples, err := cli.Query(ctx, `max by (idc, d_b_instance_name) (qce_postgres_storagerate_max)`, time.Now())
+	if err != nil {
+		log.Printf("instance overview storage rate: %v", err)
+		return
+	}
+	var hits []instoverview.RateHit
+	for _, sm := range samples {
+		v, ok := promclient.InstantValue(sm)
+		if !ok {
+			continue
+		}
+		name := strings.TrimSpace(sm.Metric["d_b_instance_name"])
+		if name == "" {
+			continue
+		}
+		hits = append(hits, instoverview.RateHit{Name: name, IDC: sm.Metric["idc"], Rate: v})
+	}
+	regions := map[string]store.Region{}
+	if list, err := h.Store.ListRegions(); err == nil {
+		for _, r := range list {
+			regions[r.ID] = r
+		}
+	}
+	envByID := map[string]store.Environment{}
+	if list, err := h.Store.ListEnvironments(); err == nil {
+		for _, e := range list {
+			envByID[e.ID] = e
+		}
+	}
+	type matched struct {
+		id   string
+		rate float64
+	}
+	var found []matched
+	for _, id := range ids {
+		inst, err := h.Store.GetInstance(id)
+		if err != nil || inst == nil {
+			continue
+		}
+		reg := regions[strings.TrimSpace(inst.RegionID)]
+		env := envByID[strings.TrimSpace(inst.EnvID)]
+		idcs := cloudIDCs(inst, reg.Code, reg.Name, env.Code, env.Name)
+		rate, ok := instoverview.PickStorageRate(inst.Name, idcs, hits)
+		if !ok {
+			rate, ok = instoverview.PickStorageRate(cloudDBName(inst), idcs, hits)
+		}
+		if !ok {
+			continue
+		}
+		found = append(found, matched{id: id, rate: rate})
+	}
+	if len(found) == 0 {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.cache == nil || h.cache[tid] == nil {
+		return
+	}
+	for _, m := range found {
+		s, ok := h.cache[tid][m.id]
+		if !ok {
+			continue
+		}
+		s.StorageRate = m.rate
+		s.StorageRateKnown = true
+		h.cache[tid][m.id] = s
+	}
+}
+
+func (h *OverviewHandler) promClient() (*promclient.Client, error) {
+	base, _ := h.Store.GetGlobalArg("awr_prometheus_base_url")
+	token, _ := h.Store.GetGlobalArg("awr_prometheus_auth_token")
+	partial, _ := h.Store.GetGlobalArg("awr_prometheus_partial_response")
+	dedup, _ := h.Store.GetGlobalArg("awr_prometheus_dedup")
+	return promclient.New(promclient.Config{
+		BaseURL:         base,
+		AuthToken:       token,
+		PartialResponse: strings.EqualFold(strings.TrimSpace(partial), "true"),
+		Dedup:           strings.EqualFold(strings.TrimSpace(dedup), "true"),
+		Timeout:         8 * time.Second,
+	}), nil
+}
+
+func cloudDBName(inst *store.Instance) string {
+	if inst == nil {
+		return ""
+	}
+	for _, raw := range inst.Tags {
+		k, v, ok := strings.Cut(strings.TrimSpace(raw), "=")
+		if ok && strings.EqualFold(strings.TrimSpace(k), "db") && strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return strings.TrimSpace(inst.Name)
+}
+
+func cloudIDCs(inst *store.Instance, regionCode, regionName, envCode, envName string) []string {
+	if inst == nil {
+		return nil
+	}
+	var out []string
+	add := func(v string) {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			return
+		}
+		for _, e := range out {
+			if strings.EqualFold(e, v) {
+				return
+			}
+		}
+		out = append(out, v)
+	}
+	for _, raw := range inst.Tags {
+		k, v, ok := strings.Cut(strings.TrimSpace(raw), "=")
+		if ok && strings.EqualFold(strings.TrimSpace(k), "idc") {
+			add(v)
+		}
+	}
+	add(inst.IDC)
+	add(regionCode)
+	add(regionName)
+	add(envCode)
+	add(envName)
+	return out
 }
 
 func matchOverviewType(want, norm string) bool {

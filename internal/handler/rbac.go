@@ -12,12 +12,14 @@ import (
 	"auto-dba/internal/ldapauth"
 	"auto-dba/internal/middleware"
 	"auto-dba/internal/notify"
+	"auto-dba/internal/sessionstore"
 	"auto-dba/internal/store"
 )
 
 type RBACHandler struct {
-	Store  *store.DB
-	Secret string
+	Store    *store.DB
+	Secret   string
+	Sessions *sessionstore.Store
 }
 
 func (h *RBACHandler) requireAdmin(c *gin.Context) bool {
@@ -533,7 +535,12 @@ func (h *RBACHandler) ResetUserPassword(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 			return
 		}
+		if err := h.Store.MarkPasswordChanged(exist.ID); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+			return
+		}
 		_ = h.Store.UnlockUser(exist.ID)
+		kickUserSessions(c, h.Sessions, h.Store, exist.ID, "password_changed")
 		c.JSON(http.StatusOK, gin.H{"ok": true, "message": "LDAP 目录密码已更新"})
 		return
 	}
@@ -548,6 +555,7 @@ func (h *RBACHandler) ResetUserPassword(c *gin.Context) {
 		return
 	}
 	_ = h.Store.UnlockUser(exist.ID)
+	kickUserSessions(c, h.Sessions, h.Store, exist.ID, "password_changed")
 	c.JSON(http.StatusOK, gin.H{"ok": true, "message": "密码已更新"})
 }
 

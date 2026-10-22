@@ -39,6 +39,8 @@ import {
 } from '@ant-design/icons'
 import axios from 'axios'
 import api from '../../api/request'
+import { useAppSelector } from '../../store'
+import { readQueryTreeCache, writeQueryTreeCache } from './queryTreeCache'
 import DbTypeIcon from '../../components/DbTypeIcon'
 import SqlEditor from '../../components/SqlEditor'
 import { formatSqlContent } from '../../utils/formatSql'
@@ -252,6 +254,9 @@ function loadWorkspace(): Workspace {
 export default function CommonQuery() {
   const navigate = useNavigate()
   const location = useLocation()
+  const tenantId = String(
+    (useAppSelector((s) => s.auth.user) as { current_tenant?: { id?: string } })?.current_tenant?.id || '',
+  )
 
   const username = useMemo(() => {
     try {
@@ -1093,6 +1098,13 @@ export default function CommonQuery() {
   }
 
   const loadTree = useCallback(async () => {
+    const hit = readQueryTreeCache(tenantId)
+    if (hit) {
+      setDatabases(hit.databases)
+      setInstances(hit.instances)
+      setEnvOptions(hit.envOptions)
+      return
+    }
     setTreeLoading(true)
     try {
       const scope = { scope: 'tenant' }
@@ -1107,18 +1119,20 @@ export default function CommonQuery() {
         const t = normalizeType(instById[db.instance_id]?.db_type)
         return t !== 'kafka' && t !== 'redis'
       })
-      setDatabases(dbs)
-      setInstances(instList)
       const envSet = new Set<string>()
       for (const db of dbs) {
         const env = resolveDbEnv(db, instById[db.instance_id])
         if (env) envSet.add(env)
       }
-      setEnvOptions([...envSet].sort(cmpName))
+      const envOptions = [...envSet].sort(cmpName)
+      setDatabases(dbs)
+      setInstances(instList)
+      setEnvOptions(envOptions)
+      writeQueryTreeCache({ tenantId, databases: dbs, instances: instList, envOptions })
     } finally {
       setTreeLoading(false)
     }
-  }, [])
+  }, [tenantId])
 
   useEffect(() => {
     loadTree()

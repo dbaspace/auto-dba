@@ -1,17 +1,23 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -80,7 +86,6 @@ func serveAgent(name, addr string, handler http.Handler, writeTimeout time.Durat
 	log.Printf("%s http.Server timeouts: readHeader=10s read=60s write=%v idle=120s", name, writeTimeout)
 	log.Fatal(srv.ListenAndServe())
 }
-
 
 const (
 	jobTTL  = 2 * time.Hour
@@ -213,9 +218,10 @@ func handleEnsureFS(w http.ResponseWriter, r *http.Request) {
 
 func handleFilePut(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Path    string `json:"path"`
-		Content string `json:"content"`
-		Mode    string `json:"mode"`
+		Path          string `json:"path"`
+		Content       string `json:"content"`
+		ContentBase64 string `json:"content_base64"`
+		Mode          string `json:"mode"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Path == "" {
 		http.Error(w, "path required", 400)
@@ -225,12 +231,35 @@ func handleFilePut(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "dry_run": true})
 		return
 	}
+	payload := []byte(req.Content)
+	if req.ContentBase64 != "" {
+		raw, err := base64.StdEncoding.DecodeString(req.ContentBase64)
+		if err != nil {
+			http.Error(w, "content_base64 invalid", 400)
+			return
+		}
+		payload = raw
+	}
+	if err := os.MkdirAll(filepath.Dir(req.Path), 0o755); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	mode := os.FileMode(0o644)
+	if req.Mode != "" {
+		if parsed, err := strconv.ParseUint(req.Mode, 8, 32); err == nil {
+			mode = os.FileMode(parsed)
+		}
+	}
 	tmp := req.Path + ".new"
-	if err := os.WriteFile(tmp, []byte(req.Content), 0o644); err != nil {
+	if err := os.WriteFile(tmp, payload, mode); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
 	if err := os.Rename(tmp, req.Path); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	if err := os.Chmod(req.Path, mode); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
@@ -433,9 +462,149 @@ func handleExec(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "message": msg})
+	case "dns_precheck":
+		if *dryRun || req.DryRun {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "message": "dry-run dns_precheck"})
+			return
+		}
+		port := 53
+		if req.Payload != nil {
+			switch v := req.Payload["port"].(type) {
+			case float64:
+				port = int(v)
+			case int:
+				port = v
+			}
+		}
+		if msg, err := dnsPrecheck(port); err != nil {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "message": err.Error()})
+			return
+		} else {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "message": msg})
+		}
+	case "dns_query":
+		out, err := dnsQuery(req.Payload)
+		if err != nil {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "message": out})
 	default:
 		http.Error(w, "command not allowed", 403)
 	}
+}
+
+// dnsQuery 向本机 DNS 查询。服务器地址用本机内网 IP 而非回环地址：
+// hdns 按来源 IP 选解析范围，回环地址会落到 DEFAULT。返回 JSON 文本。
+func dnsQuery(p map[string]any) (string, error) {
+	str := func(k string) string { s, _ := p[k].(string); return strings.TrimSpace(s) }
+	server, name, qtype := str("server"), strings.TrimSuffix(str("name"), "."), strings.ToUpper(str("type"))
+	if name == "" {
+		return "", fmt.Errorf("域名为空")
+	}
+	host, _, err := net.SplitHostPort(server)
+	if err != nil {
+		return "", fmt.Errorf("服务器地址须为 host:port")
+	}
+	if ip := net.ParseIP(host); ip == nil || ip.IsLoopback() {
+		return "", fmt.Errorf("服务器地址须为本机内网 IP")
+	}
+	r := &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+		d := net.Dialer{Timeout: 3 * time.Second}
+		return d.DialContext(ctx, network, server)
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	start := time.Now()
+	q := name + "."
+	answers := []string{}
+	switch qtype {
+	case "A", "AAAA":
+		nw := "ip4"
+		if qtype == "AAAA" {
+			nw = "ip6"
+		}
+		var ips []net.IP
+		ips, err = r.LookupIP(ctx, nw, q)
+		for _, ip := range ips {
+			answers = append(answers, ip.String())
+		}
+	case "CNAME":
+		var c string
+		c, err = r.LookupCNAME(ctx, q)
+		if c = strings.TrimSuffix(strings.ToLower(c), "."); err == nil && c != strings.ToLower(name) {
+			answers = append(answers, c)
+		}
+	case "TXT":
+		answers, err = r.LookupTXT(ctx, q)
+	case "MX":
+		var mx []*net.MX
+		mx, err = r.LookupMX(ctx, q)
+		for _, m := range mx {
+			answers = append(answers, strconv.Itoa(int(m.Pref))+" "+strings.TrimSuffix(strings.ToLower(m.Host), "."))
+		}
+	default:
+		return "", fmt.Errorf("记录类型仅支持 A、AAAA、CNAME、TXT、MX")
+	}
+	res := map[string]any{"server": server, "name": name, "type": qtype, "answers": answers, "elapsed_ms": time.Since(start).Milliseconds()}
+	if err != nil {
+		var de *net.DNSError
+		if errors.As(err, &de) && de.IsNotFound {
+			res["rcode"] = "NXDOMAIN"
+		} else {
+			res["rcode"], res["error"] = "ERROR", err.Error()
+		}
+	} else {
+		sort.Strings(answers)
+		res["rcode"] = "NOERROR"
+	}
+	b, _ := json.Marshal(res)
+	return string(b), nil
+}
+
+func dnsPrecheck(port int) (string, error) {
+	if port < 1 || port > 65535 {
+		return "", fmt.Errorf("端口无效")
+	}
+	for _, dir := range []string{"/usr/local/auto-dba/dns", "/etc/auto-dba/dns"} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return "", fmt.Errorf("目录 %s 不可写: %v", dir, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, ".write-probe"), []byte("ok"), 0o644); err != nil {
+			return "", fmt.Errorf("目录 %s 不可写: %v", dir, err)
+		}
+		_ = os.Remove(filepath.Join(dir, ".write-probe"))
+	}
+	for _, kind := range []string{"udp", "tcp"} {
+		busy, ours, detail, err := portOccupied(kind, port)
+		if err != nil {
+			return "", err
+		}
+		if busy && !ours {
+			return "", fmt.Errorf("%s/%d 已被占用: %s", kind, port, strings.TrimSpace(detail))
+		}
+	}
+	return "udp/" + strconv.Itoa(port) + " 与 tcp 可用，目录可写", nil
+}
+
+func portOccupied(kind string, port int) (busy, ours bool, detail string, err error) {
+	flag := "-ulnp"
+	if kind == "tcp" {
+		flag = "-tlnp"
+	}
+	script := fmt.Sprintf("ss %s 2>/dev/null | grep -E '[:.]%d([^0-9]|$)' || true", flag, port)
+	out, err := exec.Command("bash", "-c", script).CombinedOutput()
+	if err != nil {
+		return false, false, "", fmt.Errorf("检查 %s/%d 失败: %v", kind, port, err)
+	}
+	text := strings.TrimSpace(string(out))
+	if text == "" {
+		return false, false, "", nil
+	}
+	if strings.Contains(text, "coredns") {
+		return true, true, text, nil
+	}
+	return true, false, text, nil
 }
 
 func doReplSetup(p map[string]any) (string, error) {
@@ -712,7 +881,7 @@ func doReplVerify(engine, role string, port int) (bool, string, error) {
 		if role != "replica" {
 			ok = true
 		}
-		return ok, "pg_is_in_recovery="+s, nil
+		return ok, "pg_is_in_recovery=" + s, nil
 	case "redis", "codis":
 		if role == "sentinel" {
 			out, err := exec.Command("redis-cli", "-p", fmt.Sprintf("%d", port), "SENTINEL", "masters").CombinedOutput()

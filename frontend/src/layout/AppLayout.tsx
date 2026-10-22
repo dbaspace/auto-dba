@@ -98,6 +98,7 @@ export default function AppLayout() {
   const navigate = useNavigate()
   const dispatch = useAppDispatch()
   const user = useAppSelector((s) => s.auth.user)
+  const tenantId = String((user as { current_tenant?: { id?: string } })?.current_tenant?.id || '')
   const menus = useAppSelector((s) => s.auth.menus)
   const tabs = useAppSelector((s) => s.tabs.tabs)
   const activeKey = useAppSelector((s) => s.tabs.activeKey)
@@ -522,7 +523,7 @@ export default function AppLayout() {
           <div className="app-tab-panels">
             {tabs.map((t) => (
               <KeepAliveTabPanel
-                key={t.key}
+                key={`${tenantId}:${t.key}`}
                 tabKey={t.key}
                 path={t.path}
                 search={t.search || ''}

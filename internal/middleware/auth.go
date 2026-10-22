@@ -116,13 +116,26 @@ func Auth(secret *string, db *store.DB, sessions SessionGate, skipPrefixes ...st
 			c.Abort()
 			return
 		}
+		var pwdChanged string
 		if db != nil && strings.TrimSpace(claims.UserID) != "" {
 			u, uerr := db.GetUserByID(claims.UserID)
-			if uerr == nil && u != nil && u.IsLoginBlocked() {
-				c.JSON(http.StatusUnauthorized, gin.H{"message": u.LoginBlockedMessage()})
-				c.Abort()
-				return
+			if uerr == nil && u != nil {
+				if u.IsLoginBlocked() {
+					c.JSON(http.StatusUnauthorized, gin.H{"message": u.LoginBlockedMessage()})
+					c.Abort()
+					return
+				}
+				pwdChanged = u.PasswordChangedAt
 			}
+		}
+		if tokenIssuedBeforePasswordChange(claims.IssuedAt, pwdChanged) {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"message":            "会话已失效，请重新登录",
+				"code":               "session_revoked",
+				"diagnostic_message": "password changed",
+			})
+			c.Abort()
+			return
 		}
 		jti := strings.TrimSpace(claims.ID)
 		if sessions != nil && sessions.Enabled() && jti != "" && !sessions.FailOpen() {
@@ -153,6 +166,23 @@ func Auth(secret *string, db *store.DB, sessions SessionGate, skipPrefixes ...st
 		c.Set(CtxJTI, jti)
 		c.Next()
 	}
+}
+
+// tokenIssuedBeforePasswordChange 改密时间晚于 token 签发时间时，旧登录应失效。
+// changedAt 为空表示从未改密。
+func tokenIssuedBeforePasswordChange(issued *jwt.NumericDate, changedAt string) bool {
+	changedAt = strings.TrimSpace(changedAt)
+	if changedAt == "" {
+		return false
+	}
+	changed, err := time.Parse(time.RFC3339, changedAt)
+	if err != nil {
+		return false
+	}
+	if issued == nil {
+		return true
+	}
+	return issued.Time.Before(changed)
 }
 
 func JTI(c *gin.Context) string {
@@ -238,9 +268,9 @@ func TenantRequired(db *store.DB) gin.HandlerFunc {
 		tid := TenantID(c)
 		if tid == "" {
 			c.JSON(http.StatusBadRequest, gin.H{
-				"message":             "请先选择租户",
-				"need_tenant_select":  true,
-				"diagnostic_message":  "jwt tid is empty",
+				"message":            "请先选择租户",
+				"need_tenant_select": true,
+				"diagnostic_message": "jwt tid is empty",
 			})
 			c.Abort()
 			return

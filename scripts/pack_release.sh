@@ -120,6 +120,12 @@ copy_agents() {
     "$stage/deploy/node-agent/bin/node-agent" \
     "$stage/deploy/db-agent/bin/db-agent" \
     "$stage/deploy/backup-agent/bin/"* 2>/dev/null || true
+  # DNS 集群部署从包根读取 deploy/coredns/bin/coredns
+  if [[ -f deploy/coredns/bin/coredns ]]; then
+    mkdir -p "$stage/deploy/coredns/bin"
+    cp -a deploy/coredns/bin/coredns "$stage/deploy/coredns/bin/"
+    chmod a+x "$stage/deploy/coredns/bin/coredns"
+  fi
 }
 
 copy_config_examples() {

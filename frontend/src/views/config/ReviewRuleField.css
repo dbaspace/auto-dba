@@ -50,3 +50,20 @@
   line-height: 1.4;
   color: #6b7280;
 }
+.rule-json {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+.rule-json-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+.rule-json-k {
+  color: #6b7280;
+  font-size: 12px;
+  white-space: nowrap;
+}

@@ -38,6 +38,12 @@ import MigrationSchemaCompare from '../views/ops/MigrationSchemaCompare'
 import Flashback from '../views/flashback/Flashback'
 import FlashbackCloud from '../views/flashback/FlashbackCloud'
 import Environments from '../views/config/Environments'
+import DnsRecords from '../views/dns/DnsRecords'
+import DnsZones from '../views/dns/DnsZones'
+import DnsNodes from '../views/dns/DnsNodes'
+import DnsChanges from '../views/dns/DnsChanges'
+import DnsTools from '../views/dns/DnsTools'
+import DnsInspect from '../views/dns/DnsInspect'
 import Regions from '../views/config/Regions'
 import Users from '../views/config/Users'
 import Roles from '../views/config/Roles'
@@ -238,6 +244,14 @@ const router = createHashRouter([
       { path: 'config/instances', element: <Instances /> },
       { path: 'config/regions', element: <Regions /> },
       { path: 'config/environments', element: <Environments /> },
+      { path: 'dns', element: <Navigate to="/dns/records" replace /> },
+      { path: 'dns/records', element: <DnsRecords /> },
+      { path: 'dns/zones', element: <DnsZones /> },
+      { path: 'dns/nodes', element: <DnsNodes /> },
+      { path: 'dns/changes', element: <DnsChanges /> },
+      { path: 'dns/tools', element: <DnsTools /> },
+      { path: 'dns/inspect', element: <DnsInspect /> },
+      { path: 'config/dns', element: <Navigate to="/dns/records" replace /> },
       { path: 'config/tags', element: <Navigate to="/cmdb/tags" replace /> },
       { path: 'config/connectors', element: <Connectors /> },
       { path: 'config/agents', element: <PlatformAgent /> },

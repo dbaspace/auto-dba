@@ -7,6 +7,7 @@ import { useAppDispatch, useAppSelector } from '../../store'
 import { closeTab, openTab, tabKey } from '../../store/tabsSlice'
 import CollapsibleSqlBlock from '../../components/CollapsibleSqlBlock'
 import DdlExecImpact from './DdlExecImpact'
+import DnsChangeDiff, { payloadRows } from '../dns/DnsChangeDiff'
 import { countNonEmptyLines, lineVsStatementHint, shouldHintLineVsStatement } from './sqlStatementCount'
 import './TicketDetail.css'
 
@@ -203,6 +204,18 @@ export default function TicketDetail() {
     const fields: ApplyField[] = [
       { key: 'reason', label: '原因', value: it.description || resourceApplyExtra?.reason || '-' },
     ]
+    if (it.issue_type === 'dns_change') {
+      const p = payloadRows(it.sql_content || '')
+      if (p.kind === 'rollback') fields.push({ key: 'dns_batch', label: '回滚批次', value: p.batchId || '-' })
+      fields.push({ key: 'dns_diff', label: '变更内容', kind: 'dns-diff', value: it.sql_content || '' })
+      fields.push({
+        key: 'schedule',
+        label: '执行方式',
+        kind: 'schedule',
+        value: '审批通过后自动执行 DNS 变更（执行前重新校验并检查冲突）',
+      })
+      return fields
+    }
     if (!isResourceApply) {
       fields.push(
         { key: 'db_type', label: '数据库类型', kind: 'type-tag', value: dbType || '-' },
@@ -536,7 +549,7 @@ export default function TicketDetail() {
   }, [item])
 
   const neededInstanceIds = useMemo(() => {
-    if (item?.issue_type === 'resource_apply') return [] as string[]
+    if (item?.issue_type === 'resource_apply' || item?.issue_type === 'dns_change') return [] as string[]
     const set = new Set<string>()
     const primary = String(item?.instance_id || '').trim()
     if (primary) set.add(primary)
@@ -1256,6 +1269,8 @@ export default function TicketDetail() {
                       ) : null}
                       <CollapsibleSqlBlock value={f.value} />
                     </div>
+                  ) : f.kind === 'dns-diff' ? (
+                    <DnsChangeDiff rows={payloadRows(f.value).rows} />
                   ) : f.kind === 'schedule' ? (
                     <Tag color="warning">{f.value}</Tag>
                   ) : (

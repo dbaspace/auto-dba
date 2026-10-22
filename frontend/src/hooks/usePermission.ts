@@ -54,6 +54,15 @@ export const Perm = {
     trigger: 'um.action.scheduled-jobs.trigger',
     sidebar: 'um.sidebar.config-scheduled-jobs',
   },
+  dns: {
+    create: 'um.action.dns.create',
+    edit: 'um.action.dns.edit',
+    delete: 'um.action.dns.delete',
+    import: 'um.action.dns.import',
+    rollback: 'um.action.dns.rollback',
+    policy: 'um.action.dns.policy',
+    sidebar: 'um.sidebar.config-dns',
+  },
   users: {
     create: 'um.action.users.create',
     edit: 'um.action.users.edit',

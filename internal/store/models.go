@@ -13,20 +13,22 @@ type User struct {
 	LoginDisabled    bool     `json:"login_disabled"`
 	FailedLoginCount int      `json:"failed_login_count"`
 	LockedAt         string   `json:"locked_at,omitempty"`
+	// PasswordChangedAt 最近一次改密时间（RFC3339）。空表示从未改密，不踢已有登录。
+	PasswordChangedAt string `json:"-"`
 	// LDAP/SSO 外部认证失败计数与冷却（来自 tbl_login_attempt）
-	ExternalFailCount    int    `json:"external_fail_count,omitempty"`
+	ExternalFailCount     int    `json:"external_fail_count,omitempty"`
 	ExternalCooldownUntil string `json:"external_cooldown_until,omitempty"`
-	Status               string `json:"status"`
-	Avatar           string   `json:"avatar,omitempty"`
-	Gender           string   `json:"gender,omitempty"`
-	Email            string   `json:"email,omitempty"`
-	Phone            string   `json:"phone,omitempty"`
-	IMType           string   `json:"im_type,omitempty"`
-	IMAccount        string   `json:"im_account,omitempty"`
-	LarkID           string   `json:"lark_id,omitempty"`
-	LarkOpenID       string   `json:"lark_open_id,omitempty"`
-	LarkEmail        string   `json:"lark_email,omitempty"`
-	LarkSyncTime     string   `json:"lark_sync_time,omitempty"`
+	Status                string `json:"status"`
+	Avatar                string `json:"avatar,omitempty"`
+	Gender                string `json:"gender,omitempty"`
+	Email                 string `json:"email,omitempty"`
+	Phone                 string `json:"phone,omitempty"`
+	IMType                string `json:"im_type,omitempty"`
+	IMAccount             string `json:"im_account,omitempty"`
+	LarkID                string `json:"lark_id,omitempty"`
+	LarkOpenID            string `json:"lark_open_id,omitempty"`
+	LarkEmail             string `json:"lark_email,omitempty"`
+	LarkSyncTime          string `json:"lark_sync_time,omitempty"`
 	// HasLoggedIn 仅 ListUsers 填充：tbl_user_sessions 中出现过
 	HasLoggedIn bool `json:"has_logged_in"`
 }
@@ -145,16 +147,16 @@ type Connector struct {
 }
 
 type Issue struct {
-	ID           string `json:"id"`
-	TenantID     string `json:"tenant_id,omitempty"`
-	TenantName   string `json:"tenant_name,omitempty"`
-	TicketNo     string `json:"ticket_no"`
-	IssueType    string `json:"issue_type"`
-	Type         string `json:"type"`
-	InstanceID   string `json:"instance_id"`
-	Domain       string `json:"domain,omitempty"`
-	DatabaseID   string `json:"database_id,omitempty"`
-	DBName       string `json:"db_name"`
+	ID         string `json:"id"`
+	TenantID   string `json:"tenant_id,omitempty"`
+	TenantName string `json:"tenant_name,omitempty"`
+	TicketNo   string `json:"ticket_no"`
+	IssueType  string `json:"issue_type"`
+	Type       string `json:"type"`
+	InstanceID string `json:"instance_id"`
+	Domain     string `json:"domain,omitempty"`
+	DatabaseID string `json:"database_id,omitempty"`
+	DBName     string `json:"db_name"`
 	// Env / DBType 列表展示用，来自实例或 sql_content，非表列。
 	Env          string `json:"env,omitempty"`
 	DBType       string `json:"db_type,omitempty"`
@@ -746,6 +748,7 @@ const (
 	IssueTypeDbDeploy      = "db_deploy"
 	IssueTypeResourceApply = "resource_apply" // 平台资源申请（库/域名/主机/集群）
 	IssueTypeK8sChange     = "k8s_change"     // K8s 生产变更（apply/删除/drain/缩零等）
+	IssueTypeDnsChange     = "dns_change"     // DNS 记录变更（需审批的解析域）
 
 	StatusPending        = "pending"
 	StatusApproved       = "approved"

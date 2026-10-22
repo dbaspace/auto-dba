@@ -53,6 +53,18 @@ func topo(id, label, kind string) TopoSpec {
 func AllEngines() []EngineDescriptor {
 	return []EngineDescriptor{
 		{
+			ID: "dns", Label: "DNS", Family: "dns", FamilyLabel: "域名服务",
+			Workbench: WorkbenchDbDeploy, Capability: CapabilityFull, AllowDeploy: true, AllowCloud: false,
+			Desc: "把裁剪编译的 CoreDNS 装到已有 DB Agent 的主机。记录在配置中心维护，节点连解析库自行加载。",
+			Path: "/ops/cluster-deploy/dns", InstanceType: "",
+			Topologies: []TopoSpec{
+				topo("standalone", "单节点", "self"),
+				topo("multi_node", "多节点", "self"),
+			},
+			Defaults: map[string]any{"listen": "0.0.0.0:53"},
+			Roles:    []string{"dns"},
+		},
+		{
 			ID: "haproxy", Label: "HAProxy", Family: "proxy", FamilyLabel: "接入层代理",
 			Workbench: WorkbenchProxy, Capability: CapabilityFull, AllowDeploy: true, AllowCloud: false,
 			Desc: "主备 2 节点自建（yum/apt 装 haproxy+keepalived）+ VIP 校验与配置下发；亦可登记已有。",

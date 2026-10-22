@@ -77,6 +77,7 @@ type Deps struct {
 	Sso                *handler.SsoHandler
 	SMTP               *handler.SMTPHandler
 	Notify             *handler.NotifyHandler
+	DNS                *handler.DNSHandler
 	Terminal           *terminal.Handler
 	Static             string
 }
@@ -291,6 +292,41 @@ func Init(e *gin.Engine, d Deps) {
 	secured.POST("/environments", requireURN(store.URNEnvironmentsCreate), d.Env.Create)
 	secured.PUT("/environments/:id", requireURN(store.URNEnvironmentsEdit), d.Env.Update)
 	secured.DELETE("/environments/:id", requireURN(store.URNEnvironmentsDelete), d.Env.Delete)
+
+	if d.DNS != nil {
+		view := requireURN(store.URNSidebarDNS)
+		secured.GET("/dns/zones", view, d.DNS.ListZones)
+		secured.POST("/dns/zones", requireURN(store.URNDNSCreate), d.DNS.CreateZone)
+		secured.PUT("/dns/zones/:id", requireURN(store.URNDNSEdit), d.DNS.UpdateZone)
+		secured.DELETE("/dns/zones/:id", requireURN(store.URNDNSDelete), d.DNS.DeleteZone)
+		secured.GET("/dns/ranges", view, d.DNS.ListRanges)
+		secured.POST("/dns/ranges", requireURN(store.URNDNSCreate), d.DNS.CreateRange)
+		secured.PUT("/dns/ranges/:id", requireURN(store.URNDNSEdit), d.DNS.UpdateRange)
+		secured.DELETE("/dns/ranges/:id", requireURN(store.URNDNSDelete), d.DNS.DeleteRange)
+		secured.GET("/dns-records", view, d.DNS.ListRecords)
+		secured.POST("/dns-records", requireURN(store.URNDNSCreate), d.DNS.CreateRecords)
+		secured.PUT("/dns-records/:id", requireURN(store.URNDNSEdit), d.DNS.UpdateRecord)
+		secured.DELETE("/dns-records/:id", requireURN(store.URNDNSDelete), d.DNS.DeleteRecord)
+		secured.POST("/dns-records/batch-delete", requireURN(store.URNDNSDelete), d.DNS.BatchDeleteRecords)
+		secured.GET("/dns/nodes", requireURN(store.URNSidebarDNSNodes), d.DNS.ListNodes)
+		secured.GET("/dns/metrics", requireURN(store.URNSidebarDNSNodes), d.DNS.Metrics)
+		secured.GET("/dns/changes", requireURN(store.URNSidebarDNSChanges), d.DNS.ListChanges)
+		secured.GET("/dns/changes/:batch", view, d.DNS.GetChange)
+		secured.POST("/dns/changes/:batch/rollback", requireURN(store.URNDNSRollback), d.DNS.RollbackChange)
+		secured.GET("/dns/inspect", requireURN(store.URNSidebarDNSInspect), d.DNS.Inspect)
+		secured.GET("/dns/reverse", view, d.DNS.Reverse)
+		secured.GET("/dns/export", view, d.DNS.Export)
+		secured.POST("/dns/import/preview", requireURN(store.URNDNSImport), d.DNS.ImportPreview)
+		secured.POST("/dns/import/apply", requireURN(store.URNDNSImport), d.DNS.ImportApply)
+		secured.POST("/dns/resolve/simulate", requireURN(store.URNSidebarDNSTools), d.DNS.Simulate)
+		secured.POST("/dns/resolve/probe", requireURN(store.URNSidebarDNSTools), d.DNS.Probe)
+		secured.POST("/dns/resolve/node", requireURN(store.URNSidebarDNSTools), d.DNS.NodeQuery)
+		secured.GET("/dns/policies", view, d.DNS.ListPolicies)
+		secured.PUT("/dns/policies/:zone_id", requireURN(store.URNDNSPolicy), d.DNS.SavePolicy)
+		secured.GET("/dns/ttl-holds", view, d.DNS.ListTTLHolds)
+		secured.POST("/dns/ttl-holds", requireURN(store.URNDNSEdit), d.DNS.LowerTTL)
+		secured.POST("/dns/ttl-holds/:id/restore", requireURN(store.URNDNSEdit), d.DNS.RestoreTTL)
+	}
 
 	if d.MonitorTag != nil {
 		secured.GET("/monitor-tags", d.MonitorTag.List)

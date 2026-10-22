@@ -159,7 +159,7 @@ Client Secret（及 LDAP Bind 密码）用字段加密密钥落库（优先 `app
 |------|------|------|
 | SQL 洞察 | `/ops/sql-insight` | 六 Tab：SQL洞察 / 洞察分析 / 可视汇总 / AWR报告 / 表空间分析 / 智能分析；壳上统一「设置」入口（`/config/sql-insight`）。写操作权限：活动快照采集 / AWR 生成 / 表空间采集 / 智能分析（见 rbac-permissions） |
 | 会话管理 | `/ops/sessions` | 查看会话与锁，可定时刷新，并结束异常会话（PostgreSQL / MySQL 族） |
-| 实例总览 | `/ops/instance-overview` | 已登记实例的横向一览。打开只读元库；点刷新才限流采集 PostgreSQL / Redis 的版本、角色、连接、内存、从库延迟。不是监控曲线 |
+| 实例总览 | `/ops/instance-overview` | 已登记实例的横向一览。打开只读元库；点刷新才限流采集 PostgreSQL / Redis 的版本、角色、连接、内存、从库延迟，并可带云监控存储使用率。不是监控曲线 |
 | MySQL 慢 SQL | `/ops/mysql-slow` | performance_schema digest Top SQL（只读） |
 
 ## 告警管理
@@ -251,6 +251,19 @@ DBA 域配置管理门面：统一目录（含 SR/部署/代理/账号/CDC）、
 | 导入导出 | `/cmdb/import-export` | 实例 CSV/JSON |
 | 变更审计 | `/cmdb/audit` | 实例/库等变更 before/after |
 | 同步任务 | `/cmdb/sync` | Prometheus / 云标注 / HTTP 企业 CMDB 适配器（默认仅候选） |
+
+## DNS 管理
+
+解析记录、域与范围、节点、变更、解析测试与体检。数据全平台一份，权限按菜单控制。保存后写入 `hdns` 表并递增 `serials`，节点自行重载。集群部署可下发裁剪编译的 CoreDNS。方案见 [dns-plan.md](dns-plan.md)。变更可走 `dns_change` 工单，审批通过后自动执行。
+
+| 页面 | 路径 | 说明 |
+|------|------|------|
+| 解析记录 | `/dns/records` | 主机记录的增删改、启停、导入 |
+| 域与范围 | `/dns/zones` | 解析域、解析范围（名称 + 来源网段）与域策略 |
+| 节点 | `/dns/nodes` | DNS 节点与指标 |
+| 变更记录 | `/dns/changes` | 变更批次，可回滚 |
+| 解析测试 | `/dns/tools` | 模拟与实查解析 |
+| 解析体检 | `/dns/inspect` | 全量规则检查与实例比对 |
 
 ## 数据库配置
 

@@ -37,6 +37,21 @@ const (
 	URNArgsEdit           = "um.action.args.edit"
 	URNArgsDelete         = "um.action.args.delete"
 
+	URNSidebarDNS = "um.sidebar.config-dns"
+	URNDNSCreate  = "um.action.dns.create"
+	URNDNSEdit    = "um.action.dns.edit"
+	URNDNSDelete  = "um.action.dns.delete"
+
+	URNSidebarDNSRecords = "um.sidebar.dns-records"
+	URNSidebarDNSZones   = "um.sidebar.dns-zones"
+	URNSidebarDNSNodes   = "um.sidebar.dns-nodes"
+	URNSidebarDNSChanges = "um.sidebar.dns-changes"
+	URNSidebarDNSTools   = "um.sidebar.dns-tools"
+	URNSidebarDNSInspect = "um.sidebar.dns-inspect"
+	URNDNSRollback       = "um.action.dns.rollback"
+	URNDNSImport         = "um.action.dns.import"
+	URNDNSPolicy         = "um.action.dns.policy"
+
 	URNSidebarScheduledJobs   = "um.sidebar.config-scheduled-jobs"
 	URNScheduledJobsEdit      = "um.action.scheduled-jobs.edit"
 	URNScheduledJobsTrigger   = "um.action.scheduled-jobs.trigger"

@@ -709,7 +709,19 @@ func (d *DB) UpdateUserRoles(id string, roleIDs []string, displayName string) er
 }
 
 func (d *DB) UpdateUserPassword(id, passwordHash string) error {
-	_, err := d.Exec(`UPDATE tbl_users SET password_hash=? WHERE id=?`, passwordHash, id)
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := d.Exec(`UPDATE tbl_users SET password_hash=?, password_changed_at=? WHERE id=?`, passwordHash, now, id)
+	return err
+}
+
+// MarkPasswordChanged 目录改密不写本地哈希时，仍记下改密时间以便踢掉旧登录。
+func (d *DB) MarkPasswordChanged(id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return errors.New("id required")
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := d.Exec(`UPDATE tbl_users SET password_changed_at=? WHERE id=?`, now, id)
 	return err
 }
 

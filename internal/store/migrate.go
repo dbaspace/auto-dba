@@ -562,6 +562,9 @@ func (d *DB) ensureLoginLogsTable() error {
 	if err := d.ensureUserLoginStatusColumns(); err != nil {
 		return err
 	}
+	if err := d.ensureUserPasswordChangedColumn(); err != nil {
+		return err
+	}
 	if err := d.ensurePGActivitySnapshotsTable(); err != nil {
 		return err
 	}
@@ -1412,6 +1415,23 @@ func (d *DB) ensureUserSourceColumn() error {
 	}
 	if n == 0 {
 		if _, err := d.db.Exec(`ALTER TABLE tbl_users ADD COLUMN source TEXT NOT NULL DEFAULT 'platform'`); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (d *DB) ensureUserPasswordChangedColumn() error {
+	var n int
+	err := d.db.QueryRow(`
+		SELECT COUNT(1) FROM information_schema.columns
+		WHERE table_name = 'tbl_users' AND column_name = 'password_changed_at'
+	`).Scan(&n)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		if _, err := d.db.Exec(`ALTER TABLE tbl_users ADD COLUMN password_changed_at TEXT NOT NULL DEFAULT ''`); err != nil {
 			return err
 		}
 	}
