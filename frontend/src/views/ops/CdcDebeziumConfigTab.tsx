@@ -394,7 +394,7 @@ export default function CdcDebeziumConfigTab({ taskId, extra, pending = false, o
           </Button>
           {!editing ? (
             <Button size="small" type="primary" disabled={pending || missing} onClick={() => setEditing(true)}>
-              保存
+              编辑
             </Button>
           ) : (
             <>
@@ -402,7 +402,7 @@ export default function CdcDebeziumConfigTab({ taskId, extra, pending = false, o
                 取消
               </Button>
               <Button size="small" type="primary" loading={saving} onClick={save}>
-                确认保存
+                保存
               </Button>
             </>
           )}
