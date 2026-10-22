@@ -31,6 +31,19 @@ type Config struct {
 	Copilot   CopilotConfig      `yaml:"copilot"` // DBA Copilot；密钥放 Nacos，不读库表全局参数
 	Notify    NotifyModuleConfig `yaml:"notify"`  // 通知渠道能力（飞书/企微/短信/电话/机器人）；密钥放 Nacos；不含邮件
 	DNS       DNSConfig          `yaml:"dns"`     // 独立解析库；节点账号写入 Corefile
+	Ticket    TicketConfig       `yaml:"ticket"`  // 工单申请页环境分组；不改实例登记的环境编码
+}
+
+// TicketEnvGroup 申请页「生产 / 测试」与环境编码的对应关系。
+type TicketEnvGroup struct {
+	Code  string   `yaml:"code" json:"code"`
+	Label string   `yaml:"label" json:"label"`
+	Codes []string `yaml:"codes" json:"codes"`
+}
+
+// TicketConfig 工单申请相关配置。EnvGroups 为空时申请页按编码规则归入生产/测试。
+type TicketConfig struct {
+	EnvGroups []TicketEnvGroup `yaml:"env_groups"`
 }
 
 // DNSConfig 解析库。DSN 给平台读写；节点账号只授予 hdns 需要的表。

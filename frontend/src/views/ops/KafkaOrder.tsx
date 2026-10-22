@@ -6,9 +6,13 @@ import api from '../../api/request'
 import { useWorkOrderDraft } from '../../hooks/useWorkOrderDraft'
 import { useAppDispatch, useAppSelector } from '../../store'
 import { goTicketListAndClose } from '../tickets/goTicketList'
-import { buildEnvOptions, type EnvOption } from '../../utils/env'
 import {
-  filterAccessDomainRows,
+  filterAccessDomainsByGroup,
+  loadTicketEnvGroups,
+  resolveTicketEnvValue,
+  type TicketEnvGroup,
+} from '../../utils/ticketEnv'
+import {
   parseSourceKey,
   sourceKey,
   sourcePrimaryLabel,
@@ -49,7 +53,7 @@ export default function KafkaOrder() {
   const [antdForm] = Form.useForm()
   const [accessDomains, setAccessDomains] = useState<AccessDomainRow[]>([])
   const [instById, setInstById] = useState<Record<string, any>>({})
-  const [envOptions, setEnvOptions] = useState<EnvOption[]>([])
+  const [envGroups, setEnvGroups] = useState<TicketEnvGroup[]>([])
   const [instLoading, setInstLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
 
@@ -72,6 +76,7 @@ export default function KafkaOrder() {
     getValues: () => formRef.current,
     applyValues: (d) => {
       const next = { ...emptyForm(), ...d }
+      formRef.current = next
       setForm(next)
       antdForm.setFieldsValue({
         ...next,
@@ -87,8 +92,10 @@ export default function KafkaOrder() {
 
   const kafkaOptions = useMemo((): DomainSource[] => {
     if (!form.env) return []
-    return sourcesFromAccessDomains(filterAccessDomainRows(accessDomains, { env: form.env, dbType: 'kafka' }))
-  }, [accessDomains, form.env])
+    return sourcesFromAccessDomains(
+      filterAccessDomainsByGroup(accessDomains, { groupCode: form.env, groups: envGroups, dbType: 'kafka' }),
+    )
+  }, [accessDomains, form.env, envGroups])
 
   const currentInst = useMemo(() => instById[form.instance_id], [instById, form.instance_id])
   const approvers = useMemo(() => currentInst?.approvers || [], [currentInst])
@@ -125,13 +132,12 @@ export default function KafkaOrder() {
   async function loadInst() {
     setInstLoading(true)
     try {
-      const [domRes, envRes] = await Promise.all([
-        api.get('/access-domains', { params: { db_type: 'kafka' } }),
-        api.get('/environments').catch(() => ({ data: { data: [] } })),
-      ])
+      const domRes = await api.get('/access-domains', { params: { db_type: 'kafka' } })
       const domains: AccessDomainRow[] = domRes.data.data || []
       setAccessDomains(domains)
-      setEnvOptions(buildEnvOptions(envRes.data.data || [], domains))
+      const groups = await loadTicketEnvGroups()
+      setEnvGroups(groups)
+      return { groups, domains }
     } finally {
       setInstLoading(false)
     }
@@ -184,8 +190,29 @@ export default function KafkaOrder() {
   useEffect(() => {
     let cancelled = false
     ;(async () => {
-      await loadInst()
-      if (!cancelled) restoreDraft()
+      const loaded = (await loadInst()) || { groups: [], domains: [] }
+      if (cancelled) return
+      restoreDraft()
+      const mapped = resolveTicketEnvValue(formRef.current.env, loaded.groups)
+      if (mapped !== formRef.current.env) {
+        formRef.current = { ...formRef.current, env: mapped }
+        patchForm({ env: mapped })
+      }
+      const cur = formRef.current
+      const validKeys = new Set(
+        sourcesFromAccessDomains(
+          filterAccessDomainsByGroup(loaded.domains, {
+            groupCode: cur.env,
+            groups: loaded.groups,
+            dbType: 'kafka',
+          }),
+        ).map((s) => s.key),
+      )
+      const curKey = cur.instance_id && cur.domain ? sourceKey(cur.instance_id, cur.domain) : ''
+      if (curKey && !validKeys.has(curKey)) {
+        formRef.current = { ...cur, instance_id: '', domain: '', assigned_to: '' }
+        patchForm({ instance_id: '', domain: '', assigned_to: '' })
+      }
     })()
     return () => {
       cancelled = true
@@ -227,7 +254,7 @@ export default function KafkaOrder() {
               optionFilterProp="label"
               placeholder="请选择环境"
               onChange={onEnvChange}
-              options={envOptions.map((e) => ({ value: e.value, label: e.label }))}
+              options={envGroups.map((e) => ({ value: e.code, label: e.label }))}
             />
           </Form.Item>
           <Form.Item

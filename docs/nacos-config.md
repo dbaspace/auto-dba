@@ -188,6 +188,23 @@ copilot:
 
 不要在 DataId 里再写 `nacos:` 段。
 
+### 工单申请环境档
+
+`ticket.env_groups` 只给工单申请页把环境收成「生产 / 测试」，并据此过滤数据源。实例登记、环境管理、域名上的 `env_code` 仍是 `beijing`、`test` 这类具体编码。热更后下一请求生效，不用重启。
+
+```yaml
+ticket:
+  env_groups:
+    - code: prod
+      label: 生产
+      codes: [beijing, pobeice, ai-beijing, ai-sea, frankfurt, siliconvalley, singapore]
+    - code: test
+      label: 测试
+      codes: [test, dev, uat]
+```
+
+未写入任何一组的编码在申请页归到「其他」。省略整段时，编码含 `test` / `dev` 或等于 `uat` 归测试，其余归生产。SQL 检测和审核人仍按选中的数据源，不按这一档整组执行。
+
 **Copilot 401 排查**：`Invalid User API Key` 表示上游拒绝密钥——检查 Nacos `copilot.api_key` 是否为有效 Cursor User API Key（`crsr_…`），或改用 OpenAI 兼容网关的 `sk-…`；前端选「通义」时必须配置 `provider: openai` 与对应 `base_url`，不能仍指向 `api.cursor.com`。
 
 ### 通知渠道（飞书 / 企微 / 短信 / 电话 / 群机器人）

@@ -136,6 +136,44 @@ func (h *TicketHandler) canActOnTarget(tenantID, instanceID, dbName, _ string) (
 	return true, targetActAllow, "", nil
 }
 
+// submitInstanceIDs 提交时要逐条校验审核人的实例。DDL 取全部数据源，其余用主实例。
+func submitInstanceIDs(req ticketSubmitReq) []string {
+	if req.Type == store.IssueTypeDDL {
+		return ddlDataSourceIDs(req.NeedRollback, req.InstanceID)
+	}
+	id := strings.TrimSpace(req.InstanceID)
+	if id == "" {
+		return nil
+	}
+	return []string{id}
+}
+
+// reviewerCoversInstances 所选审核人必须在每一条已配置审核人的数据源名单里。
+func (h *TicketHandler) reviewerCoversInstances(reviewer, dbName string, ids []string) string {
+	reviewer = strings.TrimSpace(reviewer)
+	if reviewer == "" || h == nil {
+		return ""
+	}
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		list := h.resolveApprovers(id, dbName)
+		if len(list) == 0 || usernameInList(reviewer, list) {
+			continue
+		}
+		label := id
+		if h.Store != nil {
+			if inst, _ := h.Store.GetInstance(id); inst != nil && strings.TrimSpace(inst.Name) != "" {
+				label = strings.TrimSpace(inst.Name)
+			}
+		}
+		return "审核人须同时在全部数据源的库/实例审核人中（" + label + " 不包含该审核人）"
+	}
+	return ""
+}
+
 func (h *TicketHandler) resolveApprovers(instanceID, dbName string) []string {
 	if dbName != "" {
 		if dbEnt, _ := h.Store.FindDatabase(instanceID, dbName); dbEnt != nil && len(dbEnt.Approvers) > 0 {
@@ -484,9 +522,8 @@ func (h *TicketHandler) Submit(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
-	approvers := h.resolveApprovers(req.InstanceID, req.DBName)
-	if len(approvers) > 0 && !usernameInList(reviewer, approvers) {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "审核人须在目标库/实例 approvers 列表中"})
+	if msg := h.reviewerCoversInstances(reviewer, req.DBName, submitInstanceIDs(req)); msg != "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": msg})
 		return
 	}
 	skipSchema := req.Type == store.IssueTypeDDL && ddlShardSkipSchema(req.NeedRollback)

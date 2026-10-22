@@ -109,6 +109,45 @@ interface ApplyField {
   kind?: string
 }
 
+function DDLSourceList({ sources }: { sources: string[] }) {
+  const [open, setOpen] = useState(false)
+  const fold = sources.length > 2
+  const shown = fold && !open ? sources.slice(0, 2) : sources
+  const rest = sources.length - 2
+  return (
+    <div>
+      {shown.map((s, i) => (
+        <div key={`${s}-${i}`}>{s}</div>
+      ))}
+      {fold ? (
+        <Button type="link" size="small" style={{ padding: 0, height: 'auto' }} onClick={() => setOpen((v) => !v)}>
+          {open ? '收起' : `展开其余 ${rest} 个`}
+        </Button>
+      ) : null}
+    </div>
+  )
+}
+
+function parseDDLApplyExtra(raw: string) {
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object') return null
+    const sources = (Array.isArray(parsed.data_sources) ? parsed.data_sources : [])
+      .map((s: any) => String(s?.domain || '').trim())
+      .filter(Boolean)
+    return {
+      sources,
+      shardDB: !!parsed.shard_db,
+      shardDBPrefix: String(parsed.shard_db_prefix || '').trim(),
+      shardTable: !!parsed.shard_table,
+      shardTablePrefix: String(parsed.shard_table_prefix || '').trim(),
+    }
+  } catch {
+    return null
+  }
+}
+
 export default function TicketDetail() {
   const navigate = useNavigate()
   const location = useLocation()
@@ -221,6 +260,27 @@ export default function TicketDetail() {
         { key: 'db_type', label: '数据库类型', kind: 'type-tag', value: dbType || '-' },
         { key: 'db', label: '数据库', kind: 'db-tag', value: dbPath },
       )
+      if (it.issue_type === 'ddl') {
+        const ddlExtra = parseDDLApplyExtra(it.need_rollback)
+        if (ddlExtra && ddlExtra.sources.length >= 2) {
+          fields.push({
+            key: 'ddl_sources',
+            label: '数据源',
+            kind: 'ddl-sources',
+            value: ddlExtra.sources,
+          })
+        }
+        if (ddlExtra && (ddlExtra.shardDB || ddlExtra.shardTable)) {
+          const lines: string[] = []
+          if (ddlExtra.shardDB) {
+            lines.push(ddlExtra.shardDBPrefix ? `分库，前缀 ${ddlExtra.shardDBPrefix}` : '分库')
+          }
+          if (ddlExtra.shardTable) {
+            lines.push(ddlExtra.shardTablePrefix ? `分表，前缀 ${ddlExtra.shardTablePrefix}` : '分表')
+          }
+          fields.push({ key: 'ddl_shard', label: '分库/分表', kind: 'pre', value: lines.join('\n') })
+        }
+      }
     } else if (resourceApplyExtra?.items?.length) {
       const actionMap: Record<string, string> = {
         acl: '同租ACL',
@@ -1273,6 +1333,10 @@ export default function TicketDetail() {
                     <DnsChangeDiff rows={payloadRows(f.value).rows} />
                   ) : f.kind === 'schedule' ? (
                     <Tag color="warning">{f.value}</Tag>
+                  ) : f.kind === 'ddl-sources' ? (
+                    <DDLSourceList sources={Array.isArray(f.value) ? f.value.map(String) : []} />
+                  ) : f.kind === 'pre' ? (
+                    <div style={{ whiteSpace: 'pre-wrap' }}>{f.value}</div>
                   ) : (
                     <span>{f.value}</span>
                   )}

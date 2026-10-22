@@ -4,9 +4,13 @@ import { AutoComplete, Button, Checkbox, Form, Input, Select, Space, message } f
 import api from '../../api/request'
 import DatabasePicker from '../../components/DatabasePicker'
 import { dbLabel } from '../../utils/db'
-import { buildEnvOptions, type EnvOption } from '../../utils/env'
 import {
-  filterAccessDomainRows,
+  filterAccessDomainsByGroup,
+  loadTicketEnvGroups,
+  resolveTicketEnvValue,
+  type TicketEnvGroup,
+} from '../../utils/ticketEnv'
+import {
   filterDbsByDomain,
   parseSourceKey,
   sourceKey,
@@ -47,7 +51,7 @@ export default function DclGrants() {
   formRef.current = form
   const [instances, setInstances] = useState<any[]>([])
   const [accessDomains, setAccessDomains] = useState<AccessDomainRow[]>([])
-  const [envOptions, setEnvOptions] = useState<EnvOption[]>([])
+  const [envGroups, setEnvGroups] = useState<TicketEnvGroup[]>([])
   const [databases, setDatabases] = useState<any[]>([])
   const [dbLoading, setDbLoading] = useState(false)
   const [approverLoading, setApproverLoading] = useState(false)
@@ -62,9 +66,13 @@ export default function DclGrants() {
   const sourceOptions = useMemo((): DomainSource[] => {
     if (!form.env || !form.db_type) return []
     return sourcesFromAccessDomains(
-      filterAccessDomainRows(accessDomains, { env: form.env, dbType: form.db_type }),
+      filterAccessDomainsByGroup(accessDomains, {
+        groupCode: form.env,
+        groups: envGroups,
+        dbType: form.db_type,
+      }),
     )
-  }, [accessDomains, form.env, form.db_type])
+  }, [accessDomains, form.env, form.db_type, envGroups])
 
   const currentInst = useMemo(
     () => instances.find((i) => i.id === form.instance_id),
@@ -163,6 +171,7 @@ export default function DclGrants() {
         db_ids: Array.isArray(d.db_ids) ? d.db_ids : [],
         permissions: Array.isArray(d.permissions) ? d.permissions : [],
       }
+      formRef.current = next
       setForm(next)
       antdForm.setFieldsValue({
         ...next,
@@ -231,16 +240,16 @@ export default function DclGrants() {
 
   useEffect(() => {
     ;(async () => {
-      const [instRes, domRes, envRes] = await Promise.all([
+      const [instRes, domRes] = await Promise.all([
         api.get('/instances'),
         api.get('/access-domains').catch(() => ({ data: { data: [] } })),
-        api.get('/environments').catch(() => ({ data: { data: [] } })),
       ])
       const domains: AccessDomainRow[] = domRes.data.data || []
       const instList = instRes.data.data || []
       setInstances(instList)
       setAccessDomains(domains)
-      setEnvOptions(buildEnvOptions(envRes.data.data || [], [...domains, ...instList]))
+      const groups = await loadTicketEnvGroups()
+      setEnvGroups(groups)
       setApproverLoading(true)
       try {
         const args = (await api.get('/global-args')).data.data || []
@@ -258,7 +267,24 @@ export default function DclGrants() {
         setApproverLoading(false)
       }
       restoreDraft()
-      if (formRef.current.instance_id) await loadDbs(formRef.current.instance_id)
+      const mapped = resolveTicketEnvValue(formRef.current.env, groups)
+      if (mapped !== formRef.current.env) {
+        formRef.current = { ...formRef.current, env: mapped }
+        patchForm({ env: mapped })
+      }
+      const cur = formRef.current
+      const validKeys = new Set(
+        sourcesFromAccessDomains(
+          filterAccessDomainsByGroup(domains, { groupCode: cur.env, groups, dbType: cur.db_type }),
+        ).map((s) => s.key),
+      )
+      const curKey = cur.instance_id && cur.domain ? sourceKey(cur.instance_id, cur.domain) : ''
+      if (curKey && !validKeys.has(curKey)) {
+        formRef.current = { ...cur, instance_id: '', domain: '', db_ids: [] }
+        patchForm({ instance_id: '', domain: '', db_ids: [] })
+      } else if (formRef.current.instance_id) {
+        await loadDbs(formRef.current.instance_id)
+      }
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -288,7 +314,7 @@ export default function DclGrants() {
               placeholder="请选择环境"
               value={form.env || undefined}
               onChange={(v) => onEnvOrTypeChange({ env: v || '' })}
-              options={envOptions.map((e) => ({ label: e.label, value: e.value }))}
+              options={envGroups.map((e) => ({ label: e.label, value: e.code }))}
             />
           </Form.Item>
           <Form.Item label="数据库类型" name="db_type" rules={[{ required: true, message: '请选择数据库类型' }]}>

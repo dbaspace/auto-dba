@@ -131,6 +131,17 @@ terminal:
 #   # 通义示例：base_url 改为兼容网关 /v1，api_key=sk-…，provider: openai
 #   # model: '[{"value":"qwen-plus","label":"通义"}]'
 
+# 工单申请页环境档。只影响申请页下拉和数据源过滤，不改实例登记的环境编码。
+# 省略整段时：编码含 test/dev 或等于 uat 归测试，其余归生产。
+# ticket:
+#   env_groups:
+#     - code: prod
+#       label: 生产
+#       codes: [beijing, pobeice, ai-beijing, ai-sea, frankfurt, siliconvalley, singapore]
+#     - code: test
+#       label: 测试
+#       codes: [test, dev, uat]
+
 # 可拆分微服务（K8s Pod 互通）
 # mode: embed|remote|off；remote 时填 url
 services:

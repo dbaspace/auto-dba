@@ -495,6 +495,7 @@ func Init(e *gin.Engine, d Deps) {
 	t.GET("/instances", d.Ticket.ListInstances)
 	t.GET("/instances/:instance_id/databases", d.Ticket.ListInstanceDatabases)
 	t.GET("/target-approvers", d.Ticket.GetTargetApprovers)
+	t.GET("/env-groups", d.Ticket.EnvGroups)
 	t.POST("/check-sql", d.Ticket.CheckSQL)
 	t.GET("/stats", d.Ticket.Stats)
 	t.GET("/dashboard/stats", d.Ticket.DashboardStats)

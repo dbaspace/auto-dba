@@ -5,7 +5,7 @@ import api from '../../api/request'
 import { useAppDispatch, useAppSelector } from '../../store'
 import { goTicketListAndClose } from './goTicketList'
 import { dbLabel } from '../../utils/db'
-import { buildEnvOptions } from '../../utils/env'
+import { envCodeInGroup, loadTicketEnvGroups, resolveTicketEnvValue, type TicketEnvGroup } from '../../utils/ticketEnv'
 import DbTypeIcon from '../../components/DbTypeIcon'
 import { useWorkOrderDraft } from '../../hooks/useWorkOrderDraft'
 import './DqlExport.css'
@@ -81,7 +81,8 @@ export default function DqlExport() {
   const [saving, setSaving] = useState(false)
   const [instances, setInstances] = useState<any[]>([])
   const [databases, setDatabases] = useState<any[]>([])
-  const [envs, setEnvs] = useState<string[]>([])
+  const [envGroups, setEnvGroups] = useState<TicketEnvGroup[]>([])
+  const envGroupsRef = useRef<TicketEnvGroup[]>([])
   const [dbTypes, setDbTypes] = useState(DEFAULT_DB_TYPES)
   const [approvers, setApprovers] = useState<string[]>([])
   const [extraApprovers, setExtraApprovers] = useState<string[]>([])
@@ -134,6 +135,7 @@ export default function DqlExport() {
         security_assigned_to: d.security_assigned_to || '',
         description: d.description || '',
       }
+      formRef.current = next
       setForm(next)
       antdForm.setFieldsValue(next)
       setDraftRowHint(Number(d.row_count || 0))
@@ -163,10 +165,10 @@ export default function DqlExport() {
     return databases.filter((d) => {
       const inst = instMap[d.instance_id] || {}
       if (form.db_type && String(inst.db_type || '').toLowerCase() !== form.db_type) return false
-      if (form.env && (inst.idc || '') !== form.env) return false
+      if (form.env && !envCodeInGroup(inst.idc || '', form.env, envGroups)) return false
       return true
     })
-  }, [databases, instMap, form.db_type, form.env])
+  }, [databases, instMap, form.db_type, form.env, envGroups])
 
   const parsedTables = useMemo(() => parseTables(form.sql_content), [form.sql_content])
 
@@ -186,7 +188,7 @@ export default function DqlExport() {
     const options = databases.filter((d) => {
       const inst = instMap[d.instance_id] || {}
       if (next.db_type && String(inst.db_type || '').toLowerCase() !== next.db_type) return false
-      if (next.env && (inst.idc || '') !== next.env) return false
+      if (next.env && !envCodeInGroup(inst.idc || '', next.env, envGroupsRef.current)) return false
       return true
     })
     if (next.database_id && !options.some((d) => d.id === next.database_id)) {
@@ -235,7 +237,7 @@ export default function DqlExport() {
     }
     if (inst) {
       if (!formRef.current.db_type) patch.db_type = String(inst.db_type || '').toLowerCase()
-      if (!formRef.current.env) patch.env = inst.idc || ''
+      if (!formRef.current.env) patch.env = resolveTicketEnvValue(inst.idc || '', envGroupsRef.current)
     }
     patchForm(patch)
     await loadApprovers(instanceId, dbName)
@@ -246,10 +248,9 @@ export default function DqlExport() {
   }
 
   async function loadMeta(): Promise<{ instances: any[]; databases: any[] }> {
-    const [instRes, dbRes, envRes, argRes, apprRes] = await Promise.all([
+    const [instRes, dbRes, argRes, apprRes] = await Promise.all([
       api.get('/instances'),
       api.get('/databases'),
-      api.get('/environments').catch(() => ({ data: { data: [] } })),
       api.get('/global-args').catch(() => ({ data: { data: [] } })),
       api.get('/create-db/approvers').catch(() => ({ data: { data: [] } })),
     ])
@@ -257,7 +258,9 @@ export default function DqlExport() {
     const dbList = dbRes.data.data || []
     setInstances(instList)
     setDatabases(dbList)
-    setEnvs(buildEnvOptions(envRes.data.data || [], instList).map((e: any) => e.value))
+    const groups = await loadTicketEnvGroups()
+    envGroupsRef.current = groups
+    setEnvGroups(groups)
     const raw = (argRes.data.data || []).find((a: any) => a.key === 'ticket_instance_types')?.value || ''
     try {
       const parsed = JSON.parse(raw)
@@ -329,6 +332,21 @@ export default function DqlExport() {
       applyDraft()
       const meta = await loadMeta()
       if (cancelled) return
+      const mapped = resolveTicketEnvValue(formRef.current.env, envGroupsRef.current)
+      if (mapped !== formRef.current.env) {
+        formRef.current = { ...formRef.current, env: mapped }
+        patchForm({ env: mapped })
+      }
+      const picked = (meta.databases || []).find((d: any) => d.id === formRef.current.database_id)
+      const pickedInst = (meta.instances || []).find((i: any) => i.id === (picked?.instance_id || formRef.current.instance_id))
+      if (
+        formRef.current.env &&
+        pickedInst &&
+        !envCodeInGroup(pickedInst.idc || '', formRef.current.env, envGroupsRef.current)
+      ) {
+        formRef.current = { ...formRef.current, database_id: '', instance_id: '', db_name: '' }
+        patchForm({ database_id: '', instance_id: '', db_name: '' })
+      }
       // setForm 异步，草稿恢复后用 antdForm 同步取值，避免跳过审批人加载
       const af = antdForm.getFieldsValue(true) || {}
       const f = { ...formRef.current, ...af }
@@ -390,7 +408,7 @@ export default function DqlExport() {
               showSearch
               placeholder="请选择环境"
               onChange={(v) => onFilterChange({ env: v })}
-              options={envs.map((e) => ({ value: e, label: e }))}
+              options={envGroups.map((e) => ({ value: e.code, label: e.label }))}
             />
           </Form.Item>
           <Form.Item name="database_id" label="数据库" rules={[{ required: true, message: '请选择数据库' }]}>

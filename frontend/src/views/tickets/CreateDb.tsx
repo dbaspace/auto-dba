@@ -5,10 +5,8 @@ import CheckResultFilterBar from '../../components/CheckResultFilterBar'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import dayjs, { Dayjs } from 'dayjs'
 import api from '../../api/request'
-import { buildEnvOptions } from '../../utils/env'
 import { formatSqlContent } from '../../utils/formatSql'
 import {
-  filterAccessDomainRows,
   parseSourceKey,
   sourcePrimaryLabel,
   sourceSecondaryLabel,
@@ -16,6 +14,13 @@ import {
   type AccessDomainRow,
   type DomainSource,
 } from '../../utils/instanceSource'
+import {
+  envCodeForSource,
+  filterAccessDomainsByGroup,
+  loadTicketEnvGroups,
+  resolveTicketEnvValue,
+  type TicketEnvGroup,
+} from '../../utils/ticketEnv'
 import DbTypeIcon from '../../components/DbTypeIcon'
 import SqlEditor from '../../components/SqlEditor'
 import { useCheckResultView } from '../../hooks/useCheckResultView'
@@ -97,7 +102,7 @@ export default function CreateDb() {
   formMirror.current = form
   const [antdForm] = Form.useForm()
   const [accessDomains, setAccessDomains] = useState<AccessDomainRow[]>([])
-  const [envOptions, setEnvOptions] = useState<{ value: string; label: string }[]>([])
+  const [envGroups, setEnvGroups] = useState<TicketEnvGroup[]>([])
   const [approvers, setApprovers] = useState<string[]>([])
   const [checkRows, setCheckRows] = useState<any[]>([])
   const [lastCheckFp, setLastCheckFp] = useState<string | null>(null)
@@ -113,9 +118,13 @@ export default function CreateDb() {
 
   const dataSourceOptions = useMemo((): DomainSource[] => {
     return sourcesFromAccessDomains(
-      filterAccessDomainRows(accessDomains, { env: form.env, dbType: form.instance_type }),
+      filterAccessDomainsByGroup(accessDomains, {
+        groupCode: form.env,
+        groups: envGroups,
+        dbType: form.instance_type,
+      }),
     )
-  }, [accessDomains, form.env, form.instance_type])
+  }, [accessDomains, form.env, form.instance_type, envGroups])
 
   const selectedSources = useMemo(() => parseSelectedSources(form.instance_ids), [form.instance_ids])
 
@@ -290,7 +299,7 @@ export default function CreateDb() {
     try {
       const { data } = await api.post('/create-db', {
         db_type: form.instance_type,
-        idc_scope: form.env,
+        idc_scope: envCodeForSource(accessDomains, sources[0].instance_id, sources[0].domain),
         instance_id: instanceIds[0],
         instance_ids: instanceIds,
         domain: sources[0].domain,
@@ -323,14 +332,14 @@ export default function CreateDb() {
       setDsLoading(true)
       setReviewerLoading(true)
       try {
-        const [domRes, envRes, apprRes] = await Promise.all([
+        const [domRes, apprRes] = await Promise.all([
           api.get('/access-domains'),
-          api.get('/environments').catch(() => ({ data: { data: [] } })),
           api.get('/create-db/approvers'),
         ])
         const domains: AccessDomainRow[] = domRes.data.data || []
         setAccessDomains(domains)
-        setEnvOptions(buildEnvOptions(envRes.data.data || [], domains))
+        const groups = await loadTicketEnvGroups()
+        setEnvGroups(groups)
         const uniq = unionApproverNames(
           (apprRes.data.data || []).map((a: any) => String(a?.name || a || '')),
         )
@@ -347,12 +356,13 @@ export default function CreateDb() {
           return f
         })
         setForm((f) => {
+          const env = resolveTicketEnvValue(f.env, groups)
           const valid = new Set(
             sourcesFromAccessDomains(
-              filterAccessDomainRows(domains, { env: f.env, dbType: f.instance_type }),
+              filterAccessDomainsByGroup(domains, { groupCode: env, groups, dbType: f.instance_type }),
             ).map((s) => s.key),
           )
-          return { ...f, instance_ids: (f.instance_ids || []).filter((id) => valid.has(id)) }
+          return { ...f, env, instance_ids: (f.instance_ids || []).filter((id) => valid.has(id)) }
         })
       } finally {
         setDsLoading(false)
@@ -380,7 +390,7 @@ export default function CreateDb() {
                 placeholder="请选择"
                 value={form.env || undefined}
                 onChange={(v) => onEnvOrTypeChange({ env: v || '' })}
-                options={envOptions}
+                options={envGroups.map((e) => ({ value: e.code, label: e.label }))}
               />
             </Form.Item>
             <Form.Item label="实例类型" name="instance_type" rules={[{ required: true, message: '请选择实例类型' }]}>

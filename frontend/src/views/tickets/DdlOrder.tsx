@@ -23,9 +23,7 @@ import dayjs, { Dayjs } from 'dayjs'
 import api from '../../api/request'
 import { dbLabel } from '../../utils/db'
 import { formatSqlContent } from '../../utils/formatSql'
-import { buildEnvOptions, EnvOption } from '../../utils/env'
 import {
-  filterAccessDomainRows,
   filterDbsByDomain,
   parseSourceKey,
   sourcePrimaryLabel,
@@ -34,6 +32,13 @@ import {
   type AccessDomainRow,
   type DomainSource,
 } from '../../utils/instanceSource'
+import {
+  filterAccessDomainsByGroup,
+  intersectApproverNames,
+  loadTicketEnvGroups,
+  resolveTicketEnvValue,
+  type TicketEnvGroup,
+} from '../../utils/ticketEnv'
 import DbTypeIcon from '../../components/DbTypeIcon'
 import SqlEditor from '../../components/SqlEditor'
 import { useCheckResultView } from '../../hooks/useCheckResultView'
@@ -152,7 +157,9 @@ export default function DdlOrder() {
   const [antdForm] = Form.useForm()
 
   const [accessDomains, setAccessDomains] = useState<AccessDomainRow[]>([])
-  const [envOptions, setEnvOptions] = useState<EnvOption[]>([])
+  const [envGroups, setEnvGroups] = useState<TicketEnvGroup[]>([])
+  const envGroupsRef = useRef<TicketEnvGroup[]>([])
+  const [approverHint, setApproverHint] = useState('')
   const [dbTypes, setDbTypes] = useState<DbType[]>(DEFAULT_DB_TYPES)
   const [dbRecords, setDbRecords] = useState<any[]>([])
   const [approvers, setApprovers] = useState<string[]>([])
@@ -178,9 +185,13 @@ export default function DdlOrder() {
 
   const dataSourceOptions = useMemo((): DomainSource[] => {
     return sourcesFromAccessDomains(
-      filterAccessDomainRows(accessDomains, { env: form.env, dbType: form.instance_type }),
+      filterAccessDomainsByGroup(accessDomains, {
+        groupCode: form.env,
+        groups: envGroups,
+        dbType: form.instance_type,
+      }),
     )
-  }, [accessDomains, form.env, form.instance_type])
+  }, [accessDomains, form.env, form.instance_type, envGroups])
 
   const selectedDomainSources = useMemo(
     () =>
@@ -230,14 +241,15 @@ export default function DdlOrder() {
 
   const checkHasError = checkRows.some((r) => String(r.error_level || '').toUpperCase() === 'ERROR')
   const fingerprintMatches = lastCheckFp != null && lastCheckFp === checkFp
-  const submitAllowed = fingerprintMatches && !checkHasError
+  const submitAllowed = fingerprintMatches && !checkHasError && !approverHint
 
   const submitDisabledReason = useMemo(() => {
+    if (approverHint) return '所选数据源的审核人不一致，无法提交'
     if (lastCheckFp == null) return '请先点击「SQL检测」'
     if (!fingerprintMatches) return 'SQL 或表单与上次检测不一致，请重新检测后再提交'
     if (checkHasError) return 'SQL 检测存在错误，请修复后再提交'
     return ''
-  }, [lastCheckFp, fingerprintMatches, checkHasError])
+  }, [approverHint, lastCheckFp, fingerprintMatches, checkHasError])
 
   const dsPlaceholder = !form.env
     ? '请先选择环境'
@@ -339,6 +351,7 @@ export default function DdlOrder() {
     ]
     if (!instIds.length || !dbName) {
       setApprovers([])
+      setApproverHint('')
       return
     }
     setReviewerLoading(true)
@@ -348,21 +361,26 @@ export default function DdlOrder() {
           const { data } = await api.get('/tickets/target-approvers', {
             params: { instance_id: id, db_name: dbName },
           })
-          return (data.data || []).map((a: any) => a.name || a).filter(Boolean)
+          return (data.data || []).map((a: any) => a.name || a).filter(Boolean) as string[]
         }),
       )
-      const seen = new Set<string>()
-      const out: string[] = []
-      for (const name of lists.flat()) {
-        if (seen.has(name)) continue
-        seen.add(name)
-        out.push(name)
-      }
+      const out = intersectApproverNames(lists)
       setApprovers(out)
+      if (instIds.length > 1 && out.length === 0) {
+        const lines = instIds.map((id, i) => {
+          const dom = keys.map((k) => parseSourceKey(k)).find((p) => p?.instance_id === id)?.domain || id
+          const names = lists[i].length ? lists[i].join('、') : '未配置审核人'
+          return `${dom}：${names}`
+        })
+        setApproverHint('所选数据源的审核人不一致，没有人能同时审核全部数据源。\n' + lines.join('\n'))
+      } else {
+        setApproverHint('')
+      }
       const cur = formRef.current
       if (cur.assigned_to && !out.includes(cur.assigned_to)) patchForm({ assigned_to: '' })
     } catch {
       setApprovers([])
+      setApproverHint('')
       message.error('加载审核人失败')
     } finally {
       setReviewerLoading(false)
@@ -508,6 +526,7 @@ export default function DdlOrder() {
         ...d,
         data_source_ids: Array.isArray(d.data_source_ids) ? d.data_source_ids : [],
       } as FormState
+      formRef.current = next
       setForm(next)
       antdForm.setFieldsValue(next)
     },
@@ -529,6 +548,10 @@ export default function DdlOrder() {
     const sql = String(f.sql_content || '').trim()
     if (!sql) {
       message.error('请填写 SQL')
+      return
+    }
+    if (approverHint) {
+      message.warning('所选数据源的审核人不一致，无法提交')
       return
     }
     if (!submitAllowed) {
@@ -589,14 +612,20 @@ export default function DdlOrder() {
   async function loadMeta() {
     setDsLoading(true)
     try {
-      const [domRes, envRes, argRes] = await Promise.all([
+      const [domRes, argRes] = await Promise.all([
         api.get('/access-domains'),
-        api.get('/environments').catch(() => ({ data: { data: [] } })),
         api.get('/global-args').catch(() => ({ data: { data: [] } })),
       ])
       const domains: AccessDomainRow[] = domRes.data.data || []
       setAccessDomains(domains)
-      setEnvOptions(buildEnvOptions(envRes.data.data || [], domains))
+      const groups = await loadTicketEnvGroups()
+      envGroupsRef.current = groups
+      setEnvGroups(groups)
+      const mapped = resolveTicketEnvValue(formRef.current.env, groups)
+      if (mapped !== formRef.current.env) {
+        formRef.current = { ...formRef.current, env: mapped }
+        patchForm({ env: mapped })
+      }
       const args = argRes.data.data || argRes.data || []
       const raw =
         (Array.isArray(args) ? args : []).find((a: any) => a.key === 'ticket_instance_types')?.value || ''
@@ -632,7 +661,11 @@ export default function DdlOrder() {
       const cur = formRef.current
       const validKeys = new Set(
         sourcesFromAccessDomains(
-          filterAccessDomainRows(domains, { env: cur.env, dbType: cur.instance_type }),
+          filterAccessDomainsByGroup(domains, {
+            groupCode: cur.env,
+            groups: envGroupsRef.current,
+            dbType: cur.instance_type,
+          }),
         ).map((s) => s.key),
       )
       const nextKeys = (cur.data_source_ids || []).filter((k) => validKeys.has(k))
@@ -692,7 +725,7 @@ export default function DdlOrder() {
                 optionFilterProp="label"
                 value={form.env || undefined}
                 onChange={(v) => onEnvOrTypeChange({ env: v || '' })}
-                options={envOptions.map((e) => ({ value: e.value, label: e.label }))}
+                options={envGroups.map((e) => ({ value: e.code, label: e.label }))}
               />
             </Form.Item>
 
@@ -862,6 +895,11 @@ export default function DdlOrder() {
                 onChange={(v) => patchForm({ assigned_to: v || '' })}
                 options={approvers.map((a) => ({ value: a, label: a }))}
               />
+              {approverHint ? (
+                <div className="form-extra" style={{ whiteSpace: 'pre-wrap', color: '#cf1322' }}>
+                  {approverHint}
+                </div>
+              ) : null}
             </Form.Item>
 
             <Form.Item label="描述" name="description" rules={[{ required: true, message: '请输入描述' }]}>

@@ -17,9 +17,7 @@ import dayjs, { Dayjs } from 'dayjs'
 import api from '../../api/request'
 import { dbLabel } from '../../utils/db'
 import { formatSqlContent } from '../../utils/formatSql'
-import { buildEnvOptions, EnvOption } from '../../utils/env'
 import {
-  filterAccessDomainRows,
   filterDbsByDomain,
   parseSourceKey,
   sourceKey,
@@ -29,6 +27,12 @@ import {
   type AccessDomainRow,
   type DomainSource,
 } from '../../utils/instanceSource'
+import {
+  filterAccessDomainsByGroup,
+  loadTicketEnvGroups,
+  resolveTicketEnvValue,
+  type TicketEnvGroup,
+} from '../../utils/ticketEnv'
 import DbTypeIcon from '../../components/DbTypeIcon'
 import SqlEditor from '../../components/SqlEditor'
 import { useCheckResultView } from '../../hooks/useCheckResultView'
@@ -131,7 +135,8 @@ export default function DmlOrder() {
   const [antdForm] = Form.useForm()
 
   const [accessDomains, setAccessDomains] = useState<AccessDomainRow[]>([])
-  const [envOptions, setEnvOptions] = useState<EnvOption[]>([])
+  const [envGroups, setEnvGroups] = useState<TicketEnvGroup[]>([])
+  const envGroupsRef = useRef<TicketEnvGroup[]>([])
   const [dbTypes, setDbTypes] = useState<DbType[]>(DEFAULT_DB_TYPES)
   const [dbRecords, setDbRecords] = useState<any[]>([])
   const [approvers, setApprovers] = useState<string[]>([])
@@ -151,9 +156,13 @@ export default function DmlOrder() {
 
   const dataSourceOptions = useMemo((): DomainSource[] => {
     return sourcesFromAccessDomains(
-      filterAccessDomainRows(accessDomains, { env: form.env, dbType: form.instance_type }),
+      filterAccessDomainsByGroup(accessDomains, {
+        groupCode: form.env,
+        groups: envGroups,
+        dbType: form.instance_type,
+      }),
     )
-  }, [accessDomains, form.env, form.instance_type])
+  }, [accessDomains, form.env, form.instance_type, envGroups])
 
   const filteredDbRecords = useMemo(
     () => (form.domain ? filterDbsByDomain(dbRecords, form.domain) : []),
@@ -399,6 +408,7 @@ export default function DmlOrder() {
         domain: d.domain || '',
         sql_content: d.sql_content || d.sql || '',
       } as FormState
+      formRef.current = next
       setForm(next)
       antdForm.setFieldsValue({
         ...next,
@@ -485,6 +495,7 @@ export default function DmlOrder() {
       domain: src.domain || '',
       sql_content: src.sql_content || src.sql || '',
     } as FormState
+    formRef.current = next
     setForm(next)
     antdForm.setFieldsValue({
       ...next,
@@ -497,14 +508,20 @@ export default function DmlOrder() {
   async function loadMeta() {
     setDsLoading(true)
     try {
-      const [domRes, envRes, argRes] = await Promise.all([
+      const [domRes, argRes] = await Promise.all([
         api.get('/access-domains'),
-        api.get('/environments').catch(() => ({ data: { data: [] } })),
         api.get('/global-args').catch(() => ({ data: { data: [] } })),
       ])
       const domains: AccessDomainRow[] = domRes.data.data || []
       setAccessDomains(domains)
-      setEnvOptions(buildEnvOptions(envRes.data.data || [], domains))
+      const groups = await loadTicketEnvGroups()
+      envGroupsRef.current = groups
+      setEnvGroups(groups)
+      const mapped = resolveTicketEnvValue(formRef.current.env, groups)
+      if (mapped !== formRef.current.env) {
+        formRef.current = { ...formRef.current, env: mapped }
+        patchForm({ env: mapped })
+      }
       const args = argRes.data.data || argRes.data || []
       const raw =
         (Array.isArray(args) ? args : []).find((a: any) => a.key === 'ticket_instance_types')?.value || ''
@@ -541,7 +558,11 @@ export default function DmlOrder() {
       const cur = formRef.current
       const validKeys = new Set(
         sourcesFromAccessDomains(
-          filterAccessDomainRows(domains, { env: cur.env, dbType: cur.instance_type }),
+          filterAccessDomainsByGroup(domains, {
+            groupCode: cur.env,
+            groups: envGroupsRef.current,
+            dbType: cur.instance_type,
+          }),
         ).map((s) => s.key),
       )
       const curKey = cur.instance_id && cur.domain ? sourceKey(cur.instance_id, cur.domain) : ''
@@ -602,7 +623,7 @@ export default function DmlOrder() {
                 optionFilterProp="label"
                 value={form.env || undefined}
                 onChange={(v) => onEnvOrTypeChange({ env: v || '' })}
-                options={envOptions.map((e) => ({ value: e.value, label: e.label }))}
+                options={envGroups.map((e) => ({ value: e.code, label: e.label }))}
               />
             </Form.Item>
 
