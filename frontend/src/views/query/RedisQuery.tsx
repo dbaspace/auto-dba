@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Button, Input, Select, Spin, Tag, message } from 'antd'
+import { Button, Input, Select, Spin, Tabs, Tag, message } from 'antd'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import { DatabaseOutlined, EnvironmentOutlined, StopOutlined } from '@ant-design/icons'
 import axios from 'axios'
@@ -45,27 +45,39 @@ function normalizeDomain(s: string) {
     .toLowerCase()
 }
 
+function domainKey(instanceId: string, domain: string) {
+  return `${instanceId}:${normalizeDomain(domain)}`
+}
+
+const DEFAULT_COMMAND = 'SCAN 0 MATCH * COUNT 100'
+
+interface RedisTab {
+  key: string
+  instanceId: string
+  domain: string
+  port?: number
+  instanceName?: string
+  dbName: string
+  command: string
+  result: RedisResult | null
+  running: boolean
+}
+
 export default function RedisQuery() {
   const [instLoading, setInstLoading] = useState(false)
-  const [dbLoading, setDbLoading] = useState(false)
-  const [running, setRunning] = useState(false)
-  const queryAbortRef = useRef<AbortController | null>(null)
+  const [dbLoadingKeys, setDbLoadingKeys] = useState<string[]>([])
+  const queryAbortRef = useRef<Map<string, AbortController>>(new Map())
   const [domains, setDomains] = useState<DomainEntry[]>([])
   const [keyword, setKeyword] = useState('')
   const [envFilter, setEnvFilter] = useState('')
   const [expandedEnv, setExpandedEnv] = useState('')
-  const [selectedId, setSelectedId] = useState('')
-  const [selectedDomain, setSelectedDomain] = useState('')
-  const [databases, setDatabases] = useState<RedisDb[]>([])
-  const [dbName, setDbName] = useState('')
-  const [command, setCommand] = useState('SCAN 0 MATCH * COUNT 100')
-  const [result, setResult] = useState<RedisResult | null>(null)
+  const [expandedKeys, setExpandedKeys] = useState<string[]>([])
+  const [dbMap, setDbMap] = useState<Record<string, RedisDb[]>>({})
+  const [tabs, setTabs] = useState<RedisTab[]>([])
+  const [activeKey, setActiveKey] = useState('')
   const [history, setHistory] = useState<string[]>([])
 
-  const selected = useMemo(
-    () => domains.find((d) => d.instance_id === selectedId && normalizeDomain(d.domain) === normalizeDomain(selectedDomain)),
-    [domains, selectedId, selectedDomain],
-  )
+  const current = useMemo(() => tabs.find((t) => t.key === activeKey), [tabs, activeKey])
 
   const envOptions = useMemo(() => {
     const set = new Set<string>()
@@ -98,6 +110,7 @@ export default function RedisQuery() {
   }, [domains, envFilter, keyword])
 
   const resultRows = useMemo(() => {
+    const result = current?.result
     const cols = result?.columns || []
     return (result?.rows || []).map((row, ri) => {
       const obj: Record<string, any> = { __k: ri }
@@ -106,16 +119,17 @@ export default function RedisQuery() {
       })
       return obj
     })
-  }, [result])
+  }, [current?.result])
 
   const textBlob = useMemo(() => {
+    const result = current?.result
     const cols = result?.columns || []
     const rows = result?.rows || []
     if (cols.length === 1 && rows.length === 1 && typeof rows[0]?.[0] === 'string' && /[\r\n]/.test(rows[0][0])) {
       return rows[0][0]
     }
     return ''
-  }, [result])
+  }, [current?.result])
 
   function colWidth(col: string) {
     if (col === 'section') return 120
@@ -139,36 +153,110 @@ export default function RedisQuery() {
     setExpandedEnv(env)
   }
 
-  function selectDomain(entry: DomainEntry) {
+  function patchTab(key: string, patch: Partial<RedisTab>) {
+    setTabs((list) => list.map((t) => (t.key === key ? { ...t, ...patch } : t)))
+  }
+
+  function ensureTab(entry: DomainEntry) {
+    const d = String(entry.domain || '').trim()
+    const key = domainKey(entry.instance_id, d)
+    setTabs((list) => {
+      if (list.some((t) => t.key === key)) return list
+      return [
+        ...list,
+        {
+          key,
+          instanceId: entry.instance_id,
+          domain: d,
+          port: entry.port,
+          instanceName: entry.instance_name,
+          dbName: '',
+          command: DEFAULT_COMMAND,
+          result: null,
+          running: false,
+        },
+      ]
+    })
+    setActiveKey(key)
+    return key
+  }
+
+  function onDomainClick(entry: DomainEntry) {
     const d = String(entry.domain || '').trim()
     if (!d || !entry.instance_id) return
-    setSelectedId(entry.instance_id)
-    setSelectedDomain(d)
-    setDbName('')
-    setDatabases([])
-    setResult(null)
-    void loadDBs(entry.instance_id, d)
-  }
-
-  function selectDB(name: string) {
-    setDbName(name)
-    setResult(null)
-  }
-
-  async function loadDBs(id: string = selectedId, domain: string = selectedDomain) {
-    if (!id || !domain) return
-    setDbLoading(true)
-    try {
-      const { data } = await api.get(`/instances/${id}/redis/databases`, { params: { domain } })
-      const list: RedisDb[] = data.data || []
-      setDatabases(list)
-      setDbName((prev) => (list.some((x) => x.name === prev) ? prev : list[0]?.name || ''))
-    } catch {
-      setDatabases([])
-      setDbName('')
-    } finally {
-      setDbLoading(false)
+    const key = domainKey(entry.instance_id, d)
+    if (expandedKeys.includes(key)) {
+      setExpandedKeys((list) => list.filter((k) => k !== key))
+      return
     }
+    setExpandedKeys((list) => (list.includes(key) ? list : [...list, key]))
+    ensureTab(entry)
+    void loadDBs(entry)
+  }
+
+  function selectDB(entry: DomainEntry, name: string) {
+    const d = String(entry.domain || '').trim()
+    const key = domainKey(entry.instance_id, d)
+    setTabs((list) => {
+      const exists = list.some((t) => t.key === key)
+      const base = exists
+        ? list
+        : [
+            ...list,
+            {
+              key,
+              instanceId: entry.instance_id,
+              domain: d,
+              port: entry.port,
+              instanceName: entry.instance_name,
+              dbName: '',
+              command: DEFAULT_COMMAND,
+              result: null,
+              running: false,
+            },
+          ]
+      return base.map((t) => (t.key === key ? { ...t, dbName: name, result: t.dbName === name ? t.result : null } : t))
+    })
+    setActiveKey(key)
+  }
+
+  async function loadDBs(entry: DomainEntry) {
+    const d = String(entry.domain || '').trim()
+    const id = entry.instance_id
+    if (!id || !d) return
+    const key = domainKey(id, d)
+    setDbLoadingKeys((list) => (list.includes(key) ? list : [...list, key]))
+    try {
+      const { data } = await api.get(`/instances/${id}/redis/databases`, { params: { domain: d } })
+      const list: RedisDb[] = data.data || []
+      setDbMap((m) => ({ ...m, [key]: list }))
+      setTabs((tabsNow) =>
+        tabsNow.map((t) => {
+          if (t.key !== key) return t
+          const dbName = list.some((x) => x.name === t.dbName) ? t.dbName : list[0]?.name || ''
+          return { ...t, dbName }
+        }),
+      )
+    } catch {
+      setDbMap((m) => ({ ...m, [key]: [] }))
+      setTabs((tabsNow) => tabsNow.map((t) => (t.key === key ? { ...t, dbName: '' } : t)))
+    } finally {
+      setDbLoadingKeys((list) => list.filter((k) => k !== key))
+    }
+  }
+
+  function closeTab(key: string) {
+    queryAbortRef.current.get(key)?.abort()
+    queryAbortRef.current.delete(key)
+    setTabs((list) => {
+      const idx = list.findIndex((t) => t.key === key)
+      const next = list.filter((t) => t.key !== key)
+      if (activeKey === key) {
+        const fallback = next[idx] || next[idx - 1]
+        setActiveKey(fallback?.key || '')
+      }
+      return next
+    })
   }
 
   function pushHistory(sql: string) {
@@ -184,38 +272,41 @@ export default function RedisQuery() {
   }
 
   async function run() {
-    const sql = command.trim()
-    if (!selectedId || !selectedDomain || !sql || !dbName) return
-    queryAbortRef.current?.abort()
+    const tab = tabs.find((t) => t.key === activeKey)
+    const sql = tab?.command.trim() || ''
+    if (!tab || !sql || !tab.dbName) return
+    const key = tab.key
+    queryAbortRef.current.get(key)?.abort()
     const ac = new AbortController()
-    queryAbortRef.current = ac
-    setRunning(true)
+    queryAbortRef.current.set(key, ac)
+    patchTab(key, { running: true })
     try {
       const { data } = await api.post(
-        `/instances/${selectedId}/redis/execute`,
-        { command: sql, db_name: dbName, domain: selectedDomain },
+        `/instances/${tab.instanceId}/redis/execute`,
+        { command: sql, db_name: tab.dbName, domain: tab.domain },
         { signal: ac.signal },
       )
       if (data?.canceled) {
         message.info(data.message || '查询已终止')
         return
       }
-      setResult(data)
+      patchTab(key, { result: data })
       pushHistory(sql)
     } catch (err: any) {
       if (axios.isCancel(err) || err?.code === 'ERR_CANCELED' || err?.name === 'CanceledError') {
         message.info('查询已终止')
         return
       }
-      setResult(null)
+      patchTab(key, { result: null })
     } finally {
-      if (queryAbortRef.current === ac) queryAbortRef.current = null
-      setRunning(false)
+      if (queryAbortRef.current.get(key) === ac) queryAbortRef.current.delete(key)
+      patchTab(key, { running: false })
     }
   }
 
   function stopQuery() {
-    queryAbortRef.current?.abort()
+    if (!activeKey) return
+    queryAbortRef.current.get(activeKey)?.abort()
   }
 
   function onCmdKey(e: React.KeyboardEvent) {
@@ -296,12 +387,13 @@ export default function RedisQuery() {
 
   useEffect(
     () => () => {
-      queryAbortRef.current?.abort()
+      queryAbortRef.current.forEach((ac) => ac.abort())
+      queryAbortRef.current.clear()
     },
     [],
   )
 
-  const canRun = Boolean(selectedId && selectedDomain && dbName && command.trim())
+  const canRun = Boolean(current && current.dbName && current.command.trim() && !current.running)
 
   return (
     <div className="ops-page redis-query">
@@ -339,34 +431,37 @@ export default function RedisQuery() {
                   {open ? (
                     <div className="domain-list">
                       {list.map((entry) => {
-                        const domActive =
-                          selectedId === entry.instance_id &&
-                          normalizeDomain(selectedDomain) === normalizeDomain(entry.domain)
+                        const key = domainKey(entry.instance_id, entry.domain)
+                        const expanded = expandedKeys.includes(key)
+                        const tab = tabs.find((t) => t.key === key)
+                        const databases = dbMap[key] || []
+                        const dbLoading = dbLoadingKeys.includes(key)
                         return (
                           <div key={entry.id} className="domain-block">
                             <button
                               type="button"
-                              className={`domain-item${domActive ? ' active' : ''}`}
+                              className={`domain-item${activeKey === key ? ' active' : ''}${expanded ? ' open' : ''}`}
                               onClick={(e) => {
                                 e.stopPropagation()
-                                selectDomain(entry)
+                                onDomainClick(entry)
                               }}
                             >
+                              <span className={`caret${expanded ? ' open' : ''}`}>▸</span>
                               <span className="node-ico">
                                 <DbTypeIcon type="redis" size={14} />
                               </span>
                               <span className="domain-name">{entry.domain}</span>
                             </button>
-                            {domActive ? (
+                            {expanded ? (
                               <Spin spinning={dbLoading} wrapperClassName="db-list">
                                 {databases.map((d) => (
                                   <button
                                     key={d.name}
                                     type="button"
-                                    className={`db-item${dbName === d.name ? ' active' : ''}`}
+                                    className={`db-item${tab?.dbName === d.name ? ' active' : ''}`}
                                     onClick={(e) => {
                                       e.stopPropagation()
-                                      selectDB(d.name)
+                                      selectDB(entry, d.name)
                                     }}
                                   >
                                     <span className="node-ico db-ico">
@@ -397,46 +492,68 @@ export default function RedisQuery() {
           </Spin>
         </CollapsibleSide>
         <section className="main">
-          {!selectedId || !selectedDomain ? (
+          {tabs.length ? (
+            <Tabs
+              className="work-tabs"
+              type="editable-card"
+              hideAdd
+              activeKey={activeKey}
+              onChange={setActiveKey}
+              onEdit={(targetKey, action) => {
+                if (action === 'remove') closeTab(String(targetKey))
+              }}
+              items={tabs.map((t) => ({
+                key: t.key,
+                label: <span className="tab-label">{t.domain}</span>,
+              }))}
+            />
+          ) : null}
+          {!current ? (
             <div className="placeholder">请从左侧展开环境并选择域名与逻辑库，再执行只读命令</div>
           ) : (
             <>
               <div className="toolbar">
-                <strong>{selected?.instance_name || selectedDomain}</strong>
-                <span className="muted">{domainAddr(selectedDomain, selected?.port)}</span>
-                <Tag color="default">{dbName || '未选库'}</Tag>
-                <Button loading={dbLoading} onClick={() => void loadDBs()}>
+                <strong>{current.instanceName || current.domain}</strong>
+                <span className="muted">{domainAddr(current.domain, current.port)}</span>
+                <Tag color="default">{current.dbName || '未选库'}</Tag>
+                <Button
+                  loading={dbLoadingKeys.includes(current.key)}
+                  onClick={() => {
+                    const entry = domains.find((d) => domainKey(d.instance_id, d.domain) === current.key)
+                    if (entry) void loadDBs(entry)
+                  }}
+                >
                   刷新库
                 </Button>
               </div>
               <Input.TextArea
-                value={command}
+                value={current.command}
                 rows={4}
                 placeholder={'只读命令，例如：GET mykey\nSCAN 0 MATCH * COUNT 100\nINFO server'}
-                onChange={(e) => setCommand(e.target.value)}
+                onChange={(e) => patchTab(current.key, { command: e.target.value })}
                 onKeyDown={onCmdKey}
               />
               <div className="actions">
-                <Button type="primary" loading={running} disabled={!canRun} onClick={() => void run()}>
+                <Button type="primary" loading={current.running} disabled={!canRun} onClick={() => void run()}>
                   运行
                 </Button>
-                <Button danger disabled={!running} icon={<StopOutlined />} onClick={stopQuery}>
+                <Button danger disabled={!current.running} icon={<StopOutlined />} onClick={stopQuery}>
                   查询终止
                 </Button>
-                <Button onClick={() => setCommand('SCAN 0 MATCH * COUNT 100')} disabled={running}>
+                <Button onClick={() => patchTab(current.key, { command: DEFAULT_COMMAND })} disabled={current.running}>
                   SCAN 示例
                 </Button>
-                <Button onClick={() => setCommand('INFO server')} disabled={running}>
+                <Button onClick={() => patchTab(current.key, { command: 'INFO server' })} disabled={current.running}>
                   INFO 示例
                 </Button>
                 <span className="muted">
-                  仅允许 GET / INFO / SCAN · Ctrl/⌘ + Enter 运行 · 当前 {dbName || '未选库'}
+                  仅允许 GET / INFO / SCAN · Ctrl/⌘ + Enter 运行 · 当前 {current.dbName || '未选库'}
                 </span>
               </div>
-              {result ? (
+              {current.result ? (
                 <div className="result">
                   <div className="result-meta">
-                    {result.row_count ?? 0} 行 · {result.execution_time_ms ?? 0} ms
+                    {current.result.row_count ?? 0} 行 · {current.result.execution_time_ms ?? 0} ms
                   </div>
                   {textBlob ? (
                     <pre className="result-pre">{textBlob}</pre>
@@ -448,7 +565,7 @@ export default function RedisQuery() {
                       scroll={{ y: 360 }}
                       pagination={false}
                       locale={{ emptyText: '无数据' }}
-                      columns={(result.columns || []).map((col) => ({
+                      columns={(current.result.columns || []).map((col) => ({
                         title: col,
                         dataIndex: col,
                         key: col,
@@ -463,7 +580,7 @@ export default function RedisQuery() {
                 <div className="history">
                   <div className="side-head">最近命令</div>
                   {history.map((h, i) => (
-                    <div key={i} className="hist-item" onClick={() => setCommand(h)}>
+                    <div key={i} className="hist-item" onClick={() => patchTab(current.key, { command: h })}>
                       {h}
                     </div>
                   ))}

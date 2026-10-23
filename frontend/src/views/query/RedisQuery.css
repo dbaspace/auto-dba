@@ -34,7 +34,10 @@
 }
 .redis-query .domain-item:hover { background: #f3f4f6; }
 .redis-query .domain-item.active { background: #e6f4ff; color: #1677ff; }
+.redis-query .domain-item .caret { width: 12px; flex-shrink: 0; color: #9ca3af; font-size: 12px; line-height: 1; transition: transform .15s; display: inline-block; }
+.redis-query .domain-item .caret.open { color: #1677ff; transform: rotate(90deg); }
 .redis-query .domain-item .domain-name {
+  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -72,6 +75,9 @@
 .redis-query .db-item .keys { color: #9ca3af; flex-shrink: 0; }
 .redis-query .db-item.active .keys { color: #69b1ff; }
 .redis-query .main { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 12px; overflow: auto; }
+.redis-query .work-tabs { flex-shrink: 0; margin-bottom: 8px; }
+.redis-query .work-tabs .ant-tabs-nav { margin-bottom: 0; }
+.redis-query .tab-label { display: inline-block; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
 .redis-query .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 10px; }
 .redis-query .muted { color: #9ca3af; font-size: 13px; }
 .redis-query .placeholder, .redis-query .empty { color: #9ca3af; font-size: 13px; padding: 24px 8px; }

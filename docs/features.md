@@ -75,7 +75,7 @@ Client Secret（及 LDAP Bind 密码）用字段加密密钥落库（优先 `app
 |------|------|------|
 | 数据库 | `/ops/query` | 选择环境与库执行 SQL，支持收藏语句、取消执行、同名库切换环境 |
 | Kafka | `/ops/kafka-query` | 侧栏按本租户可见 **Kafka 域名**（`GET /access-domains?db_type=kafka`，无域名时回退实例）；查看 Topic 元数据并抽样消息 |
-| Redis | `/ops/redis-query` | 侧栏按 **环境 → 域名 → 逻辑库** 选择连接（优先域名表）；执行允许的只读命令 |
+| Redis | `/ops/redis-query` | 侧栏按 **环境 → 域名 → 逻辑库** 选择连接（优先域名表）；每个域名单独开页签，命令与结果互不覆盖；执行允许的只读命令 |
 
 ## 工单
 

@@ -27,13 +27,13 @@ KeePlus（进程 `auto-dba`）支持多种打包方式。**构建在有 Node 18+
 
 一体包与后端包解压后工作目录须为**包根**（存在 `deploy/node-agent/bin/node-agent` 等），集群部署 SSH 下发无需再本机构建 Agent。
 
-可选环境变量：`GOOS` `GOARCH`（默认 `linux`/`amd64`）、`STAMP`（默认时间戳；发版用 `STAMP=v1.12.33`）、`IMAGE_TAG`、`SKIP_PNPM_INSTALL=1`（已有 `node_modules` 时）。
+可选环境变量：`GOOS` `GOARCH`（默认 `linux`/`amd64`）、`STAMP`（默认时间戳；发版用 `STAMP=v1.12.34`）、`IMAGE_TAG`、`SKIP_PNPM_INSTALL=1`（已有 `node_modules` 时）。
 
 ```bash
-STAMP=v1.12.33 ./scripts/pack_release.sh all
-STAMP=v1.12.33 ./scripts/pack_release.sh backend
-STAMP=v1.12.33 ./scripts/pack_release.sh frontend
-IMAGE_TAG=auto-dba:v1.12.33 ./scripts/pack_release.sh docker
+STAMP=v1.12.34 ./scripts/pack_release.sh all
+STAMP=v1.12.34 ./scripts/pack_release.sh backend
+STAMP=v1.12.34 ./scripts/pack_release.sh frontend
+IMAGE_TAG=auto-dba:v1.12.34 ./scripts/pack_release.sh docker
 ```
 
 ## 发布到 GitHub Release（固定流程）
@@ -46,13 +46,13 @@ IMAGE_TAG=auto-dba:v1.12.33 ./scripts/pack_release.sh docker
 # 已 push 的提交 + 写好 docs/changelog-vX.Y.Z.md 后：
 
 # 推荐：打包 + 打 tag + 创建 Release（一体包）
-PACK=1 ./scripts/publish_github_release.sh v1.12.33
+PACK=1 ./scripts/publish_github_release.sh v1.12.34
 
-# 已有 dist/*-v1.12.33.tgz 时只发版
-./scripts/publish_github_release.sh v1.12.33
+# 已有 dist/*-v1.12.34.tgz 时只发版
+./scripts/publish_github_release.sh v1.12.34
 
 # 发版前顺带删若干旧 Release（不删受仓库 Rules 保护的 tag）
-DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12.33
+DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12.34
 ```
 
 前提：本机能 `git push origin HEAD`；已安装 `gh`。若 Keychain 无凭据，先手动 push 一次或导出 `GH_TOKEN=...`。
@@ -61,7 +61,8 @@ DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12
 
 | 版本 | 要点 |
 |------|------|
-| [v1.12.33](changelog-v1.12.33.md) | **当前推荐**。实例总览表格在页内滚动，筛选、汇总和分页留在视口内 |
+| [v1.12.34](changelog-v1.12.34.md) | **当前推荐**。Redis 查询按域名开页签，命令与结果互不覆盖 |
+| [v1.12.33](changelog-v1.12.33.md) | 实例总览表格在页内滚动，筛选、汇总和分页留在视口内 |
 | [v1.12.32](changelog-v1.12.32.md) | 加表沿用父 Connector、StarRocks 列映射、PostgreSQL 迁移补序列与约束、助手只读 SQL |
 | [v1.12.31](changelog-v1.12.31.md) | 告警实时动态、CDC 编排加固与修复源端、域名/已登记库删除 |
 | [v1.12.30](changelog-v1.12.30.md) | CDC Debezium 配置页查看为「编辑」、提交为「保存」 |
