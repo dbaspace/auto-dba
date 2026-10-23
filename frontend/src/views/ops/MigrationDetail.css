@@ -1,19 +1,12 @@
 /* MigrationDetail 样式：由旧 MigrationDetail.vue <style scoped> 迁移（:deep(.el-*) → .ant-*） */
 .mig-detail {
   width: 100%;
+  min-width: 0;
   max-width: none;
-  padding: 16px 16px 32px;
+  padding: 8px 12px 32px;
   overflow: auto;
   background: var(--app-content-bg, #fff);
   box-sizing: border-box;
-}
-.mig-detail > .mig-toolbar,
-.mig-detail > .ant-card,
-.mig-detail > .mb,
-.mig-detail > .mt {
-  max-width: 1400px;
-  margin-left: auto;
-  margin-right: auto;
 }
 .mig-toolbar {
   margin-bottom: 12px;

@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, Button, Checkbox, Input, Tag, message } from 'antd'
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Alert, Button, Checkbox, Input, Select, Tag, message } from 'antd'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import {
   ArrowDownOutlined,
@@ -9,6 +9,7 @@ import {
   SearchOutlined,
 } from '@ant-design/icons'
 import api from '../../api/request'
+import { normalizeSyncTableMode } from './cdc'
 import { VirtualList } from './VirtualList'
 import './CdcTableMappingPanel.css'
 
@@ -40,6 +41,7 @@ interface Props {
   instanceId?: string
   dbName?: string
   schema?: string
+  showSyncMode?: boolean
 }
 
 function normalizeCols(raw: any[]): MappingColumn[] {
@@ -100,16 +102,18 @@ function TargetNameInput({ value, onCommit }: { value: string; onCommit: (v: str
 
 function MappingList({
   items,
+  height,
   renderItem,
 }: {
   items: Mapping[]
+  height: number
   renderItem: (m: Mapping, index: number) => React.ReactNode
 }) {
   if (items.length > MAPPING_VIRTUAL_THRESHOLD) {
     return (
       <VirtualList
         className="map-list map-list-virtual"
-        height={600}
+        height={height}
         estimate={160}
         items={items}
         itemKey={(m) => m.key}
@@ -118,7 +122,7 @@ function MappingList({
     )
   }
   return (
-    <div className="map-list">
+    <div className="map-list" style={{ maxHeight: height }}>
       {items.map((m, index) => (
         <React.Fragment key={m.key}>{renderItem(m, index)}</React.Fragment>
       ))}
@@ -132,6 +136,7 @@ export default function CdcTableMappingPanel({
   instanceId = '',
   dbName = '',
   schema = 'public',
+  showSyncMode = false,
 }: Props) {
   const [search, setSearch] = useState('')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
@@ -348,6 +353,21 @@ export default function CdcTableMappingPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expanded, mappings.map((m) => m.key).join(',')])
 
+  const listRef = useRef<HTMLDivElement>(null)
+  const [listHeight, setListHeight] = useState(280)
+  useLayoutEffect(() => {
+    const el = listRef.current
+    if (!el) return
+    const apply = () => {
+      const next = Math.max(280, Math.floor(el.clientHeight))
+      setListHeight((prev) => (prev === next ? prev : next))
+    }
+    apply()
+    const ro = new ResizeObserver(apply)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [filtered.length, mappings.length])
+
   if (!mappings.length) {
     return <div className="tree-empty">左侧勾选或「分表匹配」后，已选映射会显示在这里</div>
   }
@@ -392,8 +412,10 @@ export default function CdcTableMappingPanel({
       {!filtered.length ? (
         <div className="tree-empty">无匹配映射</div>
       ) : (
+        <div ref={listRef} className="map-list-slot">
         <MappingList
           items={filtered}
+          height={listHeight}
           renderItem={(m, index) => {
             const entry = cache[m.key]
             const showManual = !!entry?.error || (!!entry && !entry.loading && !(entry.columns || []).length)
@@ -521,6 +543,21 @@ export default function CdcTableMappingPanel({
                   <span className="muted target-lab">目标表</span>
                   <TargetNameInput value={m.target_table || ''} onCommit={(v) => patch(m.key, { target_table: v })} />
                 </div>
+                {showSyncMode && (
+                  <div className="target-row" onClick={(e) => e.stopPropagation()}>
+                    <span className="muted target-lab">同步模式</span>
+                    <Select
+                      size="small"
+                      style={{ width: 160 }}
+                      value={normalizeSyncTableMode(m.sync_table_mode)}
+                      onChange={(v) => patch(m.key, { sync_table_mode: v })}
+                      options={[
+                        { value: 'incremental', label: '增量' },
+                        { value: 'initialization', label: '初始化' },
+                      ]}
+                    />
+                  </div>
+                )}
                 {isOpen(m.key) && (
                   <div className="map-body" onClick={(e) => e.stopPropagation()}>
                     <div className="key-bar">
@@ -652,6 +689,7 @@ export default function CdcTableMappingPanel({
             )
           }}
         />
+        </div>
       )}
     </div>
   )

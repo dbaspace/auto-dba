@@ -284,6 +284,20 @@ function extraEndpoint(host: any, port: any): string {
   return h
 }
 
+/** 用任务记下的主机端口回填实例。端口为 0 时只比主机。 */
+export function matchInstanceByEndpoint(list: any[], host: any, port: any): any | undefined {
+  const h = String(host || '').trim().toLowerCase()
+  if (!h) return undefined
+  const p = Number(port || 0)
+  return (list || []).find((i) => {
+    const names = [i?.host, i?.domain_name]
+    if (Array.isArray(i?.domains)) names.push(...i.domains)
+    const hit = names.some((n) => String(n || '').split(',')[0].trim().toLowerCase() === h)
+    if (!hit) return false
+    return !p || Number(i?.port) === p
+  })
+}
+
 /** 实例对不上时仍展示任务里记下的主机端口。 */
 export function endpointLabel(instance: any, host: any, port: any, withName = false): string {
   const raw = extraEndpoint(host, port)
@@ -996,7 +1010,8 @@ export function buildSqlPreview(form: any, mappingList: any[], kafkaBrokers: str
   const sourceDb = String(form.source_db || '').trim()
   const defaultPrefix = [env, sourceDb].filter(Boolean).join('_')
   const rlNameOf = (tgt: string) => {
-    const table = String(tgt || '').trim() || 'table'
+    const table = String(tgt || '').trim().replace(/[^a-zA-Z0-9_]/g, '_') || 'table'
+    if (form.task_type === 'add_table') return `rl_${table}`
     if (prefix && defaultPrefix && prefix !== defaultPrefix) return `rl_${prefix}_${table}`
     if (env || sourceDb) return `rl_${[env, sourceDb, table].filter(Boolean).join('_')}`
     return `rl_${table}`
@@ -1015,7 +1030,8 @@ export function buildSqlPreview(form: any, mappingList: any[], kafkaBrokers: str
   return maps
     .map((m: any) => {
       const tgt = m.target_table || m.source_tables?.[0] || 'example_table'
-      if (seen.has(tgt)) return null
+      const bare = String(tgt).split('.').pop()
+      if (bare === 'debezium_signal' || seen.has(tgt)) return null
       seen.add(tgt)
       const keys = (m.key_columns || []).length ? m.key_columns : ['id']
       const shard = (m.shard_keys || []).length ? m.shard_keys : keys

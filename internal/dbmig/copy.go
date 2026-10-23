@@ -26,12 +26,21 @@ func copyTable(ctx context.Context, engine string, src, tgt *sql.DB, o *store.Mi
 	if len(cols) == 0 {
 		return 0, fmt.Errorf("源表无列")
 	}
+	overriding := false
+	if store.NormalizeDBType(engine) == "postgres" {
+		var ierr error
+		overriding, ierr = pgIdentityAlways(ctx, tgt, firstNonEmpty(o.TargetSchema, o.SourceSchema), o.TargetTable)
+		if ierr != nil {
+			return 0, ierr
+		}
+	}
 	chunk := maxInsertRows(len(cols))
 	if batchSize > chunk {
 		batchSize = chunk
 	}
-	// 断点续传（已写入部分行）时走流式并跳过已确认行；完整表优先尝试 PG COPY
-	if store.NormalizeDBType(engine) == "postgres" && o.CompletedRows == 0 {
+	// 断点续传（已写入部分行）时走流式并跳过已确认行；完整表优先尝试 PG COPY。
+	// GENERATED ALWAYS AS IDENTITY 不能用 COPY 写入显式值。
+	if store.NormalizeDBType(engine) == "postgres" && o.CompletedRows == 0 && !overriding {
 		if n, err := copyTablePostgres(ctx, src, tgt, o, cols); err == nil {
 			if onBatch != nil && n > 0 {
 				_ = onBatch(n)
@@ -39,11 +48,11 @@ func copyTable(ctx context.Context, engine string, src, tgt *sql.DB, o *store.Mi
 			return n, nil
 		}
 	}
-	return copyTableStream(ctx, engine, src, tgt, o, cols, batchSize, speedLimit, onBatch)
+	return copyTableStream(ctx, engine, src, tgt, o, cols, batchSize, speedLimit, overriding, onBatch)
 }
 
 // copyTableStream 单次流式 SELECT，禁止深 OFFSET 翻页。
-func copyTableStream(ctx context.Context, engine string, src, tgt *sql.DB, o *store.MigrationObject, cols []string, batchSize, speedLimit int, onBatch func(n int64) error) (int64, error) {
+func copyTableStream(ctx context.Context, engine string, src, tgt *sql.DB, o *store.MigrationObject, cols []string, batchSize, speedLimit int, overriding bool, onBatch func(n int64) error) (int64, error) {
 	colSQL := joinQuoted(engine, cols)
 	srcRef := tableRef(engine, firstNonEmpty(o.SourceSchema, "public"), o.SourceTable)
 	skip := o.CompletedRows
@@ -61,7 +70,7 @@ func copyTableStream(ctx context.Context, engine string, src, tgt *sql.DB, o *st
 		if len(batch) == 0 {
 			return nil
 		}
-		if err := insertBatch(ctx, tgt, engine, o, cols, batch); err != nil {
+		if err := insertBatch(ctx, tgt, engine, o, cols, batch, overriding); err != nil {
 			return err
 		}
 		n := int64(len(batch))
@@ -185,13 +194,20 @@ func listColumns(ctx context.Context, db *sql.DB, engine, schema, table string) 
 	)
 	if store.NormalizeDBType(engine) == "postgres" {
 		rows, err = db.QueryContext(ctx, `
-			SELECT column_name FROM information_schema.columns
-			WHERE table_schema=$1 AND table_name=$2
-			ORDER BY ordinal_position`, schema, table)
+			SELECT a.attname
+			FROM pg_attribute a
+			JOIN pg_class cl ON a.attrelid = cl.oid
+			JOIN pg_namespace n ON cl.relnamespace = n.oid
+			WHERE n.nspname=$1 AND cl.relname=$2
+				AND a.attnum > 0 AND NOT a.attisdropped
+				AND COALESCE(a.attgenerated::text, '') = ''
+			ORDER BY a.attnum`, schema, table)
 	} else {
 		rows, err = db.QueryContext(ctx, `
 			SELECT COLUMN_NAME FROM information_schema.COLUMNS
 			WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=?
+				AND EXTRA NOT LIKE '%VIRTUAL GENERATED%'
+				AND EXTRA NOT LIKE '%STORED GENERATED%'
 			ORDER BY ORDINAL_POSITION`, table)
 	}
 	if err != nil {
@@ -209,7 +225,7 @@ func listColumns(ctx context.Context, db *sql.DB, engine, schema, table string) 
 	return cols, rows.Err()
 }
 
-func insertBatch(ctx context.Context, tgt *sql.DB, engine string, o *store.MigrationObject, cols []string, batch [][]any) error {
+func insertBatch(ctx context.Context, tgt *sql.DB, engine string, o *store.MigrationObject, cols []string, batch [][]any, overriding bool) error {
 	if len(batch) == 0 {
 		return nil
 	}
@@ -219,14 +235,14 @@ func insertBatch(ctx context.Context, tgt *sql.DB, engine string, o *store.Migra
 		if end > len(batch) {
 			end = len(batch)
 		}
-		if err := insertChunk(ctx, tgt, engine, o, cols, batch[start:end]); err != nil {
+		if err := insertChunk(ctx, tgt, engine, o, cols, batch[start:end], overriding); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func insertChunk(ctx context.Context, tgt *sql.DB, engine string, o *store.MigrationObject, cols []string, batch [][]any) error {
+func insertChunk(ctx context.Context, tgt *sql.DB, engine string, o *store.MigrationObject, cols []string, batch [][]any, overriding bool) error {
 	ref := tableRef(engine, firstNonEmpty(o.TargetSchema, o.SourceSchema), o.TargetTable)
 	colSQL := joinQuoted(engine, cols)
 	ph := "(" + strings.TrimRight(strings.Repeat("?,", len(cols)), ",") + ")"
@@ -249,7 +265,7 @@ func insertChunk(ctx context.Context, tgt *sql.DB, engine string, o *store.Migra
 			b.WriteByte(')')
 			args = append(args, row...)
 		}
-		q := fmt.Sprintf("INSERT INTO %s (%s) VALUES %s", ref, colSQL, b.String())
+		q := pgInsertSQL(ref, colSQL, b.String(), overriding && store.NormalizeDBType(engine) == "postgres")
 		_, err := tgt.ExecContext(ctx, q, args...)
 		return err
 	}

@@ -124,18 +124,22 @@ func BuildTargetSQLItems(p TargetSQLParams, colsByTable map[string][]pgCol, pksB
 		if strings.EqualFold(strings.TrimSpace(m.Status), "deleted") {
 			continue
 		}
-		src := cleanStringSlice(m.SourceTables)
+		rawSrc := cleanStringSlice(m.SourceTables)
+		src := FilterProtectedPublicationTables(rawSrc)
 		tgt := strings.TrimSpace(m.TargetTable)
 		if tgt == "" && len(src) > 0 {
 			tgt = src[0]
 		}
-		if tgt == "" || seen[tgt] {
+		if tgt == "" || seen[tgt] || IsProtectedPublicationTable(tgt) {
+			continue
+		}
+		if len(rawSrc) > 0 && len(src) == 0 {
 			continue
 		}
 		seen[tgt] = true
-		srcName := src[0]
-		if srcName == "" {
-			srcName = tgt
+		srcName := tgt
+		if len(src) > 0 && src[0] != "" {
+			srcName = src[0]
 		}
 		item := TargetSQLItem{Source: strings.Join(src, ", "), Table: tgt}
 		if !p.AutoCreate {
@@ -144,7 +148,10 @@ func BuildTargetSQLItems(p TargetSQLParams, colsByTable map[string][]pgCol, pksB
 			out = append(out, item)
 			continue
 		}
-		cols := colsByTable[srcName]
+		cols := sharedPgCols(src, colsByTable)
+		if len(cols) == 0 {
+			cols = append([]pgCol(nil), colsByTable[srcName]...)
+		}
 		pks := pksByTable[srcName]
 		keys := cleanStringSlice(m.KeyColumns)
 		if len(keys) == 0 {
@@ -153,6 +160,7 @@ func BuildTargetSQLItems(p TargetSQLParams, colsByTable map[string][]pgCol, pksB
 		if len(keys) == 0 && len(cols) > 0 {
 			keys = []string{cols[0].Name}
 		}
+		cols = orderPgColsByKeys(cols, keys)
 		shard := cleanStringSlice(m.ShardKeys)
 		if len(shard) == 0 {
 			shard = keys
@@ -174,7 +182,7 @@ func BuildTargetSQLItems(p TargetSQLParams, colsByTable map[string][]pgCol, pksB
 		if strings.TrimSpace(p.KafkaDefaultOffset) != "" {
 			offset = NormalizeKafkaOffset(p.KafkaDefaultOffset)
 		}
-		rlName := RoutineLoadNameFor(p.Env, p.SourceDB, prefix, tgt)
+		rlName := RoutineLoadNameForTask(p.TaskType, p.Env, p.SourceDB, prefix, tgt)
 		item.Load = renderRoutineLoadSQL(db, tgt, rlName, cols, conc, p.KafkaBrokers, topics, p.DebeziumMode, offset, p.MessageSchemaMode)
 		out = append(out, item)
 	}
@@ -208,6 +216,10 @@ func JoinTargetSQL(items []TargetSQLItem) string {
 func buildCreateTableSQL(db, table string, cols []pgCol, keys, shard []string, keyClause string, buckets, repl int, partCol string, dp map[string]string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "CREATE TABLE IF NOT EXISTS `%s`.`%s` (\n", db, table)
+	keySet := map[string]struct{}{}
+	for _, k := range keys {
+		keySet[strings.ToLower(strings.TrimSpace(k))] = struct{}{}
+	}
 	if len(cols) == 0 {
 		for i, k := range keys {
 			if i > 0 {
@@ -220,21 +232,27 @@ func buildCreateTableSQL(db, table string, cols []pgCol, keys, shard []string, k
 			keys = []string{"id"}
 		}
 	} else {
-		for i, c := range cols {
+		ordered := orderPgColsByKeys(cols, keys)
+		for i, c := range ordered {
 			if i > 0 {
 				b.WriteString(",\n")
 			}
-			fmt.Fprintf(&b, "  `%s` %s", c.Name, mapSRType(c.UDT))
+			nullDecl := "NULL"
+			if _, ok := keySet[strings.ToLower(c.Name)]; ok || !c.IsNullable {
+				nullDecl = "NOT NULL"
+			}
+			b.WriteString(formatSRColumnLine(c, mapPGColToSR(c), nullDecl))
 		}
+		cols = ordered
 	}
 	for _, line := range srMetaColumnLines(cols) {
 		b.WriteString(",\n")
 		b.WriteString(line)
 	}
+	b.WriteString("\n)")
 	if len(keys) > 0 {
-		fmt.Fprintf(&b, ",\n  %s(`%s`)", keyClause, strings.Join(keys, "`,`"))
+		fmt.Fprintf(&b, "\n%s(`%s`)", keyClause, strings.Join(keys, "`,`"))
 	}
-	b.WriteString("\n) ENGINE=OLAP")
 	if partCol != "" {
 		fmt.Fprintf(&b, "\nPARTITION BY RANGE(`%s`) ()", partCol)
 	}

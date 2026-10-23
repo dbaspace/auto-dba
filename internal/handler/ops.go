@@ -151,6 +151,19 @@ func (h *CDCHandler) DebeziumPreview(c *gin.Context) {
 			in.PGUser = strings.TrimSpace(inst.Username)
 		}
 	}
+	if pick("task_type") == "add_table" {
+		parentID := firstNonEmpty(pick("parent_id"), pick("parent_task_id"))
+		if parentID != "" {
+			if parent, _ := h.Store.GetCDCInTenant(parentID, effectiveListTenantID(h.Store, c)); parent != nil {
+				schema := pick("source_schema")
+				base := cdc.CurrentConfigFromExtra(cdc.ParseTaskExtra(parent.Description))
+				if merged, ok := cdc.MergeParentConnectorPreview(base, schema, in.Tables, in.Mappings); ok {
+					c.JSON(http.StatusOK, gin.H{"ok": true, "data": merged})
+					return
+				}
+			}
+		}
+	}
 	out := cdc.BuildPreview(in)
 	c.JSON(http.StatusOK, gin.H{"ok": true, "data": out})
 }

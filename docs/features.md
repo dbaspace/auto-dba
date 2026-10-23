@@ -104,8 +104,8 @@ Client Secret（及 LDAP Bind 密码）用字段加密密钥落库（优先 `app
 | 页面 | 路径 | 说明 |
 |------|------|------|
 | 同步列表 | `/ops/slots` | 采集并查看 PostgreSQL 逻辑复制槽（pid、flush LSN、按 restart_lsn 计算的滞后字节）。初始化任务优先匹配槽；批量重启跳过把 `*-add` 任务名当成 Connector。可按状态、积压、域名、任务名筛选；支持手动采集（显示进度）。平台定时任务 `sync.slots.collect` 按全局参数 `slot_monitor_collect_interval_sec`（默认 60 秒）周期采集。建 CDC 任务只登记槽名，不覆盖已采集的 LSN。采集按全局唯一的 `slot_name` 覆盖同一行的 pid、LSN、滞后（主机写法不同也不另插一行），并保留 id。**批量重启**（对齐 Hub）：提交 `items[{host,port,slot_name}]`（稳定键，兼容旧 `ids`）；确认后异步执行——先对业务库 `UPDATE tbl_heartbeat_table`，再 `POST .../connectors/{name}/tasks/0/restart`（不走 CDC 任务页的 includeTasks 全量重启）；页面显示重启进度。采集与重启互斥；操作日志写入 `tbl_sync_slot_op_logs` 持久化，同页「查看操作日志」可查看。不删除 PostgreSQL 复制槽 |
-| CDC 同步任务 | `/ops/cdc` | 创建、启动、停止同步任务，查看链路、表映射、加表与运行日志。列表 description 瘦身（`list_table_counts`）；运行中初始化任务按当前页探测链路；后台周期扫表结构差异。详情页签懒加载。Debezium 配置页查看时为「编辑」，进入编辑后提交为「保存」，切走页签保留未保存内容。初始化任务可修复源端地址。Connector 缺失时可[重新初始化](cdc-reinit.md)。服务重启后，超过 5 分钟仍在编排中的任务标为失败并可重试 |
-| 数据迁移 | `/ops/migration` | 库表或整库迁移，支持对象选择、预检、执行与校验 |
+| CDC 同步任务 | `/ops/cdc` | 创建、启动、停止同步任务，查看链路、表映射、加表与运行日志。列表 description 瘦身（`list_table_counts`）；运行中初始化任务按当前页探测链路；后台周期扫表结构差异。详情页签懒加载。Debezium 配置页查看时为「编辑」，进入编辑后提交为「保存」，切走页签保留未保存内容。加表预览在父 Connector 上追加表清单，Routine Load 名为 `rl_` 加目标表名。初始化缺 `debezium_signal` 时提交后自动创建。StarRocks 建表按 PostgreSQL 列类型映射。初始化任务可修复源端地址。Connector 缺失时可[重新初始化](cdc-reinit.md)。服务重启后，超过 5 分钟仍在编排中的任务标为失败并可重试 |
+| 数据迁移 | `/ops/migration` | 库表或整库迁移，支持对象选择、预检、执行与校验。PostgreSQL 会迁移扩展、序列、索引，外键和触发器在数据完成后创建；`GENERATED ALWAYS` 不走 COPY。详情页签显示任务名 |
 | 表结构对比 | `/ops/migration/compare` | 同族实例异步对比结构，生成只增不删的修复 SQL |
 
 **CDC** 的链路是 PostgreSQL 逻辑复制 → Debezium / Kafka Connect → Kafka → StarRocks。一个任务内维护源表与目标表的绑定；分库分表按绑定串行处理，提交前只对代表库做表存在性预检。外部地址未配置时任务可以先落库，执行时返回「未配置」，不会中断进程。
@@ -161,7 +161,7 @@ Client Secret（及 LDAP Bind 密码）用字段加密密钥落库（优先 `app
 |------|------|------|
 | SQL 洞察 | `/ops/sql-insight` | 六 Tab：SQL洞察 / 洞察分析 / 可视汇总 / AWR报告 / 表空间分析 / 智能分析；壳上统一「设置」入口（`/config/sql-insight`）。写操作权限：活动快照采集 / AWR 生成 / 表空间采集 / 智能分析（见 rbac-permissions） |
 | 会话管理 | `/ops/sessions` | 查看会话与锁，可定时刷新，并结束异常会话（PostgreSQL / MySQL 族） |
-| 实例总览 | `/ops/instance-overview` | 已登记实例的横向一览，含角色与异常标记。打开只读元库；点刷新才限流采集 PostgreSQL / Redis 的版本、角色、连接、内存、从库延迟，并可带云监控存储使用率。PostgreSQL 已用存储是各库文件合计。不是监控曲线 |
+| 实例总览 | `/ops/instance-overview` | 已登记实例的横向一览，含角色与异常标记。打开只读元库；点刷新才限流采集，并显示采样进度与完成时间。采集 PostgreSQL / Redis 的版本、角色、连接、内存、从库延迟，并可带云监控存储使用率。PostgreSQL 已用存储是各库文件合计。不是监控曲线 |
 | MySQL 慢 SQL | `/ops/mysql-slow` | performance_schema digest Top SQL（只读） |
 
 ## 告警管理
@@ -174,7 +174,7 @@ Client Secret（及 LDAP Bind 密码）用字段加密密钥落库（优先 `app
 | 实时动态 | `/ops/alerts/activity` | 告警触发与恢复、工单、高可用、配置变更、DNS、AWR 按时间归并 |
 | AIOps 知识库 | `/ops/aiops/knowledge` | 内置与库内案例（PostgreSQL/MySQL/Redis/StarRocks）、alertname 试算、DBA Copilot |
 | AIOps 关联 | `/ops/aiops/incidents` | 按实例时间窗聚合活跃告警 |
-| AI助手 | `/ops/ai-assistant` | 整页 DBA Copilot，与知识库内「DBA 助手」共享会话 |
+| AI助手 | `/ops/ai-assistant` | 整页 DBA Copilot，与知识库内「DBA 助手」共享会话。对上实例后可写一条只读 SQL 并指定库名；登记域名与连接主机视为同一实例。拒绝脚本和写操作 |
 | 历史告警 | `/ops/alerts/history` | 已恢复列表与复盘 Markdown |
 | 规则管理 | `/ops/alerts/rules` | PromQL 模板、作用域、多档、频控、试跑 |
 | 静默管理 | `/ops/alerts/silences` | 按 labels 静默 |

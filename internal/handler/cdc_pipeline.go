@@ -102,7 +102,7 @@ func (h *CDCHandler) Tables(c *gin.Context) {
 				} else {
 					targets = append(targets, tables...)
 				}
-				for _, rl := range cdc.ListRoutineLoadStates(ctx, db, t.TargetDB, targets, firstNonEmpty(extra["env"], rootExtra["env"]), t.SourceDB, prefix) {
+				for _, rl := range cdc.ListRoutineLoadStates(ctx, db, t.TargetDB, targets, t.TaskType, firstNonEmpty(extra["env"], rootExtra["env"]), t.SourceDB, prefix) {
 					rlByTable[strings.ToLower(rl.Table)] = rl
 				}
 				_ = db.Close()
@@ -139,13 +139,13 @@ func (h *CDCHandler) Tables(c *gin.Context) {
 				"shard_pattern":   m.ShardPattern,
 				"sync_table_mode": cdc.NormalizeSyncTableMode(m.SyncTableMode),
 				"source_db_scope": m.SourceDbScope, "source_db_names": m.SourceDbNames,
-				"status":              firstNonEmpty(m.Status, "active"),
-				"source":              src,
-				"topic_names":         topics,
+				"status":      firstNonEmpty(m.Status, "active"),
+				"source":      src,
+				"topic_names": topics,
 				"routine_load_name": firstNonEmpty(
 					rl.Name,
 					m.RoutineLoadName,
-					cdc.RoutineLoadNameFor(firstNonEmpty(extra["env"], rootExtra["env"]), t.SourceDB, prefix, tgt),
+					cdc.RoutineLoadNameForTask(t.TaskType, firstNonEmpty(extra["env"], rootExtra["env"]), t.SourceDB, prefix, tgt),
 				),
 				"routine_load_status": firstNonEmpty(rl.State, m.RoutineLoadStatus),
 			}
@@ -169,7 +169,7 @@ func (h *CDCHandler) Tables(c *gin.Context) {
 				"topic_names": topics,
 				"routine_load_name": firstNonEmpty(
 					rl.Name,
-					cdc.RoutineLoadNameFor(firstNonEmpty(extra["env"], rootExtra["env"]), t.SourceDB, prefix, name),
+					cdc.RoutineLoadNameForTask(t.TaskType, firstNonEmpty(extra["env"], rootExtra["env"]), t.SourceDB, prefix, name),
 				),
 				"routine_load_status": rl.State,
 			})

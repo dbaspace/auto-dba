@@ -128,19 +128,53 @@
 .count-cell .c-src { color: #1677ff; font-weight: 600; }
 .count-cell .c-tgt { color: #389e0d; font-weight: 600; }
 .count-cell .c-shard { color: #722ed1; font-weight: 600; }
-.cdc-form { max-width: 768px; }
-.cdc-form-wide { max-width: 1280px; }
-.cdc-steps { margin-bottom: 24px; }
-.cdc-nav {
-  max-width: 768px;
+.cdc-form,
+.cdc-form-wide {
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+}
+.cdc-steps {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  margin-bottom: 16px;
+  overflow-x: auto;
+}
+.cdc-steps.ant-steps .ant-steps-item-title,
+.cdc-steps .ant-steps-item-title {
+  white-space: normal;
+  line-height: 1.35;
+}
+.cdc-nav,
+.cdc-nav-wide {
+  width: 100%;
+  max-width: none;
+  min-width: 0;
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
   padding-top: 16px;
   margin-top: 8px;
   border-top: 1px solid #f0f0f0;
 }
-.cdc-nav-wide { max-width: 1280px; }
+.cdc-create .cdc-title-row {
+  min-width: 0;
+  align-items: flex-start;
+}
+.cdc-create .cdc-title-left {
+  min-width: 0;
+  flex: 0 1 auto;
+}
+.cdc-create .cdc-hint {
+  flex: 1 1 180px;
+  min-width: 0;
+  text-align: right;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 .cdc-nav-right { display: flex; gap: 8px; }
 .cdc-tag-row { margin-bottom: 16px; min-width: 0; }
 .cdc-tag-row .ops { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }

@@ -17,6 +17,15 @@ func TestRoutineLoadNameFor_prefixRl(t *testing.T) {
 	if got := RoutineLoadNameFor("test", "order_db", "test_order_db", "tbl_order"); got != "rl_test_order_db_tbl_order" {
 		t.Fatalf("default prefix: %s", got)
 	}
+	if got := AddTableRoutineLoadName("tbl_authorization"); got != "rl_tbl_authorization" {
+		t.Fatalf("add table name: %s", got)
+	}
+	if got := RoutineLoadNameForTask("add_table", "beijing", "db_member_profile", "rt_bj_db_member_profile", "tbl_authorization"); got != "rl_tbl_authorization" {
+		t.Fatalf("add table task: %s", got)
+	}
+	if got := RoutineLoadNameForTask("init", "test", "order_db", "rt_test_db_order_master", "tbl_order"); got != "rl_rt_test_db_order_master_tbl_order" {
+		t.Fatalf("init keeps prefix: %s", got)
+	}
 }
 
 func TestResolveInitNaming_defaults(t *testing.T) {

@@ -110,4 +110,9 @@ func TestDetectDanger(t *testing.T) {
 	if DetectDanger("更新一下数据") == "" || DetectDanger("改下数据") == "" {
 		t.Fatal("particle between verb and object should still be a write")
 	}
+	for _, q := range []string{"python print(1)", "os.system('rm')", "subprocess.run([])", "exec(payload)"} {
+		if DetectDanger(q) == "" {
+			t.Fatalf("script should hit: %s", q)
+		}
+	}
 }

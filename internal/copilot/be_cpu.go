@@ -37,7 +37,7 @@ func (s *Service) prefetchBECPU(ctx context.Context, tenant, message string) str
 	if it == nil {
 		return fmt.Sprintf("平台基础数据：目录里没有实例 %s，未到 Prometheus 查询。", host)
 	}
-	fact := formatInstanceFact(it)
+	fact := formatInstanceMatch(it, host)
 	if !isStarRocksLike(it.DBType) {
 		return fact + fmt.Sprintf("\n该实例引擎是 %s，不是 StarRocks/Doris，未按 BE CPU 查询。", it.DBType)
 	}
@@ -81,31 +81,82 @@ func isStarRocksLike(dbType string) bool {
 }
 
 func pickInstance(list []store.Instance, host string) *store.Instance {
-	host = strings.ToLower(strings.TrimSpace(host))
+	host = strings.TrimSpace(host)
 	if host == "" {
 		return nil
 	}
-	var fuzzy *store.Instance
 	for i := range list {
-		it := &list[i]
-		if strings.EqualFold(it.Host, host) || strings.EqualFold(it.DomainName, host) || strings.EqualFold(it.Name, host) {
-			return it
-		}
-		for _, d := range it.Domains {
-			if strings.EqualFold(strings.TrimSpace(d), host) {
-				return it
-			}
-		}
-		if fuzzy == nil {
-			fuzzy = it
+		if instanceMatches(&list[i], host) {
+			return &list[i]
 		}
 	}
-	return fuzzy
+	return nil
+}
+
+func instanceMatches(it *store.Instance, host string) bool {
+	if it == nil {
+		return false
+	}
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return false
+	}
+	if strings.EqualFold(it.Host, host) || strings.EqualFold(it.Name, host) {
+		return true
+	}
+	for _, d := range instanceDomains(it) {
+		if strings.EqualFold(d, host) {
+			return true
+		}
+	}
+	return false
+}
+
+func instanceDomains(it *store.Instance) []string {
+	if it == nil {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	var out []string
+	add := func(s string) {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return
+		}
+		key := strings.ToLower(s)
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, s)
+	}
+	add(it.DomainName)
+	for _, d := range it.Domains {
+		add(d)
+	}
+	return out
 }
 
 func formatInstanceFact(it *store.Instance) string {
+	return formatInstanceMatch(it, "")
+}
+
+func formatInstanceMatch(it *store.Instance, query string) string {
 	if it == nil {
 		return "平台基础数据：无"
 	}
-	return fmt.Sprintf("平台基础数据：name=%s host=%s domain=%s db_type=%s port=%d", it.Name, it.Host, it.DomainName, it.DBType, it.Port)
+	domains := instanceDomains(it)
+	domainText := strings.Join(domains, ",")
+	fact := fmt.Sprintf("平台基础数据：name=%s host=%s domains=%s db_type=%s port=%d。连接主机与全部登记域名都是这一台实例。",
+		it.Name, it.Host, domainText, it.DBType, it.Port)
+	q := strings.TrimSpace(query)
+	if q == "" || strings.EqualFold(q, it.Host) || strings.EqualFold(q, it.Name) {
+		return fact
+	}
+	for _, d := range domains {
+		if strings.EqualFold(d, q) {
+			return fact + fmt.Sprintf(" 按登记域名 %s 对上实例 %s，连接主机是 %s。", q, it.Name, it.Host)
+		}
+	}
+	return fact
 }

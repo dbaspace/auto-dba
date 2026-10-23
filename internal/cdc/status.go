@@ -230,7 +230,7 @@ func AggregatePipelineStatus(ctx context.Context, st *store.DB, secret string, o
 		sr.Message = err.Error()
 	} else {
 		targets := collectTargetTables(maps, tables)
-		rls = ListRoutineLoadStates(ctx, db, t.TargetDB, targets, extra["env"], t.SourceDB, prefix)
+		rls = ListRoutineLoadStates(ctx, db, t.TargetDB, targets, t.TaskType, extra["env"], t.SourceDB, prefix)
 		db.Close()
 		sr.State = "READY"
 		bad := 0
@@ -470,13 +470,13 @@ func slotState(s *PipelineSlot) string {
 	return "PAUSED"
 }
 
-func ListRoutineLoadStates(ctx context.Context, db *sql.DB, targetDB string, tables []string, env, sourceDB, topicPrefix string) []PipelineRoutineLoad {
+func ListRoutineLoadStates(ctx context.Context, db *sql.DB, targetDB string, tables []string, taskType, env, sourceDB, topicPrefix string) []PipelineRoutineLoad {
 	out := make([]PipelineRoutineLoad, 0, len(tables))
 	if db == nil {
 		return out
 	}
 	for _, table := range tables {
-		name := RoutineLoadNameFor(env, sourceDB, topicPrefix, table)
+		name := RoutineLoadNameForTask(taskType, env, sourceDB, topicPrefix, table)
 		item := PipelineRoutineLoad{Name: name, Table: table, State: "UNKNOWN"}
 		rows, err := db.QueryContext(ctx, fmt.Sprintf("SHOW ROUTINE LOAD FOR `%s`.`%s`", targetDB, name))
 		if err != nil {

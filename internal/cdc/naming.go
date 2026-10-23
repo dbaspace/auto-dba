@@ -132,6 +132,23 @@ func RoutineLoadNameFor(env, srcDb, topicPrefix, target string) string {
 	return GenerateRoutineLoadName(env, srcDb, target)
 }
 
+// AddTableRoutineLoadName 新增表的 Routine Load 名只保留 rl_ 加目标表名。
+func AddTableRoutineLoadName(target string) string {
+	t := sanitizeIdent(target)
+	if t == "" {
+		t = "table"
+	}
+	return "rl_" + t
+}
+
+// RoutineLoadNameForTask 新增表用短名，其它任务沿用原来的前缀规则。
+func RoutineLoadNameForTask(taskType, env, srcDb, topicPrefix, target string) string {
+	if strings.EqualFold(strings.TrimSpace(taskType), "add_table") {
+		return AddTableRoutineLoadName(target)
+	}
+	return RoutineLoadNameFor(env, srcDb, topicPrefix, target)
+}
+
 // InitNaming 预检/创建最终生效的四项命名。
 type InitNaming struct {
 	Env             string

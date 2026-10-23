@@ -10,6 +10,7 @@ import (
 var dangerPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(drop|delete|update|insert|truncate|alter|kill|grant|revoke|copy|call)\b`),
 	regexp.MustCompile(`(?i)pg_read_file|lo_export|into\s+outfile|dblink`),
+	regexp.MustCompile(`(?i)\bpython3?\b|\bos\.system\b|\bsubprocess\b|\bexec\b`),
 }
 
 // DetectDanger 命中写操作或危险语句时返回原因；只读分析返回空。

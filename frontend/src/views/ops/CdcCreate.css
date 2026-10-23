@@ -1,10 +1,83 @@
 /* CdcCreate 专属样式：由旧 CdcCreate.vue <style scoped> 迁移（去掉 Element Plus :deep()） */
 .cdc-create {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+.cdc-create > .cdc-form {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
+}
+.cdc-create > .cdc-nav {
+  flex-shrink: 0;
+}
+.cdc-form:has(.cdc-step-fill) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.cdc-step-fill {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+.cdc-fill-grids {
+  flex: 1 1 auto;
+  min-height: 280px;
+  display: flex;
+  min-width: 0;
+}
+.cdc-fill-grids > .ant-row {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 280px;
+}
+.cdc-fill-grids .ant-col {
+  display: flex;
+  flex-direction: column;
+}
+.cdc-fill-grids .map-card {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-height: 280px;
+  margin-bottom: 0;
+}
+.cdc-fill-grids .map-card > .ant-card-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.src-list-slot,
+.map-list-slot {
+  flex: 1 1 auto;
+  min-height: 280px;
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.cdc-fill-grids .src-list,
+.cdc-fill-grids .map-list {
+  max-height: none;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 .cdc-card {
   margin-bottom: 16px;
   border-radius: 8px;
+}
+.cdc-sql-collapse {
+  margin-bottom: 16px;
+  background: #fff;
+}
+.cdc-sql-collapse .ant-collapse-item:last-child {
+  border-radius: 0 0 8px 8px;
 }
 .map-card {
   min-height: 420px;

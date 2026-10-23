@@ -79,7 +79,7 @@ export function VirtualList<T>({
   return (
     <div
       className={className}
-      style={{ maxHeight: height, overflow: 'auto', position: 'relative' }}
+      style={{ height, maxHeight: height, overflow: 'auto', position: 'relative' }}
       onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
     >
       <div style={{ height: total, position: 'relative' }}>

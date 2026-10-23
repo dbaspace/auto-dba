@@ -43,6 +43,18 @@ func FilterProtectedPublicationTables(tables []string) []string {
 	return out
 }
 
+// PartitionMissingSourceTables 把缺失表拆成业务表和信号表。初始化预检只拦截业务表。
+func PartitionMissingSourceTables(missing []string) (business, signal []string) {
+	for _, name := range missing {
+		if IsProtectedPublicationTable(name) {
+			signal = append(signal, name)
+			continue
+		}
+		business = append(business, name)
+	}
+	return business, signal
+}
+
 func SignalTableExists(ctx context.Context, db *sql.DB, signalTable string) (bool, error) {
 	schema, table := ParseQualifiedSignalTable(signalTable)
 	var n int

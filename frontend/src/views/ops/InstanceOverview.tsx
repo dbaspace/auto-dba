@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Button, Input, Select, Space, Table, Tag, message } from 'antd'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Button, Input, Progress, Select, Space, Table, Tag, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useNavigate } from 'react-router-dom'
 import api from '../../api/request'
@@ -143,24 +143,7 @@ function stale(s?: Sample) {
   return Number.isFinite(t) && Date.now() - t > STALE_MS
 }
 
-function versionMixKeys(rows: Row[]) {
-  const groups = new Map<string, Set<string>>()
-  for (const row of rows) {
-    const v = row.sample?.version?.trim()
-    if (!row.sample?.reachable || !v) continue
-    const key = `${row.env_id}|${row.db_type}`
-    const set = groups.get(key) || new Set<string>()
-    set.add(v)
-    groups.set(key, set)
-  }
-  const mixed = new Set<string>()
-  groups.forEach((set, key) => {
-    if (set.size > 1) mixed.add(key)
-  })
-  return mixed
-}
-
-function anomalyTags(row: Row, mixed: Set<string>) {
+function anomalyTags(row: Row) {
   const s = row.sample
   const tags: string[] = []
   if (!s) return tags
@@ -173,7 +156,6 @@ function anomalyTags(row: Row, mixed: Set<string>) {
   if ((s.lag_known && (s.lag_bytes || 0) >= LAG_BYTES) || (s.lag_sec_known && (s.lag_seconds || 0) >= 10)) {
     tags.push('复制延迟')
   }
-  if (s.version && mixed.has(`${row.env_id}|${row.db_type}`)) tags.push('版本不一致')
   return tags
 }
 
@@ -203,6 +185,8 @@ export default function InstanceOverview() {
   const [rows, setRows] = useState<Row[]>([])
   const [collect, setCollect] = useState<CollectState>({})
   const [loading, setLoading] = useState(false)
+  const [sampledAt, setSampledAt] = useState('')
+  const wasRunning = useRef(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -248,6 +232,19 @@ export default function InstanceOverview() {
     return () => window.clearInterval(timer)
   }, [collect.status, load])
 
+  useEffect(() => {
+    if (collect.status === 'running') {
+      wasRunning.current = true
+      return
+    }
+    if (!wasRunning.current || collect.status !== 'done') return
+    wasRunning.current = false
+    const now = new Date()
+    const hh = String(now.getHours()).padStart(2, '0')
+    const mm = String(now.getMinutes()).padStart(2, '0')
+    setSampledAt(`${hh}:${mm}`)
+  }, [collect.status])
+
   const refresh = async () => {
     try {
       const { data } = await api.post('/instance-overview/collect', { db_type: dbType, env: env || '', q })
@@ -259,15 +256,14 @@ export default function InstanceOverview() {
     }
   }
 
-  const mixed = useMemo(() => versionMixKeys(rows), [rows])
   const sorted = useMemo(() => {
     return [...rows].sort((a, b) => {
-      const da = anomalyTags(a, mixed).filter((t) => t !== '暂不采集').length
-      const db = anomalyTags(b, mixed).filter((t) => t !== '暂不采集').length
+      const da = anomalyTags(a).filter((t) => t !== '暂不采集').length
+      const db = anomalyTags(b).filter((t) => t !== '暂不采集').length
       if (da !== db) return db - da
       return (a.name || a.host).localeCompare(b.name || b.host)
     })
-  }, [rows, mixed])
+  }, [rows])
 
   const summary = useMemo(() => {
     let alert = 0
@@ -277,15 +273,15 @@ export default function InstanceOverview() {
     const versions = new Set<string>()
     for (const row of rows) {
       const s = row.sample
-      const tags = anomalyTags(row, mixed).filter((t) => t !== '暂不采集')
+      const tags = anomalyTags(row).filter((t) => t !== '暂不采集')
       if (tags.length) alert++
-      else if (s?.reachable) ok++
+      if (s?.reachable) ok++
       if (s?.role === 'primary') primary++
       if (s?.role === 'replica') replica++
       if (s?.version) versions.add(s.version)
     }
     return { total: rows.length, alert, ok, primary, replica, versions: versions.size }
-  }, [rows, mixed])
+  }, [rows])
 
   const engine = normEngine(dbType)
   const showRedis = engine === 'redis'
@@ -311,16 +307,7 @@ export default function InstanceOverview() {
     {
       title: '版本',
       width: 140,
-      render: (_, row) => {
-        const v = row.sample?.version
-        const mixedTag = v && mixed.has(`${row.env_id}|${row.db_type}`)
-        return (
-          <span>
-            {v || '—'}
-            {mixedTag ? <Tag color="orange">不一致</Tag> : null}
-          </span>
-        )
-      },
+      render: (_, row) => row.sample?.version || '—',
     },
     {
       title: '角色',
@@ -336,7 +323,7 @@ export default function InstanceOverview() {
       title: '状态',
       width: 180,
       render: (_, row) => {
-        const tags = anomalyTags(row, mixed)
+        const tags = anomalyTags(row)
         if (!row.sample) return <span className="ov-status muted">未采集</span>
         if (!tags.length) return <span className="ov-status ok">正常</span>
         return (
@@ -435,7 +422,7 @@ export default function InstanceOverview() {
     const header = ['实例名', '地址', '环境', '类型', '版本', '角色', '状态', '连接', '已用存储', '存储使用率', '大约总量', '内存大小GB', '使用率', '从库延迟']
     const lines = [header.join(',')]
     for (const row of sorted) {
-      const tags = anomalyTags(row, mixed)
+      const tags = anomalyTags(row)
       lines.push(
         [
           row.name,
@@ -477,7 +464,9 @@ export default function InstanceOverview() {
   }
 
   const running = collect.status === 'running'
-  const progress = running && collect.total ? `${collect.done || 0}/${collect.total}` : ''
+  const sampleDone = collect.done || 0
+  const sampleTotal = collect.total || 0
+  const samplePercent = sampleTotal ? Math.round((sampleDone / sampleTotal) * 100) : 0
 
   return (
     <div className="ops-page instance-overview">
@@ -511,9 +500,19 @@ export default function InstanceOverview() {
           <Input allowClear style={{ width: 220 }} value={q} onChange={(e) => setQ(e.target.value)} placeholder="实例名 / 主机" />
         </div>
         <Space>
-          <Button type="primary" loading={running} onClick={() => void refresh()}>
-            {running ? `采集 ${progress}` : '刷新'}
+          <Button type="primary" loading={running} disabled={running} onClick={() => void refresh()}>
+            刷新
           </Button>
+          {running ? (
+            <span className="ov-collect">
+              <Progress percent={samplePercent} size="small" showInfo={false} />
+              <span>
+                正在采样 {sampleDone}/{sampleTotal}
+              </span>
+            </span>
+          ) : sampledAt ? (
+            <span className="ov-collect-done">采样完成 {sampledAt}</span>
+          ) : null}
           <Button onClick={exportCsv}>导出</Button>
         </Space>
       </div>
@@ -544,8 +543,11 @@ export default function InstanceOverview() {
         </div>
       </div>
       <div className="instance-overview-note">
-        数字是当前一次采样，不是监控图里的区间平均。超过约 5 分钟会变淡。低于 60% 为绿色，60% 起为黄色，80% 起为红色。
-        {engine === 'postgres' ? ' 已用存储是各库文件合计。使用率是云监控最近值。大约总量 = 已用存储 / 使用率。' : ''}
+        {running
+          ? '正在采样，汇总和表格会随结果更新，完成后才是本轮最终数字'
+          : `数字是当前一次采样，不是监控图里的区间平均。超过约 5 分钟会变淡。低于 60% 为绿色，60% 起为黄色，80% 起为红色。${
+              engine === 'postgres' ? ' 已用存储是各库文件合计。使用率是云监控最近值。大约总量 = 已用存储 / 使用率。' : ''
+            }`}
       </div>
       <div className="instance-overview-table">
         <Table

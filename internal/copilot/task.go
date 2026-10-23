@@ -11,11 +11,15 @@ import (
 )
 
 const taskDecidePrompt = "你是只读排查任务的调度器。根据已有步骤决定下一步，只输出一个 JSON 对象，不要解释。" +
-	`动作只能是 {"action":"catalog"}、{"action":"prometheus","expr":"指标表达式","hours":1}、{"action":"postgres","query":"activity|connections|databases"}、{"action":"clickhouse","query":"processes|queries|databases"}、{"action":"analyze","script":"python，使用变量 data"}、{"action":"done"}。` +
-	"postgres 与 clickhouse 只能选查询名字，不能写 SQL。引擎以平台实例为准。" +
+	"强制规则：只能做查询，不能执行脚本，不能做查询以外的动作。" +
+	`动作只能是 {"action":"catalog"}、{"action":"prometheus","expr":"指标表达式","hours":1}、{"action":"postgres","query":"activity|connections|databases|sizes"}、{"action":"postgres","database":"库名","sql":"一条查询 SQL"}、{"action":"clickhouse","query":"processes|queries|databases"}、{"action":"done"}。` +
+	"postgres 可以选具名查询，也可以自己写一条查询 SQL。sql 只允许一条 SELECT、WITH ... SELECT、SHOW 或 EXPLAIN。" +
+	"禁止 INSERT、UPDATE、DELETE、DDL、COPY、多条语句，以及 python、exec、os.system、subprocess 等脚本。" +
+	"写 sql 时必须带 database，连到该库执行，不要连维护库 postgres，除非问题里的库就是 postgres。域名只用来认实例，查询仍走连接主机。" +
+	"查某库有没有某表时，写 SELECT schemaname, tablename FROM pg_tables，并带上该库名。clickhouse 仍只能选查询名字。引擎以平台实例为准。" +
+	"登记域名和连接主机若指向同一台实例，按这台实例继续查询，不要因为域名和 host 字符串不同就停住。" +
 	"expr 只写聚合和指标名，可用 __SEL__ 或 mode=\"idle\"，不要自带 instance、domain、host、url、tenant。" +
-	"hours 为 0 表示瞬时查询，1 到 6 表示最近几小时。" +
-	"已有序列就用 analyze 做统计；统计完成或无法继续就 done。"
+	"hours 为 0 表示瞬时查询，1 到 6 表示最近几小时。统计完成或无法继续就 done。"
 
 // TaskStep 平台任务的一步，返回给对话展示。
 type TaskStep struct {
@@ -27,11 +31,13 @@ type TaskStep struct {
 
 // TaskAction 模型决定的下一步。host、url、tenant 不在这里，标签只来自平台实例。
 type TaskAction struct {
-	Action string `json:"action"`
-	Expr   string `json:"expr"`
-	Query  string `json:"query"`
-	Hours  int    `json:"hours"`
-	Script string `json:"script"`
+	Action   string `json:"action"`
+	Expr     string `json:"expr"`
+	Query    string `json:"query"`
+	Database string `json:"database"`
+	SQL      string `json:"sql"`
+	Hours    int    `json:"hours"`
+	Script   string `json:"script"`
 }
 
 type taskState struct {
@@ -101,6 +107,22 @@ func (s *Service) runTaskDecide(ctx context.Context, cfg Config, model string, r
 		switch strings.ToLower(strings.TrimSpace(act.Action)) {
 		case "", "done":
 			return steps
+		case "analyze":
+			push(TaskStep{Action: "analyze", Status: "error", Output: "助手只能查询，禁止执行脚本"})
+			continue
+		default:
+		}
+		if strings.TrimSpace(act.Script) != "" {
+			push(TaskStep{Action: act.Action, Status: "error", Output: "助手只能查询，禁止执行脚本"})
+			continue
+		}
+		if reason := DetectDanger(act.SQL); strings.TrimSpace(act.SQL) != "" && reason != "" {
+			push(TaskStep{Action: act.Action, Status: "error", Detail: act.Database, Output: reason})
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(act.Action)) {
+		case "", "done":
+			return steps
 		case "catalog":
 			step, inst := s.catalogStep(req.TenantID, req.Message)
 			push(step)
@@ -122,13 +144,17 @@ func (s *Service) runTaskDecide(ctx context.Context, cfg Config, model string, r
 				push(TaskStep{Action: act.Action, Status: "error", Detail: act.Query, Output: "未对上平台实例，未查询。"})
 				continue
 			}
-			step, payload := s.runScaffold(ctx, req.TenantID, st.inst, act.Action, act.Query, 0)
+			var step TaskStep
+			var payload string
+			if act.Action == "postgres" && strings.TrimSpace(act.SQL) != "" {
+				step, payload = s.sqlSelectStep(ctx, req.TenantID, st.inst, act.Database, act.SQL)
+			} else {
+				step, payload = s.runScaffold(ctx, req.TenantID, st.inst, act.Action, act.Query, 0)
+			}
 			push(step)
 			if payload != "" {
 				st.lastJSON = payload
 			}
-		case "analyze":
-			push(analyzeStep(act.Script, st.lastJSON))
 		default:
 			push(TaskStep{Action: act.Action, Status: "error", Output: "未知动作"})
 		}
@@ -180,6 +206,8 @@ func parseTaskAction(text string) (TaskAction, bool) {
 	act.Action = strings.ToLower(strings.TrimSpace(act.Action))
 	act.Expr = strings.TrimSpace(act.Expr)
 	act.Query = strings.TrimSpace(act.Query)
+	act.Database = strings.TrimSpace(act.Database)
+	act.SQL = strings.TrimSpace(act.SQL)
 	if act.Hours < 0 {
 		act.Hours = 0
 	}
@@ -269,7 +297,7 @@ func (s *Service) catalogStep(tenant, message string) (TaskStep, *store.Instance
 			}
 			return TaskStep{Action: "catalog", Status: "error", Detail: host, Output: msg}, nil
 		}
-		return TaskStep{Action: "catalog", Status: "ok", Detail: it.DBType, Output: formatInstanceFact(it)}, it
+		return TaskStep{Action: "catalog", Status: "ok", Detail: it.DBType, Output: formatInstanceMatch(it, host)}, it
 	}
 	if s == nil || s.Store == nil {
 		return TaskStep{Action: "catalog", Status: "error", Detail: host, Output: "实例目录不可用，未到 Prometheus 查询。"}, nil
@@ -282,7 +310,7 @@ func (s *Service) catalogStep(tenant, message string) (TaskStep, *store.Instance
 	if it == nil {
 		return TaskStep{Action: "catalog", Status: "error", Detail: host, Output: "目录里没有实例 " + host + "，未到 Prometheus 查询。"}, nil
 	}
-	return TaskStep{Action: "catalog", Status: "ok", Detail: it.DBType, Output: formatInstanceFact(it)}, it
+	return TaskStep{Action: "catalog", Status: "ok", Detail: it.DBType, Output: formatInstanceMatch(it, host)}, it
 }
 
 func (s *Service) promStep(ctx context.Context, inst *store.Instance, expr string, hours int) (TaskStep, string) {
@@ -299,14 +327,9 @@ func (s *Service) promStep(ctx context.Context, inst *store.Instance, expr strin
 }
 
 func analyzeStep(script, input string) TaskStep {
-	if strings.TrimSpace(input) == "" {
-		return TaskStep{Action: "analyze", Status: "error", Output: "没有上一步的查询结果，未运行脚本。"}
-	}
-	out, err := runAnalyzeScript(script, input)
-	if err != nil {
-		return TaskStep{Action: "analyze", Status: "error", Output: err.Error()}
-	}
-	return TaskStep{Action: "analyze", Status: "ok", Output: out}
+	_ = script
+	_ = input
+	return TaskStep{Action: "analyze", Status: "error", Output: "助手只能查询，禁止执行脚本"}
 }
 
 func formatSteps(steps []TaskStep) string {

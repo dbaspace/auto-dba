@@ -232,10 +232,32 @@ func (e *Engine) execute(ctx context.Context, t *store.MigrationTask, resume boo
 		return p, nil
 	}
 
+	pairsNames := tablePairsFromObjects(objs)
+	if engine == "postgres" && t.SchemaStrategy != "no_init" {
+		seenDB := map[string]struct{}{}
+		for _, o := range objs {
+			key := o.SourceDB + "\x00" + firstNonEmpty(o.TargetDB, o.SourceDB)
+			if _, ok := seenDB[key]; ok {
+				continue
+			}
+			seenDB[key] = struct{}{}
+			pair, err := getPair(o.SourceDB, firstNonEmpty(o.TargetDB, o.SourceDB))
+			if err != nil {
+				return err
+			}
+			if err := preparePGDatabase(ctx, pair.src, pair.tgt); err != nil {
+				return err
+			}
+		}
+	}
+
 	var (
 		progressMu sync.Mutex
 		firstErr   error
 		errOnce    sync.Once
+		pendMu     sync.Mutex
+		pendFKs    []deferredStmt
+		pendTrigs  []deferredStmt
 	)
 	setErr := func(err error) {
 		errOnce.Do(func() { firstErr = err })
@@ -279,8 +301,11 @@ func (e *Engine) execute(ctx context.Context, t *store.MigrationTask, resume boo
 			tableCtx, tableCancel := context.WithTimeout(workCtx, tableTimeout)
 			defer tableCancel()
 
+			var deferred *schemaDeferred
 			if t.SchemaStrategy != "no_init" && !(resume && o.CompletedRows > 0) {
-				if err := applySchema(tableCtx, engine, pair.src, pair.tgt, o, t.ConflictStrategy); err != nil {
+				var err error
+				deferred, err = applySchema(tableCtx, engine, pair.src, pair.tgt, o, t.ConflictStrategy, pairsNames)
+				if err != nil {
 					o.Status = store.StatusFailed
 					o.ErrorMessage = err.Error()
 					_ = e.Store.UpdateMigrationObject(o)
@@ -321,6 +346,56 @@ func (e *Engine) execute(ctx context.Context, t *store.MigrationTask, resume boo
 				o.TotalRows = n
 				o.CompletedRows = n
 				progressMu.Unlock()
+				if engine == "postgres" {
+					ss := firstNonEmpty(o.SourceSchema, "public")
+					ts := firstNonEmpty(o.TargetSchema, ss)
+					seqCols, serr := listSequenceColumns(tableCtx, pair.src, ss, o.SourceTable)
+					if serr != nil {
+						o.Status = store.StatusFailed
+						o.ErrorMessage = serr.Error()
+						_ = e.Store.UpdateMigrationObject(o)
+						setErr(fmt.Errorf("序列收集 %s: %w", o.SourceTable, serr))
+						cancelWork()
+						return
+					}
+					if err := syncPGSequencesAfterData(tableCtx, pair.tgt, ts, o.TargetTable, seqCols); err != nil {
+						o.Status = store.StatusFailed
+						o.ErrorMessage = err.Error()
+						_ = e.Store.UpdateMigrationObject(o)
+						setErr(fmt.Errorf("序列同步 %s: %w", o.SourceTable, err))
+						cancelWork()
+						return
+					}
+				} else if err := syncMySQLAutoIncrement(tableCtx, pair.tgt, o.TargetTable); err != nil {
+					o.Status = store.StatusFailed
+					o.ErrorMessage = err.Error()
+					_ = e.Store.UpdateMigrationObject(o)
+					setErr(fmt.Errorf("更新 AUTO_INCREMENT %s: %w", o.SourceTable, err))
+					cancelWork()
+					return
+				}
+			} else if engine == "postgres" && deferred != nil && deferred.Created {
+				ts := firstNonEmpty(o.TargetSchema, firstNonEmpty(o.SourceSchema, "public"))
+				if err := syncPGSequencesFromSource(tableCtx, pair.tgt, retargetSeqSync(deferred.SeqSyncs, ts, o.TargetTable)); err != nil {
+					o.Status = store.StatusFailed
+					o.ErrorMessage = err.Error()
+					_ = e.Store.UpdateMigrationObject(o)
+					setErr(fmt.Errorf("序列同步 %s: %w", o.SourceTable, err))
+					cancelWork()
+					return
+				}
+			}
+			if deferred != nil && deferred.Created {
+				ts := firstNonEmpty(o.TargetSchema, firstNonEmpty(o.SourceSchema, "public"))
+				key := strings.ToLower(ts + "." + o.TargetTable)
+				pendMu.Lock()
+				for _, sqlText := range deferred.FKs {
+					pendFKs = append(pendFKs, deferredStmt{DB: pair.tgt, SQL: sqlText, Table: key})
+				}
+				for _, sqlText := range deferred.Triggers {
+					pendTrigs = append(pendTrigs, deferredStmt{DB: pair.tgt, SQL: sqlText, Table: key})
+				}
+				pendMu.Unlock()
 			}
 			o.Status = store.StatusCompleted
 			o.ErrorMessage = ""
@@ -335,7 +410,55 @@ func (e *Engine) execute(ctx context.Context, t *store.MigrationTask, resume boo
 	if firstErr != nil {
 		return firstErr
 	}
-	return workCtx.Err()
+	if err := workCtx.Err(); err != nil {
+		return err
+	}
+	allowed := map[string]struct{}{}
+	for _, p := range pairsNames {
+		allowed[strings.ToLower(p.TgtSchema+"."+p.TgtTable)] = struct{}{}
+	}
+	keptFKs, _ := filterDeferredByTables(pendFKs, allowed)
+	for _, stmt := range keptFKs {
+		if err := execSQL(ctx, stmt.DB, "外键创建", stmt.SQL); err != nil {
+			return err
+		}
+	}
+	keptTrigs, skipped := filterDeferredByTables(pendTrigs, allowed)
+	if len(skipped) > 0 {
+		e.logf(t.ID, "WARN", "跳过 %d 个触发器（所属表未纳入本次迁移）", len(skipped))
+	}
+	byDB := map[*sql.DB][]string{}
+	var dbOrder []*sql.DB
+	for _, stmt := range keptTrigs {
+		if _, ok := byDB[stmt.DB]; !ok {
+			dbOrder = append(dbOrder, stmt.DB)
+		}
+		byDB[stmt.DB] = append(byDB[stmt.DB], stmt.SQL)
+	}
+	for _, db := range dbOrder {
+		if engine == "postgres" {
+			if err := applyDeferredTriggers(ctx, db, byDB[db]); err != nil {
+				return err
+			}
+			continue
+		}
+		for _, stmt := range byDB[db] {
+			if err := execSQL(ctx, db, "触发器迁移", stmt); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func retargetSeqSync(in []pgSeqSync, schema, table string) []pgSeqSync {
+	out := make([]pgSeqSync, len(in))
+	for i, s := range in {
+		s.Schema = schema
+		s.Table = table
+		out[i] = s
+	}
+	return out
 }
 
 // StartScheduler 已废弃：由 jobreg migration.due_scanner 接管。

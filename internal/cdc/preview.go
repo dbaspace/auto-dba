@@ -146,3 +146,29 @@ func BuildPreview(in PreviewInput) PreviewResult {
 		Config:             cfg,
 	}
 }
+
+// MergeParentConnectorPreview 在父任务已保存的 connector 配置上追加本次新增表。
+// 父任务没有配置时返回 false，调用方改走全新 connector 预览。
+func MergeParentConnectorPreview(base map[string]string, schema string, tables []string, mappings []TableMapping) (PreviewResult, bool) {
+	if len(base) == 0 {
+		return PreviewResult{}, false
+	}
+	cfg := make(map[string]string, len(base)+1)
+	for k, v := range base {
+		cfg[k] = v
+	}
+	plain, shards := SplitMappings(mappings, tables)
+	added := SplitTableIncludeList(buildTableIncludeListWithShards(schema, plain, shards))
+	cfg["table.include.list"] = MergeTableIncludeList(cfg["table.include.list"], schema, added)
+	cfg = MaskConfigMap(cfg)
+	return PreviewResult{
+		Notes: []string{
+			"在父任务 connector 配置上追加本次新增表的 table.include.list。",
+			"保留原 slot.name 与 publication.name，提交后写入父 connector。",
+		},
+		PublicationName: cfg["publication.name"],
+		SlotName:        cfg["slot.name"],
+		TopicPrefix:     cfg["topic.prefix"],
+		Config:          cfg,
+	}, true
+}

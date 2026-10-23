@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   useLocation,
   useNavigate,
@@ -44,18 +44,18 @@ import {
   PAGE_HINTS,
   PAGE_TITLES,
   SR_DP_TIME_UNITS,
-  buildSqlPreview,
   buildSrDynamicPartitionObject,
   countTasksSyncedTable,
   decodeCdcExtra,
   filterShardDatabases,
-  formatDebeziumConfig,
+  endpointLabel,
   formatSourceScopeLabel,
   formatSrDynamicPartitionDisplay,
   groupShardTables,
   instEnv,
   type ShardGroup,
   instLabel,
+  matchInstanceByEndpoint,
   keyModelLabel,
   matchGlob,
   normalizeKafkaBootstrap,
@@ -158,6 +158,26 @@ function ShardDbTagList({
   )
 }
 
+const LIST_MIN_HEIGHT = 280
+
+function useFillHeight(min = LIST_MIN_HEIGHT) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [height, setHeight] = useState(min)
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const apply = () => {
+      const next = Math.max(min, Math.floor(el.clientHeight))
+      setHeight((prev) => (prev === next ? prev : next))
+    }
+    apply()
+    const ro = new ResizeObserver(apply)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [min])
+  return { ref, height }
+}
+
 function CdcSourceTableList({
   groups,
   singles,
@@ -169,26 +189,31 @@ function CdcSourceTableList({
   renderGroup: (g: ShardGroup) => React.ReactNode
   renderSingle: (name: string) => React.ReactNode
 }) {
+  const { ref, height } = useFillHeight()
   const items = [
     ...groups.map((g) => ({ key: 'g:' + g.base, group: g as ShardGroup | undefined, name: '' })),
     ...singles.map((name) => ({ key: 's:' + name, group: undefined as ShardGroup | undefined, name })),
   ]
   if (!items.length) {
     return (
-      <div className="src-list">
-        <div className="tree-empty">暂无表</div>
+      <div ref={ref} className="src-list-slot">
+        <div className="src-list">
+          <div className="tree-empty">暂无表</div>
+        </div>
       </div>
     )
   }
   return (
-    <VirtualList
-      className="src-list"
-      height={420}
-      estimate={40}
-      items={items}
-      itemKey={(it) => it.key}
-      renderItem={(it) => (it.group ? renderGroup(it.group) : renderSingle(it.name))}
-    />
+    <div ref={ref} className="src-list-slot">
+      <VirtualList
+        className="src-list"
+        height={height}
+        estimate={40}
+        items={items}
+        itemKey={(it) => it.key}
+        renderItem={(it) => (it.group ? renderGroup(it.group) : renderSingle(it.name))}
+      />
+    </div>
   )
 }
 
@@ -211,7 +236,10 @@ export default function CdcCreate() {
   const [tableQ, setTableQ] = useState('')
   const [manualTables, setManualTables] = useState('')
   const [sqlPreviews, setSqlPreviews] = useState<SqlPreviewItem[]>([])
+  const [sqlPreviewError, setSqlPreviewError] = useState('')
+  const [sqlOpenKeys, setSqlOpenKeys] = useState<string[]>([])
   const [debeziumPreview, setDebeziumPreview] = useState<any>(null)
+  const [, setDebeziumPreviewError] = useState('')
   const [instances, setInstances] = useState<any[]>([])
   const [envOptions, setEnvOptions] = useState<{ value: string; label: string }[]>([])
   const [envLoading, setEnvLoading] = useState(true)
@@ -292,10 +320,6 @@ export default function CdcCreate() {
         ? form.auto_create_table && step === 3
         : false
   const isConfirmStep = step === steps.length - 1
-  const isWideStep =
-    (form.task_type === 'init' && step === 1) ||
-    (form.task_type === 'add_table' && step === 1) ||
-    (form.task_type === 'alter_schema' && step === 1)
   const nextDisabled = form.task_type === 'init' && step === 4 && !precheckOk
 
   const resolvedShardDbs = useMemo(() => {
@@ -334,7 +358,7 @@ export default function CdcCreate() {
   }, [form.task_type, form.parent_ids, form.parent_id, parentTasks])
 
   const parentTables = useMemo(() => {
-    const p = selectedParents[0] || parentTasks.find((t) => t.id === form.parent_id)
+    const p = parentTasks.find((t) => t.id === form.parent_id) || selectedParents[0]
     if (!p) return []
     const fromSynced = syncedByParent[p.id]
     if (fromSynced?.length) return fromSynced
@@ -344,7 +368,7 @@ export default function CdcCreate() {
   const parentMappings = useMemo(() => {
     const live = (parentMappingRows || []).filter((m) => m.status !== 'deleted')
     if (live.length) return live
-    const p = selectedParents[0] || parentTasks.find((t) => t.id === form.parent_id)
+    const p = parentTasks.find((t) => t.id === form.parent_id) || selectedParents[0]
     const extra = decodeCdcExtra(p?.description).extra
     const maps = extra.mappings || []
     if (maps.length) return maps
@@ -352,7 +376,7 @@ export default function CdcCreate() {
   }, [parentMappingRows, selectedParents, parentTasks, form.parent_id, parentTables])
 
   const canAutoAlter = useMemo(() => {
-    const p = selectedParents[0] || parentTasks.find((t) => t.id === form.parent_id)
+    const p = parentTasks.find((t) => t.id === form.parent_id) || selectedParents[0]
     if (!p) return false
     const extra = decodeCdcExtra(p.description).extra
     return extra.auto_create_table !== false && !!(p.target_instance_id && p.target_db)
@@ -450,8 +474,6 @@ export default function CdcCreate() {
     visibleSingleTables.filter((t) => isTableSelected(t)).length
   const allSelectableChecked = selectableCount > 0 && selectedSelectableCount === selectableCount
   const allSelectableIndeterminate = selectedSelectableCount > 0 && selectedSelectableCount < selectableCount
-
-  const debeziumConfigText = formatDebeziumConfig(debeziumPreview?.config)
 
   // ---- payload deps 组装（供 precheck / preview / submit） ----
   function buildDeps() {
@@ -842,9 +864,16 @@ export default function CdcCreate() {
     }
   }
 
+  function clearPickedTables() {
+    setMappings([])
+    mappingsRef.current = []
+    setTables([])
+    setTableHint('')
+  }
+
   async function loadTables() {
     const f = formRef.current
-    if (!f.source_instance_id || !f.source_db) {
+    if (!(f.task_type === 'add_table' && f.parent_id) && (!f.source_instance_id || !f.source_db)) {
       setTableHint('请先选择源端实例和数据库')
       return
     }
@@ -884,19 +913,31 @@ export default function CdcCreate() {
 
   function toggleParent(row: any, checked: boolean) {
     if (!row) return
-    const nextSet = new Set(form.parent_ids)
-    if (checked) nextSet.add(row.id)
-    else nextSet.delete(row.id)
-    const selected = parentTasks.filter((t) => nextSet.has(t.id))
-    const err = validateAddTableParents(selected, (id: string) => instances.find((i) => i.id === id))
-    if (checked && err) {
-      message.warning(err)
+    const dbOf = (t: any) => String(t?.source_db || '').trim().toLowerCase()
+    const current = parentTasks.filter((t) => form.parent_ids.includes(t.id))
+    let ids: string[]
+    if (!checked) {
+      ids = form.parent_ids.filter((id) => id !== row.id)
+    } else {
+      const sameDb = current.filter((t) => dbOf(t) === dbOf(row))
+      const selected = sameDb.some((t) => t.id === row.id) ? sameDb : [...sameDb, row]
+      const err = validateAddTableParents(selected, (id: string) => instances.find((i) => i.id === id))
+      if (err) {
+        message.warning(err)
+        return
+      }
+      const rest = sameDb.map((t) => t.id).filter((id) => id !== row.id)
+      const keepRep = form.parent_id && rest.includes(form.parent_id)
+      ids = keepRep ? [form.parent_id, ...rest.filter((id) => id !== form.parent_id), row.id] : [row.id, ...rest]
+    }
+    const ref = parentTasks.find((t) => t.id === ids[0]) || (checked ? row : null)
+    if (!ref) {
+      patchForm({ parent_ids: [], parent_id: '', tables: [], table_map: {} })
+      formRef.current = { ...formRef.current, parent_ids: [], parent_id: '', tables: [], table_map: {} }
+      clearPickedTables()
       return
     }
-    const ids = [...nextSet]
-    patchForm({ parent_ids: ids, parent_id: ids[0] || '' })
-    const ref = selected[0] || (checked ? row : null)
-    if (ref) onPickParent(ref, ids)
+    onPickParent(ref, ids)
   }
 
   function onPickParent(row: any, parentIdsOverride?: string[]) {
@@ -904,10 +945,28 @@ export default function CdcCreate() {
     const isMulti = form.task_type === 'add_table' || form.task_type === 'alter_schema'
     const extra = decodeCdcExtra(row.description).extra
     const suffix = form.task_type === 'alter_schema' ? '加列' : form.task_type === 'remove_table' ? '移除表' : '加表'
+    const sourceHost = extra.source_host || ''
+    const sourcePort = Number(extra.source_port || 0)
+    const targetHost = extra.target_host || ''
+    const targetPort = Number(extra.target_port || 0)
+    let sourceID = row.source_instance_id || ''
+    let targetID = row.target_instance_id || ''
+    if (!instanceID(sourceID)) {
+      const hit = matchInstanceByEndpoint(instances, sourceHost, sourcePort)
+      if (hit) sourceID = hit.id
+    }
+    if (!instanceID(targetID)) {
+      const hit = matchInstanceByEndpoint(instances, targetHost, targetPort)
+      if (hit) targetID = hit.id
+    }
     const patch: Partial<CdcForm> = {
       parent_id: row.id,
-      source_instance_id: row.source_instance_id,
-      target_instance_id: row.target_instance_id,
+      source_instance_id: sourceID,
+      target_instance_id: targetID,
+      source_host: sourceHost,
+      source_port: sourcePort,
+      target_host: targetHost,
+      target_port: targetPort,
       source_db: row.source_db,
       target_db: row.target_db,
       env: extra.env || form.env,
@@ -936,11 +995,19 @@ export default function CdcCreate() {
     if (!form.name) patch.name = `${row.name}_${suffix}`
     if (isMulti) patch.parent_ids = parentIdsOverride && parentIdsOverride.length ? parentIdsOverride : [row.id]
     // canAutoAlter 需基于新 parent 计算
-    const autoAlterOk = extra.auto_create_table !== false && !!(row.target_instance_id && row.target_db)
+    const autoAlterOk = extra.auto_create_table !== false && !!(targetID && row.target_db)
     if (!autoAlterOk && form.task_type === 'alter_schema') patch.alter_schema_exec_mode = 'sql_only'
+    const prev = formRef.current
+    const parentChanged = !!prev.parent_id && prev.parent_id !== row.id
+    const dbChanged = String(prev.source_db || '').toLowerCase() !== String(row.source_db || '').toLowerCase()
+    if (isMulti && prev.parent_id && (parentChanged || dbChanged)) {
+      patch.tables = []
+      patch.table_map = {}
+      clearPickedTables()
+    }
     patchForm(patch)
     formRef.current = { ...formRef.current, ...patch }
-    void loadSourceDbs(row.source_instance_id)
+    void loadSourceDbs(sourceID)
     void loadParentExtras(patch.parent_ids || (form.parent_ids.length ? form.parent_ids : [row.id]))
   }
 
@@ -1020,41 +1087,64 @@ export default function CdcCreate() {
     )
   }
 
+  function sqlPreviewKey(item: { table?: string }, idx: number) {
+    return item.table || String(idx)
+  }
+
+  function retainSqlOpenKeys(items: { table?: string; skipped?: boolean }[]) {
+    const alive = new Set<string>()
+    items.forEach((it, idx) => {
+      if (!it.skipped) alive.add(sqlPreviewKey(it, idx))
+    })
+    setSqlOpenKeys((prev) => prev.filter((k) => alive.has(k)))
+  }
+
   // ---- SQL / Debezium 预览 ----
   async function refreshSql() {
-    const local = buildSqlPreview(
-      formRef.current,
-      mappingsRef.current,
-      formRef.current.kafka_bootstrap_servers || connectorKafkaHost,
-    )
-    setSqlPreviews(local)
-    sqlPreviewsRef.current = local
+    setSqlPreviewError('')
     try {
       const { data } = await api.post('/cdc-sync/tasks/preview-target-sql', {
         ...submitBodyNow(),
         ...extraPayloadNow(),
       })
-      const items = data.data?.items || []
-      if (items.length) {
-        const next = items.map((it: any) => ({
-          table: it.table,
-          source: it.source,
-          ddl: it.ddl || '',
-          load: it.load || '',
-          skipped: it.skipped,
-        }))
-        setSqlPreviews(next)
-        sqlPreviewsRef.current = next
+      if (data?.ok === false) {
+        setSqlPreviews([])
+        sqlPreviewsRef.current = []
+        setSqlOpenKeys([])
+        setSqlPreviewError(data.message || '目标端 SQL 预览失败')
       } else {
-        const sql = data.data?.sql || ''
-        if (sql) {
-          const next = [{ table: formRef.current.target_db || 'target', source: formRef.current.tables.join(','), ddl: sql, load: '' }]
+        const items = data.data?.items || []
+        if (items.length) {
+          const next = items.map((it: any) => ({
+            table: it.table,
+            source: it.source,
+            ddl: it.ddl || '',
+            load: it.load || '',
+            skipped: it.skipped,
+          }))
           setSqlPreviews(next)
           sqlPreviewsRef.current = next
+          retainSqlOpenKeys(next)
+        } else {
+          const sql = data.data?.sql || ''
+          if (sql) {
+            const next = [{ table: formRef.current.target_db || 'target', source: formRef.current.tables.join(','), ddl: sql, load: '' }]
+            setSqlPreviews(next)
+            sqlPreviewsRef.current = next
+            retainSqlOpenKeys(next)
+          } else {
+            setSqlPreviews([])
+            sqlPreviewsRef.current = []
+            setSqlOpenKeys([])
+            setSqlPreviewError('未生成目标端 SQL')
+          }
         }
       }
-    } catch {
-      /* keep local preview */
+    } catch (e: any) {
+      setSqlPreviews([])
+      sqlPreviewsRef.current = []
+      setSqlOpenKeys([])
+      setSqlPreviewError(e?.response?.data?.message || '目标端 SQL 预览失败')
     }
     return loadDebeziumPreview()
   }
@@ -1068,10 +1158,29 @@ export default function CdcCreate() {
       const preview = data.data || null
       setDebeziumPreview(preview)
       debeziumPreviewRef.current = preview
+      setDebeziumPreviewError('')
     } catch (e: any) {
       setDebeziumPreview(null)
       debeziumPreviewRef.current = null
-      message.warning(e?.response?.data?.message || 'Debezium 配置预览失败')
+      setDebeziumPreviewError(e?.response?.data?.message || 'Debezium 配置预览失败')
+    }
+  }
+
+  function onAddAutoCreate(v: boolean) {
+    patchForm({ auto_create_table: v })
+    formRef.current = { ...formRef.current, auto_create_table: v }
+    if (v || formRef.current.task_type !== 'add_table') return
+    setSqlPreviews([])
+    sqlPreviewsRef.current = []
+    setSqlOpenKeys([])
+    setDebeziumPreview(null)
+    debeziumPreviewRef.current = null
+    setDebeziumPreviewError('')
+    const nextSteps = stepsForType('add_table', false)
+    if (stepRef.current >= nextSteps.length) {
+      const s = nextSteps.length - 1
+      setStep(s)
+      stepRef.current = s
     }
   }
 
@@ -1129,6 +1238,7 @@ export default function CdcCreate() {
         }))
         setSqlPreviews(next)
         sqlPreviewsRef.current = next
+        retainSqlOpenKeys(next)
       }
       setPrecheckChecks(payload.checks || [])
       const ok = !!(data.ready ?? data.ok)
@@ -1256,7 +1366,10 @@ export default function CdcCreate() {
           : false
     const nextIsConfirm = nextStep === steps.length - 1
     if (f.task_type === 'init' && nextStep === 4) void runPrecheck()
-    if (nextIsSql) await refreshSql()
+    if (nextIsSql) {
+      setSqlOpenKeys([])
+      await refreshSql()
+    }
     else if (nextIsConfirm) {
       await loadDebeziumPreview()
       if (f.task_type === 'alter_schema') await loadAlterMigrateSQL()
@@ -1482,7 +1595,7 @@ export default function CdcCreate() {
           ← 返回列表
         </Button>
       </div>
-      <div className="cdc-title-row" style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+      <div className="cdc-title-row">
         <div className="cdc-title-left" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <h2 style={{ margin: 0 }}>{pageTitle}</h2>
           <Tag color={typeTagColor(form.task_type)}>{typeTextTag(form.task_type)}</Tag>
@@ -1492,7 +1605,7 @@ export default function CdcCreate() {
 
       <Steps className="cdc-steps" current={step} items={steps.map((s) => ({ title: s }))} style={{ marginBottom: 16 }} />
 
-      <div className={`cdc-form${isWideStep ? ' cdc-form-wide' : ''}`}>
+      <div className="cdc-form">
         {/* ===== init: 选择源端 ===== */}
         {mode === 'init' && step === 0 && (
           <>
@@ -1668,7 +1781,7 @@ export default function CdcCreate() {
 
         {/* ===== init: 选择表 ===== */}
         {mode === 'init' && step === 1 && (
-          <>
+          <div className="cdc-step-fill">
             <Alert
               type="info"
               showIcon
@@ -1704,6 +1817,7 @@ export default function CdcCreate() {
                 </div>
               </div>
             )}
+            <div className="cdc-fill-grids">
             <Row gutter={16}>
               <Col xs={24} md={12}>
                 <Card
@@ -1819,7 +1933,8 @@ export default function CdcCreate() {
                 </Card>
               </Col>
             </Row>
-          </>
+            </div>
+          </div>
         )}
 
         {/* ===== init: Debezium ===== */}
@@ -2391,60 +2506,60 @@ export default function CdcCreate() {
               message="目标端 SQL 预览（编排时将执行）"
               description="可直接改 DDL / Routine Load；提交时会带上 sql_overrides，审批通过后按你改过的 SQL 执行。若 Routine Load 的 kafka_topic 与当前 Topic 前缀不一致，后端会忽略该覆盖。"
             />
-            {sqlPreviews.map((item, idx) => (
-              <Card
-                key={item.table || idx}
-                size="small"
-                className="cdc-card small"
-                title={
-                  <span className="card-title">
-                    {item.source} → {item.table}
-                  </span>
-                }
-              >
-                <Form layout="vertical">
-                  <Form.Item label="建表 DDL">
-                    <Input.TextArea
-                      rows={8}
-                      className="sql-box"
-                      value={item.ddl}
-                      onChange={(e) => {
-                        const next = sqlPreviews.map((x, i) => (i === idx ? { ...x, ddl: e.target.value } : x))
-                        setSqlPreviews(next)
-                        sqlPreviewsRef.current = next
-                      }}
-                    />
-                  </Form.Item>
-                  <Form.Item label="Routine Load">
-                    <Input.TextArea
-                      rows={6}
-                      className="sql-box"
-                      value={item.load}
-                      onChange={(e) => {
-                        const next = sqlPreviews.map((x, i) => (i === idx ? { ...x, load: e.target.value } : x))
-                        setSqlPreviews(next)
-                        sqlPreviewsRef.current = next
-                      }}
-                    />
-                  </Form.Item>
-                </Form>
-              </Card>
-            ))}
-            {debeziumPreview && (
-              <Card
-                size="small"
-                className="cdc-card small"
-                title={
-                  <span className="card-title">
-                    Debezium Connector（{debeziumPreview.template || form.debezium_mode}）
-                  </span>
-                }
-              >
-                {(debeziumPreview.notes || []).map((n: string, i: number) => (
-                  <Alert key={i} type="info" className="mb-sm" message={n} />
-                ))}
-                <Input.TextArea rows={18} readOnly className="sql-box" value={debeziumConfigText} />
-              </Card>
+            {sqlPreviewError && (
+              <Alert type="error" showIcon className="mb" message="目标端 SQL 预览失败" description={sqlPreviewError} />
+            )}
+            {sqlPreviews.some((item) => !item.skipped) && (
+              <Collapse
+                className="cdc-sql-collapse"
+                activeKey={sqlOpenKeys}
+                onChange={(keys) => {
+                  const list = Array.isArray(keys) ? keys : [keys]
+                  setSqlOpenKeys(list.map(String))
+                }}
+                items={sqlPreviews.flatMap((item, idx) =>
+                  item.skipped
+                    ? []
+                    : [
+                        {
+                          key: sqlPreviewKey(item, idx),
+                          label: (
+                            <span className="card-title">
+                              {item.source} → {item.table}
+                            </span>
+                          ),
+                          children: (
+                            <Form layout="vertical">
+                              <Form.Item label="建表 DDL">
+                                <Input.TextArea
+                                  rows={8}
+                                  className="sql-box"
+                                  value={item.ddl}
+                                  onChange={(e) => {
+                                    const next = sqlPreviews.map((x, i) => (i === idx ? { ...x, ddl: e.target.value } : x))
+                                    setSqlPreviews(next)
+                                    sqlPreviewsRef.current = next
+                                  }}
+                                />
+                              </Form.Item>
+                              <Form.Item label="Routine Load">
+                                <Input.TextArea
+                                  rows={6}
+                                  className="sql-box"
+                                  value={item.load}
+                                  onChange={(e) => {
+                                    const next = sqlPreviews.map((x, i) => (i === idx ? { ...x, load: e.target.value } : x))
+                                    setSqlPreviews(next)
+                                    sqlPreviewsRef.current = next
+                                  }}
+                                />
+                              </Form.Item>
+                            </Form>
+                          ),
+                        },
+                      ],
+                )}
+              />
             )}
           </>
         )}
@@ -2493,10 +2608,12 @@ export default function CdcCreate() {
             </Card>
             <Card size="small" className="cdc-card small" title={<span className="card-title">源端 / 目标端</span>}>
               <Descriptions column={2} bordered size="small">
-                <Descriptions.Item label="PG 实例">{instLabel(sourceInst)}</Descriptions.Item>
+                <Descriptions.Item label="PG 实例">
+                  {endpointLabel(sourceInst, form.source_host, form.source_port, true)}
+                </Descriptions.Item>
                 <Descriptions.Item label="StarRocks 实例">
-                  {form.target_instance_id
-                    ? instLabel(targetInst)
+                  {form.target_instance_id || form.target_host
+                    ? endpointLabel(targetInst, form.target_host, form.target_port, true)
                     : form.auto_create_table
                       ? '—'
                       : '未填写（手动 DDL）'}
@@ -2745,14 +2862,33 @@ export default function CdcCreate() {
 
         {/* ===== add_table: 选择新增表 ===== */}
         {mode === 'add_table' && step === 1 && (
-          <>
+          <div className="cdc-step-fill">
+            <Card size="small" className="cdc-card small mb" title={<span className="card-title">继承自已有任务</span>}>
+              <Descriptions column={2} bordered size="small">
+                <Descriptions.Item label="任务">{parentName}</Descriptions.Item>
+                <Descriptions.Item label="Publication">{form.publication_name || '—'}</Descriptions.Item>
+                <Descriptions.Item label="源端实例">
+                  {endpointLabel(sourceInst, form.source_host, form.source_port, true)}
+                </Descriptions.Item>
+                <Descriptions.Item label="目标端实例">
+                  {endpointLabel(targetInst, form.target_host, form.target_port, true)}
+                </Descriptions.Item>
+                <Descriptions.Item label="PG 库">{form.source_db || '—'}</Descriptions.Item>
+                <Descriptions.Item label="Schema">{form.source_schema || 'public'}</Descriptions.Item>
+                <Descriptions.Item label="目标库">{form.target_db || '—'}</Descriptions.Item>
+                <Descriptions.Item label="Debezium 模式">{form.debezium_mode || '—'}</Descriptions.Item>
+                <Descriptions.Item label="已同步表数">{parentTables.length}</Descriptions.Item>
+                <Descriptions.Item label="动态分区">{form.sr_dynamic_partition_enable ? '已开启' : '未开启'}</Descriptions.Item>
+              </Descriptions>
+            </Card>
             <Alert
               type="info"
               showIcon
               className="mb"
               message="多张 PG 分表 → 1 张 StarRocks 目标表"
-              description="点击「分表匹配」批量归并；勾选单表则一对一映射。"
+              description="数字后缀的表默认归成一组，展开后只保留共有列，KEY 列可调整顺序。映射默认增量，可改为初始化。点击「分表匹配」可按规则再归并。"
             />
+            <div className="cdc-fill-grids">
             <Row gutter={16}>
               <Col xs={24} md={12}>
                 <Card
@@ -2793,6 +2929,7 @@ export default function CdcCreate() {
                       刷新
                     </Button>
                   </div>
+                  {tableHint && <Alert type="info" showIcon className="mb" message={tableHint} />}
                   <CdcSourceTableList
                     groups={visibleShardGroups}
                     singles={visibleSingleTables}
@@ -2856,11 +2993,13 @@ export default function CdcCreate() {
                     instanceId={form.source_instance_id}
                     dbName={form.source_db}
                     schema={form.source_schema || 'public'}
+                    showSyncMode
                   />
                 </Card>
               </Col>
             </Row>
-          </>
+            </div>
+          </div>
         )}
 
         {/* ===== add_table: 配置目标端 ===== */}
@@ -2872,12 +3011,14 @@ export default function CdcCreate() {
                   checked={form.auto_create_table}
                   checkedChildren="开"
                   unCheckedChildren="关"
-                  onChange={(v) => patchForm({ auto_create_table: v })}
+                  onChange={onAddAutoCreate}
                 />
               </Form.Item>
             </Form>
             <Descriptions column={2} bordered size="small">
-              <Descriptions.Item label="继承目标实例">{instLabel(targetInst)}</Descriptions.Item>
+              <Descriptions.Item label="继承目标实例">
+                {endpointLabel(targetInst, form.target_host, form.target_port, true)}
+              </Descriptions.Item>
               <Descriptions.Item label="目标库">{form.target_db || '—'}</Descriptions.Item>
               <Descriptions.Item label="表模型">{keyModelLabel(form.key_model)}</Descriptions.Item>
               <Descriptions.Item label="动态分区">
@@ -3121,7 +3262,7 @@ export default function CdcCreate() {
       </Modal>
 
       {/* ===== 导航栏 ===== */}
-      <div className={`cdc-nav${isWideStep ? ' cdc-nav-wide' : ''}`}>
+      <div className="cdc-nav">
         <Button onClick={() => goList()}>取消</Button>
         <div className="cdc-nav-right">
           {mode === 'init' && <Button onClick={() => saveDraft()}>保存草稿</Button>}

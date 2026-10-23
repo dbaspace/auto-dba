@@ -1,7 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import {
-  useParams } from 'react-router-dom'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import {
   Alert,
   Button,
@@ -20,7 +18,11 @@ import {
 } from 'antd'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import api from '../../api/request'
+import { useAppDispatch, useAppSelector } from '../../store'
+import { closeTab, openTab, tabKey, updateTabMeta } from '../../store/tabsSlice'
 import './MigrationDetail.css'
+
+const DESC_COLS = { xs: 1, sm: 2, lg: 3 }
 
 function emptyPlain(v: any) {
   const s = v != null ? String(v).trim() : ''
@@ -175,7 +177,17 @@ const me = (() => {
 export default function MigrationDetail() {
   const params = useParams()
   const navigate = useNavigate()
+  const location = useLocation()
+  const dispatch = useAppDispatch()
+  const menus = useAppSelector((s) => s.auth.menus)
   const id = params.id as string
+
+  const backToList = () => {
+    const detailKey = tabKey(location.pathname, location.search)
+    dispatch(openTab({ path: '/ops/migration', menus, title: '数据迁移' }))
+    dispatch(closeTab(detailKey))
+    navigate('/ops/migration')
+  }
 
   const [loading, setLoading] = useState(false)
   const [task, setTask] = useState<any>(null)
@@ -312,6 +324,8 @@ export default function MigrationDetail() {
       ])
       const taskVal = t.data.data
       setTask(taskVal)
+      const taskName = String(taskVal?.name || taskVal?.task_name || '').trim()
+      dispatch(updateTabMeta({ key: tabKey(location.pathname, location.search), title: taskName || '迁移任务详情' }))
       setObjects(o.data.data || [])
       setLogs(l.data.data || [])
       setPrechecks(p.data.data || [])
@@ -407,7 +421,7 @@ export default function MigrationDetail() {
     <Spin spinning={loading}>
       <div className="mig-detail">
         <div className="mig-toolbar">
-          <Button onClick={() => navigate('/ops/migration')}>返回列表</Button>
+          <Button onClick={backToList}>返回列表</Button>
         </div>
 
         {task?.error_message && (
@@ -509,7 +523,7 @@ export default function MigrationDetail() {
           </div>
 
           <div className="sec-title">任务配置</div>
-          <Descriptions column={3} bordered size="small" className="mb">
+          <Descriptions column={DESC_COLS} bordered size="small" className="mb">
             <Descriptions.Item label="数据库类型">{emptyPlain(task?.db_type)}</Descriptions.Item>
             <Descriptions.Item label="迁移模式">{emptyPlain(task?.migration_mode)}</Descriptions.Item>
             <Descriptions.Item label="数据中转方式">{transferText(task?.transfer_mode)}</Descriptions.Item>
@@ -541,7 +555,7 @@ export default function MigrationDetail() {
           </Descriptions>
 
           <div className="sec-title">审批与流转</div>
-          <Descriptions column={3} bordered size="small">
+          <Descriptions column={DESC_COLS} bordered size="small">
             <Descriptions.Item label="审批状态">
               <Tag color={approvalTagColor(task?.approval_status)}>
                 {approvalText(task?.approval_status)}

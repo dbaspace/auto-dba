@@ -9,37 +9,41 @@ import (
 	"auto-dba/internal/store"
 )
 
-func applySchema(ctx context.Context, engine string, src, tgt *sql.DB, o *store.MigrationObject, conflict string) error {
+func applySchema(ctx context.Context, engine string, src, tgt *sql.DB, o *store.MigrationObject, conflict string, pairs []pgTablePair) (*schemaDeferred, error) {
 	exists, err := tableExists(ctx, tgt, engine, firstNonEmpty(o.TargetSchema, o.SourceSchema), o.TargetTable)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if exists {
 		switch conflict {
 		case "skip":
-			return nil
+			return &schemaDeferred{}, nil
 		case "drop_create":
 			if err := dropTable(ctx, tgt, engine, o); err != nil {
-				return err
+				return nil, err
 			}
 		case "truncate":
-			return truncateTable(ctx, tgt, engine, o)
+			if err := truncateTable(ctx, tgt, engine, o); err != nil {
+				return nil, err
+			}
+			return &schemaDeferred{}, nil
 		default:
-			return fmt.Errorf("目标表 %s 已存在（conflict=abort）", tableRef(engine, firstNonEmpty(o.TargetSchema, "public"), o.TargetTable))
-		}
-		if conflict == "truncate" {
-			return nil
+			return nil, fmt.Errorf("目标表 %s 已存在（conflict=abort）", tableRef(engine, firstNonEmpty(o.TargetSchema, "public"), o.TargetTable))
 		}
 	}
 	if store.NormalizeDBType(engine) == "postgres" {
-		return applyPGSchema(ctx, src, tgt, o)
+		return applyPGSchema(ctx, src, tgt, o, pairs)
 	}
-	return applyMySQLSchema(ctx, src, tgt, o)
+	return applyMySQLSchema(ctx, src, tgt, o, pairs)
 }
 
 func dropTable(ctx context.Context, tgt *sql.DB, engine string, o *store.MigrationObject) error {
 	ref := tableRef(engine, firstNonEmpty(o.TargetSchema, o.SourceSchema), o.TargetTable)
-	_, err := tgt.ExecContext(ctx, "DROP TABLE IF EXISTS "+ref)
+	q := "DROP TABLE IF EXISTS " + ref
+	if store.NormalizeDBType(engine) == "postgres" {
+		q += " CASCADE"
+	}
+	_, err := tgt.ExecContext(ctx, q)
 	return err
 }
 
@@ -49,94 +53,37 @@ func truncateTable(ctx context.Context, tgt *sql.DB, engine string, o *store.Mig
 	return err
 }
 
-func applyMySQLSchema(ctx context.Context, src, tgt *sql.DB, o *store.MigrationObject) error {
+func applyMySQLSchema(ctx context.Context, src, tgt *sql.DB, o *store.MigrationObject, pairs []pgTablePair) (*schemaDeferred, error) {
 	var tbl, ddl string
 	err := src.QueryRowContext(ctx, "SHOW CREATE TABLE `"+strings.ReplaceAll(o.SourceTable, "`", "``")+"`").Scan(&tbl, &ddl)
 	if err != nil {
-		return fmt.Errorf("SHOW CREATE TABLE: %w", err)
+		return nil, fmt.Errorf("SHOW CREATE TABLE: %w", err)
 	}
 	ddl = strings.Replace(ddl, "CREATE TABLE `"+tbl+"`", "CREATE TABLE `"+strings.ReplaceAll(o.TargetTable, "`", "``")+"`", 1)
-	_, err = tgt.ExecContext(ctx, ddl)
-	return err
+	body, fks := splitMySQLForeignKeys(ddl, o.TargetTable, pairs)
+	if _, err := tgt.ExecContext(ctx, body); err != nil {
+		return nil, fmt.Errorf("执行建表失败: %w\nSQL: %s", err, body)
+	}
+	trigs, err := mysqlTriggerDDLs(ctx, src, o.SourceTable, o.TargetTable)
+	if err != nil {
+		return nil, err
+	}
+	return &schemaDeferred{Created: true, FKs: fks, Triggers: trigs}, nil
 }
 
-func applyPGSchema(ctx context.Context, src, tgt *sql.DB, o *store.MigrationObject) error {
+func applyPGSchema(ctx context.Context, src, tgt *sql.DB, o *store.MigrationObject, pairs []pgTablePair) (*schemaDeferred, error) {
 	ss := firstNonEmpty(o.SourceSchema, "public")
 	ts := firstNonEmpty(o.TargetSchema, ss)
-	if _, err := tgt.ExecContext(ctx, `CREATE SCHEMA IF NOT EXISTS `+quoteIdent("postgres", ts)); err != nil {
-		return err
-	}
-	rows, err := src.QueryContext(ctx, `
-		SELECT column_name, data_type, udt_name, character_maximum_length, numeric_precision, numeric_scale,
-		       is_nullable, column_default
-		FROM information_schema.columns
-		WHERE table_schema=$1 AND table_name=$2
-		ORDER BY ordinal_position`, ss, o.SourceTable)
+	plan, err := planPGTable(ctx, src, ss, o.SourceTable, ts, o.TargetTable, pairs)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer rows.Close()
-	var cols []string
-	for rows.Next() {
-		var name, dtype, udt, nullable string
-		var charLen, numPrec, numScale sql.NullInt64
-		var def sql.NullString
-		if err := rows.Scan(&name, &dtype, &udt, &charLen, &numPrec, &numScale, &nullable, &def); err != nil {
-			return err
+	for _, stmt := range plan.Body {
+		if err := execSQL(ctx, tgt, "结构迁移", stmt); err != nil {
+			return nil, err
 		}
-		part := quoteIdent("postgres", name) + " " + pgColType(dtype, udt, charLen, numPrec, numScale)
-		if nullable == "NO" {
-			part += " NOT NULL"
-		}
-		if def.Valid && !strings.Contains(strings.ToLower(def.String), "nextval(") {
-			part += " DEFAULT " + def.String
-		}
-		cols = append(cols, part)
 	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	if len(cols) == 0 {
-		return fmt.Errorf("源表 %s.%s 无列", ss, o.SourceTable)
-	}
-	pk, _ := pgPrimaryKey(ctx, src, ss, o.SourceTable)
-	if pk != "" {
-		cols = append(cols, pk)
-	}
-	ddl := fmt.Sprintf(`CREATE TABLE %s (%s)`, tableRef("postgres", ts, o.TargetTable), strings.Join(cols, ", "))
-	if _, err := tgt.ExecContext(ctx, ddl); err != nil {
-		return err
-	}
-	return copyPGIndexes(ctx, src, tgt, ss, o.SourceTable, ts, o.TargetTable)
-}
-
-func pgColType(dtype, udt string, charLen, numPrec, numScale sql.NullInt64) string {
-	switch strings.ToLower(dtype) {
-	case "character varying", "varchar":
-		if charLen.Valid && charLen.Int64 > 0 {
-			return fmt.Sprintf("varchar(%d)", charLen.Int64)
-		}
-		return "varchar"
-	case "character", "char":
-		if charLen.Valid && charLen.Int64 > 0 {
-			return fmt.Sprintf("char(%d)", charLen.Int64)
-		}
-		return "char"
-	case "numeric", "decimal":
-		if numPrec.Valid && numScale.Valid {
-			return fmt.Sprintf("numeric(%d,%d)", numPrec.Int64, numScale.Int64)
-		}
-		return "numeric"
-	case "array":
-		return udt
-	case "user-defined":
-		return quoteIdent("postgres", udt)
-	default:
-		if udt != "" && dtype != udt {
-			return udt
-		}
-		return dtype
-	}
+	return &schemaDeferred{Created: true, FKs: plan.FKs, Triggers: plan.Triggers, SeqSyncs: plan.SeqSyncs}, nil
 }
 
 func pgPrimaryKey(ctx context.Context, src *sql.DB, schema, table string) (string, error) {
@@ -163,49 +110,4 @@ func pgPrimaryKey(ctx context.Context, src *sql.DB, schema, table string) (strin
 		return "", nil
 	}
 	return "PRIMARY KEY (" + strings.Join(cols, ", ") + ")", nil
-}
-
-func copyPGIndexes(ctx context.Context, src, tgt *sql.DB, ss, st, ts, tt string) error {
-	rows, err := src.QueryContext(ctx, `
-		SELECT indexdef FROM pg_indexes
-		WHERE schemaname=$1 AND tablename=$2 AND indexname NOT IN (
-			SELECT constraint_name FROM information_schema.table_constraints
-			WHERE table_schema=$1 AND table_name=$2 AND constraint_type='PRIMARY KEY'
-		)`, ss, st)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	srcOn := []string{
-		`ON "` + ss + `"."` + st + `"`,
-		`ON ` + ss + `."` + st + `"`,
-		`ON "` + ss + `".` + st,
-		`ON ` + ss + `.` + st,
-	}
-	tgtOn := `ON ` + tableRef("postgres", ts, tt)
-	for rows.Next() {
-		var def string
-		if err := rows.Scan(&def); err != nil {
-			return err
-		}
-		replaced := false
-		for _, p := range srcOn {
-			if strings.Contains(def, p) {
-				def = strings.Replace(def, p, tgtOn, 1)
-				replaced = true
-				break
-			}
-		}
-		if !replaced {
-			// 无法安全改写（常见于 public."MixedCase"）则跳过，避免目标库误引用源表名
-			continue
-		}
-		if _, err := tgt.ExecContext(ctx, def); err != nil {
-			// 同名索引冲突时跳过，不阻断数据迁移
-			if !strings.Contains(strings.ToLower(err.Error()), "already exists") {
-				return err
-			}
-		}
-	}
-	return rows.Err()
 }

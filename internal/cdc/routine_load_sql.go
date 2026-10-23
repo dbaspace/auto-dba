@@ -47,15 +47,21 @@ func isSRTableMetaName(name string) bool {
 }
 
 func pgColKind(c pgCol) string {
-	u := strings.ToLower(strings.TrimSpace(c.UDT))
-	switch u {
-	case "date":
+	if pgColIsDateOnly(c) {
 		return "date"
-	case "timestamp":
+	}
+	if pgColIsTimestampWithoutTZ(c) {
 		return "timestamp"
-	case "json", "jsonb":
+	}
+	if pgColHasTimeZone(c) {
+		return "timestamptz"
+	}
+	udt := strings.ToLower(strings.TrimSpace(c.UDT))
+	dt := strings.ToLower(strings.TrimSpace(c.DataType))
+	switch {
+	case udt == "json" || udt == "jsonb" || dt == "json" || dt == "jsonb":
 		return "json"
-	case "bool", "boolean":
+	case udt == "bool" || udt == "boolean" || dt == "boolean":
 		return "boolean"
 	default:
 		return ""
@@ -127,9 +133,9 @@ func routineLoadExprsUnwrap(cols []pgCol) []string {
 	biz := businessCols(cols)
 	var exprs []string
 	for _, c := range biz {
-		exprs = append(exprs, "`"+c.Name+"`")
+		exprs = append(exprs, c.Name)
 	}
-	exprs = append(exprs, "`__source_db`", "`__source_table`", "`__deleted`")
+	exprs = append(exprs, "__source_db", "__source_table", "__deleted")
 	for _, c := range biz {
 		switch pgColKind(c) {
 		case "date":
@@ -161,7 +167,7 @@ func routineLoadExprsWithSchema(cols []pgCol) ([]string, string) {
 		"`"+srColSourceDBName+"`=get_json_string(payload,'$.__source_db')",
 		"`"+srColSourceTableName+"`=get_json_string(payload,'$.__source_table')",
 	)
-	return exprs, `"$.payload"`
+	return exprs, `\"$.payload\"`
 }
 
 func routineLoadExprsBeforeAfter(cols []pgCol, withSchema bool) ([]string, string) {
@@ -175,7 +181,7 @@ func routineLoadExprsBeforeAfter(cols []pgCol, withSchema bool) ([]string, strin
 			"`"+srColSourceDBName+"`=get_json_string(payload,'$.source.db')",
 			"`"+srColSourceTableName+"`=get_json_string(payload,'$.source.table')",
 		)
-		return exprs, `"$.payload"`
+		return exprs, `\"$.payload\"`
 	}
 	exprs := []string{"payload", "source_data"}
 	for _, c := range businessCols(cols) {
@@ -186,16 +192,42 @@ func routineLoadExprsBeforeAfter(cols []pgCol, withSchema bool) ([]string, strin
 		"`"+srColSourceTableName+"`=get_json_string(source_data,'$.table')",
 		"`"+srColPhysicalDeleted+"`='false'",
 	)
-	return exprs, `"$.after", "$.source"`
+	return exprs, `\"$.after\", \"$.source\"`
+}
+
+func payloadJSON(sub string) string {
+	return fmt.Sprintf("get_json_string(payload,'%s')", sub)
+}
+
+func payloadEmptyCond(raw string) string {
+	return fmt.Sprintf("(%s IS NULL OR %s = '' OR lower(%s) = 'null')", raw, raw, raw)
+}
+
+func payloadEmptyOrZeroCond(raw string) string {
+	return fmt.Sprintf("(%s OR %s = '0')", payloadEmptyCond(raw), raw)
 }
 
 func payloadExpr(c pgCol, sub string) string {
+	raw := payloadJSON(sub)
 	switch pgColKind(c) {
 	case "date":
-		return fmt.Sprintf("`%s`=date_add('1970-01-01', INTERVAL get_json_string(payload,'%s') DAY)", c.Name, sub)
+		inner := fmt.Sprintf("date_add('1970-01-01', INTERVAL %s DAY)", raw)
+		if c.IsNullable {
+			return fmt.Sprintf("`%s`=IF(%s, NULL, %s)", c.Name, payloadEmptyOrZeroCond(raw), inner)
+		}
+		return fmt.Sprintf("`%s`=%s", c.Name, inner)
 	case "timestamp":
-		return fmt.Sprintf("`%s`=DATE_ADD(days_add('1970-01-01 00:00:00', FLOOR(get_json_string(payload,'%s') / 86400000)), INTERVAL get_json_string(payload,'%s')-FLOOR(get_json_string(payload,'%s') / 86400000)*86400000 MILLISECOND)", c.Name, sub, sub, sub)
+		inner := fmt.Sprintf("DATE_ADD(days_add('1970-01-01 00:00:00', FLOOR(%s / 86400000)), INTERVAL %s-FLOOR(%s / 86400000)*86400000 MILLISECOND)", raw, raw, raw)
+		if c.IsNullable {
+			return fmt.Sprintf("`%s`=IF(%s, NULL, %s)", c.Name, payloadEmptyOrZeroCond(raw), inner)
+		}
+		return fmt.Sprintf("`%s`=%s", c.Name, inner)
+	case "timestamptz":
+		if c.IsNullable {
+			return fmt.Sprintf("`%s`=IF(%s, NULL, %s)", c.Name, payloadEmptyCond(raw), raw)
+		}
+		return fmt.Sprintf("`%s`=%s", c.Name, raw)
 	default:
-		return fmt.Sprintf("`%s`=get_json_string(payload,'%s')", c.Name, sub)
+		return fmt.Sprintf("`%s`=%s", c.Name, raw)
 	}
 }

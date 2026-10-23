@@ -109,4 +109,36 @@ func TestPickInstancePrefersExactHost(t *testing.T) {
 	if strings.Contains(fact, "password") || !strings.Contains(fact, "port=9030") {
 		t.Fatal(fact)
 	}
+	if !strings.Contains(fact, "dorisdb.bj.restosuite.cn") || !strings.Contains(fact, "都是这一台实例") {
+		t.Fatal(fact)
+	}
+}
+
+func TestPickInstanceByRegisteredDomain(t *testing.T) {
+	list := []store.Instance{
+		{Name: "other", Host: "pg.other.bj.restosuite.cn", DomainName: "pg.other.bj.restosuite.cn", DBType: "postgres"},
+		{
+			Name: "beijing-member-01", Host: "pg.member01.bj.restosuite.cn",
+			DomainName: "pg.member01.bj.restosuite.cn",
+			Domains:    []string{"pg.member01.bj.restosuite.cn", "pg.marketing01.bj.restosuite.cn"},
+			DBType:     "postgres", Port: 5432,
+		},
+	}
+	it := pickInstance(list, "pg.marketing01.bj.restosuite.cn")
+	if it == nil || it.Name != "beijing-member-01" {
+		t.Fatalf("%+v", it)
+	}
+	fact := formatInstanceMatch(it, "pg.marketing01.bj.restosuite.cn")
+	if !strings.Contains(fact, "pg.member01.bj.restosuite.cn") || !strings.Contains(fact, "pg.marketing01.bj.restosuite.cn") {
+		t.Fatal(fact)
+	}
+	if !strings.Contains(fact, "按登记域名 pg.marketing01.bj.restosuite.cn 对上实例 beijing-member-01") {
+		t.Fatal(fact)
+	}
+	if !strings.Contains(fact, "连接主机是 pg.member01.bj.restosuite.cn") {
+		t.Fatal(fact)
+	}
+	if pickInstance(list, "pg.unknown.bj.restosuite.cn") != nil {
+		t.Fatal("unmatched host must not fall back to the first instance")
+	}
 }

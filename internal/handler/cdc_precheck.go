@@ -175,8 +175,16 @@ func (h *CDCHandler) Precheck(c *gin.Context) {
 			}
 			checkedTables = tables
 			if len(tables) > 0 {
-				if miss := cdc.MissingPGTables(ctx, db, schema, tables); len(miss) > 0 {
-					add(cdcPrecheckItem{Code: "source_tables", Name: "源表存在", Level: "required", Status: "failed", Message: "不存在: " + cdc.JoinSample(miss, 20)})
+				miss := cdc.MissingPGTables(ctx, db, schema, tables)
+				business, signal := cdc.PartitionMissingSourceTables(miss)
+				if taskType != "init" {
+					business = append(business, signal...)
+					signal = nil
+				}
+				if len(business) > 0 {
+					add(cdcPrecheckItem{Code: "source_tables", Name: "源表存在", Level: "required", Status: "failed", Message: "不存在: " + cdc.JoinSample(business, 20)})
+				} else if len(signal) > 0 {
+					add(cdcPrecheckItem{Code: "source_tables", Name: "源表存在", Level: "required", Status: "passed", Message: "debezium_signal 不存在，提交后自动创建并加入 Publication"})
 				} else {
 					add(cdcPrecheckItem{Code: "source_tables", Name: "源表存在", Level: "required", Status: "passed", Message: fmt.Sprintf("%d 张", len(tables))})
 				}

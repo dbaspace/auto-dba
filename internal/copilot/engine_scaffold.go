@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"auto-dba/internal/aiops"
@@ -11,6 +12,8 @@ import (
 	"auto-dba/internal/secret"
 	"auto-dba/internal/store"
 )
+
+var reDBIdent = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // 各引擎只读语句。模型只能选名字，不能提交 SQL。
 var (
@@ -151,6 +154,41 @@ func (s *Service) runScaffold(ctx context.Context, tenant string, inst *store.In
 	default:
 		return TaskStep{Action: kind, Status: "error", Output: "未知脚手架"}, ""
 	}
+}
+
+// prepareSelectSQL 校验模型写的单条查询，并确定要连接的库。缺库名或库名非法时不退回维护库。
+func prepareSelectSQL(database, rawSQL string) (dbName, sqlText string, err error) {
+	dbName = strings.TrimSpace(database)
+	if !reDBIdent.MatchString(dbName) {
+		return "", "", fmt.Errorf("查询 SQL 必须指定合法库名，未连接实例")
+	}
+	sqlText, err = CheckCopilotSQL(rawSQL)
+	if err != nil {
+		return "", "", err
+	}
+	return dbName, sqlText, nil
+}
+
+func (s *Service) sqlSelectStep(ctx context.Context, tenant string, inst *store.Instance, database, rawSQL string) (TaskStep, string) {
+	detail := strings.TrimSpace(database)
+	if inst == nil {
+		return TaskStep{Action: "postgres", Status: "error", Detail: detail, Output: "未对上平台实例，未查询。"}, ""
+	}
+	if scaffoldEngine(inst.DBType) != "postgres" {
+		return TaskStep{
+			Action: "postgres", Status: "error", Detail: detail,
+			Output: fmt.Sprintf("平台实例引擎是 %s，不使用 postgres 查询。", inst.DBType),
+		}, ""
+	}
+	dbName, sqlText, err := prepareSelectSQL(database, rawSQL)
+	if err != nil {
+		return TaskStep{Action: "postgres", Status: "error", Detail: detail, Output: err.Error()}, ""
+	}
+	body, err := s.execReadOnlySQL(ctx, tenant, inst, dbName, sqlText)
+	if err != nil {
+		return TaskStep{Action: "postgres", Status: "error", Detail: dbName, Output: err.Error()}, ""
+	}
+	return TaskStep{Action: "postgres", Status: "ok", Detail: dbName, Output: trim(body, 1500)}, body
 }
 
 func (s *Service) sqlScaffoldStep(ctx context.Context, tenant string, inst *store.Instance, kind, name string) (TaskStep, string) {

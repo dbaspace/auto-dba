@@ -794,12 +794,39 @@ func PreviewTargetSQLItems(ctx context.Context, st *store.DB, secret string, t *
 	return items, nil
 }
 
-type pgCol struct{ Name, UDT string }
+type pgCol struct {
+	Name         string
+	DataType     string
+	UDT          string
+	IsNullable   bool
+	CharMaxLen   int
+	NumPrecision int
+	NumScale     int
+	IsIdentity   bool
+	Comment      string
+	DefaultExpr  string
+}
 
 func pgColumns(ctx context.Context, db *sql.DB, schema, table string) ([]pgCol, []string, error) {
 	rows, err := db.QueryContext(ctx, `
-		SELECT column_name, udt_name FROM information_schema.columns
-		WHERE table_schema=$1 AND table_name=$2 ORDER BY ordinal_position`, schema, table)
+SELECT c.column_name,
+       c.data_type,
+       c.udt_name,
+       (c.is_nullable = 'YES') AS is_nullable,
+       COALESCE(c.character_maximum_length, 0) AS char_max_len,
+       COALESCE(c.numeric_precision, 0) AS num_precision,
+       COALESCE(c.numeric_scale, 0) AS num_scale,
+       (c.is_identity = 'YES') AS is_identity,
+       col_description(pgc.oid, a.attnum) AS column_comment,
+       COALESCE(pg_get_expr(ad.adbin, ad.adrelid), '') AS default_expr
+FROM information_schema.columns c
+JOIN pg_class pgc ON pgc.relname = c.table_name
+JOIN pg_namespace n ON n.oid = pgc.relnamespace AND n.nspname = c.table_schema
+JOIN pg_attribute a ON a.attrelid = pgc.oid AND a.attname = c.column_name
+  AND a.attnum > 0 AND NOT a.attisdropped
+LEFT JOIN pg_attrdef ad ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum
+WHERE c.table_schema = $1 AND c.table_name = $2
+ORDER BY c.ordinal_position`, schema, table)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -807,10 +834,21 @@ func pgColumns(ctx context.Context, db *sql.DB, schema, table string) ([]pgCol, 
 	var cols []pgCol
 	for rows.Next() {
 		var c pgCol
-		if err := rows.Scan(&c.Name, &c.UDT); err != nil {
+		var comment sql.NullString
+		if err := rows.Scan(&c.Name, &c.DataType, &c.UDT, &c.IsNullable, &c.CharMaxLen, &c.NumPrecision, &c.NumScale, &c.IsIdentity, &comment, &c.DefaultExpr); err != nil {
 			return nil, nil, err
 		}
+		if comment.Valid {
+			c.Comment = strings.TrimSpace(comment.String)
+		}
+		c.DefaultExpr = strings.TrimSpace(c.DefaultExpr)
+		if !c.IsIdentity && pgDefaultLooksLikeIdentity(c.DefaultExpr) {
+			c.IsIdentity = true
+		}
 		cols = append(cols, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
 	}
 	pkRows, err := db.QueryContext(ctx, `
 		SELECT a.attname FROM pg_index i
@@ -830,29 +868,6 @@ func pgColumns(ctx context.Context, db *sql.DB, schema, table string) ([]pgCol, 
 		}
 	}
 	return cols, pks, nil
-}
-
-func mapSRType(udt string) string {
-	switch strings.ToLower(udt) {
-	case "int2", "int4", "serial":
-		return "INT"
-	case "int8", "bigserial":
-		return "BIGINT"
-	case "numeric", "decimal":
-		return "DECIMAL(38,6)"
-	case "float4", "float8":
-		return "DOUBLE"
-	case "bool":
-		return "BOOLEAN"
-	case "date":
-		return "DATE"
-	case "timestamp", "timestamptz":
-		return "DATETIME"
-	case "json", "jsonb":
-		return "JSON"
-	default:
-		return "VARCHAR(65533)"
-	}
 }
 
 func (o *Orchestrator) appendLog(t *store.CDCTask, level, step, msg string) {
@@ -982,7 +997,7 @@ func (o *Orchestrator) routineLoadAction(ctx context.Context, t *store.CDCTask, 
 		if table == "" {
 			return
 		}
-		names[RoutineLoadNameFor(extra["env"], t.SourceDB, extra["topic_prefix"], table)] = struct{}{}
+		names[RoutineLoadNameForTask(t.TaskType, extra["env"], t.SourceDB, extra["topic_prefix"], table)] = struct{}{}
 	}
 	for _, m := range maps {
 		if strings.EqualFold(m.Status, "deleted") {
@@ -1021,7 +1036,7 @@ func (o *Orchestrator) routineLoadActionForTables(ctx context.Context, t *store.
 		if tb == "" {
 			continue
 		}
-		names[RoutineLoadNameFor(extra["env"], t.SourceDB, extra["topic_prefix"], tb)] = struct{}{}
+		names[RoutineLoadNameForTask(t.TaskType, extra["env"], t.SourceDB, extra["topic_prefix"], tb)] = struct{}{}
 	}
 	o.execRoutineLoadNames(ctx, db, t, t.TargetDB, names, action)
 }

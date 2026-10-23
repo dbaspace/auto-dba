@@ -189,3 +189,111 @@ func TestDiskQuestionJudge(t *testing.T) {
 		}
 	}
 }
+
+func TestPrepareSelectSQLQueryOnly(t *testing.T) {
+	sqlText := `SELECT schemaname, tablename FROM pg_tables WHERE tablename = 'tbl_marketing_financial_ext' AND schemaname NOT IN ('pg_catalog','information_schema')`
+	db, got, err := prepareSelectSQL("db_marketing_064", sqlText)
+	if err != nil || db != "db_marketing_064" || !strings.Contains(got, "pg_tables") {
+		t.Fatalf("db=%s sql=%s err=%v", db, got, err)
+	}
+	if _, _, err := prepareSelectSQL("", "SELECT 1"); err == nil || !strings.Contains(err.Error(), "库名") {
+		t.Fatalf("missing db: %v", err)
+	}
+	if _, _, err := prepareSelectSQL("db-marketing", "SELECT 1"); err == nil {
+		t.Fatal("illegal database name accepted")
+	}
+	for _, q := range []string{
+		"INSERT INTO t VALUES (1)",
+		"DELETE FROM t",
+		"DROP TABLE t",
+		"UPDATE t SET a = 1",
+		"SELECT 1; SELECT 2",
+	} {
+		if _, _, err := prepareSelectSQL("db_marketing_064", q); err == nil {
+			t.Fatalf("accepted non-query: %s", q)
+		}
+	}
+}
+
+func TestSQLSelectStepUsesNamedDatabase(t *testing.T) {
+	inst := &store.Instance{DBType: "postgres", Host: "pg.member01.bj.restosuite.cn"}
+	step, payload := (&Service{}).sqlSelectStep(context.Background(), "t", inst, "db_marketing_064", "SELECT 1")
+	if step.Status != "error" || step.Detail != "db_marketing_064" || payload != "" {
+		t.Fatalf("%+v payload=%s", step, payload)
+	}
+	if strings.Contains(step.Output, "禁止") || strings.Contains(step.Output, "库名") {
+		t.Fatal(step.Output)
+	}
+	bad, _ := (&Service{}).sqlSelectStep(context.Background(), "t", inst, "db_marketing_064", "DROP TABLE tbl_marketing_financial_ext")
+	if bad.Status != "error" || !strings.Contains(bad.Output, "禁止") {
+		t.Fatal(bad.Output)
+	}
+	missing, _ := (&Service{}).sqlSelectStep(context.Background(), "t", inst, "", "SELECT schemaname FROM pg_tables")
+	if missing.Status != "error" || !strings.Contains(missing.Output, "库名") || missing.Detail == "postgres" {
+		t.Fatalf("%+v", missing)
+	}
+}
+
+func TestDecideRunsModelSelect(t *testing.T) {
+	inst := &store.Instance{DBType: "postgres", Host: "pg.member01.bj.restosuite.cn", DomainName: "pg.member01.bj.restosuite.cn"}
+	s := &Service{catalogLookup: func(_, host string) (*store.Instance, error) {
+		cp := *inst
+		cp.Host = host
+		return &cp, nil
+	}}
+	n := 0
+	steps := s.runTaskDecide(context.Background(), Config{}, "auto", ChatRequest{
+		Message: "查看 pg.member01.bj.restosuite.cn 库 db_marketing_064 下表 tbl_marketing_financial_ext 是否存在",
+	}, func(string) TaskAction {
+		n++
+		if n > 1 {
+			return TaskAction{Action: "done"}
+		}
+		return TaskAction{
+			Action:   "postgres",
+			Database: "db_marketing_064",
+			SQL:      "SELECT schemaname, tablename FROM pg_tables WHERE tablename = 'tbl_marketing_financial_ext'",
+		}
+	})
+	var sawDB string
+	for _, st := range steps {
+		if st.Action == "postgres" && st.Detail == "db_marketing_064" {
+			sawDB = st.Detail
+			if strings.Contains(st.Output, "禁止") {
+				t.Fatal(st.Output)
+			}
+		}
+	}
+	if sawDB != "db_marketing_064" {
+		t.Fatalf("steps=%+v", steps)
+	}
+}
+
+func TestAnalyzeActionRejected(t *testing.T) {
+	inst := &store.Instance{DBType: "postgres", Host: "pg.member01.bj.restosuite.cn", DomainName: "pg.member01.bj.restosuite.cn"}
+	s := &Service{catalogLookup: func(_, host string) (*store.Instance, error) {
+		cp := *inst
+		cp.Host = host
+		return &cp, nil
+	}}
+	steps := s.runTaskDecide(context.Background(), Config{}, "auto", ChatRequest{
+		Message: "查看 pg.member01.bj.restosuite.cn 库 db_marketing_064 有没有表 t",
+	}, func(string) TaskAction {
+		return TaskAction{Action: "analyze", Script: "print(1)"}
+	})
+	if len(steps) == 0 {
+		t.Fatal("no steps")
+	}
+	var refused bool
+	for _, st := range steps {
+		if st.Action == "analyze" {
+			refused = st.Status == "error" && strings.Contains(st.Output, "禁止执行脚本")
+		}
+	}
+	if !refused {
+		t.Fatalf("%+v", steps)
+	}
+	if analyzeStep("print(1)", `{}`).Status != "error" {
+		t.Fatal("analyzeStep must not run python")
+	}
+}
