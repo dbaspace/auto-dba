@@ -150,6 +150,7 @@ Ruler **每规则只查 1 次** Prom，不做按实例 N+1。
 | 路径 | 说明 |
 |------|------|
 | `/ops/alerts` | 活跃告警：认领 / 转派 / 处理中 / 恢复 / 误报 / 静默 / 转待办 |
+| `/ops/alerts/activity` | 实时动态：告警、工单、高可用、配置、DNS、AWR 按时间归并 |
 | `/ops/alerts/history` | 历史告警 + 复盘 |
 | `/ops/alerts/rules` | 规则 CRUD、多档、频控、作用域、试跑 |
 | `/ops/alerts/silences` | 静默规则 |

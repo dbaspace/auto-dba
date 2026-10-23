@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
   Button, Card, Checkbox, Col, Descriptions, Drawer, Input, List, Modal, Row, Select, Space, Statistic, Tabs, Tag,
   Timeline, Tooltip, Typography, message,
@@ -12,13 +13,24 @@ import {
 } from './types'
 import { getImpact, type CmdbImpact } from '../cmdb/services/cmdbApi'
 import CopilotImageInput, { CopilotImage, toApiImages } from '../../components/CopilotImageInput'
+import ActivityTimeline from './ActivityTimeline'
+import './AlertActivity.css'
 
 const rowBorder: Record<string, string> = {
   P0: '#dc2626', P1: '#ea580c', P2: '#2563eb', P3: '#94a3b8',
 }
 
+function alertInstanceId(labels?: Record<string, string>): string {
+  const l = labels || {}
+  if (l.instance_id) return l.instance_id
+  if (l.instanceId) return l.instanceId
+  if ((l.ci_type || '').toLowerCase() === 'instance' && l.ci_id) return l.ci_id
+  return ''
+}
+
 export default function ActiveAlerts() {
   const { hasUrn } = usePermission()
+  const [params] = useSearchParams()
   const [tab, setTab] = useState('active')
   const [severity, setSeverity] = useState<string>()
   const [keyword, setKeyword] = useState('')
@@ -74,6 +86,11 @@ export default function ActiveAlerts() {
   }, [tab, severity, keyword])
 
   useEffect(() => { void load() }, [load])
+
+  useEffect(() => {
+    const id = params.get('id')
+    if (id) void openDetail(id).catch(() => undefined)
+  }, [params])
 
   const openDetail = async (id: string) => {
     const res = await api.get(`/alerts/${id}`)
@@ -372,7 +389,7 @@ export default function ActiveAlerts() {
       </Card>
 
       <Drawer
-        width={560}
+        width={680}
         open={!!detail}
         onClose={() => setDetail(null)}
         title={detail ? (
@@ -472,6 +489,18 @@ export default function ActiveAlerts() {
                   <Tag key={t} color="purple">{t}</Tag>
                 ))}
               </Space>
+            )}
+            <Typography.Title level={5} style={{ marginTop: 24 }}>实例动态</Typography.Title>
+            {alertInstanceId(detail.alert.labels) && detail.alert.started_at ? (
+              <ActivityTimeline
+                compact
+                instanceId={alertInstanceId(detail.alert.labels)}
+                since={dayjs(detail.alert.started_at).unix() - 2 * 3600}
+                until={dayjs(detail.alert.started_at).unix() + 2 * 3600}
+                relatedAt={dayjs(detail.alert.started_at).unix()}
+              />
+            ) : (
+              <Typography.Text type="secondary">这条告警没有关联实例，无法按实例查看前后动态。</Typography.Text>
             )}
             <Typography.Title level={5} style={{ marginTop: 24 }}>处理时间线</Typography.Title>
             <Timeline

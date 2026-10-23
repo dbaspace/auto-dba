@@ -143,6 +143,15 @@ func (h *CDCHandler) Precheck(c *gin.Context) {
 			} else {
 				add(cdcPrecheckItem{Code: "wal_level", Name: "wal_level", Level: "required", Status: "passed", Message: lvl})
 			}
+			if used, max, qerr := cdc.ReplicationSlotCapacity(ctx, db); qerr != nil {
+				add(cdcPrecheckItem{Code: "replication_slot_quota", Name: "复制槽配额", Level: "warning", Status: "warning", Message: qerr.Error()})
+			} else if cdc.ReplicationSlotQuotaFull(used, max) {
+				add(cdcPrecheckItem{Code: "replication_slot_quota", Name: "复制槽配额", Level: "warning", Status: "warning", Message: fmt.Sprintf("逻辑复制槽已满（used/max=%d/%d），新建 slot 会失败", used, max)})
+			} else if cdc.ReplicationSlotQuotaAlmostFull(used, max) {
+				add(cdcPrecheckItem{Code: "replication_slot_quota", Name: "复制槽配额", Level: "warning", Status: "warning", Message: fmt.Sprintf("逻辑复制槽将满（used/max=%d/%d）", used, max)})
+			} else {
+				add(cdcPrecheckItem{Code: "replication_slot_quota", Name: "复制槽配额", Level: "info", Status: "passed", Message: fmt.Sprintf("used/max=%d/%d", used, max)})
+			}
 			schema := pick("source_schema")
 			if schema == "" {
 				schema = "public"

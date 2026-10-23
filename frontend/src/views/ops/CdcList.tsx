@@ -166,6 +166,7 @@ export default function CdcList() {
   const probeAbortRef = useRef<AbortController | null>(null)
   const lastManualRefreshRef = useRef(0)
   const silentRefreshInFlightRef = useRef(false)
+  const loadingRef = useRef(false)
   /** 手动刷新 / 首屏 load 后递增，触发当前页 pipeline 重探 */
   const [probeEpoch, setProbeEpoch] = useState(0)
 
@@ -349,6 +350,7 @@ export default function CdcList() {
       return
     }
     lastManualRefreshRef.current = now
+    loadingRef.current = true
     setLoading(true)
     setLoadError('')
     try {
@@ -360,11 +362,12 @@ export default function CdcList() {
       // 不带 _pipeline：清空探测缓存，配合 probeEpoch 强制重探当前页
       setAllRows(rows)
       setProbeEpoch((n) => n + 1)
-      setLoading(false)
       void loadSideData()
       void loadDriftCache()
     } catch (e: any) {
       setLoadError(e?.response?.data?.message || e?.message || '加载失败')
+    } finally {
+      loadingRef.current = false
       setLoading(false)
     }
   }
@@ -446,7 +449,7 @@ export default function CdcList() {
   }
 
   async function refreshTasks() {
-    if (silentRefreshInFlightRef.current || loading) return
+    if (silentRefreshInFlightRef.current || loadingRef.current) return
     silentRefreshInFlightRef.current = true
     try {
       const { data } = await api.get('/cdc-sync/tasks', { silent: true }).catch(() => ({ data: null as any }))
@@ -511,6 +514,7 @@ export default function CdcList() {
       setPage(1)
       setFilterType(t === 'running' ? 'init' : '')
       setFilterStatus('')
+      void load({ force: true })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams])
@@ -880,6 +884,7 @@ export default function CdcList() {
           onSubmitCapture={(e) => {
             e.preventDefault()
             setPage(1)
+            void load({ force: true })
           }}
         >
           <Form.Item label="环境">
@@ -927,10 +932,10 @@ export default function CdcList() {
           </Form.Item>
           <Form.Item>
             <Space>
-              <Button type="primary" disabled={loading} onClick={() => setPage(1)}>
+              <Button type="primary" htmlType="button" loading={loading} onClick={() => { setPage(1); void load({ force: true }) }}>
                 查询
               </Button>
-              <Button icon={<ReloadOutlined />} disabled={loading} onClick={() => void load()}>
+              <Button htmlType="button" icon={<ReloadOutlined />} loading={loading} onClick={() => void load({ force: true })}>
                 刷新
               </Button>
             </Space>

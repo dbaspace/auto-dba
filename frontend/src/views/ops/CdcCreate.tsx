@@ -33,6 +33,7 @@ import type { ColumnsType } from 'antd/es/table'
 import api from '../../api/request'
 import { useWorkOrderDraft } from '../../hooks/useWorkOrderDraft'
 import CdcTableMappingPanel from './CdcTableMappingPanel'
+import { VirtualList } from './VirtualList'
 import type { Mapping } from './CdcTableMappingPanel'
 import './cdc.css'
 import './CdcCreate.css'
@@ -53,6 +54,7 @@ import {
   formatSrDynamicPartitionDisplay,
   groupShardTables,
   instEnv,
+  type ShardGroup,
   instLabel,
   keyModelLabel,
   matchGlob,
@@ -99,6 +101,96 @@ import {
 import type { CdcForm, CdcMapping, InfraDefaults, PrecheckCheck, SqlPreviewItem } from './cdcCreateLogic'
 
 const dpDefaults = CDC_DYNAMIC_PARTITION_DEFAULTS
+const SHARD_DB_PREVIEW = 12
+
+function catalogEnvOptions(envs: any[]) {
+  return (envs || [])
+    .map((e) => ({
+      value: e.code || e.name,
+      label: e.name ? `${e.name} (${e.code || e.name})` : e.code,
+    }))
+    .filter((e) => e.value)
+}
+
+function instanceEnvOptions(list: any[]) {
+  const seen = new Set<string>()
+  const opts: { value: string; label: string }[] = []
+  for (const i of list || []) {
+    const code = instEnv(i)
+    if (!code || seen.has(code)) continue
+    seen.add(code)
+    opts.push({ value: code, label: code })
+  }
+  return opts
+}
+
+function ShardDbTagList({
+  names,
+  active,
+  allBlue,
+}: {
+  names: string[]
+  active?: string
+  allBlue?: boolean
+}) {
+  const [open, setOpen] = useState(false)
+  const shown = open ? names : names.slice(0, SHARD_DB_PREVIEW)
+  const rest = names.length - shown.length
+  return (
+    <div className="shard-db-tags">
+      <span className="muted">共 {names.length} 个</span>
+      {shown.map((n) => (
+        <Tag key={n} color={allBlue || n === active ? 'blue' : 'default'}>
+          {n}
+        </Tag>
+      ))}
+      {!open && rest > 0 && (
+        <Button type="link" size="small" onClick={() => setOpen(true)}>
+          展开其余 {rest} 个
+        </Button>
+      )}
+      {open && names.length > SHARD_DB_PREVIEW && (
+        <Button type="link" size="small" onClick={() => setOpen(false)}>
+          收起
+        </Button>
+      )}
+    </div>
+  )
+}
+
+function CdcSourceTableList({
+  groups,
+  singles,
+  renderGroup,
+  renderSingle,
+}: {
+  groups: ShardGroup[]
+  singles: string[]
+  renderGroup: (g: ShardGroup) => React.ReactNode
+  renderSingle: (name: string) => React.ReactNode
+}) {
+  const items = [
+    ...groups.map((g) => ({ key: 'g:' + g.base, group: g as ShardGroup | undefined, name: '' })),
+    ...singles.map((name) => ({ key: 's:' + name, group: undefined as ShardGroup | undefined, name })),
+  ]
+  if (!items.length) {
+    return (
+      <div className="src-list">
+        <div className="tree-empty">暂无表</div>
+      </div>
+    )
+  }
+  return (
+    <VirtualList
+      className="src-list"
+      height={420}
+      estimate={40}
+      items={items}
+      itemKey={(it) => it.key}
+      renderItem={(it) => (it.group ? renderGroup(it.group) : renderSingle(it.name))}
+    />
+  )
+}
 
 export default function CdcCreate() {
   const navigate = useNavigate()
@@ -122,6 +214,9 @@ export default function CdcCreate() {
   const [debeziumPreview, setDebeziumPreview] = useState<any>(null)
   const [instances, setInstances] = useState<any[]>([])
   const [envOptions, setEnvOptions] = useState<{ value: string; label: string }[]>([])
+  const [envLoading, setEnvLoading] = useState(true)
+  const envFromCatalog = useRef(false)
+  const instancesReady = useRef(false)
   const [connectors, setConnectors] = useState<any[]>([])
   const [parentTasks, setParentTasks] = useState<any[]>([])
   const [sourceDbs, setSourceDbs] = useState<string[]>([])
@@ -1284,6 +1379,39 @@ export default function CdcCreate() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams.get('type')])
 
+  // ---- 环境列表单独加载，不跟实例 / 连接器一起等 ----
+  useEffect(() => {
+    let cancel = false
+    setEnvLoading(true)
+    api
+      .get('/environments')
+      .then((envRes) => {
+        if (cancel) return
+        const opts = catalogEnvOptions(envRes.data?.data || [])
+        if (opts.length) {
+          envFromCatalog.current = true
+          setEnvOptions(opts)
+        }
+      })
+      .catch(() => {
+        envFromCatalog.current = false
+      })
+      .finally(() => {
+        if (cancel) return
+        if (envFromCatalog.current || instancesReady.current) setEnvLoading(false)
+      })
+    return () => {
+      cancel = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!instancesReady.current || envFromCatalog.current) return
+    const filled = instanceEnvOptions(instances)
+    if (filled.length) setEnvOptions(filled)
+    setEnvLoading(false)
+  }, [instances])
+
   // ---- 初始化加载 ----
   useEffect(() => {
     if (didInit.current) return
@@ -1291,28 +1419,18 @@ export default function CdcCreate() {
     const type = String(searchParams.get('type') || 'init')
     resetMode(type)
     void (async () => {
-      const [instRes, envRes, connRes, taskRes, argRes] = await Promise.all([
+      const [instRes, connRes, taskRes, argRes] = await Promise.all([
         api.get('/cdc-sync/instances').catch(() => api.get('/instances')),
-        api.get('/environments').catch(() => ({ data: { data: [] } })),
         api.get('/connectors').catch(() => ({ data: { data: [] } })),
         api
           .get('/cdc-sync/tasks/init-list')
           .catch(() => api.get('/cdc-sync/tasks', { params: { task_type: 'init' } })),
         api.get('/global-args').catch(() => ({ data: { data: [] } })),
       ])
-      setInstances(instRes.data.data || [])
-      instancesRef.current = instRes.data.data || []
-      const envs = envRes.data.data || []
-      let opts = envs
-        .map((e: any) => ({ value: e.code || e.name, label: e.name ? `${e.name} (${e.code})` : e.code }))
-        .filter((e: any) => e.value)
-      if (!opts.length) {
-        opts = [
-          { value: 'test', label: '测试 (test)' },
-          { value: 'prod', label: '生产 (prod)' },
-        ]
-      }
-      setEnvOptions(opts)
+      const loadedInstances = instRes.data.data || []
+      instancesReady.current = true
+      setInstances(loadedInstances)
+      instancesRef.current = loadedInstances
       setConnectors(connRes.data.data || [])
       const inits = (taskRes.data.data || []).filter((t: any) => t.task_type === 'init')
       setParentTasks(inits)
@@ -1402,12 +1520,14 @@ export default function CdcCreate() {
                 <Form.Item label="环境" required>
                   <Select
                     showSearch
-                    placeholder="请选择环境"
+                    loading={envLoading}
+                    placeholder={envLoading ? '环境加载中' : '请选择环境'}
                     style={{ width: 220 }}
                     value={form.env || undefined}
                     onChange={onEnvChange}
                     options={envOptions}
                     optionFilterProp="label"
+                    notFoundContent={envLoading ? '环境加载中' : '暂无数据'}
                   />
                 </Form.Item>
               </Form>
@@ -1518,13 +1638,7 @@ export default function CdcCreate() {
                     )}
                     <Form.Item label="匹配到的分库">
                       {resolvedShardDbs.length ? (
-                        <div className="shard-db-tags">
-                          {resolvedShardDbs.map((n) => (
-                            <Tag key={n} color={n === form.source_db ? 'blue' : 'default'}>
-                              {n}
-                            </Tag>
-                          ))}
-                        </div>
+                        <ShardDbTagList names={resolvedShardDbs} active={form.source_db} />
                       ) : (
                         <div className="form-extra warn">
                           填写前缀后将从实例库列表自动匹配；有效多分库需 ≥ 2 个库。
@@ -1583,11 +1697,7 @@ export default function CdcCreate() {
                   · 已匹配 {resolvedShardDbs.length} 个库
                 </div>
                 <div className="shard-db-tags mt">
-                  {resolvedShardDbs.map((n) => (
-                    <Tag key={n} color="blue">
-                      {n}
-                    </Tag>
-                  ))}
+                  <ShardDbTagList names={resolvedShardDbs} allBlue />
                 </div>
                 <div className="form-extra">
                   逻辑表选一次即覆盖全部分库；字段以代表库为准，请确保各分库表结构一致。
@@ -1644,9 +1754,11 @@ export default function CdcCreate() {
                     />
                   )}
                   {tableHint && <Alert type="info" showIcon className="mb" message={tableHint} />}
-                  <div className="src-list">
-                    {visibleShardGroups.map((g) => (
-                      <div key={'g-' + g.base} className="src-row">
+                  <CdcSourceTableList
+                    groups={visibleShardGroups}
+                    singles={visibleSingleTables}
+                    renderGroup={(g) => (
+                      <div className="src-row">
                         <Checkbox checked={isGroupSelected(g)} onChange={(e) => toggleGroup(g, e.target.checked)}>
                           <span className="src-name">{g.targetTable || g.base}</span>
                           <Tag color="warning">分表 {g.members.length}</Tag>
@@ -1664,18 +1776,15 @@ export default function CdcCreate() {
                           </div>
                         )}
                       </div>
-                    ))}
-                    {visibleSingleTables.map((t) => (
-                      <div key={t} className="src-row">
+                    )}
+                    renderSingle={(t) => (
+                      <div className="src-row">
                         <Checkbox checked={isTableSelected(t)} onChange={(e) => toggleSingle(t, e.target.checked)}>
                           {t}
                         </Checkbox>
                       </div>
-                    ))}
-                    {!visibleShardGroups.length && !visibleSingleTables.length && (
-                      <div className="tree-empty">暂无表</div>
                     )}
-                  </div>
+                  />
                   <Form layout="vertical">
                     <Form.Item label="手动补充表名" className="mt">
                       <Input.TextArea
@@ -2566,12 +2675,14 @@ export default function CdcCreate() {
                 <Select
                   allowClear
                   showSearch
-                  placeholder="全部"
+                  loading={envLoading}
+                  placeholder={envLoading ? '环境加载中' : '全部'}
                   style={{ width: 220 }}
                   value={form.env || undefined}
                   onChange={(v) => patchForm({ env: v || '' })}
                   options={envOptions}
                   optionFilterProp="label"
+                  notFoundContent={envLoading ? '环境加载中' : '暂无数据'}
                 />
               </Form.Item>
             </Form>
@@ -2682,20 +2793,34 @@ export default function CdcCreate() {
                       刷新
                     </Button>
                   </div>
-                  <div className="src-list">
-                    {visibleShardGroups.map((g) => (
-                      <div key={'ag-' + g.base} className="src-row">
+                  <CdcSourceTableList
+                    groups={visibleShardGroups}
+                    singles={visibleSingleTables}
+                    renderGroup={(g) => (
+                      <div className="src-row">
                         <Checkbox checked={isGroupSelected(g)} onChange={(e) => toggleGroup(g, e.target.checked)}>
                           <span className="src-name">{g.targetTable || g.base}</span>
                           <Tag color="warning">分表 {g.members.length}</Tag>
                         </Checkbox>
+                        <Button type="link" className="expand-btn" onClick={() => toggleExpand(g.base)}>
+                          {expandedGroups.has(g.base) ? '收起' : '展开'}
+                        </Button>
+                        {expandedGroups.has(g.base) && (
+                          <div className="src-members">
+                            {g.members.map((n) => (
+                              <div key={n} className="muted">
+                                {n}
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
-                    ))}
-                    {visibleSingleTables.map((t) => {
+                    )}
+                    renderSingle={(t) => {
                       const syncedAll = syncedInAllParents.has(t.toLowerCase())
                       const cnt = countTasksSyncedTable(t, selectedParents)
                       return (
-                        <div key={'a-' + t} className="src-row">
+                        <div className="src-row">
                           <Checkbox
                             checked={isTableSelected(t)}
                             disabled={syncedAll}
@@ -2710,8 +2835,8 @@ export default function CdcCreate() {
                           </Checkbox>
                         </div>
                       )
-                    })}
-                  </div>
+                    }}
+                  />
                 </Card>
               </Col>
               <Col xs={24} md={12}>

@@ -1,3 +1,12 @@
+.app-tab-panel > .instance-overview.ops-page {
+  background: #f4f6fb;
+  padding: 4px 2px 8px;
+}
+
+html[data-color-mode='dark'] .app-tab-panel > .instance-overview.ops-page {
+  background: var(--app-page-bg, #141414);
+}
+
 .instance-overview .ops-filters {
   gap: 8px;
 }
@@ -12,18 +21,228 @@
   padding-right: 6px;
 }
 
-.instance-overview-summary {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 16px;
-  margin: 8px 0 12px;
+.instance-overview-cards {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 12px;
+  margin: 12px 0 10px;
+}
+
+.ov-card {
+  background: var(--app-content-bg, #fff);
+  border: 1px solid #eef1f6;
+  border-radius: 12px;
+  padding: 14px 16px 12px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.ov-card .label {
+  color: #8c8c8c;
   font-size: 13px;
+  line-height: 1.4;
+}
+
+.ov-card .value {
+  margin-top: 6px;
+  color: var(--app-text, #1f1f1f);
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+}
+
+.ov-card .unit {
+  margin-left: 4px;
+  color: #595959;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.ov-card.ok .value {
+  color: #389e0d;
+}
+
+.ov-card.warn .value {
+  color: #d48806;
 }
 
 .instance-overview-note {
+  margin: 0 0 12px;
   color: rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .instance-overview-stale td {
   color: rgba(0, 0, 0, 0.35);
+}
+
+.ov-muted {
+  color: rgba(0, 0, 0, 0.35);
+}
+
+.ov-metric {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ov-bar {
+  flex: 1 1 56px;
+  height: 6px;
+  min-width: 48px;
+  max-width: 88px;
+  overflow: hidden;
+  background: #f0f0f0;
+  border-radius: 99px;
+}
+
+.ov-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: 99px;
+}
+
+.ov-metric-ok .ov-bar > span {
+  background: #52c41a;
+}
+
+.ov-metric-warn .ov-bar > span {
+  background: #faad14;
+}
+
+.ov-metric-danger .ov-bar > span {
+  background: #ff4d4f;
+}
+
+.ov-metric-num {
+  flex: 0 0 auto;
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.ov-metric-ok .ov-metric-num {
+  color: #389e0d;
+}
+
+.ov-metric-warn .ov-metric-num {
+  color: #d48806;
+}
+
+.ov-metric-danger .ov-metric-num {
+  color: #cf1322;
+}
+
+.ov-metric-extra {
+  flex: 0 0 auto;
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.instance-overview .ant-table-tbody > tr > td.ov-cell-ok {
+  background: #f6ffed;
+}
+
+.instance-overview .ant-table-tbody > tr > td.ov-cell-warn {
+  background: #fff7e6;
+}
+
+.instance-overview .ant-table-tbody > tr > td.ov-cell-danger {
+  background: #fff1f0;
+}
+
+.instance-overview .ant-table-tbody > tr:hover > td.ov-cell-ok {
+  background: #eefbe4;
+}
+
+.instance-overview .ant-table-tbody > tr:hover > td.ov-cell-warn {
+  background: #fff1d6;
+}
+
+.instance-overview .ant-table-tbody > tr:hover > td.ov-cell-danger {
+  background: #ffe8e6;
+}
+
+html[data-color-mode='dark'] .instance-overview .ant-table-tbody > tr > td.ov-cell-ok {
+  background: rgba(82, 196, 26, 0.16);
+}
+
+html[data-color-mode='dark'] .instance-overview .ant-table-tbody > tr > td.ov-cell-warn {
+  background: rgba(250, 173, 20, 0.18);
+}
+
+html[data-color-mode='dark'] .instance-overview .ant-table-tbody > tr > td.ov-cell-danger {
+  background: rgba(255, 77, 79, 0.18);
+}
+
+.instance-overview-table {
+  background: var(--app-content-bg, #fff);
+  border: 1px solid #eef1f6;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.ov-role {
+  margin: 0;
+  border: none;
+  border-radius: 999px;
+  font-size: 12px;
+}
+
+.ov-role-primary {
+  color: #1677ff;
+  background: #e6f4ff;
+}
+
+.ov-role-replica {
+  color: #595959;
+  background: #f5f5f5;
+}
+
+.ov-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.ov-status::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.ov-status.ok {
+  color: #389e0d;
+}
+
+.ov-status.warn {
+  color: #d48806;
+}
+
+.ov-status.danger {
+  color: #cf1322;
+}
+
+.ov-status.muted {
+  color: rgba(0, 0, 0, 0.45);
+}
+
+@media (max-width: 1200px) {
+  .instance-overview-cards {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .instance-overview-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }

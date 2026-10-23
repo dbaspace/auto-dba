@@ -80,6 +80,7 @@ export const PAGE_ROUTES = [
   { path: '/ops/ha', title: '高可用服务维护' },
   { path: '/ops/todo', title: '待办跟进' },
   { path: '/ops/alerts', title: '活跃告警' },
+  { path: '/ops/alerts/activity', title: '实时动态' },
   { path: '/ops/alerts/history', title: '历史告警' },
   { path: '/ops/alerts/rules', title: '规则管理' },
   { path: '/ops/alerts/silences', title: '静默管理' },

@@ -152,6 +152,7 @@ export const Perm = {
     sync: 'um.action.domains.sync',
     assign: 'um.action.domains.assign',
     edit: 'um.action.domains.edit',
+    delete: 'um.action.domains.delete',
     sidebar: 'um.sidebar.config-domains',
   },
 } as const

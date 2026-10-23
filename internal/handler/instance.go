@@ -1476,6 +1476,53 @@ func (h *DatabaseHandler) Delete(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
+// DeleteBatch POST /databases/batch-delete — 批量删除已登记库，不删除实例。
+func (h *DatabaseHandler) DeleteBatch(c *gin.Context) {
+	var req struct {
+		IDs []string `json:"ids"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "参数无效"})
+		return
+	}
+	seen := map[string]bool{}
+	ids := make([]string, 0, len(req.IDs))
+	for _, id := range req.IDs {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "ids 必填"})
+		return
+	}
+	scope := effectiveListTenantID(h.Store, c)
+	user := c.GetString(middleware.CtxUsername)
+	okCount := 0
+	failed := make([]batchDBFail, 0)
+	for _, id := range ids {
+		exist, err := h.Store.GetDatabaseInTenant(id, scope)
+		if err != nil {
+			failed = append(failed, batchDBFail{ID: id, Message: err.Error()})
+			continue
+		}
+		if exist == nil {
+			failed = append(failed, batchDBFail{ID: id, Message: "数据库不存在"})
+			continue
+		}
+		if err := h.Store.DeleteDatabase(exist.ID); err != nil {
+			failed = append(failed, batchDBFail{ID: id, DBName: exist.DBName, Message: err.Error()})
+			continue
+		}
+		okCount++
+		_ = h.Store.AppendCmdbAudit(user, "delete", "database", exist.ID, "api", exist, nil)
+	}
+	c.JSON(http.StatusOK, gin.H{"ok_count": okCount, "fail_count": len(failed), "failed": failed})
+}
+
 type GlobalArgHandler struct {
 	Store *store.DB
 }

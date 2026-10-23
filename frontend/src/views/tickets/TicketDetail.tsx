@@ -162,6 +162,13 @@ export default function TicketDetail() {
     navigate('/ops/tickets')
   }
 
+  const goCdcApprovalResult = () => {
+    const detailKey = tabKey(location.pathname, location.search)
+    dispatch(openTab({ path: '/ops/cdc', menus, title: 'CDC 同步任务' }))
+    dispatch(closeTab(detailKey))
+    navigate('/ops/cdc?tab=approval_result')
+  }
+
   const [item, setItem] = useState<any>(null)
   const [canApproveFlag, setCanApproveFlag] = useState(false)
   const [canTransferFlag, setCanTransferFlag] = useState(false)
@@ -893,9 +900,25 @@ export default function TicketDetail() {
           setComment(currentComment)
         }
         await api.put(`/tickets/${it.id}/reject`, { reason: currentComment })
+        if (it.issue_type === 'cdc_sync') {
+          message.success('操作成功')
+          setComment('')
+          goCdcApprovalResult()
+          return
+        }
       } else if (kind === 'approve') {
         const { data } = await api.put(`/tickets/${it.id}/approve`)
         if (data?.message) okMsg = String(data.message)
+        if (it.issue_type === 'cdc_sync') {
+          const { data: fresh } = await api.get('/tickets/' + it.id)
+          const st = String(fresh?.data?.status || '')
+          if (st && st !== 'pending') {
+            message.success(okMsg)
+            setComment('')
+            goCdcApprovalResult()
+            return
+          }
+        }
       } else if (kind === 'cancel') {
         const ok = await confirmCancel()
         if (!ok) {

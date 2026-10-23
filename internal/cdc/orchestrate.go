@@ -90,6 +90,22 @@ func stepSuccessLog(step string) string {
 	}
 }
 
+func (o *Orchestrator) markOrchestrating(t *store.CDCTask, on bool) {
+	if o == nil || t == nil {
+		return
+	}
+	extra := parseTaskExtra(t.Description)
+	if on {
+		extra["orchestrating"] = "true"
+	} else {
+		delete(extra, "orchestrating")
+	}
+	o.saveExtra(t, extra)
+	if on && t.Status != "" {
+		_ = o.Store.UpdateCDCStatus(t.ID, t.Status, t.ApprovalStatus)
+	}
+}
+
 func (o *Orchestrator) Apply(ctx context.Context, taskID, fromStep string) error {
 	t, err := o.Store.GetCDC(taskID)
 	if err != nil || t == nil {
@@ -98,6 +114,14 @@ func (o *Orchestrator) Apply(ctx context.Context, taskID, fromStep string) error
 	if !cdcTaskApproved(t) {
 		return fmt.Errorf("CDC 任务须审批通过后才能执行")
 	}
+	if ctx.Value(orchLockCtxKey{}) == nil {
+		extra := parseTaskExtra(t.Description)
+		return o.withOrchestrateLocks(ctx, t.SourceID, o.resolveKafkaBrokers(extra), func(ctx context.Context) error {
+			return o.Apply(ctx, taskID, fromStep)
+		})
+	}
+	o.markOrchestrating(t, true)
+	defer o.markOrchestrating(t, false)
 	switch strings.TrimSpace(t.TaskType) {
 	case "alter_schema":
 		return o.applyAlterSchema(ctx, t)
@@ -487,34 +511,32 @@ func (o *Orchestrator) ensurePublicationAndSlot(ctx context.Context, inst *store
 		return fmt.Errorf("连接源端失败: %w", err)
 	}
 	defer db.Close()
+	applyPGOrchestrationTimeouts(db)
 	qTables := qualifyPGTables(schema, tables)
 	if len(qTables) == 0 {
 		return fmt.Errorf("未指定同步表")
 	}
-	var pubSQL string
 	if addOnly {
-		pubSQL = fmt.Sprintf(`ALTER PUBLICATION %s ADD TABLE %s`, quotePGIdent(pub), strings.Join(qTables, ", "))
-	} else {
-		pubSQL = fmt.Sprintf(`CREATE PUBLICATION %s FOR TABLE %s`, quotePGIdent(pub), strings.Join(qTables, ", "))
-	}
-	if _, err := db.ExecContext(ctx, pubSQL); err != nil {
-		low := strings.ToLower(err.Error())
-		switch {
-		case addOnly && (strings.Contains(low, "already") || strings.Contains(low, "duplicate")):
-			return nil
-		case addOnly:
-			return fmt.Errorf("ALTER PUBLICATION 失败: %w", err)
-		case !strings.Contains(low, "already exists"):
-			return fmt.Errorf("创建 publication 失败: %w", err)
+		have, herr := ListPublicationTables(ctx, db, pub)
+		if herr != nil {
+			return fmt.Errorf("查询 publication 成员失败: %w", herr)
 		}
-		// publication 已存在（例如上次编排建完 publication 后失败）仍须确保 slot 存在。
-	}
-	if addOnly {
+		missing := missingPublicationTables(schema, tables, have)
+		if len(missing) == 0 {
+			return nil
+		}
+		pubSQL := fmt.Sprintf(`ALTER PUBLICATION %s ADD TABLE %s`, quotePGIdent(pub), strings.Join(qualifyPGTables(schema, missing), ", "))
+		if _, err := db.ExecContext(ctx, pubSQL); err != nil {
+			return fmt.Errorf("ALTER PUBLICATION 失败: %w", err)
+		}
 		return nil
 	}
-	slotSQL := fmt.Sprintf(`SELECT pg_create_logical_replication_slot(%s, 'pgoutput')`, quotePGLiteral(slot))
-	if _, err := db.ExecContext(ctx, slotSQL); err != nil && !strings.Contains(strings.ToLower(err.Error()), "already exists") {
-		return fmt.Errorf("创建 replication slot 失败: %w", err)
+	pubSQL := fmt.Sprintf(`CREATE PUBLICATION %s FOR TABLE %s`, quotePGIdent(pub), strings.Join(qTables, ", "))
+	if _, err := db.ExecContext(ctx, pubSQL); err != nil && !strings.Contains(strings.ToLower(err.Error()), "already exists") {
+		return fmt.Errorf("创建 publication 失败: %w", err)
+	}
+	if err := createLogicalSlot(ctx, db, slot); err != nil {
+		return err
 	}
 	return nil
 }
@@ -599,6 +621,15 @@ func (o *Orchestrator) applyTargetSQL(ctx context.Context, t *store.CDCTask, sql
 			continue
 		}
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
+			if isCreateRoutineLoad(stmt) && createAlreadyExists(err) {
+				if retryErr := recreateRoutineLoad(ctx, db, routineLoadDB(stmt), routineLoadName(stmt), stmt); retryErr != nil {
+					return fmt.Errorf("执行目标 SQL 失败: %w", retryErr)
+				}
+				continue
+			}
+			if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(stmt)), "CREATE") && createAlreadyExists(err) {
+				continue
+			}
 			return fmt.Errorf("执行目标 SQL 失败: %w", err)
 		}
 	}

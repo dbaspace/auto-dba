@@ -175,7 +175,7 @@ func BuildTargetSQLItems(p TargetSQLParams, colsByTable map[string][]pgCol, pksB
 			offset = NormalizeKafkaOffset(p.KafkaDefaultOffset)
 		}
 		rlName := RoutineLoadNameFor(p.Env, p.SourceDB, prefix, tgt)
-		item.Load = buildRoutineLoadSQL(db, tgt, rlName, keys, conc, p.KafkaBrokers, topics, p.DebeziumMode, offset, p.MessageSchemaMode)
+		item.Load = renderRoutineLoadSQL(db, tgt, rlName, cols, conc, p.KafkaBrokers, topics, p.DebeziumMode, offset, p.MessageSchemaMode)
 		out = append(out, item)
 	}
 	return ApplySQLOverrides(out, p.SQLOverrides)
@@ -227,6 +227,10 @@ func buildCreateTableSQL(db, table string, cols []pgCol, keys, shard []string, k
 			fmt.Fprintf(&b, "  `%s` %s", c.Name, mapSRType(c.UDT))
 		}
 	}
+	for _, line := range srMetaColumnLines(cols) {
+		b.WriteString(",\n")
+		b.WriteString(line)
+	}
 	if len(keys) > 0 {
 		fmt.Fprintf(&b, ",\n  %s(`%s`)", keyClause, strings.Join(keys, "`,`"))
 	}
@@ -246,47 +250,15 @@ func buildCreateTableSQL(db, table string, cols []pgCol, keys, shard []string, k
 }
 
 func buildRoutineLoadSQL(db, table, rlName string, keys []string, conc int, brokers string, topics []string, mode, kafkaOffset, schemaMode string) string {
-	cols := append(append([]string{}, keys...), "__op")
-	broker := strings.TrimSpace(brokers)
-	if broker == "" {
-		broker = "kafka:9092"
-	}
-	offset := defaultStr(NormalizeKafkaOffset(kafkaOffset), "OFFSET_BEGINNING")
-	rlName = strings.TrimSpace(rlName)
-	if rlName == "" {
-		rlName = RoutineLoadNameFor("", "", "", table)
-	}
-	props := []string{`"format" = "json"`, `"strip_outer_array" = "false"`, fmt.Sprintf(`"desired_concurrent_number" = "%d"`, conc)}
-	if !IsWithoutSchema(schemaMode) || strings.TrimSpace(mode) == ModeBeforeAfter {
-		paths := make([]string, 0, len(cols))
-		for _, c := range cols {
-			if c == "__op" {
-				if strings.TrimSpace(mode) == ModeBeforeAfter {
-					paths = append(paths, `"$.op"`)
-				} else {
-					paths = append(paths, `"$.__op"`)
-				}
-				continue
-			}
-			if strings.TrimSpace(mode) == ModeBeforeAfter {
-				paths = append(paths, fmt.Sprintf(`"$.after.%s"`, c))
-			} else {
-				paths = append(paths, fmt.Sprintf(`"$.%s"`, c))
-			}
+	cols := make([]pgCol, 0, len(keys))
+	for _, k := range keys {
+		k = strings.TrimSpace(k)
+		if k == "" {
+			continue
 		}
-		props = append([]string{props[0], fmt.Sprintf(`"jsonpaths" = "[%s]"`, strings.Join(paths, ",")), props[1], props[2]})
+		cols = append(cols, pgCol{Name: k})
 	}
-	return fmt.Sprintf(`CREATE ROUTINE LOAD `+"`%s`.`%s`"+` ON `+"`%s`"+`
-COLUMNS(%s)
-PROPERTIES (
-  %s
-)
-FROM KAFKA (
-  "kafka_broker_list" = "%s",
-  "kafka_topic" = "%s",
-  "property.group.id" = "%s",
-  "property.kafka_default_offsets" = "%s"
-);`, db, rlName, table, strings.Join(cols, ", "), strings.Join(props, ",\n  "), broker, strings.Join(topics, ","), rlName, offset)
+	return renderRoutineLoadSQL(db, table, rlName, cols, conc, brokers, topics, mode, kafkaOffset, schemaMode)
 }
 
 func NormalizeMessageSchemaMode(s string) string {

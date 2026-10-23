@@ -95,7 +95,7 @@ func (h *CDCHandler) ConnectorUpdate(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "待审批任务不能修改 Connector 配置"})
 		return
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 90*time.Second)
 	defer cancel()
 	if h.rejectIfConnectorMissing(c, ctx, root) {
 		return
@@ -122,9 +122,24 @@ func (h *CDCHandler) ConnectorUpdate(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": gin.H{
+	resp := gin.H{"data": gin.H{
 		"name": extra["connector_name"], "config": cdc.MaskConfigMap(after),
-	}})
+	}}
+	if root.Status == store.StatusPaused {
+		resp["restart_skipped"] = true
+		resp["message"] = "已保存。任务已暂停，恢复或手动重启后生效"
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+	names := h.orch().TaskConnectorNames(root)
+	if err := h.orch().RestartConnectorTasks(ctx, root, extra, names); err != nil {
+		resp["restart_error"] = err.Error()
+		resp["message"] = "已保存。重启未完成：" + err.Error() + "。可再点详情里的「重启」"
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+	resp["message"] = "已保存并已重启同步任务"
+	c.JSON(http.StatusOK, resp)
 }
 
 func (h *CDCHandler) ConnectorVersionList(c *gin.Context) {

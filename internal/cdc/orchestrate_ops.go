@@ -261,11 +261,43 @@ func (o *Orchestrator) stepAddTableDebezium(ctx context.Context, t, parent *stor
 
 // restartConnectorBestEffort 用于 PUT config 之后：Connect 已因 task config 变化重建 Task，这里失败只告警。
 func (o *Orchestrator) restartConnectorBestEffort(ctx context.Context, t *store.CDCTask, extra map[string]string, name string) {
-	if err := connectRestartConnectorAndTasks(ctx, o.ResolveConnectBase(extra), name); err != nil {
-		o.appendLog(t, "WARN", "debezium", "重启 connector "+name+" 失败："+err.Error())
-		return
+	_ = o.RestartConnectorTasks(ctx, t, extra, []string{name})
+}
+
+// RestartConnectorTasks 连同 Task 一起重启，使新配置进到正在跑的复制连接。
+// 不改任务状态，也不重跑编排。单个失败记告警并继续，返回第一个错误。
+func (o *Orchestrator) RestartConnectorTasks(ctx context.Context, t *store.CDCTask, extra map[string]string, names []string) error {
+	if o == nil {
+		return fmt.Errorf("编排器未就绪")
 	}
-	o.appendLog(t, "INFO", "debezium", "已重启 connector 及其 task："+name)
+	base := o.ResolveConnectBase(extra)
+	if base == "" {
+		return fmt.Errorf("未配置 Connect 地址")
+	}
+	var first error
+	seen := map[string]struct{}{}
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		if err := connectRestartConnectorAndTasks(ctx, base, name); err != nil {
+			o.appendLog(t, "WARN", "debezium", "重启 connector "+name+" 失败："+err.Error())
+			if first == nil {
+				first = fmt.Errorf("重启 %s: %w", name, err)
+			}
+			continue
+		}
+		o.appendLog(t, "INFO", "debezium", "已重启 connector 及其 task："+name)
+	}
+	if len(seen) == 0 {
+		return fmt.Errorf("没有可重启的 Connector")
+	}
+	return first
 }
 
 func (o *Orchestrator) applyAlterSchema(ctx context.Context, t *store.CDCTask) error {
@@ -301,19 +333,37 @@ func (o *Orchestrator) applyAlterSchema(ctx context.Context, t *store.CDCTask) e
 	var sqls []string
 	for _, item := range items {
 		cols := selectedAlterColumns(item.Columns)
-		stmt := BuildAlterAddColumnSQL(targetDB, item.TargetTable, cols)
-		if stmt == "" {
-			continue
+		existing, _ := ListSRColumns(ctx, db, targetDB, item.TargetTable)
+		have := map[string]struct{}{}
+		for _, name := range existing {
+			have[strings.ToLower(name)] = struct{}{}
 		}
-		sqls = append(sqls, stmt)
-		if _, err := db.ExecContext(ctx, strings.TrimSuffix(stmt, ";")); err != nil {
-			extra["error_step"] = "starrocks"
-			o.appendLog(t, "ERROR", "starrocks", err.Error())
-			o.saveExtra(t, extra)
-			_ = o.Store.UpdateCDCStatus(t.ID, store.StatusFailed, t.ApprovalStatus)
-			return fmt.Errorf("ALTER %s: %w", item.TargetTable, err)
+		var missing []SchemaDiffColumn
+		for _, c := range cols {
+			if _, ok := have[strings.ToLower(c.Name)]; ok {
+				continue
+			}
+			missing = append(missing, c)
 		}
-		o.appendLog(t, "INFO", "starrocks", stmt)
+		if len(missing) == 0 {
+			o.appendLog(t, "INFO", "starrocks", "列已存在，跳过 ALTER "+item.TargetTable)
+		} else {
+			stmt := BuildAlterAddColumnSQL(targetDB, item.TargetTable, missing)
+			if stmt != "" {
+				sqls = append(sqls, stmt)
+				if _, err := db.ExecContext(ctx, strings.TrimSuffix(stmt, ";")); err != nil && !srAlreadyExists(err) {
+					extra["error_step"] = "starrocks"
+					o.appendLog(t, "ERROR", "starrocks", err.Error())
+					o.saveExtra(t, extra)
+					_ = o.Store.UpdateCDCStatus(t.ID, store.StatusFailed, t.ApprovalStatus)
+					return fmt.Errorf("ALTER %s: %w", item.TargetTable, err)
+				}
+				o.appendLog(t, "INFO", "starrocks", stmt)
+				if err := WaitSRAlterColumn(ctx, db, targetDB, item.TargetTable, 90*time.Second); err != nil {
+					o.appendLog(t, "WARN", "starrocks", "等待 schema change: "+err.Error())
+				}
+			}
+		}
 	}
 	parentExtra := parseTaskExtra(parent.Description)
 	mode := defaultStr(extra["debezium_mode"], parentExtra["debezium_mode"])
@@ -330,26 +380,24 @@ func (o *Orchestrator) applyAlterSchema(ctx context.Context, t *store.CDCTask) e
 		if topic != "" && len(item.SourceTables) > 0 {
 			topic = prefix + "." + schema + "." + item.SourceTables[0]
 		}
-		if err := WaitSRAlterColumn(ctx, db, targetDB, item.TargetTable, 90*time.Second); err != nil {
-			o.appendLog(t, "WARN", "starrocks", "等待 schema change: "+err.Error())
-		}
 		offset := defaultStr(extra["kafka_default_offsets"], "OFFSET_BEGINNING")
 		schemaMode := defaultStr(extra["message_schema_mode"], parentExtra["message_schema_mode"])
 		plan := BuildAlterMigratePlanOpts(targetDB, item.TargetTable, brokers, topic, mode, srCols, selectedAlterColumns(item.Columns), conc, offset, schemaMode, extra["env"], t.SourceDB, prefix)
-		for _, stmt := range []string{plan["pause_sql"], plan["stop_sql"]} {
-			if strings.TrimSpace(stmt) == "" {
-				continue
-			}
-			if _, err := db.ExecContext(ctx, strings.TrimSuffix(stmt, ";")); err != nil {
-				o.appendLog(t, "WARN", "starrocks", "RL "+stmt+" : "+err.Error())
-			}
+		rlName := RoutineLoadNameFor(extra["env"], t.SourceDB, prefix, item.TargetTable)
+		action, err := ensureRoutineLoad(ctx, db, targetDB, rlName, plan["create_sql"], srCols)
+		if err != nil {
+			o.appendLog(t, "WARN", "starrocks", "Routine Load "+rlName+"："+err.Error())
+			continue
 		}
-		if create := plan["create_sql"]; create != "" {
-			if _, err := db.ExecContext(ctx, strings.TrimSuffix(create, ";")); err != nil {
-				o.appendLog(t, "WARN", "starrocks", "重建 RL 失败: "+err.Error())
-			} else {
-				o.appendLog(t, "INFO", "starrocks", "已重建 Routine Load "+RoutineLoadNameFor(extra["env"], t.SourceDB, extra["topic_prefix"], item.TargetTable))
-				sqls = append(sqls, create)
+		switch action {
+		case "skip":
+			o.appendLog(t, "INFO", "starrocks", "Routine Load "+rlName+" 已覆盖最新列，跳过重建")
+		case "resume":
+			o.appendLog(t, "INFO", "starrocks", "Routine Load "+rlName+" 已覆盖最新列，已 RESUME")
+		default:
+			o.appendLog(t, "INFO", "starrocks", "已重建 Routine Load "+rlName)
+			if plan["create_sql"] != "" {
+				sqls = append(sqls, plan["create_sql"])
 			}
 		}
 	}

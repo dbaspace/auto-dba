@@ -11,6 +11,7 @@ import (
 
 	"auto-dba/internal/aiops"
 	"auto-dba/internal/alert"
+	"auto-dba/internal/dns"
 	"auto-dba/internal/middleware"
 	"auto-dba/internal/promclient"
 	"auto-dba/internal/store"
@@ -20,6 +21,7 @@ type AlertHandler struct {
 	Store  *store.DB
 	Secret string
 	AIOps  *aiops.Service
+	DNS    *dns.Provider
 }
 
 func (h *AlertHandler) aiopsSvc() *aiops.Service {

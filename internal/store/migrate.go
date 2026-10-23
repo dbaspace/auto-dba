@@ -791,6 +791,7 @@ func (d *DB) ensureAWRTables() error {
 		`CREATE INDEX IF NOT EXISTS idx_awr_report_instance ON tbl_db_awr_reports(instance_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_awr_report_hostport ON tbl_db_awr_reports(host, port)`,
 		`CREATE INDEX IF NOT EXISTS idx_awr_report_severity ON tbl_db_awr_reports(report_date, severity)`,
+		`CREATE INDEX IF NOT EXISTS idx_awr_report_created ON tbl_db_awr_reports(created_at)`,
 	} {
 		if _, err := d.db.Exec(idx); err != nil {
 			return err

@@ -4,6 +4,7 @@ import { useAppDispatch, useAppSelector } from '../../store'
 import { closeTab, openTab, tabKey } from '../../store/tabsSlice'
 import {
   Alert,
+  AutoComplete,
   Badge,
   Button,
   Card,
@@ -11,6 +12,7 @@ import {
   Descriptions,
   Drawer,
   Input,
+  InputNumber,
   Modal,
   Pagination,
   Radio,
@@ -106,6 +108,12 @@ export default function CdcDetail() {
   const [approveComment, setApproveComment] = useState('')
   const [rejectComment, setRejectComment] = useState('')
   const [approving, setApproving] = useState(false)
+  const [debeziumSeen, setDebeziumSeen] = useState(false)
+  const [repairOpen, setRepairOpen] = useState(false)
+  const [repairHost, setRepairHost] = useState('')
+  const [repairPort, setRepairPort] = useState<number>(5432)
+  const [repairOthers, setRepairOthers] = useState(true)
+  const [repairing, setRepairing] = useState(false)
   const [tableRows, setTableRows] = useState<any[]>([])
   const [tableQ, setTableQ] = useState('')
   const [showDeletedMaps, setShowDeletedMaps] = useState(false)
@@ -759,6 +767,57 @@ export default function CdcDetail() {
     await load()
   }
 
+  function connectorEndpoint() {
+    let cfg: any = extra.debezium_config
+    if (typeof cfg === 'string') {
+      try {
+        cfg = JSON.parse(cfg)
+      } catch {
+        cfg = null
+      }
+    }
+    const host = String(cfg?.['database.hostname'] || '').trim()
+    const port = String(cfg?.['database.port'] || '').trim()
+    return host ? `${host}${port ? ':' + port : ''}` : ''
+  }
+
+  function openRepairSource() {
+    const host = String(source?.host || source?.domain_name || extra.source_host || '').trim()
+    const port = Number(source?.port || extra.source_port || 5432)
+    setRepairHost(host)
+    setRepairPort(port > 0 ? port : 5432)
+    setRepairOthers(true)
+    setRepairOpen(true)
+  }
+
+  async function submitRepairSource() {
+    const host = repairHost.trim()
+    if (!host) {
+      message.warning('请填写域名')
+      return
+    }
+    if (!repairPort || repairPort <= 0 || repairPort > 65535) {
+      message.warning('端口无效')
+      return
+    }
+    setRepairing(true)
+    try {
+      const { data } = await api.post(`/cdc-sync/tasks/${task.id}/repair-source`, {
+        host,
+        port: repairPort,
+        repair_others: repairOthers,
+      })
+      if (data?.warning) message.warning(`${data.message || '源端地址已更新'}：${data.warning}`)
+      else message.success(String(data?.message || '已修复源端'))
+      setRepairOpen(false)
+      await load()
+    } catch (e: any) {
+      message.error(e?.response?.data?.message || e?.message || '修复失败')
+    } finally {
+      setRepairing(false)
+    }
+  }
+
   async function approveTicket() {
     if (!task.issue_id) return
     setApproving(true)
@@ -770,7 +829,8 @@ export default function CdcDetail() {
         backToCdcList()
         return
       }
-      await load()
+      backToCdcList({ tab: 'approval_result' })
+      return
     } catch (e: any) {
       message.error(e?.response?.data?.message || '审批失败')
     } finally {
@@ -789,7 +849,8 @@ export default function CdcDetail() {
       await api.put(`/tickets/${task.issue_id}/reject`, { reason: rejectComment.trim() })
       message.success('操作成功')
       setRejectOpen(false)
-      await load()
+      backToCdcList({ tab: 'approval_result' })
+      return
     } catch (e: any) {
       message.error(e?.response?.data?.message || '驳回失败')
     } finally {
@@ -803,13 +864,13 @@ export default function CdcDetail() {
       key: 'src',
       render: (_, row) =>
         row.kind === 'shard' ? (
-          <div>
+          <div className="cdc-pub-src">
             <Tag color="purple">分表 {row.tables.length}</Tag>
             {row.shard_pattern ? <code style={{ marginLeft: 4 }}>{row.shard_pattern}</code> : null}
             <ShardSourceTablesGrid tables={row.tables} />
           </div>
         ) : (
-          <div>
+          <div className="cdc-pub-src">
             {row.system ? <Tag>系统</Tag> : row.orphan ? <Tag color="orange">未映射</Tag> : <Tag color="blue">单表</Tag>}{' '}
             <code>{row.tables[0] || '—'}</code>
           </div>
@@ -1148,6 +1209,7 @@ export default function CdcDetail() {
         activeKey={tab}
         onChange={(k) => {
           setTab(k)
+          if (k === 'debezium') setDebeziumSeen(true)
           if (k === 'logs') void loadLogs()
           if (k === 'tables') void ensureTablesLoaded()
           if (k === 'publication') {
@@ -1178,7 +1240,21 @@ export default function CdcDetail() {
           <Card size="small" title="源端 / 目标端" className="cdc-card small">
             <Descriptions column={2} size="small">
               {descItems([
-                { label: '源端 PostgreSQL', children: endpointLabel(source, extra.source_host, extra.source_port, true) },
+                {
+                  label: '源端 PostgreSQL',
+                  children: (
+                    <div>
+                      <div>{endpointLabel(source, extra.source_host, extra.source_port, true)}</div>
+                      {isInit && !pending ? (
+                        <Button type="link" size="small" style={{ padding: 0, height: 'auto' }} onClick={openRepairSource}>
+                          修复源端
+                        </Button>
+                      ) : !isInit ? (
+                        <span style={{ color: '#8c8c8c', fontSize: 12 }}>请到初始化任务上修复源端</span>
+                      ) : null}
+                    </div>
+                  ),
+                },
                 {
                   label: '目标端 StarRocks',
                   children: task.target_instance_id || extra.target_host
@@ -1482,6 +1558,7 @@ export default function CdcDetail() {
             />
           )}
           <ResponsiveTable
+            className="cdc-pub-table"
             rowKey="key"
             size="small"
             dataSource={pubFilteredRows}
@@ -1497,17 +1574,16 @@ export default function CdcDetail() {
         </Card>
       )}
 
-      {tab === 'debezium' && (
-        <Card size="small" className="cdc-card wide">
-          {task.id && (
-            <CdcDebeziumConfigTab
-              taskId={task.id}
-              extra={extra}
-              pending={pending}
-              onUpdated={load}
-              onReinit={task.task_type === 'init' ? () => setReinitOpen(true) : undefined}
-            />
-          )}
+      {(tab === 'debezium' || debeziumSeen) && task.id && (
+        <Card size="small" className="cdc-card wide" style={{ display: tab === 'debezium' ? undefined : 'none' }}>
+          <CdcDebeziumConfigTab
+            taskId={task.id}
+            extra={extra}
+            pending={pending}
+            active={tab === 'debezium'}
+            onUpdated={load}
+            onReinit={task.task_type === 'init' ? () => setReinitOpen(true) : undefined}
+          />
         </Card>
       )}
 
@@ -1716,6 +1792,50 @@ export default function CdcDetail() {
             options={reviewerOptions.map((a) => ({ value: a, label: a }))}
           />
         </div>
+      </Modal>
+
+      <Modal
+        title="修复源端"
+        open={repairOpen}
+        onCancel={() => setRepairOpen(false)}
+        onOk={() => void submitRepairSource()}
+        confirmLoading={repairing}
+        okText="确认修复并重启"
+        cancelText="取消"
+        destroyOnClose
+      >
+        <p>
+          当前实例地址：{endpointLabel(source, extra.source_host, extra.source_port, true)}
+        </p>
+        {connectorEndpoint() && connectorEndpoint() !== `${String(source?.host || source?.domain_name || '')}:${source?.port || ''}` ? (
+          <p>Connector 上的地址：{connectorEndpoint()}</p>
+        ) : null}
+        <p style={{ color: '#8c8c8c', fontSize: 12 }}>
+          复制槽名、publication、表清单、账号密码都不改。Connect 会更新 database.hostname / database.port，并连同 Task 重启，使已有复制连接切到新域名。
+        </p>
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ marginBottom: 4 }}>域名</div>
+          <AutoComplete
+            style={{ width: '100%' }}
+            value={repairHost}
+            options={Array.from(
+              new Set(
+                [source?.domain_name, source?.host, ...(source?.domains || [])]
+                  .map((s) => String(s || '').trim())
+                  .filter(Boolean),
+              ),
+            ).map((d) => ({ value: d }))}
+            onChange={(v) => setRepairHost(v)}
+            placeholder="选择或填写域名"
+          />
+        </div>
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ marginBottom: 4 }}>端口</div>
+          <InputNumber min={1} max={65535} value={repairPort} onChange={(v) => setRepairPort(Number(v || 0))} style={{ width: 160 }} />
+        </div>
+        <Checkbox checked={repairOthers} onChange={(e) => setRepairOthers(e.target.checked)}>
+          一并修复同源端其它运行中的初始化任务
+        </Checkbox>
       </Modal>
 
       <Modal title={(ddlTarget || '映射') + ' DDL'} open={ddlOpen} width={720} footer={<Button onClick={() => setDdlOpen(false)}>关闭</Button>} onCancel={() => setDdlOpen(false)}>

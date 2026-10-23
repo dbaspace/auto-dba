@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 
@@ -192,6 +193,105 @@ func (h *AccessDomainHandler) AssignTenantBatch(c *gin.Context) {
 		}
 		okCount++
 		_ = h.Store.AppendTenantAudit(to, actor, "resource.assign", "domain:"+id)
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"ok_count":   okCount,
+		"fail_count": len(failed),
+		"failed":     failed,
+	})
+}
+
+func (h *AccessDomainHandler) deleteAllowed(c *gin.Context, row *store.AccessDomain) error {
+	if row == nil {
+		return errAccessDomainMissing
+	}
+	if platformAdminAuditing(h.Store, c) {
+		return nil
+	}
+	if strings.TrimSpace(row.TenantID) != strings.TrimSpace(middleware.TenantID(c)) {
+		return errAccessDomainForbidden
+	}
+	return nil
+}
+
+var (
+	errAccessDomainMissing   = errors.New("域名不存在")
+	errAccessDomainForbidden = errors.New("只能删除本租户的域名")
+)
+
+// Delete DELETE /access-domains/:id
+func (h *AccessDomainHandler) Delete(c *gin.Context) {
+	id := strings.TrimSpace(c.Param("id"))
+	row, err := h.Store.GetAccessDomain(id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	if err := h.deleteAllowed(c, row); err != nil {
+		status := http.StatusForbidden
+		if errors.Is(err, errAccessDomainMissing) {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, gin.H{"message": err.Error()})
+		return
+	}
+	if err := h.Store.DeleteAccessDomain(id); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// DeleteBatch POST /access-domains/batch-delete
+func (h *AccessDomainHandler) DeleteBatch(c *gin.Context) {
+	var req struct {
+		IDs []string `json:"ids"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "参数无效"})
+		return
+	}
+	seen := map[string]bool{}
+	ids := make([]string, 0, len(req.IDs))
+	for _, id := range req.IDs {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "ids 必填"})
+		return
+	}
+	type failItem struct {
+		ID      string `json:"id"`
+		Domain  string `json:"domain,omitempty"`
+		DBType  string `json:"db_type,omitempty"`
+		Message string `json:"message"`
+	}
+	okCount := 0
+	failed := make([]failItem, 0)
+	for _, id := range ids {
+		row, err := h.Store.GetAccessDomain(id)
+		domain, dbType := "", ""
+		if row != nil {
+			domain, dbType = row.Domain, row.DBType
+		}
+		if err != nil {
+			failed = append(failed, failItem{ID: id, Message: err.Error()})
+			continue
+		}
+		if err := h.deleteAllowed(c, row); err != nil {
+			failed = append(failed, failItem{ID: id, Domain: domain, DBType: dbType, Message: err.Error()})
+			continue
+		}
+		if err := h.Store.DeleteAccessDomain(id); err != nil {
+			failed = append(failed, failItem{ID: id, Domain: domain, DBType: dbType, Message: err.Error()})
+			continue
+		}
+		okCount++
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"ok_count":   okCount,

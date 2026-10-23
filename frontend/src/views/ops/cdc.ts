@@ -1082,7 +1082,7 @@ export function isSensitiveConfigKey(key: any): boolean {
 
 export function formatOperationType(source: string): string {
   return (
-    { ui_save: '修改', restore: '恢复', add_table: '新增表', remove_table: '移除表', reinit: '重新初始化' }[source] ||
+    { ui_save: '修改', restore: '恢复', add_table: '新增表', remove_table: '移除表', reinit: '重新初始化', repair_source: '修复源端' }[source] ||
     (source ? '修改' : '—')
   )
 }
@@ -1090,7 +1090,7 @@ export function formatOperationType(source: string): string {
 // AntD Tag 颜色
 export function operationTypeTagColor(source: string): string {
   return (
-    { restore: 'orange', add_table: 'green', remove_table: 'red', ui_save: 'default', reinit: 'purple' }[source] ||
+    { restore: 'orange', add_table: 'green', remove_table: 'red', ui_save: 'default', reinit: 'purple', repair_source: 'blue' }[source] ||
     'default'
   )
 }

@@ -12,6 +12,9 @@
   flex-direction: column;
   gap: 12px;
 }
+.map-list-virtual {
+  display: block;
+}
 .map-item {
   border: 1px solid #e5e7eb;
   border-radius: 8px;

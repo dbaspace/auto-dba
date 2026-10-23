@@ -3,19 +3,21 @@ package cdc
 import (
 	"encoding/json"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"auto-dba/internal/store"
 )
 
 const (
-	VersionSourceUISave      = "ui_save"
-	VersionSourceRestore     = "restore"
-	VersionSourceAddTable    = "add_table"
-	VersionSourceRemoveTable = "remove_table"
-	VersionSourceReinit      = "reinit"
-	VersionKeepN             = 50
-	connectorMaskValue       = "********"
+	VersionSourceUISave       = "ui_save"
+	VersionSourceRestore      = "restore"
+	VersionSourceAddTable     = "add_table"
+	VersionSourceRemoveTable  = "remove_table"
+	VersionSourceReinit       = "reinit"
+	VersionSourceRepairSource = "repair_source"
+	VersionKeepN              = 50
+	connectorMaskValue        = "********"
 )
 
 var sensitiveKeyRE = regexp.MustCompile(`(?i)password|secret|token|credential`)
@@ -249,6 +251,34 @@ func TableIncludeDelta(current, historical map[string]string) (add, drop []strin
 		}
 	}
 	return add, drop
+}
+
+// ApplySourceEndpoint 只改连接地址，不动槽名、publication、表清单和账号。
+func ApplySourceEndpoint(cfg map[string]string, host string, port int) {
+	if cfg == nil {
+		return
+	}
+	host = strings.TrimSpace(host)
+	if host != "" {
+		cfg["database.hostname"] = host
+	}
+	if port > 0 {
+		cfg["database.port"] = strconv.Itoa(port)
+	}
+}
+
+func WriteTaskExtraFields(st *store.DB, t *store.CDCTask, fields map[string]string) error {
+	if st == nil || t == nil || len(fields) == 0 {
+		return nil
+	}
+	extra := parseTaskExtra(t.Description)
+	for k, v := range fields {
+		extra[k] = v
+	}
+	text, _ := splitCDCDesc(t.Description)
+	b, _ := json.Marshal(extra)
+	t.Description = strings.TrimSpace(text + "\n-- auto-dba-cdc:" + string(b))
+	return st.UpdateCDCDescription(t.ID, t.Description)
 }
 
 func WriteTaskDebeziumConfig(st *store.DB, t *store.CDCTask, cfg map[string]string) error {

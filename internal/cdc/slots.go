@@ -12,7 +12,8 @@ import (
 	"auto-dba/internal/store"
 )
 
-// replicationSlotsSQL 只读 pg_replication_slots。当前 WAL 位置只取一次，不查 pg_stat_activity / pg_stat_replication。
+// replicationSlotsSQL 只读逻辑复制槽。槽占用是当前 WAL 到 restart_lsn 的保留量，与
+// pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn) 相同。当前 WAL 只取一次。
 const replicationSlotsSQL = `
 SELECT s.slot_name,
        COALESCE(s.database, ''),
@@ -21,11 +22,12 @@ SELECT s.slot_name,
        COALESCE(s.restart_lsn::text, ''),
        COALESCE(s.confirmed_flush_lsn::text, ''),
        COALESCE(s.plugin, ''),
-       COALESCE(pg_wal_lsn_diff(cur.lsn, COALESCE(s.confirmed_flush_lsn, s.restart_lsn))::bigint, 0)
+       COALESCE(pg_wal_lsn_diff(cur.lsn, s.restart_lsn)::bigint, 0)
 FROM pg_replication_slots s
-CROSS JOIN (SELECT pg_current_wal_lsn() AS lsn) cur`
+CROSS JOIN (SELECT pg_current_wal_lsn() AS lsn) cur
+WHERE s.slot_type <> 'physical'`
 
-// replicationSlotsSQLFallback 在主查询失败时仍只读目录，滞后改用 restart_lsn。
+// replicationSlotsSQLFallback 在主查询失败时仍只读逻辑槽目录，占用同样按 restart_lsn。
 const replicationSlotsSQLFallback = `
 SELECT s.slot_name,
        COALESCE(s.database, ''),
@@ -36,7 +38,8 @@ SELECT s.slot_name,
        COALESCE(s.plugin, ''),
        COALESCE(pg_wal_lsn_diff(cur.lsn, s.restart_lsn)::bigint, 0)
 FROM pg_replication_slots s
-CROSS JOIN (SELECT pg_current_wal_lsn() AS lsn) cur`
+CROSS JOIN (SELECT pg_current_wal_lsn() AS lsn) cur
+WHERE s.slot_type <> 'physical'`
 
 // SlotRow 是同步列表的一行：复制槽字段来自采集，CDC 字段按槽名左连接补齐。
 type SlotRow struct {
@@ -114,7 +117,7 @@ func retryOtherDatabase(err error) bool {
 	return strings.Contains(low, "does not exist") || strings.Contains(low, "3d000") || strings.Contains(low, "permission denied") || strings.Contains(low, "not permitted")
 }
 
-// QueryReplicationSlots 在已有连接上只读复制槽。滞后优先用 confirmed_flush_lsn，否则用 restart_lsn。
+// QueryReplicationSlots 在已有连接上只读逻辑复制槽。槽占用按 restart_lsn 到当前 WAL 的字节差。
 func QueryReplicationSlots(ctx context.Context, db *sql.DB) ([]store.SyncSlot, error) {
 	if db == nil {
 		return nil, fmt.Errorf("数据库连接为空")
@@ -240,10 +243,11 @@ func AttachSlotCDC(slots []store.SyncSlot, tasks []store.CDCTask, insts []store.
 				continue
 			}
 			name, base, topic, score := matchTaskSlot(slot, c.task, c.extra)
-			if score <= best || name == "" {
+			rank := slotTaskRank(c.task.TaskType, score)
+			if rank <= best || name == "" {
 				continue
 			}
-			best = score
+			best = rank
 			row.TaskID = c.task.ID
 			row.TaskName = c.task.Name
 			row.ConnectorName = name
@@ -254,6 +258,17 @@ func AttachSlotCDC(slots []store.SyncSlot, tasks []store.CDCTask, insts []store.
 		out = append(out, row)
 	}
 	return out
+}
+
+// slotTaskRank 让初始化任务压过加表等子任务。子任务最高 3 分，init 从 100 起，所以库名对得上的 init 不会被 *-add 盖掉。
+func slotTaskRank(taskType string, score int) int {
+	if score <= 0 {
+		return 0
+	}
+	if strings.EqualFold(strings.TrimSpace(taskType), "init") {
+		return score + 100
+	}
+	return score
 }
 
 // SlotHostMatches 判断槽上记录的主机端口是否属于这台实例。
@@ -286,9 +301,17 @@ func matchTaskSlot(slot store.SyncSlot, task *store.CDCTask, extra map[string]st
 		if slot.Database != "" && b.DbName != "" && !strings.EqualFold(b.DbName, slot.Database) {
 			continue
 		}
+		// 分库 binding 没有自己的 connector 时，任务级名字属于代表库。库名对不上就不用它。
 		name = strings.TrimSpace(b.ConnectorName)
-		if name == "" {
+		if name == "" && slotDBMatchesSource(slot, task) {
 			name = strings.TrimSpace(extra["connector_name"])
+		}
+		if name == "" {
+			continue
+		}
+		if slot.Database != "" && b.DbName == "" && !slotDBMatchesSource(slot, task) {
+			name = ""
+			continue
 		}
 		score = 2
 		if strings.EqualFold(b.DbName, slot.Database) && slot.Database != "" {
@@ -297,7 +320,7 @@ func matchTaskSlot(slot store.SyncSlot, task *store.CDCTask, extra map[string]st
 		break
 	}
 	if score == 0 && strings.EqualFold(strings.TrimSpace(extra["slot_name"]), strings.TrimSpace(slot.SlotName)) {
-		if slot.Database != "" && task.SourceDB != "" && !strings.EqualFold(task.SourceDB, slot.Database) && !extraListsDB(extra, slot.Database) {
+		if !slotDBMatchesSource(slot, task) {
 			return "", "", "", 0
 		}
 		name = strings.TrimSpace(extra["connector_name"])
@@ -306,7 +329,7 @@ func matchTaskSlot(slot store.SyncSlot, task *store.CDCTask, extra map[string]st
 			score = 3
 		}
 	}
-	if name == "" {
+	if name == "" || childTaskNameUsedAsConnector(task, name) {
 		return "", "", "", 0
 	}
 	base = strings.TrimSpace(extra["connect_base_url"])
@@ -317,13 +340,29 @@ func matchTaskSlot(slot store.SyncSlot, task *store.CDCTask, extra map[string]st
 	return name, base, topic, score
 }
 
-func extraListsDB(extra map[string]string, dbName string) bool {
-	for _, name := range splitCSV(extra["source_db_names"]) {
-		if strings.EqualFold(name, dbName) {
-			return true
-		}
+// slotDBMatchesSource 任务级 connector 只代表 SourceDB。槽上有库名时，两者必须相同。
+func slotDBMatchesSource(slot store.SyncSlot, task *store.CDCTask) bool {
+	if task == nil {
+		return false
 	}
-	return false
+	db := strings.TrimSpace(slot.Database)
+	if db == "" {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(task.SourceDB), db)
+}
+
+// childTaskNameUsedAsConnector 加表子任务的名字不是 Connect connector，不能拿去重启。
+func childTaskNameUsedAsConnector(task *store.CDCTask, connector string) bool {
+	if task == nil {
+		return false
+	}
+	taskType := strings.ToLower(strings.TrimSpace(task.TaskType))
+	switch taskType {
+	case "", "init":
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(connector), strings.TrimSpace(task.Name))
 }
 
 func connectorLabel(raw string) string {

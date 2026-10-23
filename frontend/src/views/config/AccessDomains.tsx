@@ -3,7 +3,7 @@ import { Button, Dropdown, Input, Modal, Pagination, Select, Tabs, Tag, message 
 import ResponsiveTable from '../../components/ResponsiveTable'
 import api from '../../api/request'
 import Auth from '../../components/Auth'
-import { Perm } from '../../hooks/usePermission'
+import { Perm, usePermission } from '../../hooks/usePermission'
 import { useAppSelector } from '../../store'
 import {
   parseInstanceTypes,
@@ -35,6 +35,8 @@ function typeKey(t?: string) {
 
 export default function AccessDomains() {
   const user = useAppSelector((s) => s.auth.user)
+  const { hasUrn } = usePermission()
+  const canDelete = hasUrn(Perm.domains.delete)
   const impersonating = Boolean((user as { impersonating?: boolean })?.impersonating)
   const currentTenant = (user as { current_tenant?: { id?: string; name?: string; code?: string } })?.current_tenant
   const currentTenantId = String(currentTenant?.id || '')
@@ -53,6 +55,7 @@ export default function AccessDomains() {
   const [assignTid, setAssignTid] = useState('')
   const [assigning, setAssigning] = useState(false)
   const [selectedKeys, setSelectedKeys] = useState<React.Key[]>([])
+  const [deleting, setDeleting] = useState(false)
 
   const knownTypes = useMemo(() => new Set(typeOptions.map((t) => typeKey(t.value))), [typeOptions])
 
@@ -226,6 +229,69 @@ export default function AccessDomains() {
     }
   }
 
+  function removeRows(list: DomainRow[]) {
+    const next = list.filter((r) => r.id)
+    if (!next.length) {
+      message.warning('请先勾选域名')
+      return
+    }
+    Modal.confirm({
+      title: next.length > 1 ? `删除 ${next.length} 个域名` : '删除域名',
+      okText: '删除',
+      okButtonProps: { danger: true },
+      content: (
+        <div>
+          <p style={{ marginBottom: 8 }}>
+            只删除域名记录，不删除实例和已登记库。关联实例的域名列表会去掉这一条，下次一键同步不会再加回来。
+          </p>
+          <ul style={{ margin: 0, paddingLeft: 18, maxHeight: 160, overflow: 'auto' }}>
+            {next.map((r) => (
+              <li key={r.id}>
+                {r.domain}（{r.db_type || '—'}）
+              </li>
+            ))}
+          </ul>
+        </div>
+      ),
+      onOk: async () => {
+        setDeleting(true)
+        try {
+          const ids = next.map((r) => r.id!).filter(Boolean)
+          if (ids.length === 1) {
+            await api.delete(`/access-domains/${ids[0]}`)
+            message.success('已删除')
+          } else {
+            const { data } = await api.post('/access-domains/batch-delete', { ids })
+            const okCount = Number(data.ok_count || 0)
+            const failCount = Number(data.fail_count || 0)
+            const failed: { id?: string; domain?: string; db_type?: string; message?: string }[] = data.failed || []
+            if (failCount === 0) {
+              message.success(`已删除 ${okCount} 个域名`)
+            } else {
+              Modal.warning({
+                title: `删除完成：成功 ${okCount}，失败 ${failCount}`,
+                content: (
+                  <ul style={{ margin: 0, paddingLeft: 18, maxHeight: 240, overflow: 'auto' }}>
+                    {failed.map((f) => (
+                      <li key={f.id || f.domain}>
+                        {f.domain || f.id}
+                        {f.db_type ? `（${f.db_type}）` : ''}：{f.message || '失败'}
+                      </li>
+                    ))}
+                  </ul>
+                ),
+              })
+            }
+          }
+          setSelectedKeys([])
+          await load()
+        } finally {
+          setDeleting(false)
+        }
+      },
+    })
+  }
+
   useEffect(() => {
     ;(async () => {
       await loadTypes()
@@ -253,7 +319,7 @@ export default function AccessDomains() {
     <div className="ops-page">
       {impersonating ? (
         <p className="muted" style={{ marginBottom: 8 }}>
-          审计中：列表含全平台域名。可勾选后「批量指定租户」，或单行「指定租户」；一键同步按当前类型 Tab 过滤（「其他」则全量）。
+          审计中：列表含全平台域名。可勾选后「批量指定租户」或「批量删除」；一键同步按当前类型 Tab 过滤（「其他」则全量）。
         </p>
       ) : null}
       <Tabs
@@ -331,6 +397,19 @@ export default function AccessDomains() {
             </Button>
           </Auth>
         ) : null}
+        <Auth urn={Perm.domains.delete}>
+          <Button
+            danger
+            loading={deleting}
+            disabled={!selectedKeys.length}
+            onClick={() => {
+              const set = new Set(selectedKeys.map(String))
+              removeRows(filteredRows.filter((r) => r.id && set.has(r.id)))
+            }}
+          >
+            批量删除{selectedKeys.length ? `（${selectedKeys.length}）` : ''}
+          </Button>
+        </Auth>
       </div>
       <div className="ops-table">
         <ResponsiveTable
@@ -340,7 +419,7 @@ export default function AccessDomains() {
           pagination={false}
           scroll={{ x: 900 }}
           rowSelection={
-            impersonating
+            impersonating || canDelete
               ? {
                   selectedRowKeys: selectedKeys,
                   onChange: (keys) => setSelectedKeys(keys),
@@ -374,19 +453,6 @@ export default function AccessDomains() {
               width: 220,
               ellipsis: true,
               render: (_: unknown, row: DomainRow) => row.instance_name || row.instance_id || '—',
-            },
-            {
-              title: '操作',
-              width: 120,
-              fixed: 'right' as const,
-              render: (_: unknown, row: DomainRow) =>
-                impersonating ? (
-                  <Auth urn={Perm.tenants.impersonate}>
-                    <Button type="link" onClick={() => openAssign([row])}>
-                      指定租户
-                    </Button>
-                  </Auth>
-                ) : null,
             },
           ]}
         />

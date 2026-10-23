@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"auto-dba/internal/dns"
+	"auto-dba/internal/promclient"
 )
 
 func TestEvalNodeAlerts(t *testing.T) {
@@ -27,5 +28,23 @@ func TestEvalNodeAlerts(t *testing.T) {
 		if !firing[k] {
 			t.Errorf("missing %s in %v", k, firing)
 		}
+	}
+}
+
+func TestRatioChecks(t *testing.T) {
+	samples := []promclient.Sample{
+		{Metric: map[string]string{"instance": "10.0.0.8:9153"}, Value: []any{1.0, "0.2"}},
+		{Metric: map[string]string{"instance": "10.0.0.9:9153"}, Value: []any{1.0, "0.01"}},
+		{Metric: map[string]string{"instance": ""}, Value: []any{1.0, "0.9"}},
+	}
+	got := ratioChecks(samples, dnsAlertKindFwd, 0.05, "DNS 上游转发失败偏高", "上游转发失败率")
+	firing := map[string]string{}
+	for _, ck := range got {
+		if ck.Firing {
+			firing[ck.IP] = ck.Kind
+		}
+	}
+	if len(got) != 2 || len(firing) != 1 || firing["10.0.0.8"] != dnsAlertKindFwd {
+		t.Fatalf("checks %+v firing %v", got, firing)
 	}
 }

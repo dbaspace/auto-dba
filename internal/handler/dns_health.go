@@ -23,6 +23,7 @@ const (
 	dnsAlertKindDown  = "offline"
 	dnsAlertKindSync  = "unsynced"
 	dnsAlertKindSFail = "servfail"
+	dnsAlertKindFwd   = "forward"
 )
 
 // DNSAlertCheck 一次巡检中某节点某类告警的判定结果。
@@ -77,6 +78,7 @@ func (h *DNSHandler) RunHealth(ctx context.Context) error {
 	} else {
 		checks := EvalNodeAlerts(nodes, now)
 		checks = append(checks, h.servfailChecks(ctx)...)
+		checks = append(checks, h.forwardFailChecks(ctx)...)
 		for _, ck := range checks {
 			h.applyAlert(ck)
 		}
@@ -95,25 +97,19 @@ func (h *DNSHandler) RunHealth(ctx context.Context) error {
 	return nil
 }
 
-// servfailChecks SERVFAIL 占比超过阈值（全局参数 dns_servfail_ratio，缺省 0.05）。未配置 Prometheus 时跳过。
-func (h *DNSHandler) servfailChecks(ctx context.Context) []DNSAlertCheck {
-	cli := h.promClient()
-	if cli == nil {
-		return nil
+func (h *DNSHandler) ratioLimit(key string, def float64) float64 {
+	if h.Store == nil {
+		return def
 	}
-	limit := defaultServfail
-	if v, _ := h.Store.GetGlobalArg(dnsServfailRatioArg); strings.TrimSpace(v) != "" {
-		if f, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil && f > 0 {
-			limit = f
-		}
+	v, _ := h.Store.GetGlobalArg(key)
+	if f, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil && f > 0 {
+		return f
 	}
-	sel := h.metricsSelector()
-	q := `sum by (instance) (rate(coredns_dns_responses_total{` + sel + `,rcode="SERVFAIL"}[5m])) / sum by (instance) (rate(coredns_dns_responses_total{` + sel + `}[5m]))`
-	samples, err := cli.Query(ctx, q, time.Now())
-	if err != nil {
-		log.Printf("dns.health: servfail query: %v", err)
-		return nil
-	}
+	return def
+}
+
+// ratioChecks 把按 instance 聚合的占比结果转成告警判定。instance 形如 ip:port 时指纹只用 IP。
+func ratioChecks(samples []promclient.Sample, kind string, limit float64, title, what string) []DNSAlertCheck {
 	var out []DNSAlertCheck
 	for _, s := range samples {
 		inst := s.Metric["instance"]
@@ -121,7 +117,7 @@ func (h *DNSHandler) servfailChecks(ctx context.Context) []DNSAlertCheck {
 		if hh, _, err := net.SplitHostPort(inst); err == nil {
 			ip = hh
 		}
-		if len(s.Value) != 2 {
+		if strings.TrimSpace(ip) == "" || len(s.Value) != 2 {
 			continue
 		}
 		v, ok := promclient.ToFloat(s.Value[1])
@@ -129,11 +125,38 @@ func (h *DNSHandler) servfailChecks(ctx context.Context) []DNSAlertCheck {
 			continue
 		}
 		out = append(out, DNSAlertCheck{
-			Kind: dnsAlertKindSFail, IP: ip, Firing: v > limit, Title: "DNS SERVFAIL 偏高 " + ip,
-			Detail: fmt.Sprintf("近 5 分钟 SERVFAIL 占比 %.2f%%，阈值 %.2f%%", v*100, limit*100),
+			Kind: kind, IP: ip, Firing: v > limit, Title: title + " " + ip,
+			Detail: fmt.Sprintf("近 5 分钟%s %.2f%%，阈值 %.2f%%", what, v*100, limit*100),
 		})
 	}
 	return out
+}
+
+func (h *DNSHandler) queryRatio(ctx context.Context, q, kind, argKey string, def float64, title, what string) []DNSAlertCheck {
+	cli := h.promClient()
+	if cli == nil {
+		return nil
+	}
+	samples, err := cli.Query(ctx, q, time.Now())
+	if err != nil {
+		log.Printf("dns.health: %s query: %v", kind, err)
+		return nil
+	}
+	return ratioChecks(samples, kind, h.ratioLimit(argKey, def), title, what)
+}
+
+// servfailChecks SERVFAIL 占比超过阈值（全局参数 dns_servfail_ratio，缺省 0.05）。未配置 Prometheus 时跳过。
+func (h *DNSHandler) servfailChecks(ctx context.Context) []DNSAlertCheck {
+	sel := h.metricsSelector()
+	q := `sum by (instance) (rate(coredns_dns_responses_total{` + sel + `,rcode="SERVFAIL"}[5m])) / sum by (instance) (rate(coredns_dns_responses_total{` + sel + `}[5m]))`
+	return h.queryRatio(ctx, q, dnsAlertKindSFail, dnsServfailRatioArg, defaultServfail, "DNS SERVFAIL 偏高", "SERVFAIL 占比")
+}
+
+// forwardFailChecks 上游转发失败率（SERVFAIL 或 REFUSED）超过阈值。全局参数 dns_forward_fail_ratio，缺省 0.05。
+func (h *DNSHandler) forwardFailChecks(ctx context.Context) []DNSAlertCheck {
+	sel := h.metricsSelector()
+	q := `sum by (instance) (rate(coredns_forward_responses_total{` + sel + `,rcode=~"SERVFAIL|REFUSED"}[5m])) / sum by (instance) (rate(coredns_forward_responses_total{` + sel + `}[5m]))`
+	return h.queryRatio(ctx, q, dnsAlertKindFwd, dnsForwardFailRatioArg, defaultServfail, "DNS 上游转发失败偏高", "上游转发失败率")
 }
 
 // applyAlert 触发或恢复。指纹 dns:<kind>:<ip>；同一指纹未恢复前只更新不重复通知。

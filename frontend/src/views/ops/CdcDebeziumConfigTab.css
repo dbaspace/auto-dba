@@ -1,3 +1,13 @@
+.dbz-tab .ant-table-measure-row {
+  height: 0 !important;
+  font-size: 0 !important;
+  line-height: 0 !important;
+}
+.dbz-tab .ant-table-measure-row > td {
+  padding: 0 !important;
+  border: 0 !important;
+  height: 0 !important;
+}
 .dbz-summary {
   padding: 12px;
   background: var(--app-page-bg, #f8fafc);

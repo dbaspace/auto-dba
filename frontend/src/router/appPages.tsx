@@ -97,6 +97,7 @@ import CmdbAudit from '../views/cmdb/Audit'
 import CmdbSync from '../views/cmdb/Sync'
 import TodoFollowUp from '../views/todo/TodoFollowUp'
 import ActiveAlerts from '../views/alerts/ActiveAlerts'
+import AlertActivity from '../views/alerts/AlertActivity'
 import AlertHistory from '../views/alerts/AlertHistory'
 import AlertRules from '../views/alerts/AlertRules'
 import AIOpsKnowledge from '../views/aiops/Knowledge'
@@ -310,6 +311,7 @@ export function TabPagePanel({ pathname, search }: { pathname: string; search?: 
 
       <Route path="/ops/todo" element={<TodoFollowUp />} />
       <Route path="/ops/alerts" element={<ActiveAlerts />} />
+      <Route path="/ops/alerts/activity" element={<AlertActivity />} />
       <Route path="/ops/alerts/history" element={<AlertHistory />} />
       <Route path="/ops/alerts/rules" element={<AlertRules />} />
       <Route path="/ops/alerts/silences" element={<AlertSilences />} />

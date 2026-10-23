@@ -233,6 +233,8 @@ func Init(e *gin.Engine, d Deps) {
 	if d.AccessDomain != nil {
 		secured.GET("/access-domains", d.AccessDomain.List)
 		secured.POST("/access-domains/sync", requireURN(store.URNDomainsSync), d.AccessDomain.Sync)
+		secured.POST("/access-domains/batch-delete", requireURN(store.URNDomainsDelete), d.AccessDomain.DeleteBatch)
+		secured.DELETE("/access-domains/:id", requireURN(store.URNDomainsDelete), d.AccessDomain.Delete)
 		secured.POST("/access-domains/assign-tenant", requireURN(store.URNTenantsImpersonate), d.AccessDomain.AssignTenantBatch)
 		secured.POST("/access-domains/:id/assign-tenant", requireURN(store.URNTenantsImpersonate), d.AccessDomain.AssignTenant)
 	}
@@ -270,6 +272,7 @@ func Init(e *gin.Engine, d Deps) {
 	secured.POST("/databases/assign-tenant", requireURN(store.URNTenantsImpersonate), d.DB.AssignTenantBatch)
 	secured.POST("/databases/batch-approvers", requireURN(store.URNDatabasesEdit), d.DB.BatchApprovers)
 	secured.POST("/databases/batch-access-users", requireURN(store.URNDatabasesEdit), d.DB.BatchAccessUsers)
+	secured.POST("/databases/batch-delete", requireURN(store.URNDatabasesDelete), d.DB.DeleteBatch)
 	secured.GET("/databases/:id/tables", d.DB.ListTables)
 	secured.PUT("/databases/:id", requireURN(store.URNDatabasesEdit), d.DB.Update)
 	secured.POST("/databases/:id/assign-tenant", requireURN(store.URNTenantsImpersonate), d.DB.AssignTenant)
@@ -380,6 +383,7 @@ func Init(e *gin.Engine, d Deps) {
 		al := secured.Group("/alerts")
 		al.GET("", d.Alert.List)
 		al.GET("/stats", d.Alert.Stats)
+		al.GET("/activity", requireURN(store.URNSidebarAlertActivity), d.Alert.Activity)
 		al.POST("/postmortem", d.Alert.Postmortem)
 		al.GET("/:id", d.Alert.Get)
 		al.GET("/:id/events", d.Alert.Events)
@@ -581,6 +585,7 @@ func Init(e *gin.Engine, d Deps) {
 	cdc.GET("/tasks/:id/connector/status", d.CDC.ConnectorRuntimeStatus)
 	cdc.GET("/tasks/:id/connector", d.CDC.Connector)
 	cdc.PUT("/tasks/:id/connector", d.CDC.ConnectorUpdate)
+	cdc.POST("/tasks/:id/repair-source", d.CDC.RepairSource)
 	cdc.GET("/tasks/:id/connector/versions", d.CDC.ConnectorVersionList)
 	cdc.GET("/tasks/:id/connector/versions/:versionId", d.CDC.ConnectorVersionDetail)
 	cdc.POST("/tasks/:id/connector/versions/:versionId/restore/preview", d.CDC.ConnectorVersionRestorePreview)

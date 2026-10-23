@@ -51,9 +51,11 @@ type OpLogRow = {
 }
 
 function lagMB(bytes?: number) {
-  const n = Number(bytes || 0) / 1024 / 1024
-  if (!Number.isFinite(n) || n <= 0) return '0 MB'
-  return `${n.toFixed(2)} MB`
+  const mb = Number(bytes || 0) / 1024 / 1024
+  if (!Number.isFinite(mb) || mb <= 0) return '0 MB'
+  if (mb >= 1024 * 1024) return `${(mb / 1024 / 1024).toFixed(2)} TB`
+  if (mb >= 1024) return `${(mb / 1024).toFixed(2)} GB`
+  return `${mb.toFixed(2)} MB`
 }
 
 function canRestart(row: SlotRow) {
@@ -527,7 +529,7 @@ export default function SlotList() {
             { title: 'slot pid', dataIndex: 'active_pid', width: 100, render: (v) => (v ? v : '—') },
             { title: 'restart_lsn', dataIndex: 'restart_lsn', width: 140, ellipsis: true, render: (v) => v || '—' },
             { title: 'confirmed_flush_lsn', dataIndex: 'confirmed_flush_lsn', width: 170, ellipsis: true, render: (v) => v || '—' },
-            { title: 'replication_lag(MB)', width: 160, render: (_, row: SlotRow) => lagMB(row.lag_bytes) },
+            { title: '槽占用', width: 160, render: (_, row: SlotRow) => lagMB(row.lag_bytes) },
             {
               title: 'topic',
               dataIndex: 'topic',

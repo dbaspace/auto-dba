@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { Alert, Button, Card, Col, DatePicker, Drawer, Grid, Row, Select, Space, Statistic, Tag, Typography, message } from 'antd'
 import dayjs, { type Dayjs } from 'dayjs'
 import api from '../../api/request'
@@ -9,6 +10,7 @@ const PAGE_SIZE = 20
 
 export default function AlertHistory() {
   const screens = Grid.useBreakpoint()
+  const [params] = useSearchParams()
   const [rows, setRows] = useState<AlertHistoryRow[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
@@ -43,6 +45,11 @@ export default function AlertHistory() {
   }, [severity, range, focus, page, pageSize])
 
   useEffect(() => { void load() }, [load])
+
+  useEffect(() => {
+    const id = params.get('alert_id')
+    if (id) setFocus({ id, title: '关联通知' })
+  }, [params])
 
   const focusAlert = (a: AlertHistoryRow) => {
     setFocus({ id: a.id, title: a.title })

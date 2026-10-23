@@ -111,6 +111,11 @@ func Run(cfg *config.Config, configPath string) {
 		SSHInsecureHostKey: cfg.Terminal.SSHInsecureHostKey,
 	})
 	cdcOrch := cdc.NewOrchestrator(db, fieldCrypto, cfg.CDC)
+	if n, err := cdcOrch.RecoverInflight(); err != nil {
+		log.Printf("cdc recover inflight: %v", err)
+	} else if n > 0 {
+		log.Printf("cdc recover inflight: marked %d tasks failed", n)
+	}
 	flashback.SetRuntime(&flashback.Runtime{Store: db, Secret: fieldCrypto, Cfg: cfg.Flashback})
 	fbEngine := flashback.New()
 	ticketH := &handler.TicketHandler{Store: db, Secret: fieldCrypto, Flashback: fbEngine, Migration: migEngine, Archive: arcEngine, CDC: cdcOrch, Backup: bakEngine}
@@ -211,7 +216,7 @@ func Run(cfg *config.Config, configPath string) {
 		DNS:                dnsH,
 		Cmdb:               &handler.CmdbHandler{Store: db, Secret: fieldCrypto},
 		Todo:               &handler.TodoHandler{Store: db},
-		Alert:              &handler.AlertHandler{Store: db, Secret: fieldCrypto},
+		Alert:              &handler.AlertHandler{Store: db, Secret: fieldCrypto, DNS: dnsH.DNS},
 		Copilot:            &handler.CopilotHandler{Svc: func() *copilot.Service { s := copilot.New(db); s.Secret = fieldCrypto; return s }()},
 		Runbook:            &handler.RunbookHandler{Svc: runbook.New(db)},
 		DCL:                &handler.DCLHandler{Store: db, Secret: fieldCrypto},

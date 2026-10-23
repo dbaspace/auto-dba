@@ -298,7 +298,10 @@ func (h *SlotHandler) restartOneSlot(ctx context.Context, tid string, item slotR
 	slotName := strings.TrimSpace(slot.SlotName)
 	label = fmt.Sprintf("%s slot=%s (%s)", taskName, slotName, hostDB)
 	if len(rows) == 0 || rows[0].ConnectorName == "" || rows[0].ConnectBase == "" {
-		return label, "skip", "跳过：未匹配到 Connect/连接器名"
+		return label, "skip", fmt.Sprintf("跳过：未匹配到槽 %s、库 %s 对应的 connector", slotName, slot.Database)
+	}
+	if strings.HasSuffix(strings.ToLower(rows[0].ConnectorName), "-add") {
+		return label, "skip", fmt.Sprintf("跳过：槽 %s、库 %s 不能用加表任务名 %s 当 connector", slotName, slot.Database, rows[0].ConnectorName)
 	}
 	inst := cdc.FindInstanceForSlot(*slot, insts)
 	if inst == nil {

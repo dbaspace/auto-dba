@@ -103,9 +103,30 @@ function approxTotal(s?: Sample) {
   return bytesText((s.data_bytes || 0) / (s.storage_rate / 100))
 }
 
-function memUsage(used?: number, max?: number) {
-  if (!max || used == null) return '—'
-  return ((used / max) * 100).toFixed(2)
+function usagePct(used?: number, max?: number) {
+  if (!max || used == null) return null
+  return (used / max) * 100
+}
+
+function rateLevel(pct: number): 'ok' | 'warn' | 'danger' {
+  if (pct >= 80) return 'danger'
+  if (pct >= 60) return 'warn'
+  return 'ok'
+}
+
+function RateCell({ pct, extra }: { pct: number | null; extra?: string }) {
+  if (pct == null || !Number.isFinite(pct)) return <span className="ov-muted">{extra || '—'}</span>
+  const lv = rateLevel(pct)
+  const width = Math.max(0, Math.min(100, pct))
+  return (
+    <div className={`ov-metric ov-metric-${lv}`}>
+      <div className="ov-bar" aria-hidden>
+        <span style={{ width: `${width}%` }} />
+      </div>
+      <span className="ov-metric-num">{Math.round(pct)}%</span>
+      {extra ? <span className="ov-metric-extra">{extra}</span> : null}
+    </div>
+  )
 }
 
 function lagText(s?: Sample) {
@@ -249,19 +270,22 @@ export default function InstanceOverview() {
   }, [rows, mixed])
 
   const summary = useMemo(() => {
-    let down = 0
+    let alert = 0
+    let ok = 0
     let primary = 0
     let replica = 0
     const versions = new Set<string>()
     for (const row of rows) {
       const s = row.sample
-      if (s?.reachable === false && s.error_kind !== 'skip') down++
+      const tags = anomalyTags(row, mixed).filter((t) => t !== '暂不采集')
+      if (tags.length) alert++
+      else if (s?.reachable) ok++
       if (s?.role === 'primary') primary++
       if (s?.role === 'replica') replica++
       if (s?.version) versions.add(s.version)
     }
-    return { total: rows.length, down, primary, replica, versions: versions.size }
-  }, [rows])
+    return { total: rows.length, alert, ok, primary, replica, versions: versions.size }
+  }, [rows, mixed])
 
   const engine = normEngine(dbType)
   const showRedis = engine === 'redis'
@@ -298,20 +322,29 @@ export default function InstanceOverview() {
         )
       },
     },
-    { title: '角色', width: 80, render: (_, row) => roleText(row.sample?.role) },
+    {
+      title: '角色',
+      width: 88,
+      render: (_, row) => {
+        const role = row.sample?.role
+        if (role === 'primary') return <Tag className="ov-role ov-role-primary">主库</Tag>
+        if (role === 'replica') return <Tag className="ov-role ov-role-replica">从库</Tag>
+        return '—'
+      },
+    },
     {
       title: '状态',
-      width: 160,
+      width: 180,
       render: (_, row) => {
         const tags = anomalyTags(row, mixed)
-        if (!row.sample) return '未采集'
-        if (!tags.length) return <Tag color="green">正常</Tag>
+        if (!row.sample) return <span className="ov-status muted">未采集</span>
+        if (!tags.length) return <span className="ov-status ok">正常</span>
         return (
           <Space size={4} wrap>
             {tags.map((t) => (
-              <Tag key={t} color={t === '暂不采集' ? 'default' : 'red'}>
+              <span key={t} className={`ov-status ${t === '暂不采集' ? 'muted' : !row.sample?.reachable ? 'danger' : 'warn'}`}>
                 {t}
-              </Tag>
+              </span>
             ))}
           </Space>
         )
@@ -321,13 +354,34 @@ export default function InstanceOverview() {
   if (showRuntime) {
     columns.push(
       { title: '运行时间', width: 110, render: (_, row) => uptimeText(row.sample?.uptime_sec) },
-      { title: '连接', width: 110, render: (_, row) => (row.sample ? ratio(row.sample.conn_used, row.sample.conn_max) : '—') },
+      {
+        title: '连接',
+        width: 200,
+        onCell: (row) => {
+          const pct = usagePct(row.sample?.conn_used, row.sample?.conn_max)
+          return { className: pct == null ? '' : `ov-cell ov-cell-${rateLevel(pct)}` }
+        },
+        render: (_, row) => (
+          <RateCell
+            pct={usagePct(row.sample?.conn_used, row.sample?.conn_max)}
+            extra={row.sample ? ratio(row.sample.conn_used, row.sample.conn_max) : undefined}
+          />
+        ),
+      },
     )
   }
   if (showRedis) {
     columns.push(
       { title: '内存大小GB', width: 110, render: (_, row) => memSizeGb(row.sample?.mem_max) },
-      { title: '使用率', width: 90, render: (_, row) => memUsage(row.sample?.mem_used, row.sample?.mem_max) },
+      {
+        title: '使用率',
+        width: 170,
+        onCell: (row) => {
+          const pct = usagePct(row.sample?.mem_used, row.sample?.mem_max)
+          return { className: pct == null ? '' : `ov-cell ov-cell-${rateLevel(pct)}` }
+        },
+        render: (_, row) => <RateCell pct={usagePct(row.sample?.mem_used, row.sample?.mem_max)} />,
+      },
       {
         title: '命中率',
         width: 90,
@@ -338,7 +392,15 @@ export default function InstanceOverview() {
   if (engine === 'postgres') {
     columns.push(
       { title: '已用存储', width: 110, render: (_, row) => usedStorage(row.sample) },
-      { title: '使用率', width: 90, render: (_, row) => storageRateText(row.sample) },
+      {
+        title: '使用率',
+        width: 170,
+        onCell: (row) => {
+          const pct = row.sample?.storage_rate_known ? row.sample.storage_rate ?? 0 : null
+          return { className: pct == null ? '' : `ov-cell ov-cell-${rateLevel(pct)}` }
+        },
+        render: (_, row) => <RateCell pct={row.sample?.storage_rate_known ? row.sample.storage_rate ?? 0 : null} />,
+      },
       { title: '大约总量', width: 110, render: (_, row) => approxTotal(row.sample) },
     )
   }
@@ -388,7 +450,10 @@ export default function InstanceOverview() {
           storageRateText(row.sample),
           approxTotal(row.sample),
           memSizeGb(row.sample?.mem_max),
-          memUsage(row.sample?.mem_used, row.sample?.mem_max),
+          (() => {
+            const pct = usagePct(row.sample?.mem_used, row.sample?.mem_max)
+            return pct == null ? '' : `${Math.round(pct)}%`
+          })(),
           lagText(row.sample),
         ]
           .map((v) => csvCell(String(v)))
@@ -452,27 +517,48 @@ export default function InstanceOverview() {
           <Button onClick={exportCsv}>导出</Button>
         </Space>
       </div>
-      <div className="instance-overview-summary">
-        <span>实例 {summary.total}</span>
-        <span>不可达 {summary.down}</span>
-        <span>主库 {summary.primary}</span>
-        <span>从库 {summary.replica}</span>
-        <span>版本种类 {summary.versions}</span>
-        <span className="instance-overview-note">
-          数字是当前一次采样，不是监控图里的区间平均。超过约 5 分钟会变淡。
-          {engine === 'postgres' ? ' 已用存储是各库文件合计。使用率是云监控最近值。大约总量 = 已用存储 / 使用率。' : ''}
-        </span>
+      <div className="instance-overview-cards">
+        <div className="ov-card">
+          <div className="label">实例总数</div>
+          <div className="value">{summary.total}<span className="unit">个</span></div>
+        </div>
+        <div className="ov-card ok">
+          <div className="label">运行正常</div>
+          <div className="value">{summary.ok}</div>
+        </div>
+        <div className="ov-card warn">
+          <div className="label">告警中</div>
+          <div className="value">{summary.alert}</div>
+        </div>
+        <div className="ov-card">
+          <div className="label">主库</div>
+          <div className="value">{summary.primary}</div>
+        </div>
+        <div className="ov-card">
+          <div className="label">从库</div>
+          <div className="value">{summary.replica}</div>
+        </div>
+        <div className="ov-card">
+          <div className="label">版本种类</div>
+          <div className="value">{summary.versions}<span className="unit">种</span></div>
+        </div>
       </div>
-      <Table
-        rowKey="id"
-        size="small"
-        loading={loading && !running}
-        dataSource={sorted}
-        columns={columns}
-        scroll={{ x: 1400 }}
-        pagination={{ defaultPageSize: 20, showSizeChanger: true, pageSizeOptions: ['20', '50', '100'], showTotal: (n) => `共 ${n} 条` }}
-        rowClassName={(row) => (stale(row.sample) ? 'instance-overview-stale' : '')}
-      />
+      <div className="instance-overview-note">
+        数字是当前一次采样，不是监控图里的区间平均。超过约 5 分钟会变淡。低于 60% 为绿色，60% 起为黄色，80% 起为红色。
+        {engine === 'postgres' ? ' 已用存储是各库文件合计。使用率是云监控最近值。大约总量 = 已用存储 / 使用率。' : ''}
+      </div>
+      <div className="instance-overview-table">
+        <Table
+          rowKey="id"
+          size="small"
+          loading={loading && !running}
+          dataSource={sorted}
+          columns={columns}
+          scroll={{ x: 1400 }}
+          pagination={{ defaultPageSize: 20, showSizeChanger: true, pageSizeOptions: ['20', '50', '100'], showTotal: (n) => `共 ${n} 条` }}
+          rowClassName={(row) => (stale(row.sample) ? 'instance-overview-stale' : '')}
+        />
+      </div>
     </div>
   )
 }

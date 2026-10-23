@@ -231,6 +231,14 @@ func (d *DB) ensureAlertTables() error {
 	if err := d.ensureAlertNotifyBudgetTable(); err != nil {
 		return err
 	}
+	for _, idx := range []string{
+		`CREATE INDEX IF NOT EXISTS idx_issues_updated ON tbl_issues(updated_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_ha_tasks_updated ON tbl_ha_tasks(updated_at)`,
+	} {
+		if _, err := d.Exec(idx); err != nil {
+			return err
+		}
+	}
 	return d.ensureAlertOpsTables()
 }
 

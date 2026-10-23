@@ -276,7 +276,7 @@ func RegisterPlatformJobs(r *jobreg.Registry, d Deps) {
 	if d.DNS != nil && d.DNS.DNS.Configured() {
 		r.Register(jobreg.JobDesc{
 			Key: "dns.health", Name: "DNS 节点巡检", Group: "dns",
-			Description:  "节点离线、未同步与 SERVFAIL 告警；到期恢复预降的 TTL；同步 CoreDNS 监控目标",
+			Description:  "节点离线、未同步、SERVFAIL 与上游转发失败告警；到期恢复预降的 TTL；同步 CoreDNS 监控目标",
 			ScheduleKind: jobreg.ScheduleInterval, DefaultSpec: "60s",
 			Mutable: true, Triggerable: true, Pauseable: true, RiskLevel: jobreg.RiskLow,
 			MisfirePolicy: jobreg.MisfireSkip,

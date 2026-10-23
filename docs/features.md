@@ -103,8 +103,8 @@ Client Secret（及 LDAP Bind 密码）用字段加密密钥落库（优先 `app
 
 | 页面 | 路径 | 说明 |
 |------|------|------|
-| 同步列表 | `/ops/slots` | 采集并查看 PostgreSQL 复制槽（pid、flush LSN、滞后字节）。可按状态、积压、域名、任务名筛选；支持手动采集（显示进度）。平台定时任务 `sync.slots.collect` 按全局参数 `slot_monitor_collect_interval_sec`（默认 60 秒）周期采集。建 CDC 任务只登记槽名，不覆盖已采集的 LSN。采集按全局唯一的 `slot_name` 覆盖同一行的 pid、LSN、滞后（主机写法不同也不另插一行），并保留 id。**批量重启**（对齐 Hub）：提交 `items[{host,port,slot_name}]`（稳定键，兼容旧 `ids`）；确认后异步执行——先对业务库 `UPDATE tbl_heartbeat_table`，再 `POST .../connectors/{name}/tasks/0/restart`（不走 CDC 任务页的 includeTasks 全量重启）；页面显示重启进度。采集与重启互斥；操作日志写入 `tbl_sync_slot_op_logs` 持久化，同页「查看操作日志」可查看。不删除 PostgreSQL 复制槽 |
-| CDC 同步任务 | `/ops/cdc` | 创建、启动、停止同步任务，查看链路、表映射、加表与运行日志。列表 description 瘦身（`list_table_counts`）；运行中初始化任务按当前页探测链路；后台周期扫表结构差异。详情页签懒加载。Debezium 配置页查看时为「编辑」，进入编辑后提交为「保存」。Connector 缺失时可[重新初始化](cdc-reinit.md) |
+| 同步列表 | `/ops/slots` | 采集并查看 PostgreSQL 逻辑复制槽（pid、flush LSN、按 restart_lsn 计算的滞后字节）。初始化任务优先匹配槽；批量重启跳过把 `*-add` 任务名当成 Connector。可按状态、积压、域名、任务名筛选；支持手动采集（显示进度）。平台定时任务 `sync.slots.collect` 按全局参数 `slot_monitor_collect_interval_sec`（默认 60 秒）周期采集。建 CDC 任务只登记槽名，不覆盖已采集的 LSN。采集按全局唯一的 `slot_name` 覆盖同一行的 pid、LSN、滞后（主机写法不同也不另插一行），并保留 id。**批量重启**（对齐 Hub）：提交 `items[{host,port,slot_name}]`（稳定键，兼容旧 `ids`）；确认后异步执行——先对业务库 `UPDATE tbl_heartbeat_table`，再 `POST .../connectors/{name}/tasks/0/restart`（不走 CDC 任务页的 includeTasks 全量重启）；页面显示重启进度。采集与重启互斥；操作日志写入 `tbl_sync_slot_op_logs` 持久化，同页「查看操作日志」可查看。不删除 PostgreSQL 复制槽 |
+| CDC 同步任务 | `/ops/cdc` | 创建、启动、停止同步任务，查看链路、表映射、加表与运行日志。列表 description 瘦身（`list_table_counts`）；运行中初始化任务按当前页探测链路；后台周期扫表结构差异。详情页签懒加载。Debezium 配置页查看时为「编辑」，进入编辑后提交为「保存」，切走页签保留未保存内容。初始化任务可修复源端地址。Connector 缺失时可[重新初始化](cdc-reinit.md)。服务重启后，超过 5 分钟仍在编排中的任务标为失败并可重试 |
 | 数据迁移 | `/ops/migration` | 库表或整库迁移，支持对象选择、预检、执行与校验 |
 | 表结构对比 | `/ops/migration/compare` | 同族实例异步对比结构，生成只增不删的修复 SQL |
 
@@ -161,7 +161,7 @@ Client Secret（及 LDAP Bind 密码）用字段加密密钥落库（优先 `app
 |------|------|------|
 | SQL 洞察 | `/ops/sql-insight` | 六 Tab：SQL洞察 / 洞察分析 / 可视汇总 / AWR报告 / 表空间分析 / 智能分析；壳上统一「设置」入口（`/config/sql-insight`）。写操作权限：活动快照采集 / AWR 生成 / 表空间采集 / 智能分析（见 rbac-permissions） |
 | 会话管理 | `/ops/sessions` | 查看会话与锁，可定时刷新，并结束异常会话（PostgreSQL / MySQL 族） |
-| 实例总览 | `/ops/instance-overview` | 已登记实例的横向一览。打开只读元库；点刷新才限流采集 PostgreSQL / Redis 的版本、角色、连接、内存、从库延迟，并可带云监控存储使用率。不是监控曲线 |
+| 实例总览 | `/ops/instance-overview` | 已登记实例的横向一览，含角色与异常标记。打开只读元库；点刷新才限流采集 PostgreSQL / Redis 的版本、角色、连接、内存、从库延迟，并可带云监控存储使用率。PostgreSQL 已用存储是各库文件合计。不是监控曲线 |
 | MySQL 慢 SQL | `/ops/mysql-slow` | performance_schema digest Top SQL（只读） |
 
 ## 告警管理
@@ -171,6 +171,7 @@ Client Secret（及 LDAP Bind 密码）用字段加密密钥落库（优先 `app
 | 页面 | 路径 | 说明 |
 |------|------|------|
 | 活跃告警 | `/ops/alerts` | 认领、转派、处理中、恢复、误报、静默、转待办；详情含诊断摘要 / Runbook / 助手 |
+| 实时动态 | `/ops/alerts/activity` | 告警触发与恢复、工单、高可用、配置变更、DNS、AWR 按时间归并 |
 | AIOps 知识库 | `/ops/aiops/knowledge` | 内置与库内案例（PostgreSQL/MySQL/Redis/StarRocks）、alertname 试算、DBA Copilot |
 | AIOps 关联 | `/ops/aiops/incidents` | 按实例时间窗聚合活跃告警 |
 | AI助手 | `/ops/ai-assistant` | 整页 DBA Copilot，与知识库内「DBA 助手」共享会话 |
@@ -274,8 +275,8 @@ DBA 域配置管理门面：统一目录（含 SR/部署/代理/账号/CDC）、
 | 页面 | 路径 | 说明 |
 |------|------|------|
 | 实例管理 | `/config/instances?db_type=…` | 登记 PostgreSQL、MySQL 族、Kafka、Redis、主机等连接；按类型各开 Tab；列表支持列排序与底部分页；域名/标签列表折叠；域名可多行粘贴并去重；可见范围（全局/私有）；审计下「指定租户」（可选目标）。**主机** Tab 支持「从监控同步」：扫描「监控目标注册」全部 endpoints，按规范化 IP/主机名去重后登记为 `db_type=host`（有多少登记多少，已存在跳过）；SSH 默认 `sysadmin:22`、私有可见（当前用户），名称/审批人等不足项事后编辑补充 |
-| 已登记库 | `/config/databases` | 登记业务库、审批人与可见范围；列表可按**环境 / 域名 / 库名**筛选；域名按库自身绑定展示；tags 约定 `alias=`（查询树短名，兼容 `label=`）、`idc=`、`domain=`；审计下可单条或**批量指定归属租户**（不迁实例） |
-| 域名管理 | `/config/domains` | 全引擎统一域名资源；按类型一键同步（`UNIQUE(domain,db_type)` 隔离）；新域名默认归属默认租户；审计下单条/批量指定租户；可授权跨租只读。支持按环境 Select 与域名/实例/环境关键字过滤。工单（DDL/DML/建库/权限申请/Redis/Kafka）与 Redis/Kafka 查询的地址按**本租户可见域名**列出；仅划拨域名即可查询父实例 |
+| 已登记库 | `/config/databases` | 登记业务库、审批人与可见范围；列表可按**环境 / 域名 / 库名**筛选；域名按库自身绑定展示；tags 约定 `alias=`（查询树短名，兼容 `label=`）、`idc=`、`domain=`；审计下可单条或**批量指定归属租户**（不迁实例）；可批量删除已登记库，不删实例 |
+| 域名管理 | `/config/domains` | 全引擎统一域名资源；按类型一键同步（`UNIQUE(domain,db_type)` 隔离）；新域名默认归属默认租户；审计下单条/批量指定租户；可授权跨租只读；可单条或批量删除（同步从实例域名列表去掉，不删实例）。支持按环境 Select 与域名/实例/环境关键字过滤。工单（DDL/DML/建库/权限申请/Redis/Kafka）与 Redis/Kafka 查询的地址按**本租户可见域名**列出；仅划拨域名即可查询父实例 |
 | 账号管理 | `/config/accounts` | 登记供权限申请和执行使用的数据库账号（随库租户） |
 | 审核规则 | `/config/review-rules` | DDL / DML 的 SQL 审核规则，以及 Redis 命令规则。含多语句分号校验 `SQLRequireSemicolon`；PostgreSQL 时间字段等多值规则见 [review-rules.md](review-rules.md) |
 

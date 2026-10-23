@@ -568,10 +568,22 @@ func missingPublicationTables(schema string, want, have []string) []string {
 
 // Reinit 同步执行重新初始化（由 runner 在后台调用；调用方已把状态置为 reinitializing）。
 func (o *Orchestrator) Reinit(ctx context.Context, taskID string, req ReinitRequest) (err error) {
+	if ctx.Value(orchLockCtxKey{}) == nil {
+		t, gerr := o.Store.GetCDC(taskID)
+		if gerr != nil || t == nil {
+			return fmt.Errorf("任务不存在")
+		}
+		extra := parseTaskExtra(t.Description)
+		return o.withOrchestrateLocks(ctx, t.SourceID, o.resolveKafkaBrokers(extra), func(ctx context.Context) error {
+			return o.Reinit(ctx, taskID, req)
+		})
+	}
 	t, gerr := o.Store.GetCDC(taskID)
 	if gerr != nil || t == nil {
 		return fmt.Errorf("任务不存在")
 	}
+	o.markOrchestrating(t, true)
+	defer o.markOrchestrating(t, false)
 	extra := parseTaskExtra(t.Description)
 	op := req.Operator
 	step := "prepare"
@@ -672,6 +684,7 @@ func (o *Orchestrator) reinitPGBinding(ctx context.Context, t *store.CDCTask, in
 		return fmt.Errorf("连接源端失败: %w", err)
 	}
 	defer db.Close()
+	applyPGOrchestrationTimeouts(db)
 	exists, err := PublicationExists(ctx, db, p.PublicationName)
 	if err != nil {
 		return fmt.Errorf("查询 publication 失败: %w", err)
@@ -701,9 +714,8 @@ func (o *Orchestrator) reinitPGBinding(ctx context.Context, t *store.CDCTask, in
 		o.reinitLog(t, "INFO", fmt.Sprintf("slot %s（%s）已存在，复用位点", p.SlotName, p.DbName), op)
 		return nil
 	}
-	slotSQL := fmt.Sprintf(`SELECT pg_create_logical_replication_slot(%s, 'pgoutput')`, quotePGLiteral(p.SlotName))
-	if _, err := db.ExecContext(ctx, slotSQL); err != nil && !strings.Contains(strings.ToLower(err.Error()), "already exists") {
-		return fmt.Errorf("创建 replication slot 失败: %w", err)
+	if err := createLogicalSlot(ctx, db, p.SlotName); err != nil {
+		return err
 	}
 	o.reinitLog(t, "WARN", fmt.Sprintf("slot %s（%s）不存在，已新建：从当前位点开始捕获，此前的变更会缺失", p.SlotName, p.DbName), op)
 	return nil

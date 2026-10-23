@@ -285,6 +285,71 @@ func (d *DB) ListGrantedAccessDomains(toTenantID, toUserID, dbType, envCode, q s
 	return out, nil
 }
 
+// removeInstanceDomainHost 从实例域名列表拿掉一条。domain_name 若就是这一条则清空，其余域名留给规范化补回。
+func removeInstanceDomainHost(domains []string, domainName, host string) (next []string, nextName string, changed bool) {
+	host = normalizeAccessDomainHost(host)
+	nextName = domainName
+	if host == "" {
+		return append([]string{}, domains...), nextName, false
+	}
+	next = make([]string, 0, len(domains))
+	for _, raw := range domains {
+		if normalizeAccessDomainHost(raw) == host {
+			changed = true
+			continue
+		}
+		next = append(next, raw)
+	}
+	if normalizeAccessDomainHost(domainName) == host {
+		nextName = ""
+		changed = true
+	}
+	return next, nextName, changed
+}
+
+// DeleteAccessDomain 删除域名行，并从关联实例的域名列表去掉这一条，避免一键同步重建。不删除实例。
+func (d *DB) DeleteAccessDomain(id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("域名不存在")
+	}
+	row, err := d.GetAccessDomain(id)
+	if err != nil {
+		return err
+	}
+	if row == nil {
+		return fmt.Errorf("域名不存在")
+	}
+	if strings.TrimSpace(row.InstanceID) != "" {
+		inst, err := d.GetInstance(row.InstanceID)
+		if err != nil {
+			return err
+		}
+		if inst != nil {
+			next, name, changed := removeInstanceDomainHost(inst.Domains, inst.DomainName, row.Domain)
+			if changed {
+				inst.Domains = next
+				inst.DomainName = name
+				if err := d.UpdateInstance(inst); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	if _, err := d.Exec(`DELETE FROM tbl_tenant_grants WHERE resource_type=? AND resource_id=?`, "domain", id); err != nil {
+		return err
+	}
+	res, err := d.Exec(`DELETE FROM tbl_access_domains WHERE id=?`, id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("域名不存在")
+	}
+	return nil
+}
+
 func (d *DB) AssignAccessDomainTenant(id, toTenantID string) error {
 	id = strings.TrimSpace(id)
 	toTenantID = strings.TrimSpace(toTenantID)

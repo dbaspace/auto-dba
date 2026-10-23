@@ -131,9 +131,10 @@ func localIPFor(server string) string {
 }
 
 const (
-	dnsMetricsSelectorArg = "dns_metrics_selector"
-	dnsServfailRatioArg   = "dns_servfail_ratio"
-	dnsMonitorJobName     = "auto-dba-coredns"
+	dnsMetricsSelectorArg  = "dns_metrics_selector"
+	dnsServfailRatioArg    = "dns_servfail_ratio"
+	dnsForwardFailRatioArg = "dns_forward_fail_ratio"
+	dnsMonitorJobName      = "auto-dba-coredns"
 )
 
 func (h *DNSHandler) promClient() *promclient.Client {

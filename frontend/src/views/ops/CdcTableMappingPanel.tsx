@@ -9,6 +9,7 @@ import {
   SearchOutlined,
 } from '@ant-design/icons'
 import api from '../../api/request'
+import { VirtualList } from './VirtualList'
 import './CdcTableMappingPanel.css'
 
 export interface MappingColumn {
@@ -58,6 +59,73 @@ function intersectCols(groups: MappingColumn[][]): MappingColumn[] {
   return groups[0].filter((c) => maps.every((m) => m.has(c.name)))
 }
 
+const MAPPING_VIRTUAL_THRESHOLD = 30
+
+function TargetNameInput({ value, onCommit }: { value: string; onCommit: (v: string) => void }) {
+  const [draft, setDraft] = useState(value || '')
+  const draftRef = useRef(value || '')
+  const last = useRef(value || '')
+  const timer = useRef(0)
+  useEffect(() => {
+    const next = value || ''
+    if (next !== last.current) {
+      last.current = next
+      draftRef.current = next
+      setDraft(next)
+    }
+  }, [value])
+  useEffect(() => () => window.clearTimeout(timer.current), [])
+  const commit = (v: string) => {
+    window.clearTimeout(timer.current)
+    if (v === last.current) return
+    last.current = v
+    onCommit(v)
+  }
+  return (
+    <Input
+      size="small"
+      placeholder="StarRocks 目标表名"
+      value={draft}
+      onChange={(e) => {
+        const v = e.target.value
+        draftRef.current = v
+        setDraft(v)
+        window.clearTimeout(timer.current)
+        timer.current = window.setTimeout(() => commit(v), 300)
+      }}
+      onBlur={() => commit(draftRef.current)}
+    />
+  )
+}
+
+function MappingList({
+  items,
+  renderItem,
+}: {
+  items: Mapping[]
+  renderItem: (m: Mapping, index: number) => React.ReactNode
+}) {
+  if (items.length > MAPPING_VIRTUAL_THRESHOLD) {
+    return (
+      <VirtualList
+        className="map-list map-list-virtual"
+        height={600}
+        estimate={160}
+        items={items}
+        itemKey={(m) => m.key}
+        renderItem={renderItem}
+      />
+    )
+  }
+  return (
+    <div className="map-list">
+      {items.map((m, index) => (
+        <React.Fragment key={m.key}>{renderItem(m, index)}</React.Fragment>
+      ))}
+    </div>
+  )
+}
+
 export default function CdcTableMappingPanel({
   mappings,
   onChange,
@@ -90,9 +158,6 @@ export default function CdcTableMappingPanel({
   ).length
   const hasMissingKey = mappings.some((m) => !(m.key_columns || []).length)
 
-  function emitChange() {
-    onChange(mappings.slice())
-  }
   function patch(key: string, next: Partial<Mapping>) {
     onChange(mappings.map((m) => (m.key === key ? { ...m, ...next } : m)))
   }
@@ -327,8 +392,9 @@ export default function CdcTableMappingPanel({
       {!filtered.length ? (
         <div className="tree-empty">无匹配映射</div>
       ) : (
-        <div className="map-list">
-          {filtered.map((m, index) => {
+        <MappingList
+          items={filtered}
+          renderItem={(m, index) => {
             const entry = cache[m.key]
             const showManual = !!entry?.error || (!!entry && !entry.loading && !(entry.columns || []).length)
             const colDefs = [
@@ -453,13 +519,7 @@ export default function CdcTableMappingPanel({
                 </div>
                 <div className="target-row" onClick={(e) => e.stopPropagation()}>
                   <span className="muted target-lab">目标表</span>
-                  <Input
-                    size="small"
-                    placeholder="StarRocks 目标表名"
-                    value={m.target_table}
-                    onChange={(e) => patch(m.key, { target_table: e.target.value })}
-                    onBlur={emitChange}
-                  />
+                  <TargetNameInput value={m.target_table || ''} onCommit={(v) => patch(m.key, { target_table: v })} />
                 </div>
                 {isOpen(m.key) && (
                   <div className="map-body" onClick={(e) => e.stopPropagation()}>
@@ -590,8 +650,8 @@ export default function CdcTableMappingPanel({
                 )}
               </div>
             )
-          })}
-        </div>
+          }}
+        />
       )}
     </div>
   )

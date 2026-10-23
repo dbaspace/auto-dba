@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, Button, Drawer, Input, Modal, Pagination, Space, Tag, message } from 'antd'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import type { ColumnsType } from 'antd/es/table'
@@ -14,9 +14,16 @@ import {
 import './CdcDebeziumConfigTab.css'
 
 interface ConfigRow {
+  id: string
   key: string
   value: string
   isNew: boolean
+}
+
+let configRowSeq = 0
+function nextConfigRowId() {
+  configRowSeq += 1
+  return `cfg-${configRowSeq}`
 }
 
 interface Props {
@@ -26,7 +33,102 @@ interface Props {
   onUpdated?: () => void
   /** Connector 在 Connect 上缺失时打开重新初始化弹窗 */
   onReinit?: () => void
+  /** 详情切走时保持挂载；为 false 时不重新拉配置，避免盖掉未保存编辑 */
+  active?: boolean
 }
+
+type EditableVariant = 'input' | 'password' | 'textarea'
+
+/** 本地草稿受控，停顿或失焦才写回父级 rows，避免整表重渲染把光标打到末尾。 */
+const EditableConfigCell = React.memo(function EditableConfigCell({
+  rowId,
+  value,
+  variant,
+  placeholder,
+  onCommit,
+  pasteAsValue,
+}: {
+  rowId: string
+  value: string
+  variant: EditableVariant
+  placeholder?: string
+  onCommit: (rowId: string, text: string) => void
+  pasteAsValue?: boolean
+}) {
+  const [draft, setDraft] = useState(value)
+  const draftRef = useRef(value)
+  const lastCommittedRef = useRef(value)
+  const timer = useRef<number>(0)
+
+  useEffect(() => {
+    if (value !== lastCommittedRef.current) {
+      lastCommittedRef.current = value
+      draftRef.current = value
+      setDraft(value)
+    }
+  }, [value])
+
+  useEffect(() => () => window.clearTimeout(timer.current), [])
+
+  const commitNow = (v: string) => {
+    window.clearTimeout(timer.current)
+    lastCommittedRef.current = v
+    onCommit(rowId, v)
+  }
+  const handleChange = (v: string) => {
+    draftRef.current = v
+    setDraft(v)
+    window.clearTimeout(timer.current)
+    timer.current = window.setTimeout(() => commitNow(draftRef.current), 200)
+  }
+  const handleBlur = () => {
+    window.clearTimeout(timer.current)
+    if (draftRef.current !== lastCommittedRef.current) commitNow(draftRef.current)
+  }
+  const handlePaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    const text = e.clipboardData?.getData('text')
+    if (text == null) return
+    e.preventDefault()
+    const next = text.replace(/\r?\n/g, '').trim()
+    draftRef.current = next
+    setDraft(next)
+    commitNow(next)
+  }
+
+  if (variant === 'textarea') {
+    return (
+      <Input.TextArea
+        size="small"
+        autoSize={{ minRows: 2, maxRows: 6 }}
+        value={draft}
+        placeholder={placeholder}
+        onChange={(e) => handleChange(e.target.value)}
+        onBlur={handleBlur}
+      />
+    )
+  }
+  if (variant === 'password') {
+    return (
+      <Input.Password
+        size="small"
+        value={draft}
+        placeholder={placeholder}
+        onChange={(e) => handleChange(e.target.value)}
+        onBlur={handleBlur}
+      />
+    )
+  }
+  return (
+    <Input
+      size="small"
+      value={draft}
+      placeholder={placeholder}
+      onChange={(e) => handleChange(e.target.value)}
+      onBlur={handleBlur}
+      onPaste={pasteAsValue ? handlePaste : undefined}
+    />
+  )
+})
 
 function stateColor(s: string): string {
   const u = String(s || '').toUpperCase()
@@ -45,7 +147,7 @@ function fmtTime(t: any): string {
 function configToRows(cfg: Record<string, any>): ConfigRow[] {
   return Object.entries(cfg || {})
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([key, value]) => ({ key, value: String(value ?? ''), isNew: false }))
+    .map(([key, value]) => ({ id: nextConfigRowId(), key, value: String(value ?? ''), isNew: false }))
 }
 function rowsToConfig(list: ConfigRow[]): Record<string, any> {
   const out: Record<string, any> = {}
@@ -59,7 +161,7 @@ function isLong(row: ConfigRow) {
   return String(row.value || '').length > 80 || /\.list$/.test(row.key || '')
 }
 
-export default function CdcDebeziumConfigTab({ taskId, extra, pending = false, onUpdated, onReinit }: Props) {
+export default function CdcDebeziumConfigTab({ taskId, extra, pending = false, onUpdated, onReinit, active = true }: Props) {
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [editing, setEditing] = useState(false)
@@ -87,6 +189,14 @@ export default function CdcDebeziumConfigTab({ taskId, extra, pending = false, o
   const [preview, setPreview] = useState<any>(null)
   const [restoreTarget, setRestoreTarget] = useState<any>(null)
   const [restoring, setRestoring] = useState(false)
+  const editingRef = useRef(false)
+  const tableWrapRef = useRef<HTMLDivElement>(null)
+  const scrollToNewRef = useRef(false)
+
+  function setEditingState(v: boolean) {
+    editingRef.current = v
+    setEditing(v)
+  }
 
   const filteredRows = useMemo(() => {
     const q = keyword.trim().toLowerCase()
@@ -123,29 +233,58 @@ export default function CdcDebeziumConfigTab({ taskId, extra, pending = false, o
       const d = data.data || {}
       setDetail(d)
       setRows(configToRows(d.config || {}))
-      setEditing(false)
+      setEditingState(false)
     } finally {
       setLoading(false)
     }
   }
 
   useEffect(() => {
-    load()
+    if (!active || editingRef.current) return
+    void load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [taskId])
+  }, [taskId, active])
 
   function cancelEdit() {
-    setEditing(false)
+    setEditingState(false)
     setRows(configToRows(detail.config || {}))
   }
   function addRow() {
-    setRows((prev) => [...prev, { key: '', value: '', isNew: true }])
+    setKeyword('')
+    scrollToNewRef.current = true
+    setRows((prev) => [...prev, { id: nextConfigRowId(), key: '', value: '', isNew: true }])
   }
-  function removeRow(row: ConfigRow) {
-    setRows((prev) => prev.filter((r) => r !== row))
+
+  useEffect(() => {
+    if (!scrollToNewRef.current) return
+    const id = requestAnimationFrame(() => {
+      scrollToNewRef.current = false
+      const body = tableWrapRef.current?.querySelector('.ant-table-body')
+      if (body instanceof HTMLElement) body.scrollTop = body.scrollHeight
+    })
+    return () => cancelAnimationFrame(id)
+  }, [rows])
+  function removeRow(id: string) {
+    setRows((prev) => prev.filter((r) => r.id !== id))
   }
-  function updateRow(row: ConfigRow, patch: Partial<ConfigRow>) {
-    setRows((prev) => prev.map((r) => (r === row ? { ...r, ...patch } : r)))
+  const commitKey = useCallback((id: string, text: string) => {
+    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, key: text } : r)))
+  }, [])
+  const commitValue = useCallback((id: string, text: string) => {
+    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, value: text } : r)))
+  }, [])
+  async function copyKey(row: ConfigRow) {
+    const text = String(row.key || '')
+    if (!text) {
+      message.warning('这一行没有 key')
+      return
+    }
+    try {
+      await navigator.clipboard.writeText(text)
+      message.success('已复制 key')
+    } catch {
+      message.error('复制失败')
+    }
   }
 
   async function copyJSON() {
@@ -160,8 +299,9 @@ export default function CdcDebeziumConfigTab({ taskId, extra, pending = false, o
   async function save() {
     setSaving(true)
     try {
-      await api.put(`/cdc-sync/tasks/${taskId}/connector`, { config: rowsToConfig(rows) })
-      message.success('已保存并写入版本历史')
+      const { data } = await api.put(`/cdc-sync/tasks/${taskId}/connector`, { config: rowsToConfig(rows) })
+      if (data?.restart_error) message.warning(String(data.message || data.restart_error))
+      else message.success(String(data?.message || '已保存并写入版本历史'))
       await load()
       onUpdated?.()
     } catch (e: any) {
@@ -241,11 +381,13 @@ export default function CdcDebeziumConfigTab({ taskId, extra, pending = false, o
       key: 'key',
       render: (_, row) =>
         editing && row.isNew ? (
-          <Input
-            size="small"
-            placeholder="配置项"
+          <EditableConfigCell
+            rowId={row.id}
             value={row.key}
-            onChange={(e) => updateRow(row, { key: e.target.value })}
+            variant="input"
+            placeholder="配置项"
+            pasteAsValue
+            onCommit={commitKey}
           />
         ) : (
           <code>{row.key}</code>
@@ -256,18 +398,12 @@ export default function CdcDebeziumConfigTab({ taskId, extra, pending = false, o
       key: 'value',
       render: (_, row) =>
         editing ? (
-          isLong(row) ? (
-            <Input.TextArea
-              size="small"
-              autoSize={{ minRows: 2, maxRows: 6 }}
-              value={row.value}
-              onChange={(e) => updateRow(row, { value: e.target.value })}
-            />
-          ) : isSensitiveConfigKey(row.key) ? (
-            <Input.Password size="small" value={row.value} onChange={(e) => updateRow(row, { value: e.target.value })} />
-          ) : (
-            <Input size="small" value={row.value} onChange={(e) => updateRow(row, { value: e.target.value })} />
-          )
+          <EditableConfigCell
+            rowId={row.id}
+            value={row.value}
+            variant={isLong(row) ? 'textarea' : isSensitiveConfigKey(row.key) ? 'password' : 'input'}
+            onCommit={commitValue}
+          />
         ) : (
           <span className="dbz-val">
             {isSensitiveConfigKey(row.key) && !revealed[row.key] ? '••••••••' : row.value}
@@ -283,20 +419,23 @@ export default function CdcDebeziumConfigTab({ taskId, extra, pending = false, o
           </span>
         ),
     },
-    ...(editing
-      ? [
-          {
-            title: '操作',
-            key: 'op',
-            width: 80,
-            render: (_: any, row: ConfigRow) => (
-              <Button type="link" danger onClick={() => removeRow(row)}>
-                删除
-              </Button>
-            ),
-          } as any,
-        ]
-      : []),
+    {
+      title: '操作',
+      key: 'op',
+      width: editing ? 150 : 90,
+      render: (_: any, row: ConfigRow) => (
+        <Space size={0}>
+          <Button type="link" size="small" onClick={() => void copyKey(row)}>
+            复制 key
+          </Button>
+          {editing ? (
+            <Button type="link" size="small" danger onClick={() => removeRow(row.id)}>
+              删除
+            </Button>
+          ) : null}
+        </Space>
+      ),
+    },
   ]
 
   const verColumns: ColumnsType<any> = [
@@ -336,7 +475,7 @@ export default function CdcDebeziumConfigTab({ taskId, extra, pending = false, o
   ]
 
   return (
-    <div className="dbz-tab">
+    <div className="dbz-tab" ref={tableWrapRef}>
       <div className="dbz-summary">
         <div className="dbz-summary-title">
           <strong>{detail.name || extra.connector_name || '—'}</strong>
@@ -393,7 +532,7 @@ export default function CdcDebeziumConfigTab({ taskId, extra, pending = false, o
             JSON视图
           </Button>
           {!editing ? (
-            <Button size="small" type="primary" disabled={pending || missing} onClick={() => setEditing(true)}>
+            <Button size="small" type="primary" disabled={pending || missing} onClick={() => setEditingState(true)}>
               编辑
             </Button>
           ) : (
@@ -420,7 +559,7 @@ export default function CdcDebeziumConfigTab({ taskId, extra, pending = false, o
       </div>
 
       <ResponsiveTable
-        rowKey={(r) => r.key + (r.isNew ? '__new' : '')}
+        rowKey="id"
         loading={loading}
         size="small"
         columns={cfgColumns}

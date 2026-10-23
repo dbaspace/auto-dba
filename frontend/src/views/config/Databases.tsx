@@ -191,6 +191,7 @@ export default function Databases() {
   const [selectedKeys, setSelectedKeys] = useState<React.Key[]>([])
   const { hasUrn } = usePermission()
   const canEdit = hasUrn(Perm.databases.edit)
+  const canDelete = hasUrn(Perm.databases.delete)
   const [batchMode, setBatchMode] = useState<'approvers' | 'access' | null>(null)
   const [batchRows, setBatchRows] = useState<DatabaseRow[]>([])
   const [batchUsers, setBatchUsers] = useState<string[]>([])
@@ -679,6 +680,54 @@ export default function Databases() {
     })
   }
 
+  function removeSelected() {
+    const set = new Set(selectedKeys.map(String))
+    const next = filteredRows.filter((r) => r.id && set.has(r.id))
+    if (!next.length) {
+      message.warning('请先勾选库')
+      return
+    }
+    Modal.confirm({
+      title: `删除 ${next.length} 个登记库`,
+      okText: '删除',
+      okButtonProps: { danger: true },
+      content: (
+        <div>
+          <p style={{ marginBottom: 8 }}>只删除已登记库，不删除实例。</p>
+          <ul style={{ margin: 0, paddingLeft: 18, maxHeight: 160, overflow: 'auto' }}>
+            {next.map((r) => (
+              <li key={r.id}>{r.db_name || r.id}</li>
+            ))}
+          </ul>
+        </div>
+      ),
+      onOk: async () => {
+        const { data } = await api.post('/databases/batch-delete', { ids: next.map((r) => r.id) })
+        const okCount = Number(data.ok_count || 0)
+        const failCount = Number(data.fail_count || 0)
+        const failed: { id?: string; db_name?: string; message?: string }[] = data.failed || []
+        if (failCount === 0) {
+          message.success(`已删除 ${okCount} 个库`)
+        } else {
+          Modal.warning({
+            title: `删除完成：成功 ${okCount}，失败 ${failCount}`,
+            content: (
+              <ul style={{ margin: 0, paddingLeft: 18, maxHeight: 240, overflow: 'auto' }}>
+                {failed.map((f) => (
+                  <li key={f.id || f.db_name}>
+                    {f.db_name || f.id}：{f.message || '失败'}
+                  </li>
+                ))}
+              </ul>
+            ),
+          })
+        }
+        setSelectedKeys([])
+        await load()
+      },
+    })
+  }
+
   useEffect(() => {
     loadInitial().finally(() => setInitLoading(false))
     if (impersonating) {
@@ -764,6 +813,11 @@ export default function Databases() {
                 批量指定租户{selectedKeys.length ? `（${selectedKeys.length}）` : ''}
               </Button>
             </Auth>
+          ) : null}
+          {canDelete ? (
+            <Button danger disabled={!selectedKeys.length} onClick={removeSelected}>
+              批量删除{selectedKeys.length ? `（${selectedKeys.length}）` : ''}
+            </Button>
           ) : null}
           {canEdit ? (
             <>
@@ -883,7 +937,7 @@ export default function Databases() {
           scroll={{ y: 'calc(100% - 47px)' }}
           style={{ height: '100%' }}
           rowSelection={
-            impersonating || canEdit
+            impersonating || canEdit || canDelete
               ? {
                   selectedRowKeys: selectedKeys,
                   onChange: (keys) => setSelectedKeys(keys),
