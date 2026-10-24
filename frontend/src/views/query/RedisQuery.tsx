@@ -398,7 +398,28 @@ export default function RedisQuery() {
   return (
     <div className="ops-page redis-query">
       <div className="layout">
-        <CollapsibleSide storageKey="auto-dba-redis-side-collapsed" title="Redis 域名" width={280} className="side">
+        {tabs.length ? (
+          <Tabs
+            className="work-tabs"
+            type="editable-card"
+            hideAdd
+            activeKey={activeKey}
+            onChange={setActiveKey}
+            onEdit={(targetKey, action) => {
+              if (action === 'remove') closeTab(String(targetKey))
+            }}
+            items={tabs.map((t) => ({
+              key: t.key,
+              label: (
+                <span className="tab-label" title={t.domain}>
+                  {t.domain.slice(0, 10)}
+                </span>
+              ),
+            }))}
+          />
+        ) : null}
+        <div className="body">
+        <CollapsibleSide storageKey="auto-dba-redis-side-collapsed" width={280} className="side">
           <Input
             value={keyword}
             allowClear
@@ -492,22 +513,6 @@ export default function RedisQuery() {
           </Spin>
         </CollapsibleSide>
         <section className="main">
-          {tabs.length ? (
-            <Tabs
-              className="work-tabs"
-              type="editable-card"
-              hideAdd
-              activeKey={activeKey}
-              onChange={setActiveKey}
-              onEdit={(targetKey, action) => {
-                if (action === 'remove') closeTab(String(targetKey))
-              }}
-              items={tabs.map((t) => ({
-                key: t.key,
-                label: <span className="tab-label">{t.domain}</span>,
-              }))}
-            />
-          ) : null}
           {!current ? (
             <div className="placeholder">请从左侧展开环境并选择域名与逻辑库，再执行只读命令</div>
           ) : (
@@ -589,6 +594,7 @@ export default function RedisQuery() {
             </>
           )}
         </section>
+        </div>
       </div>
     </div>
   )

@@ -1,5 +1,6 @@
 .redis-query { height: 100%; }
-.redis-query .layout { display: flex; flex: 1; min-height: 0; background: var(--app-content-bg, #fff); border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden; }
+.redis-query .layout { display: flex; flex-direction: column; flex: 1; min-height: 0; background: var(--app-content-bg, #fff); border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden; }
+.redis-query .body { display: flex; flex: 1; min-width: 0; min-height: 0; }
 .redis-query .side { width: 280px; flex-shrink: 0; border-right: 1px solid #e5e7eb; display: flex; flex-direction: column; padding: 12px; }
 .redis-query .side-head { font-weight: 600; margin-bottom: 10px; }
 .redis-query .mb { margin-bottom: 8px; }
@@ -75,9 +76,10 @@
 .redis-query .db-item .keys { color: #9ca3af; flex-shrink: 0; }
 .redis-query .db-item.active .keys { color: #69b1ff; }
 .redis-query .main { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 12px; overflow: auto; }
-.redis-query .work-tabs { flex-shrink: 0; margin-bottom: 8px; }
+.redis-query .work-tabs { flex-shrink: 0; border-bottom: 1px solid #e5e7eb; }
 .redis-query .work-tabs .ant-tabs-nav { margin-bottom: 0; }
-.redis-query .tab-label { display: inline-block; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+.redis-query .work-tabs .ant-tabs-nav-wrap { justify-content: flex-start; }
+.redis-query .tab-label { display: inline-block; vertical-align: bottom; }
 .redis-query .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 10px; }
 .redis-query .muted { color: #9ca3af; font-size: 13px; }
 .redis-query .placeholder, .redis-query .empty { color: #9ca3af; font-size: 13px; padding: 24px 8px; }
