@@ -17,16 +17,24 @@ interface Row {
   id: string
   name: string
   base_url: string
-  username: string
-  password_set?: boolean
   env_codes?: string[]
   environments?: BoundEnv[]
   enabled?: boolean
   updated_at?: string
 }
 
+interface DeployRow {
+  id: string
+  status?: string
+  base_url?: string
+  agent_id?: string
+  listen_port?: number
+  created_at?: string
+}
+
 export default function SqlExecutors() {
   const [rows, setRows] = useState<Row[]>([])
+  const [deploys, setDeploys] = useState<DeployRow[]>([])
   const [envs, setEnvs] = useState<EnvOpt[]>([])
   const [localCodes, setLocalCodes] = useState<string[]>([])
   const [visible, setVisible] = useState(false)
@@ -35,8 +43,15 @@ export default function SqlExecutors() {
   const [form] = Form.useForm()
 
   async function load() {
-    const [{ data }, envRes] = await Promise.all([api.get('/sql-executors'), api.get('/environments')])
+    const [{ data }, envRes, depRes] = await Promise.all([
+      api.get('/sql-executors'),
+      api.get('/environments'),
+      api.get('/sql-executors/deploys', { silent: true }).catch(() => api.get('/platform/agents/sql-executors/deploys')).catch(() => ({ data: { data: [] } })),
+    ])
     setRows(data.data || [])
+    setDeploys(
+      (depRes.data.data || []).filter((d: DeployRow) => d.status === 'success' && d.base_url && d.agent_id),
+    )
     setLocalCodes(data.local_idc_codes || [])
     setEnvs(envRes.data.data || [])
   }
@@ -50,8 +65,7 @@ export default function SqlExecutors() {
     form.setFieldsValue({
       name: row?.name || '',
       base_url: row?.base_url || '',
-      username: row?.username || '',
-      password: '',
+      deploy_id: undefined,
       env_codes: row?.env_codes || [],
       enabled: row?.enabled !== false,
     })
@@ -62,7 +76,12 @@ export default function SqlExecutors() {
     const values = await form.validateFields()
     setSaving(true)
     try {
-      const body = { ...values, enabled: values.enabled !== false }
+      const body = {
+        name: values.name,
+        env_codes: values.env_codes,
+        enabled: values.enabled !== false,
+        deploy_id: editingId ? undefined : values.deploy_id,
+      }
       if (editingId) await api.put(`/sql-executors/${editingId}`, body)
       else await api.post('/sql-executors', body)
       message.success('已保存')
@@ -117,10 +136,9 @@ export default function SqlExecutors() {
         description={
           <div>
             <div>1. 先在「环境管理」确认海外环境已经存在，实例的机房使用这些环境的编码。</div>
-            <div>2. 在能直连这些库的机器上启动执行器。北京只需要能访问这个地址，不必从北京直连海外数据库端口。</div>
-            <Typography.Text code>sql-agent -listen :8093 -user &lt;账号&gt; -pass &lt;密码&gt;</Typography.Text>
-            <div>3. 在本页新增一台，填写地址和账号，多选要绑定的环境，保存。</div>
-            <div>4. 点探活。通过后，这些环境上的 DDL/DML 才交给这台执行器。失败时会写明是地址不通、账号密码不对，还是环境已经绑在另一台执行器上。</div>
+            <div>2. 到「平台 Agent」把 sql-agent 下发到能直连这些库的机器。下发成功后会登记地址。数据库账号只在实例管理填写。</div>
+            <div>3. 回到本页新增，选择一条下发成功记录，地址会自动带出。再填名称、绑定环境并保存。这里不填写账号和密码。</div>
+            <div>4. 点探活。通过后，这些环境上的 DDL/DML 才交给这台执行器。失败时会写明是地址不通，还是环境已经绑在另一台执行器上。</div>
             <div>本服务所在环境不用装执行器。请在下方选上本机所在环境：选中的继续本进程直连。选上之后，其它没有绑定执行器的环境会记失败，不会再从本机直连过去。</div>
           </div>
         }
@@ -143,7 +161,7 @@ export default function SqlExecutors() {
       <ResponsiveTable
         rowKey="id"
         dataSource={rows}
-        locale={{ emptyText: '还没有执行器。先在能连上目标库的机器启动 sql-agent，再点「新增执行器」。' }}
+        locale={{ emptyText: '还没有执行器。请先到平台 Agent 下发，再在这里选择成功记录登记。' }}
         columns={[
           { title: '名称', dataIndex: 'name' },
           { title: '地址', dataIndex: 'base_url' },
@@ -193,22 +211,33 @@ export default function SqlExecutors() {
         confirmLoading={saving}
       >
         <Form form={form} labelCol={{ style: { width: 96 } }}>
+          {!editingId && deploys.length === 0 ? (
+            <Alert type="warning" showIcon style={{ marginBottom: 12 }} message="还没有下发成功的记录，请先到平台 Agent 下发 SQL 执行器。" />
+          ) : null}
           <Form.Item label="名称" name="name" rules={[{ required: true, message: '请填写名称' }]}>
             <Input placeholder="如 欧洲执行器" />
           </Form.Item>
-          <Form.Item
-            label="地址"
-            name="base_url"
-            extra="填执行器的 http://主机:8093。这台机器必须能连所选环境里的数据库。"
-            rules={[{ required: true, message: '请填写地址' }]}
-          >
-            <Input placeholder="http://主机:8093" />
-          </Form.Item>
-          <Form.Item label="账号" name="username" rules={[{ required: true, message: '请填写账号' }]}>
-            <Input />
-          </Form.Item>
-          <Form.Item label="密码" name="password" extra={editingId ? '留空表示不修改' : undefined}>
-            <Input.Password />
+          {!editingId ? (
+            <Form.Item label="下发记录" name="deploy_id" rules={[{ required: true, message: '请选择下发成功的记录' }]}>
+              <Select
+                placeholder={deploys.length ? '选择下发成功的记录' : '暂无成功记录'}
+                options={deploys.map((d) => ({
+                  value: d.id,
+                  label: `${d.base_url}${d.created_at ? ' · ' + d.created_at : ''}`,
+                }))}
+              />
+            </Form.Item>
+          ) : null}
+          <Form.Item noStyle shouldUpdate={(a, b) => a.deploy_id !== b.deploy_id || a.base_url !== b.base_url}>
+            {() => {
+              const hit = deploys.find((d) => d.id === form.getFieldValue('deploy_id'))
+              const url = editingId ? form.getFieldValue('base_url') : hit?.base_url || ''
+              return (
+                <Form.Item label="地址" extra="从下发成功记录带出，不能手填。">
+                  <Input value={url} readOnly placeholder="选择下发记录后带出" />
+                </Form.Item>
+              )
+            }}
           </Form.Item>
           <Form.Item
             label="绑定环境"

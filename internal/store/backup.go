@@ -969,7 +969,7 @@ func (d *DB) ListBackupAgentDeploysInTenant(tenantID, hostInstanceID string, lim
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	q := `SELECT id, host_instance_id, agent_id, status, listen_port, remote_dir, base_url, log_text, created_by, created_at, updated_at, finished_at
+	q := `SELECT id, host_instance_id, agent_id, status, listen_port, remote_dir, base_url, log_text, created_by, created_at, updated_at, finished_at, COALESCE(kind,'platform')
 		FROM tbl_backup_agent_deploys WHERE 1=1`
 	var args []any
 	q, args = appendTenantFilter(q, args, tenantID)
@@ -977,7 +977,6 @@ func (d *DB) ListBackupAgentDeploysInTenant(tenantID, hostInstanceID string, lim
 		q += ` AND host_instance_id=?`
 		args = append(args, id)
 	}
-	q += ` AND COALESCE(kind,'platform')<>'sql'`
 	q += ` ORDER BY created_at DESC LIMIT ?`
 	args = append(args, limit)
 	rows, err := d.Query(q, args...)
@@ -989,7 +988,7 @@ func (d *DB) ListBackupAgentDeploysInTenant(tenantID, hostInstanceID string, lim
 	for rows.Next() {
 		var it BackupAgentDeploy
 		if err := rows.Scan(&it.ID, &it.HostInstanceID, &it.AgentID, &it.Status, &it.ListenPort, &it.RemoteDir, &it.BaseURL, &it.LogText,
-			&it.CreatedBy, &it.CreatedAt, &it.UpdatedAt, &it.FinishedAt); err != nil {
+			&it.CreatedBy, &it.CreatedAt, &it.UpdatedAt, &it.FinishedAt, &it.Kind); err != nil {
 			return nil, err
 		}
 		out = append(out, it)

@@ -21,9 +21,7 @@ type SQLExecutorHandler struct {
 
 type sqlExecutorBody struct {
 	Name     string   `json:"name"`
-	BaseURL  string   `json:"base_url"`
-	Username string   `json:"username"`
-	Password string   `json:"password"`
+	DeployID string   `json:"deploy_id"`
 	EnvCodes []string `json:"env_codes"`
 	Enabled  *bool    `json:"enabled"`
 }
@@ -55,8 +53,8 @@ func (h *SQLExecutorHandler) List(c *gin.Context) {
 			bound = append(bound, gin.H{"code": code, "name": names[code]})
 		}
 		out = append(out, gin.H{
-			"id": e.ID, "name": e.Name, "base_url": e.BaseURL, "username": e.Username,
-			"password_set": e.PasswordEnc != "", "env_codes": e.EnvCodes, "environments": bound,
+			"id": e.ID, "name": e.Name, "base_url": e.BaseURL,
+			"env_codes": e.EnvCodes, "environments": bound,
 			"enabled": e.Enabled, "updated_at": e.UpdatedAt,
 		})
 	}
@@ -94,18 +92,39 @@ func (h *SQLExecutorHandler) save(c *gin.Context, id string) {
 		return
 	}
 	name := strings.TrimSpace(body.Name)
-	base := strings.TrimSpace(body.BaseURL)
-	user := strings.TrimSpace(body.Username)
 	codes := splitCodes(strings.Join(body.EnvCodes, ","))
-	if name == "" || base == "" || user == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "名称、地址、账号必填"})
+	if name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "名称必填"})
 		return
 	}
 	if len(codes) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "请从环境管理选择要绑定的环境"})
 		return
 	}
-	if other, code := h.envBoundElsewhere(codes, id); other != "" {
+	var baseFromDeploy string
+	if id == "" {
+		dep, err := h.Store.GetBackupAgentDeploy(strings.TrimSpace(body.DeployID))
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+			return
+		}
+		if dep == nil || dep.Kind != sqlexec.DeployKind || dep.Status != store.BackupDeploySuccess || strings.TrimSpace(dep.AgentID) == "" || strings.TrimSpace(dep.BaseURL) == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "请选择一条下发成功的记录。执行器登录凭据由下发生成，这里不填写数据库账号"})
+			return
+		}
+		id = dep.AgentID
+		baseFromDeploy = strings.TrimSpace(dep.BaseURL)
+	}
+	old, err := h.Store.GetSQLExecutor(id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	if old == nil || old.PasswordEnc == "" || strings.TrimSpace(old.Username) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "这次下发没有留下执行器登录凭据，请重新下发"})
+		return
+	}
+	if other, code := h.envBoundElsewhere(codes, old.ID); other != "" {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "环境 " + code + " 已经绑在执行器「" + other + "」上"})
 		return
 	}
@@ -113,34 +132,13 @@ func (h *SQLExecutorHandler) save(c *gin.Context, id string) {
 	if body.Enabled != nil {
 		enabled = *body.Enabled
 	}
+	baseURL := old.BaseURL
+	if baseFromDeploy != "" {
+		baseURL = baseFromDeploy
+	}
 	row := &store.SQLExecutor{
-		ID: id, Name: name, BaseURL: base, Username: user, EnvCodes: codes, Enabled: enabled,
-	}
-	pass := body.Password
-	if id != "" {
-		old, err := h.Store.GetSQLExecutor(id)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
-			return
-		}
-		if old == nil {
-			c.JSON(http.StatusNotFound, gin.H{"message": "执行器不存在"})
-			return
-		}
-		row.CreatedAt = old.CreatedAt
-		row.PasswordEnc = old.PasswordEnc
-	}
-	if strings.TrimSpace(pass) != "" {
-		enc, err := secret.Encrypt(h.Secret, pass)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
-			return
-		}
-		row.PasswordEnc = enc
-	}
-	if row.PasswordEnc == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "请填写执行器密码"})
-		return
+		ID: old.ID, Name: name, BaseURL: baseURL, Username: old.Username, PasswordEnc: old.PasswordEnc,
+		EnvCodes: codes, Enabled: enabled, CreatedAt: old.CreatedAt,
 	}
 	if err := h.Store.SaveSQLExecutor(row); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})

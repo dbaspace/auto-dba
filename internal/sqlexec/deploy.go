@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -35,17 +37,51 @@ type DeployOpts struct {
 	SSHInsecure     bool
 }
 
-// ResolveArtifact 查找已构建的 sql-agent。
-func ResolveArtifact() string {
-	candidates := []string{
-		"deploy/sql-agent/bin/sql-agent",
+// moduleRoot 从当前目录向上找含 go.mod 的目录，避免依赖进程启动时的工作目录。
+func moduleRoot() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "."
 	}
-	for _, p := range candidates {
-		if _, err := os.Stat(p); err == nil {
-			return p
+	for {
+		if st, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil && !st.IsDir() {
+			return dir
 		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return dir
+		}
+		dir = parent
+	}
+}
+
+// ResolveArtifact 在模块根目录查找已构建的 sql-agent。
+func ResolveArtifact() string {
+	p := filepath.Join(moduleRoot(), "deploy", "sql-agent", "bin", "sql-agent")
+	if st, err := os.Stat(p); err == nil && !st.IsDir() {
+		return p
 	}
 	return ""
+}
+
+func buildArtifact(logf func(string, ...any)) (string, error) {
+	root := moduleRoot()
+	out := filepath.Join(root, "deploy", "sql-agent", "bin", "sql-agent")
+	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+		return "", err
+	}
+	logf("正在编译 linux/amd64")
+	cmd := exec.Command("go", "build", "-trimpath", "-ldflags=-s -w", "-o", out, ".")
+	cmd.Dir = filepath.Join(root, "deploy", "sql-agent")
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", "GOARCH=amd64")
+	buf, err := cmd.CombinedOutput()
+	if text := strings.TrimSpace(string(buf)); text != "" {
+		logf("%s", text)
+	}
+	if err != nil {
+		return "", fmt.Errorf("编译 sql-agent 失败: %w", err)
+	}
+	return out, nil
 }
 
 // StartDeploy 创建下发任务。环境冲突在调用前由 handler 拒绝。
@@ -67,10 +103,6 @@ func StartDeploy(db *store.DB, opts DeployOpts) (string, error) {
 	if strings.TrimSpace(opts.SSHIdentityFile) == "" {
 		return "", fmt.Errorf("未配置 terminal.ssh_identity_file，无法 SSH 下发")
 	}
-	artifact := ResolveArtifact()
-	if artifact == "" {
-		return "", fmt.Errorf("未找到 sql-agent 制品（请先 cd deploy/sql-agent && ./build.sh）")
-	}
 	port := opts.ListenPort
 	if port <= 0 {
 		port = 8093
@@ -80,7 +112,14 @@ func StartDeploy(db *store.DB, opts DeployOpts) (string, error) {
 	}
 	remoteDir := strings.TrimSpace(opts.RemoteDir)
 	if remoteDir == "" {
-		remoteDir = "/home/sysadmin/auto-dba/sql-agent"
+		sshName := strings.TrimSpace(inst.Username)
+		if sshName == "" {
+			sshName = strings.TrimSpace(opts.SSHUser)
+		}
+		if sshName == "" {
+			sshName = "sysadmin"
+		}
+		remoteDir = "/home/" + sshName + "/auto-dba/sql-agent"
 	}
 	recent, err := db.ListSQLExecutorDeploys(hostID, 5)
 	if err == nil {
@@ -108,11 +147,11 @@ func StartDeploy(db *store.DB, opts DeployOpts) (string, error) {
 	if err := db.SetBackupAgentDeployKind(dep.ID, DeployKind, string(payload)); err != nil {
 		return "", err
 	}
-	go runDeploy(db, dep.ID, artifact, opts)
+	go runDeploy(db, dep.ID, opts)
 	return dep.ID, nil
 }
 
-func runDeploy(db *store.DB, deployID, artifact string, opts DeployOpts) {
+func runDeploy(db *store.DB, deployID string, opts DeployOpts) {
 	dep, err := db.GetBackupAgentDeploy(deployID)
 	if err != nil || dep == nil {
 		return
@@ -162,6 +201,15 @@ func runDeploy(db *store.DB, deployID, artifact string, opts DeployOpts) {
 		sshPort = 22
 	}
 	escalate := sshx.NormalizeEscalate(opts.Escalate)
+	artifact := ResolveArtifact()
+	if artifact == "" {
+		built, berr := buildArtifact(logf)
+		if berr != nil {
+			fail(berr.Error())
+			return
+		}
+		artifact = built
+	}
 	authUser := "sqlagent"
 	authPass := randomToken(16)
 	listen := mustListen(dep.ListenPort)
@@ -204,6 +252,15 @@ func runDeploy(db *store.DB, deployID, artifact string, opts DeployOpts) {
 	if _, _, err := runRemote("mkdir -p " + shellQuote(dep.RemoteDir)); err != nil {
 		fail("创建目录失败: " + err.Error())
 		return
+	}
+	if escalate == sshx.EscalateSudoSu {
+		chownCmd := "chown -R " + shellQuote(sshUser+":"+sshUser) + " " + shellQuote(dep.RemoteDir)
+		out, errOut, err := runRemote(chownCmd)
+		if err != nil {
+			fail("目录属主仍是 root，上传不会继续: " + strings.TrimSpace(out+" "+errOut) + " " + err.Error())
+			return
+		}
+		logf("已将 %s 属主改为 %s", dep.RemoteDir, sshUser)
 	}
 	logf("上传制品 %s → %s", artifact, binRemote)
 	if err := client.Upload(artifact, binRemote); err != nil {

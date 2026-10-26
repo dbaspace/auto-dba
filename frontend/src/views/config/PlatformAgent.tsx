@@ -51,7 +51,6 @@ export default function PlatformAgent() {
   const [hosts, setHosts] = useState<any[]>([])
   const [deploys, setDeploys] = useState<any[]>([])
   const [sqlExecs, setSqlExecs] = useState<any[]>([])
-  const [sqlDeploys, setSqlDeploys] = useState<any[]>([])
   const [envOptions, setEnvOptions] = useState<{ value: string; label: string }[]>([])
   const [sqlOpen, setSqlOpen] = useState(false)
   const [agentStatus, setAgentStatus] = useState<Record<string, string>>({})
@@ -93,15 +92,13 @@ export default function PlatformAgent() {
   }
 
   async function loadDeploys() {
-    const [{ data }, sqlDep, sqlList, envRes] = await Promise.all([
+    const [{ data }, sqlList, envRes] = await Promise.all([
       api.get('/platform/agents/deploys', { params: { limit: 50 } }),
-      api.get('/platform/agents/sql-executors/deploys').catch(() => ({ data: { data: [] } })),
       api.get('/platform/agents/sql-executors').catch(() => ({ data: { data: [] } })),
       api.get('/environments').catch(() => ({ data: { data: [] } })),
     ])
     const list = data.data || []
     setDeploys(list)
-    setSqlDeploys(sqlDep.data.data || [])
     setSqlExecs(sqlList.data.data || [])
     setEnvOptions(
       (envRes.data.data || []).map((e: any) => ({
@@ -109,8 +106,7 @@ export default function PlatformAgent() {
         label: e.name ? `${e.name}（${e.code}）` : e.code,
       })),
     )
-    const sqlListRows = sqlDep.data.data || []
-    return [...list, ...sqlListRows] as any[]
+    return list as any[]
   }
 
   async function refreshAgentStatus(list?: any[]) {
@@ -523,6 +519,7 @@ export default function PlatformAgent() {
       width: 100,
       render: (_, r) => <Tag color={deployStatusColor(r.status)}>{r.status}</Tag>,
     },
+    { title: '类型', width: 110, render: (_, r) => (r.kind === 'sql' ? 'SQL 执行器' : '平台 Agent') },
     { title: '端口', dataIndex: 'listen_port', width: 80 },
     { title: 'Base URL', dataIndex: 'base_url', minWidth: 160, ellipsis: true },
     { title: '时间', dataIndex: 'created_at', width: 170 },
@@ -586,7 +583,7 @@ export default function PlatformAgent() {
             sqlForm.resetFields()
             sqlForm.setFieldsValue({
               listen_port: 8093,
-              remote_dir: '/home/sysadmin/auto-dba/sql-agent',
+              remote_dir: '',
               escalate: false,
               env_codes: [],
             })
@@ -616,10 +613,6 @@ export default function PlatformAgent() {
           { title: '启用', width: 80, render: (_, row) => (row.enabled ? '是' : '否') },
         ]}
       />
-      <div className="backup-toolbar" style={{ marginTop: 16 }}>
-        <h3>SQL 执行器下发记录</h3>
-      </div>
-      <ResponsiveTable rowKey="id" loading={loading} columns={depCols} dataSource={sqlDeploys} pagination={{ pageSize: 10 }} />
       <div className="backup-toolbar" style={{ marginTop: 24 }}>
         <h3>下发记录</h3>
       </div>
@@ -844,8 +837,12 @@ export default function PlatformAgent() {
           <Form.Item name="listen_port" label="端口">
             <InputNumber min={1024} max={65535} style={{ width: '100%' }} />
           </Form.Item>
-          <Form.Item name="remote_dir" label="远程目录">
-            <Input placeholder="/home/sysadmin/auto-dba/sql-agent" />
+          <Form.Item
+            name="remote_dir"
+            label="远程目录"
+            extra="留空则使用 /home/该主机 SSH 用户/auto-dba/sql-agent。不提权时目录必须是该用户可写的；要装到 /opt 必须打开提权。"
+          >
+            <Input placeholder="留空使用该用户家目录" />
           </Form.Item>
           <Form.Item
             name="env_codes"

@@ -301,6 +301,7 @@ func Init(e *gin.Engine, d Deps) {
 	if d.SQLExec != nil {
 		execURN := requireURN(store.URNSidebarSQLExecutors)
 		secured.GET("/sql-executors", execURN, d.SQLExec.List)
+		secured.GET("/sql-executors/deploys", execURN, d.SQLExec.ListDeploys)
 		secured.PUT("/sql-executors/local-idc", execURN, d.SQLExec.SaveLocalIDC)
 		secured.POST("/sql-executors", execURN, d.SQLExec.Create)
 		secured.PUT("/sql-executors/:id", execURN, d.SQLExec.Update)
