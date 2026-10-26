@@ -37,36 +37,92 @@ type DeployOpts struct {
 	SSHInsecure     bool
 }
 
-// moduleRoot 从当前目录向上找含 go.mod 的目录，避免依赖进程启动时的工作目录。
-func moduleRoot() string {
-	dir, err := os.Getwd()
-	if err != nil {
-		return "."
-	}
+const sqlAgentRel = "deploy/sql-agent/bin/sql-agent"
+
+// moduleRootFrom 从 dir 向上找含 go.mod 的目录。找不到时返回空，避免把文件系统根当成模块根。
+func moduleRootFrom(dir string) string {
+	dir = filepath.Clean(dir)
 	for {
 		if st, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil && !st.IsDir() {
 			return dir
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return dir
+			return ""
 		}
 		dir = parent
 	}
 }
 
-// ResolveArtifact 在模块根目录查找已构建的 sql-agent。
-func ResolveArtifact() string {
-	p := filepath.Join(moduleRoot(), "deploy", "sql-agent", "bin", "sql-agent")
+func moduleRoot() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return moduleRootFrom(dir)
+}
+
+func existingFile(p string) string {
 	if st, err := os.Stat(p); err == nil && !st.IsDir() {
 		return p
 	}
 	return ""
 }
 
-func buildArtifact(logf func(string, ...any)) (string, error) {
+func resolveArtifactIn(dirs []string) string {
+	seen := map[string]struct{}{}
+	for _, dir := range dirs {
+		dir = strings.TrimSpace(dir)
+		if dir == "" {
+			continue
+		}
+		dir = filepath.Clean(dir)
+		if _, ok := seen[dir]; ok {
+			continue
+		}
+		seen[dir] = struct{}{}
+		if p := existingFile(filepath.Join(dir, filepath.FromSlash(sqlAgentRel))); p != "" {
+			return p
+		}
+	}
+	return ""
+}
+
+// ResolveArtifact 查找安装包或源码树里已构建的 sql-agent。
+func ResolveArtifact() string {
+	dirs := []string{}
+	if wd, err := os.Getwd(); err == nil {
+		dirs = append(dirs, wd)
+	}
+	if exe, err := os.Executable(); err == nil {
+		exeDir := filepath.Dir(exe)
+		dirs = append(dirs, exeDir, filepath.Dir(exeDir))
+	}
+	if root := moduleRoot(); root != "" {
+		dirs = append(dirs, root)
+	}
+	return resolveArtifactIn(dirs)
+}
+
+// sourceRoot 仅在含 go.mod 且存在 sql-agent 源码时返回模块根。
+func sourceRoot() (string, bool) {
 	root := moduleRoot()
-	out := filepath.Join(root, "deploy", "sql-agent", "bin", "sql-agent")
+	if root == "" {
+		return "", false
+	}
+	src := filepath.Join(root, "deploy", "sql-agent", "main.go")
+	if st, err := os.Stat(src); err != nil || st.IsDir() {
+		return "", false
+	}
+	return root, true
+}
+
+func buildArtifact(logf func(string, ...any)) (string, error) {
+	root, ok := sourceRoot()
+	if !ok {
+		return "", fmt.Errorf("未找到安装包内的 %s，工作目录须为包根", sqlAgentRel)
+	}
+	out := filepath.Join(root, filepath.FromSlash(sqlAgentRel))
 	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
 		return "", err
 	}
@@ -205,11 +261,13 @@ func runDeploy(db *store.DB, deployID string, opts DeployOpts) {
 	if artifact == "" {
 		built, berr := buildArtifact(logf)
 		if berr != nil {
-			fail(berr.Error())
+			wd, _ := os.Getwd()
+			fail(fmt.Sprintf("%s（当前工作目录 %s）", berr.Error(), wd))
 			return
 		}
 		artifact = built
 	}
+	logf("使用 sql-agent：%s", artifact)
 	authUser := "sqlagent"
 	authPass := randomToken(16)
 	listen := mustListen(dep.ListenPort)
