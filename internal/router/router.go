@@ -514,6 +514,7 @@ func Init(e *gin.Engine, d Deps) {
 	t.PUT("/:id/cancel", d.Ticket.Cancel)
 	t.PUT("/:id/assignee", d.Ticket.TransferAssignee)
 	t.POST("/:id/execute", d.Ticket.Execute)
+	t.POST("/:id/stop", d.Ticket.Stop)
 	t.POST("/:id/export", d.Ticket.Export)
 
 	cd := secured.Group("/create-db")

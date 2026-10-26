@@ -58,12 +58,13 @@ func (d *DB) GetIssue(id string) (*Issue, error) {
 	var exec sql.NullString
 	var hist sql.NullString
 	var tid sql.NullString
+	var prog sql.NullString
 	err := d.QueryRow(
-		`SELECT id, ticket_no, issue_type, instance_id, COALESCE(domain,''), database_id, db_name, sql_content, description, status, submitter, assigned_to, reject_reason, need_rollback, scheduled_at, execute_result, COALESCE(assignee_transfer_history,'[]'), created_at, updated_at, COALESCE(tenant_id,'')
+		`SELECT id, ticket_no, issue_type, instance_id, COALESCE(domain,''), database_id, db_name, sql_content, description, status, submitter, assigned_to, reject_reason, need_rollback, scheduled_at, execute_result, COALESCE(assignee_transfer_history,'[]'), created_at, updated_at, COALESCE(tenant_id,''), COALESCE(exec_progress,'')
 		 FROM tbl_issues WHERE id=?`, id,
 	).Scan(
 		&it.ID, &it.TicketNo, &it.IssueType, &it.InstanceID, &it.Domain, &it.DatabaseID, &it.DBName, &it.SQLContent, &it.Description,
-		&it.Status, &it.Submitter, &it.AssignedTo, &it.RejectReason, &it.NeedRollback, &it.ScheduledAt, &exec, &hist, &it.CreatedAt, &it.UpdatedAt, &tid,
+		&it.Status, &it.Submitter, &it.AssignedTo, &it.RejectReason, &it.NeedRollback, &it.ScheduledAt, &exec, &hist, &it.CreatedAt, &it.UpdatedAt, &tid, &prog,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -72,6 +73,8 @@ func (d *DB) GetIssue(id string) (*Issue, error) {
 		return nil, err
 	}
 	it.ExecuteResult = exec.String
+	it.ExecProgressRaw = prog.String
+	it.ExecProgress = ParseExecProgress(prog.String)
 	it.AssigneeTransferHistory = hist.String
 	if it.AssigneeTransferHistory == "" {
 		it.AssigneeTransferHistory = "[]"
@@ -102,7 +105,7 @@ func (d *DB) ListIssues(issueType, status, q, viewer string, viewAll bool) ([]Is
 }
 
 func (d *DB) ListIssuesInTenant(tenantID, issueType, status, q, viewer string, viewAll bool) ([]Issue, error) {
-	query := `SELECT id, ticket_no, issue_type, instance_id, COALESCE(domain,''), database_id, db_name, sql_content, description, status, submitter, assigned_to, reject_reason, need_rollback, scheduled_at, created_at, updated_at, COALESCE(tenant_id,'') FROM tbl_issues WHERE 1=1`
+	query := `SELECT id, ticket_no, issue_type, instance_id, COALESCE(domain,''), database_id, db_name, sql_content, description, status, submitter, assigned_to, reject_reason, need_rollback, scheduled_at, created_at, updated_at, COALESCE(tenant_id,''), COALESCE(exec_progress,'') FROM tbl_issues WHERE 1=1`
 	var args []any
 	if tid := strings.TrimSpace(tenantID); tid != "" {
 		query += ` AND COALESCE(tenant_id,'')=?`
@@ -138,14 +141,17 @@ func (d *DB) ListIssuesInTenant(tenantID, issueType, status, q, viewer string, v
 	for rows.Next() {
 		var it Issue
 		var tid string
+		var prog sql.NullString
 		if err := rows.Scan(
 			&it.ID, &it.TicketNo, &it.IssueType, &it.InstanceID, &it.Domain, &it.DatabaseID, &it.DBName, &it.SQLContent, &it.Description,
-			&it.Status, &it.Submitter, &it.AssignedTo, &it.RejectReason, &it.NeedRollback, &it.ScheduledAt, &it.CreatedAt, &it.UpdatedAt, &tid,
+			&it.Status, &it.Submitter, &it.AssignedTo, &it.RejectReason, &it.NeedRollback, &it.ScheduledAt, &it.CreatedAt, &it.UpdatedAt, &tid, &prog,
 		); err != nil {
 			return nil, err
 		}
 		it.TenantID = strings.TrimSpace(tid)
 		it.Type = it.IssueType
+		it.ExecProgressRaw = prog.String
+		it.ExecProgress = ParseExecProgress(prog.String)
 		out = append(out, it)
 	}
 	return out, rows.Err()
@@ -192,6 +198,46 @@ func (d *DB) ListStalePendingIssues(before time.Time) ([]Issue, error) {
 func (d *DB) UpdateIssueExec(id, status, resultJSON string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := d.Exec(`UPDATE tbl_issues SET status=?, execute_result=?, updated_at=? WHERE id=?`, status, resultJSON, now, id)
+	return err
+}
+
+// UpdateIssueExecRunning 只在仍为执行中时写入本轮结果，避免终止后被进度检查点改回 running。
+func (d *DB) UpdateIssueExecRunning(id, resultJSON string) (bool, error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	res, err := d.Exec(
+		`UPDATE tbl_issues SET execute_result=?, updated_at=? WHERE id=? AND status=?`,
+		resultJSON, now, id, StatusRunning,
+	)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+func (d *DB) SaveIssueProgress(id string, p *ExecProgress) error {
+	if d == nil {
+		return nil
+	}
+	raw := ""
+	if p != nil {
+		b, err := json.Marshal(p)
+		if err != nil {
+			return err
+		}
+		raw = string(b)
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := d.Exec(`UPDATE tbl_issues SET exec_progress=?, updated_at=? WHERE id=?`, raw, now, id)
+	return err
+}
+
+func (d *DB) ClearIssueProgress(id string) error {
+	if d == nil {
+		return nil
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := d.Exec(`UPDATE tbl_issues SET exec_progress='', updated_at=? WHERE id=?`, now, id)
 	return err
 }
 

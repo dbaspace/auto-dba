@@ -330,6 +330,7 @@ func (h *TicketHandler) executeCreateDBTicket(ctx context.Context, it *store.Iss
 			break
 		}
 		t.ConnectDB = ticketexec.AdminConnectDB(inst.DBType)
+		h.watchSession(it, inst, t.Host, it.DBName, &t)
 		res := ticketexec.Run(ctx, store.IssueTypeCreateDB, it.SQLContent, t)
 		mergeExecResult(merged, res)
 		if res == nil || !res.Success {

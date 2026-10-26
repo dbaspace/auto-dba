@@ -64,6 +64,8 @@ export default function DdlExecImpact(props: {
   successCount?: number
   statementCount?: number
   compacted?: boolean
+  /** 执行中覆盖横幅，例如「执行中，已完成 6/24 个库」 */
+  bannerTitle?: string
 }) {
   const [tab, setTab] = useState<DdlExecTab>('all')
   const ticketFailed = isTicketExecFailed({
@@ -132,8 +134,18 @@ export default function DdlExecImpact(props: {
     return base + note
   })()
 
-  const bannerClass = allOk ? 'is-success' : allFail ? 'is-fail' : hasFail ? 'is-partial' : 'is-success'
-  const bannerTitle = (() => {
+  const bannerClass = props.bannerTitle
+    ? 'is-partial'
+    : allOk
+      ? 'is-success'
+      : allFail
+        ? 'is-fail'
+        : hasFail
+          ? 'is-partial'
+          : 'is-success'
+  const bannerTitle = props.bannerTitle
+    ? props.bannerTitle
+    : (() => {
     if (!stats.instTotal) return '暂无库执行结果'
     if (allOk) return `共 ${stats.instTotal} 个库，全部执行成功`
     if (allFail) return `共 ${stats.instTotal} 个库，全部执行失败`

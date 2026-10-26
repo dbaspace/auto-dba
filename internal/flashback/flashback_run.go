@@ -3,11 +3,14 @@ package flashback
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"auto-dba/internal/store"
 )
 
 func (s *FlashbackImpl) logf(ctx context.Context, taskID, level, format string, args ...any) {
@@ -68,6 +71,12 @@ func (s *FlashbackImpl) runTask(ctx context.Context, taskID string) {
 		}
 	}()
 	if err := s.executeTask(ctx, taskID); err != nil {
+		if errors.Is(err, context.Canceled) {
+			msg := "执行已终止"
+			_ = s.store.UpdateStatus(context.Background(), taskID, store.StatusStopped, msg, "")
+			s.logf(context.Background(), taskID, "WARN", "%s", msg)
+			return
+		}
 		msg := flashbackPublicError(err)
 		_ = s.store.UpdateStatus(ctx, taskID, StatusFailed, msg, "")
 		s.logf(ctx, taskID, "ERROR", "%s", msg)

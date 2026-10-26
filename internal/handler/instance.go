@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -350,10 +351,25 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 }
 
 // SyncHostsFromMonitor POST /instances/sync-hosts-from-monitor —
-// 从「监控目标注册」全部 endpoints 提取主机地址，按规范化 IP/主机名去重后登记为 db_type=host；
-// 已存在则跳过；有多少登记多少。SSH 默认 sysadmin:22、私有可见（当前用户）；名称/审批人等不足字段事后人工补充。
+// 从「监控目标注册」全部 endpoints 提取主机，并按标签匹配区域、环境、标签。
+// 已存在的主机只补这三项里的空字段。SSH 默认 sysadmin:22、私有可见（当前用户）。
 func (h *InstanceHandler) SyncHostsFromMonitor(c *gin.Context) {
-	hosts, err := collectUniqueHostsFromMonitor(h.Store)
+	hosts, err := collectMonitorHosts(h.Store)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	envs, err := h.Store.ListEnvironments()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	regions, err := h.Store.ListRegions()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	binds, err := h.Store.ListRegionEnvBindings()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -364,14 +380,20 @@ func (h *InstanceHandler) SyncHostsFromMonitor(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
-	known := map[string]bool{}
+	known := map[string]*store.Instance{}
 	for i := range exist {
 		if !store.IsHostInstanceType(exist[i].DBType) {
 			continue
 		}
 		for _, a := range nodecheck.HostAddrs(&exist[i]) {
-			known[a] = true
+			if _, ok := known[a]; !ok {
+				known[a] = &exist[i]
+			}
 		}
+	}
+	envByID := map[string]store.Environment{}
+	for _, e := range envs {
+		envByID[e.ID] = e
 	}
 	who := actorName(c)
 	if who == "" {
@@ -382,17 +404,60 @@ func (h *InstanceHandler) SyncHostsFromMonitor(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "密码加密失败"})
 		return
 	}
-	created, skipped := 0, 0
-	for _, host := range hosts {
-		if known[host] {
-			skipped++
+	created, updated, skipped, unbound := 0, 0, 0, 0
+	for _, mh := range hosts {
+		regionID, envID, tags, envOK := matchMonitorHostLocation(mh.Labels, mh.Collectors, envs, regions, binds)
+		envCode := ""
+		if envOK {
+			envCode = strings.TrimSpace(envByID[envID].Code)
+		}
+		if cur := known[mh.Host]; cur != nil {
+			fillRegion, fillEnv, fillCode := regionID, envID, envCode
+			if id := strings.TrimSpace(cur.EnvID); id != "" {
+				fillEnv = ""
+				if e, ok := envByID[id]; ok {
+					fillRegion = pickRegionForEnv(e, regions, binds)
+					fillCode = strings.TrimSpace(e.Code)
+				} else {
+					fillRegion = ""
+					fillCode = ""
+				}
+			}
+			fillTags := monitorLabelsToTags(mh.Labels, fillCode)
+			before := *cur
+			changed := false
+			if strings.TrimSpace(cur.RegionID) == "" && fillRegion != "" {
+				cur.RegionID = fillRegion
+				changed = true
+			}
+			if strings.TrimSpace(cur.EnvID) == "" && fillEnv != "" {
+				cur.EnvID = fillEnv
+				cur.IDC = fillCode
+				changed = true
+			}
+			if len(cur.Tags) == 0 && len(fillTags) > 0 {
+				cur.Tags = fillTags
+				changed = true
+			}
+			if !changed {
+				skipped++
+			} else if err := h.Store.UpdateInstance(cur); err != nil {
+				*cur = before
+				skipped++
+			} else {
+				_ = h.Store.AppendCmdbAudit(who, "update", "instance", cur.ID, "sync-hosts-from-monitor", redactInstanceCopy(before), redactInstanceCopy(*cur))
+				updated++
+			}
+			if strings.TrimSpace(cur.EnvID) == "" {
+				unbound++
+			}
 			continue
 		}
 		it := store.Instance{
-			Name:        host,
-			Host:        host,
-			DomainName:  host,
-			Domains:     []string{host},
+			Name:        mh.Host,
+			Host:        mh.Host,
+			DomainName:  mh.Host,
+			Domains:     []string{mh.Host},
 			Port:        22,
 			DBType:      "host",
 			Username:    "sysadmin",
@@ -402,48 +467,241 @@ func (h *InstanceHandler) SyncHostsFromMonitor(c *gin.Context) {
 			Approvers:   []string{who},
 			Description: "从监控目标自动同步",
 			TenantID:    tid,
+			RegionID:    regionID,
+			EnvID:       envID,
+			IDC:         envCode,
+			Tags:        tags,
 		}
 		if err := h.Store.CreateInstance(&it); err != nil {
-			// 并发或唯一约束冲突视为已存在
 			skipped++
 			continue
 		}
 		_, _ = h.Store.SyncAccessDomainsFromInstance(&it)
 		_ = h.Store.AppendCmdbAudit(who, "create", "instance", it.ID, "sync-hosts-from-monitor", nil, redactInstanceCopy(it))
-		known[host] = true
+		saved := it
+		known[mh.Host] = &saved
 		created++
+		if strings.TrimSpace(it.EnvID) == "" {
+			unbound++
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{
 		"created": created,
+		"updated": updated,
 		"skipped": skipped,
+		"unbound": unbound,
 		"hosts":   len(hosts),
 	}})
 }
 
-func collectUniqueHostsFromMonitor(db *store.DB) ([]string, error) {
+// monitorHost 一台从监控目标抽出的主机及其合并标签。
+type monitorHost struct {
+	Host       string
+	Labels     map[string]string
+	Collectors []string
+}
+
+func collectMonitorHosts(db *store.DB) ([]monitorHost, error) {
 	jobs, err := db.ListMonitorJobs("")
 	if err != nil {
 		return nil, err
 	}
-	var out []string
-	seen := map[string]bool{}
+	byHost := map[string]*monitorHost{}
+	var order []string
 	for _, j := range jobs {
 		groups, err := db.ListMonitorTargetGroups(j.ID)
 		if err != nil {
 			return nil, err
 		}
 		for _, g := range groups {
+			merged := mergeMonitorLabels(j.Labels, g.Labels)
 			for _, ep := range splitMonitorEndpointList(g.Endpoints) {
 				host := syncNormHost(hostFromMonitorEndpoint(ep))
-				if host == "" || seen[host] {
+				if host == "" {
 					continue
 				}
-				seen[host] = true
-				out = append(out, host)
+				cur := byHost[host]
+				if cur == nil {
+					cur = &monitorHost{Host: host, Labels: map[string]string{}}
+					byHost[host] = cur
+					order = append(order, host)
+				}
+				absorbMonitorLabels(cur, merged, j.Collector)
 			}
 		}
 	}
+	out := make([]monitorHost, 0, len(order))
+	for _, host := range order {
+		out = append(out, *byHost[host])
+	}
 	return out, nil
+}
+
+// mergeMonitorLabels 任务标签打底，组标签覆盖。
+func mergeMonitorLabels(job, group map[string]string) map[string]string {
+	out := map[string]string{}
+	put := func(m map[string]string) {
+		for k, v := range m {
+			k = strings.TrimSpace(k)
+			v = strings.TrimSpace(v)
+			if k == "" || v == "" {
+				continue
+			}
+			out[k] = v
+		}
+	}
+	put(job)
+	put(group)
+	return out
+}
+
+// absorbMonitorLabels 把一组标签并进主机。已有非空值不替换。
+func absorbMonitorLabels(dst *monitorHost, labels map[string]string, collector string) {
+	if dst.Labels == nil {
+		dst.Labels = map[string]string{}
+	}
+	for k, v := range labels {
+		k = strings.TrimSpace(k)
+		v = strings.TrimSpace(v)
+		if k == "" || v == "" {
+			continue
+		}
+		if strings.TrimSpace(dst.Labels[k]) == "" {
+			dst.Labels[k] = v
+		}
+	}
+	collector = strings.TrimSpace(collector)
+	if collector == "" {
+		return
+	}
+	for _, c := range dst.Collectors {
+		if c == collector {
+			return
+		}
+	}
+	dst.Collectors = append(dst.Collectors, collector)
+}
+
+// matchMonitorHostLocation 用监控标签匹配环境与区域，并生成主机标签。
+// 环境对不上目录时 region/env 为空，tags 仍保留原标签。
+func matchMonitorHostLocation(labels map[string]string, collectors []string, envs []store.Environment, regions []store.Region, binds []store.RegionEnvBinding) (regionID, envID string, tags []string, envMatched bool) {
+	env, ok := resolveMonitorEnv(labels, collectors, envs)
+	code := ""
+	if ok {
+		envMatched = true
+		envID = env.ID
+		code = strings.TrimSpace(env.Code)
+		regionID = pickRegionForEnv(env, regions, binds)
+	}
+	tags = monitorLabelsToTags(labels, code)
+	return regionID, envID, tags, envMatched
+}
+
+func resolveMonitorEnv(labels map[string]string, collectors []string, envs []store.Environment) (store.Environment, bool) {
+	var fromLabels []string
+	for _, k := range []string{"idc", "env", "environment"} {
+		if v := strings.TrimSpace(labels[k]); v != "" {
+			fromLabels = append(fromLabels, v)
+		}
+	}
+	if env, ok := lookupEnvironment(fromLabels, envs); ok {
+		return env, true
+	}
+	return lookupEnvironment(collectors, envs)
+}
+
+func lookupEnvironment(candidates []string, envs []store.Environment) (store.Environment, bool) {
+	byCode := map[string]store.Environment{}
+	byName := map[string]store.Environment{}
+	for _, e := range envs {
+		if c := strings.ToLower(strings.TrimSpace(e.Code)); c != "" {
+			byCode[c] = e
+		}
+		if n := strings.ToLower(strings.TrimSpace(e.Name)); n != "" {
+			byName[n] = e
+		}
+	}
+	for _, raw := range candidates {
+		key := strings.ToLower(strings.TrimSpace(raw))
+		if key == "" {
+			continue
+		}
+		if e, ok := byCode[key]; ok {
+			return e, true
+		}
+		if e, ok := byName[key]; ok {
+			return e, true
+		}
+	}
+	return store.Environment{}, false
+}
+
+func pickRegionForEnv(env store.Environment, regions []store.Region, binds []store.RegionEnvBinding) string {
+	seen := map[string]bool{}
+	var ids []string
+	for _, b := range binds {
+		if b.EnvID != env.ID || strings.TrimSpace(b.RegionID) == "" || seen[b.RegionID] {
+			continue
+		}
+		seen[b.RegionID] = true
+		ids = append(ids, b.RegionID)
+	}
+	if len(ids) == 0 {
+		return ""
+	}
+	if len(ids) == 1 {
+		return ids[0]
+	}
+	byID := map[string]store.Region{}
+	for _, r := range regions {
+		byID[r.ID] = r
+	}
+	want := map[string]bool{}
+	for _, s := range []string{env.Code, env.Name} {
+		s = strings.ToLower(strings.TrimSpace(s))
+		if s != "" {
+			want[s] = true
+		}
+	}
+	var hit []string
+	for _, id := range ids {
+		r := byID[id]
+		if want[strings.ToLower(strings.TrimSpace(r.Code))] || want[strings.ToLower(strings.TrimSpace(r.Name))] {
+			hit = append(hit, id)
+		}
+	}
+	if len(hit) == 1 {
+		return hit[0]
+	}
+	return ""
+}
+
+func monitorLabelsToTags(labels map[string]string, envCode string) []string {
+	keys := make([]string, 0, len(labels))
+	clean := map[string]string{}
+	for k, v := range labels {
+		k = strings.TrimSpace(k)
+		v = strings.TrimSpace(v)
+		if k == "" || v == "" {
+			continue
+		}
+		if _, ok := clean[k]; ok {
+			continue
+		}
+		clean[k] = v
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	tags := make([]string, 0, len(keys))
+	for _, k := range keys {
+		tags = append(tags, k+"="+clean[k])
+	}
+	if strings.TrimSpace(envCode) == "" {
+		return tags
+	}
+	it := store.Instance{DBType: "host", Tags: tags}
+	syncInstanceMonitorTags(&it, envCode)
+	return it.Tags
 }
 
 func splitMonitorEndpointList(s string) []string {

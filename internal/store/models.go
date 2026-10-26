@@ -170,8 +170,10 @@ type Issue struct {
 	// AssigneeTransferHistory JSON 字符串数组，如 ["a->b by=a at=..."]
 	AssigneeTransferHistory string `json:"assignee_transfer_history,omitempty"`
 	ScheduledAt             string `json:"scheduled_at,omitempty"`
-	ExecuteResult           string `json:"-"`
-	Exec                    any    `json:"exec,omitempty"`
+	ExecuteResult           string        `json:"-"`
+	Exec                    any           `json:"exec,omitempty"`
+	ExecProgressRaw         string        `json:"-"`
+	ExecProgress            *ExecProgress `json:"exec_progress,omitempty"`
 	CreatedAt               string `json:"created_at"`
 	UpdatedAt               string `json:"updated_at"`
 }
@@ -757,6 +759,7 @@ const (
 	StatusDeleted        = "deleted"
 	StatusExecuted       = "executed"
 	StatusFailed         = "failed"
+	StatusStopped        = "stopped"
 	StatusRunning        = "running"
 	StatusPaused         = "paused"
 	StatusInit           = "init"

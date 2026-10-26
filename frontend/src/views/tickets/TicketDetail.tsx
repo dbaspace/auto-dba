@@ -1,12 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
-import { Alert, Avatar, Button, Descriptions, Input, Modal, Select, Tag, message } from 'antd'
+import { Alert, Avatar, Button, Descriptions, Input, Modal, Progress, Select, Tag, message } from 'antd'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import api from '../../api/request'
 import { useAppDispatch, useAppSelector } from '../../store'
 import { closeTab, openTab, tabKey } from '../../store/tabsSlice'
 import CollapsibleSqlBlock from '../../components/CollapsibleSqlBlock'
 import DdlExecImpact from './DdlExecImpact'
+import { ddlProgressView } from './execProgress'
 import DnsChangeDiff, { payloadRows } from '../dns/DnsChangeDiff'
 import { countNonEmptyLines, lineVsStatementHint, shouldHintLineVsStatement } from './sqlStatementCount'
 import './TicketDetail.css'
@@ -172,6 +173,7 @@ export default function TicketDetail() {
 
   const [item, setItem] = useState<any>(null)
   const [canApproveFlag, setCanApproveFlag] = useState(false)
+  const [canStop, setCanStop] = useState(false)
   const [canTransferFlag, setCanTransferFlag] = useState(false)
   const [inst, setInst] = useState<any>(null)
   const [envByInstanceId, setEnvByInstanceId] = useState<Record<string, string>>({})
@@ -577,6 +579,7 @@ export default function TicketDetail() {
     [item],
   )
   const execFailed = item?.status === 'failed'
+  const execStopped = item?.status === 'stopped'
   const execSuccess = execObj?.success === true ? true : execObj?.success === false ? false : undefined
   const isExecRunning = item?.status === 'running'
   const execRecords = useMemo(
@@ -585,8 +588,12 @@ export default function TicketDetail() {
   )
   // running 时隐藏上轮明细，避免「后台执行中」与旧失败/成功结果并读
   const displayExecRecords = useMemo(
-    () => (isExecRunning ? [] : execRecords),
-    [isExecRunning, execRecords],
+    () => (isExecRunning && item?.issue_type !== 'ddl' ? [] : execRecords),
+    [isExecRunning, item?.issue_type, execRecords],
+  )
+  const ddlProgress = useMemo(
+    () => (isExecRunning && item?.issue_type === 'ddl' ? ddlProgressView(item?.exec_progress) : null),
+    [isExecRunning, item],
   )
 
   // SR / 通用 DB 集群变更：工单等待变更结束，步骤写在 exec.records
@@ -653,6 +660,7 @@ export default function TicketDetail() {
     const s = item?.status
     if (s === 'executed') return 'is-done'
     if (s === 'failed') return 'is-danger'
+    if (s === 'stopped') return 'is-danger'
     if (s === 'running') return 'is-active'
     return 'is-wait'
   }, [item])
@@ -661,7 +669,7 @@ export default function TicketDetail() {
     const s = item?.status
     if (s === 'approved' || s === 'running') return 'is-current'
     if (s === 'executed') return 'is-ok'
-    if (s === 'failed') return 'is-fail'
+    if (s === 'failed' || s === 'stopped') return 'is-fail'
     return 'is-idle'
   }, [item])
 
@@ -669,6 +677,7 @@ export default function TicketDetail() {
     const s = item?.status
     if (s === 'executed') return isDQL ? '已下载' : execSkipped ? '已跳过连库' : '已执行'
     if (s === 'failed') return '执行失败'
+    if (s === 'stopped') return '已终止'
     if (s === 'running') return '后台执行中'
     if (s === 'approved')
       return isDQL
@@ -691,10 +700,12 @@ export default function TicketDetail() {
 
   const execEmptyText = useMemo(
     () =>
-      item?.status === 'executed' || item?.status === 'failed'
+      item?.status === 'executed' || item?.status === 'failed' || item?.status === 'stopped'
         ? '暂无数据'
         : item?.status === 'running'
-          ? '正在后台执行，完成后自动刷新结果'
+          ? item?.issue_type === 'ddl'
+            ? '已结束的库会显示在这里'
+            : '正在后台执行，完成后自动刷新结果'
           : '暂无数据，执行后获取',
     [item],
   )
@@ -706,6 +717,7 @@ export default function TicketDetail() {
       const { data } = await api.get('/tickets/' + params.id, { silent: true })
       setItem(data.data)
       setCanApproveFlag(Boolean(data.can_approve))
+      setCanStop(Boolean(data.can_stop))
       setCanTransferFlag(Boolean(data.can_transfer))
       setInst(null)
       setEnvByInstanceId({})
@@ -931,6 +943,20 @@ export default function TicketDetail() {
         await api.put(`/tickets/${it.id}/cancel`)
       } else if (kind === 'execute') {
         await api.post(`/tickets/${it.id}/execute`)
+      } else if (kind === 'stop') {
+        okMsg = '已终止执行'
+        await new Promise<void>((resolve, reject) => {
+          Modal.confirm({
+            title: '终止执行',
+            content: '已完成的语句不会回滚，将按数据库类型终止当前会话，未开始的步骤不再执行。',
+            okText: '终止执行',
+            okButtonProps: { danger: true },
+            cancelText: '取消',
+            onOk: () => resolve(),
+            onCancel: () => reject('cancel'),
+          })
+        })
+        await api.post(`/tickets/${it.id}/stop`)
       }
       message.success(okMsg)
       setComment('')
@@ -959,6 +985,7 @@ export default function TicketDetail() {
         if (!next) return
         setItem(next)
         if (typeof data.can_approve === 'boolean') setCanApproveFlag(data.can_approve)
+        if (typeof data.can_stop === 'boolean') setCanStop(data.can_stop)
         if (typeof data.can_transfer === 'boolean') setCanTransferFlag(data.can_transfer)
         if (next.status !== 'running') {
           window.clearInterval(timer)
@@ -1236,11 +1263,37 @@ export default function TicketDetail() {
                       <>
                         <div className="exec-wait">集群变更执行中…</div>
                         <div className="user-sub">{execObj?.summary || '等待变更结束后同步最终状态'}</div>
+                        {canStop ? (
+                          <Button danger size="small" loading={acting} onClick={() => act('stop')}>
+                            终止执行
+                          </Button>
+                        ) : null}
                       </>
                     ) : item.status === 'running' ? (
                       <>
-                        <div className="exec-wait">正在后台执行大 SQL，请勿重复点击</div>
-                        <div className="user-sub">页面将自动刷新执行结果</div>
+                        <div className="exec-wait">{ddlProgress?.title || '正在后台执行，请勿重复点击'}</div>
+                        {ddlProgress ? (
+                          <Progress
+                            percent={ddlProgress.percent}
+                            status="active"
+                            showInfo={!ddlProgress.indeterminate}
+                            style={{ margin: '8px 0' }}
+                          />
+                        ) : null}
+                        {ddlProgress?.sub ? <div className="user-sub">{ddlProgress.sub}</div> : <div className="user-sub">页面将自动刷新执行结果</div>}
+                        {canStop ? (
+                          <Button danger size="small" loading={acting} onClick={() => act('stop')}>
+                            终止执行
+                          </Button>
+                        ) : null}
+                      </>
+                    ) : item.status === 'stopped' ? (
+                      <>
+                        <div className="status-text danger">已终止</div>
+                        <div className="user-sub">{execSummary || fmtTime(item.updated_at)}</div>
+                        <Button type="primary" size="small" loading={acting} onClick={() => act('execute')}>
+                          重试执行
+                        </Button>
                       </>
                     ) : item.status === 'approved' ? (
                       <>
@@ -1429,8 +1482,15 @@ export default function TicketDetail() {
                     fallbackDb={item?.db_name}
                     fallbackHost={inst?.host}
                     execMessage={isExecRunning ? '' : execErrorText}
-                    execSuccess={isExecRunning ? undefined : execSuccess}
-                    execFailed={isExecRunning ? false : execFailed}
+                    execSuccess={isExecRunning || execStopped ? undefined : execSuccess}
+                    execFailed={isExecRunning || execStopped ? false : execFailed}
+                    bannerTitle={
+                      isExecRunning && ddlProgress
+                        ? Number(item?.exec_progress?.total || 0) > 1
+                          ? `执行中，已完成 ${item.exec_progress?.done || 0}/${item.exec_progress?.total} 个库`
+                          : ddlProgress.title
+                        : undefined
+                    }
                     rollbackSummary={
                       isExecRunning || !execObj?.rolled_back ? '' : String(execObj?.summary || '')
                     }

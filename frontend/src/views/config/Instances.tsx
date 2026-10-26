@@ -407,10 +407,8 @@ export default function Instances() {
       const { data } = await api.post('/instances/sync-hosts-from-monitor')
       const d = data?.data || {}
       message.success(
-        `已从监控同步主机：新建 ${d.created || 0}` +
-          (d.skipped ? `，已存在跳过 ${d.skipped}` : '') +
-          (d.hosts != null ? `（监控去重后 ${d.hosts} 台）` : '') +
-          '。名称/审批人等不足项请事后编辑补充。',
+        `已从监控同步主机：新建 ${d.created || 0}，补齐 ${d.updated || 0}，跳过 ${d.skipped || 0}，未能匹配环境 ${d.unbound || 0}` +
+          (d.hosts != null ? `（监控去重后 ${d.hosts} 台）` : ''),
       )
       await load()
     } catch (e: any) {

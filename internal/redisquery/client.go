@@ -162,6 +162,51 @@ func openReadyClient(ctx context.Context, inst *store.Instance, opt Options, db 
 	return client, nil
 }
 
+type sessionHookKey struct{}
+
+// WithSessionHook 在命令真正发出前把 CLIENT ID 交给调用方，便于终止这条连接。
+func WithSessionHook(ctx context.Context, fn func(int64)) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if fn == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, sessionHookKey{}, fn)
+}
+
+func noteRedisSession(ctx context.Context, client *redis.Client) {
+	if ctx == nil || client == nil {
+		return
+	}
+	fn, _ := ctx.Value(sessionHookKey{}).(func(int64))
+	if fn == nil {
+		return
+	}
+	id, err := client.ClientID(ctx).Result()
+	if err != nil || id <= 0 {
+		return
+	}
+	fn(id)
+}
+
+// KillClientID 用另一条连接执行 CLIENT KILL ID。
+func KillClientID(ctx context.Context, inst *store.Instance, opt Options, dbName string, id int64) error {
+	if id <= 0 {
+		return fmt.Errorf("会话号无效")
+	}
+	db, err := ParseDBIndex(dbName)
+	if err != nil {
+		db = 0
+	}
+	client, err := openReadyClient(ctx, inst, opt, db)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	return client.Do(ctx, "CLIENT", "KILL", "ID", strconv.FormatInt(id, 10)).Err()
+}
+
 func Ping(ctx context.Context, inst *store.Instance, opt Options) error {
 	client, err := openReadyClient(ctx, inst, opt, 0)
 	if err != nil {

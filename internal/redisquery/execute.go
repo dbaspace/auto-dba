@@ -72,6 +72,7 @@ func ExecuteAllowed(ctx context.Context, inst *store.Instance, opt Options, dbNa
 		return nil, err
 	}
 	defer client.Close()
+	noteRedisSession(ctx, client)
 	if ctx == nil {
 		ctx = context.Background()
 	}

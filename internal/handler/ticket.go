@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -843,10 +844,12 @@ func (h *TicketHandler) GetDetail(c *gin.Context) {
 	}
 	canApprove := it.Status == store.StatusPending && h.actorCanApproveIssue(c, it)
 	canTransfer := it.Status == store.StatusPending && strings.EqualFold(it.Submitter, middleware.Username(c))
+	canStop := it.Status == store.StatusRunning && h.actorCanStopIssue(c, it)
 	c.JSON(http.StatusOK, gin.H{
 		"data":         it,
 		"can_approve":  canApprove,
 		"can_transfer": canTransfer,
+		"can_stop":     canStop,
 	})
 }
 
@@ -1248,8 +1251,15 @@ func (h *TicketHandler) beginAsyncAutoExec(it *store.Issue) error {
 			return
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), asyncExecMaxWait(h.Store, latest))
-		defer cancel()
+		bindExecCancel(id, cancel)
+		defer func() {
+			unbindExecCancel(id)
+			cancel()
+		}()
 		if err := h.executeTicket(ctx, latest); err != nil {
+			if errors.Is(err, errExecStopped) || h.issueStopped(id) {
+				return
+			}
 			log.Printf("ticket async exec %s: %v", id, err)
 			h.failAsyncIssue(id, err.Error())
 			return
@@ -1513,6 +1523,7 @@ func (h *TicketHandler) executeTicket(ctx context.Context, it *store.Issue) erro
 		})
 		return h.persistExec(it, res)
 	}
+	h.watchSession(it, inst, t.Host, it.DBName, &t)
 	res := ticketexec.Run(ctx, it.IssueType, it.SQLContent, t)
 	return h.persistExec(it, res)
 }
@@ -1606,6 +1617,16 @@ func (h *TicketHandler) decorateTargetDeny(instanceID, msg string) string {
 	return msg + "（实例 " + name + "）"
 }
 
+type ddlExecJob struct {
+	inst    *store.Instance
+	id      string
+	domain  string
+	dbName  string
+	host    string
+	skip    bool
+	failMsg string
+}
+
 func (h *TicketHandler) executeDDLTicket(ctx context.Context, it *store.Issue) error {
 	ids := ddlDataSourceIDs(it.NeedRollback, it.InstanceID)
 	if len(ids) == 0 {
@@ -1613,34 +1634,41 @@ func (h *TicketHandler) executeDDLTicket(ctx context.Context, it *store.Issue) e
 	}
 	stmtN := len(sqlcheck.SplitSQL(it.SQLContent))
 	shardPrefix := ddlShardDBPrefix(it.NeedRollback)
+	var prev *ticketexec.Result
+	if len(ids) > 1 || shardPrefix != "" {
+		prev = ticketexec.Parse(it.ExecuteResult)
+	}
 	merged := &ticketexec.Result{
 		StartedAt:      time.Now().UTC().Format(time.RFC3339),
 		Success:        true,
 		StatementCount: stmtN,
 	}
-	var prev *ticketexec.Result
-	if len(ids) > 1 || shardPrefix != "" {
-		prev = ticketexec.Parse(it.ExecuteResult)
+	prog := &store.ExecProgress{Phase: "preparing"}
+	h.saveProgress(it.ID, prog)
+	if err := h.checkpointExec(it, merged); err != nil {
+		return err
 	}
+
+	var jobs []ddlExecJob
 	var skipped []string
 	plannedDBs := 0
-	okDBs, failDBs := 0, 0
 	for _, id := range ids {
+		if err := ctx.Err(); err != nil {
+			return errExecStopped
+		}
 		inst, err := h.Store.GetInstanceUsableInTenant(id, it.TenantID)
 		if err != nil {
 			return err
 		}
 		if inst == nil {
-			failDDLInstance(merged, "实例不存在: "+id, ticketexec.Record{InstanceID: id, DB: it.DBName})
-			failDBs++
+			jobs = append(jobs, ddlExecJob{id: id, dbName: it.DBName, failMsg: "实例不存在: " + id})
 			continue
 		}
 		// 未分库：整实例只跑代表库，上次已全部成功则跳过
 		if shardPrefix == "" {
-			if done := ddlDoneSource(prev, id, it.DBName, stmtN); done != nil {
-				mergeExecResult(merged, done)
+			if ddlDoneSource(prev, id, it.DBName, stmtN) != nil {
+				jobs = append(jobs, ddlExecJob{inst: inst, id: id, dbName: it.DBName, host: inst.Host, skip: true})
 				skipped = append(skipped, inst.Name)
-				okDBs++
 				continue
 			}
 		}
@@ -1651,81 +1679,200 @@ func (h *TicketHandler) executeDDLTicket(ctx context.Context, it *store.Issue) e
 		}
 		if dbEnt == nil {
 			msg := h.decorateTargetDeny(id, "库未登记，请先在「配置 → 已登记库」中登记 "+it.DBName)
-			failDDLInstance(merged, msg, ticketexec.Record{
-				InstanceID: id, InstanceName: inst.Name, Host: inst.Host, DB: it.DBName,
-			})
-			failDBs++
+			jobs = append(jobs, ddlExecJob{inst: inst, id: id, dbName: it.DBName, host: inst.Host, failMsg: msg})
 			continue
 		}
 		skipSchema := ddlShardSkipSchema(it.NeedRollback)
 		check := h.checkTicketSQL(it.SQLContent, it.IssueType, inst.DBType, id, it.DBName, skipSchema)
 		if !check.OK {
-			gate := reviewGateResult(check)
-			tagExecRecords(gate, id, inst.Name)
-			mergeExecResult(merged, gate)
-			failDBs++
+			msg := "执行前审核规则未通过"
+			if gate := reviewGateResult(check); gate != nil && strings.TrimSpace(gate.Message) != "" {
+				msg = gate.Message
+			}
+			jobs = append(jobs, ddlExecJob{inst: inst, id: id, dbName: it.DBName, host: inst.Host, failMsg: msg})
 			continue
 		}
 		domain := ddlDomainForInstance(it.NeedRollback, id, it.Domain)
 		dbNames := []string{it.DBName}
 		if shardPrefix != "" {
+			host := resolveInstanceHost(inst, domain)
 			if store.NormalizeReviewEngine(inst.DBType) != "postgres" {
-				failDDLInstance(merged, "分库执行仅支持 PostgreSQL", ticketexec.Record{
-					InstanceID: id, InstanceName: inst.Name, Host: resolveInstanceHost(inst, domain), DB: it.DBName,
-				})
-				failDBs++
+				jobs = append(jobs, ddlExecJob{inst: inst, id: id, domain: domain, dbName: it.DBName, host: host, failMsg: "分库执行仅支持 PostgreSQL"})
 				continue
 			}
 			names, listErr := h.listShardDatabases(ctx, inst, domain, shardPrefix)
 			if listErr != nil {
-				failDDLInstance(merged, listErr.Error(), ticketexec.Record{
-					InstanceID: id, InstanceName: inst.Name, Host: resolveInstanceHost(inst, domain), DB: "(获取库列表)",
-				})
-				failDBs++
+				if errors.Is(ctx.Err(), context.Canceled) {
+					return errExecStopped
+				}
+				jobs = append(jobs, ddlExecJob{inst: inst, id: id, domain: domain, dbName: "(获取库列表)", host: host, failMsg: listErr.Error()})
 				continue
 			}
 			if len(names) == 0 {
-				failDDLInstance(merged, fmt.Sprintf("未匹配到分库前缀 %q 且后缀为数字的库", shardPrefix), ticketexec.Record{
-					InstanceID: id, InstanceName: inst.Name, Host: resolveInstanceHost(inst, domain), DB: "(获取库列表)",
-				})
-				failDBs++
+				jobs = append(jobs, ddlExecJob{inst: inst, id: id, domain: domain, dbName: "(获取库列表)", host: host, failMsg: fmt.Sprintf("未匹配到分库前缀 %q 且后缀为数字的库", shardPrefix)})
 				continue
 			}
 			dbNames = names
 			plannedDBs += len(dbNames)
 		}
 		for _, dbName := range dbNames {
-			if shardPrefix != "" {
-				if done := ddlDoneSource(prev, id, dbName, stmtN); done != nil {
-					mergeExecResult(merged, done)
-					skipped = append(skipped, inst.Name+"/"+dbName)
-					okDBs++
-					continue
-				}
-			}
-			t, err := h.execTarget(inst, dbName, domain)
-			if err != nil {
-				failDDLInstance(merged, err.Error(), ticketexec.Record{
-					InstanceID: id, InstanceName: inst.Name, Host: resolveInstanceHost(inst, domain), DB: dbName,
-				})
-				failDBs++
+			host := resolveInstanceHost(inst, domain)
+			if shardPrefix != "" && ddlDoneSource(prev, id, dbName, stmtN) != nil {
+				jobs = append(jobs, ddlExecJob{inst: inst, id: id, domain: domain, dbName: dbName, host: host, skip: true})
+				skipped = append(skipped, inst.Name+"/"+dbName)
 				continue
 			}
-			res := ticketexec.Run(ctx, it.IssueType, it.SQLContent, t)
-			tagExecRecords(res, id, inst.Name)
-			mergeExecResult(merged, res)
-			if res == nil || !res.Success {
-				failDBs++
-				continue
+			jobs = append(jobs, ddlExecJob{inst: inst, id: id, domain: domain, dbName: dbName, host: host})
+		}
+	}
+
+	doneN, failN, successN := 0, 0, 0
+	for _, job := range jobs {
+		rec := ticketexec.Record{InstanceID: job.id, DB: job.dbName, Host: job.host}
+		if job.inst != nil {
+			rec.InstanceName = job.inst.Name
+		}
+		if job.failMsg != "" {
+			rec.ErrorMessage = job.failMsg
+			appendCompactDB(merged, rec, false, 0, 1)
+			failN++
+			doneN++
+			continue
+		}
+		if job.skip {
+			rec.SQL = "上次已全部成功，本次跳过"
+			appendCompactDB(merged, rec, true, stmtN, 0)
+			successN++
+			doneN++
+		}
+	}
+	prog.Phase = "running"
+	prog.Total = len(jobs)
+	prog.Done = doneN
+	prog.Failed = failN
+	h.saveProgress(it.ID, prog)
+	if err := h.checkpointExec(it, merged); err != nil {
+		return err
+	}
+
+	var mu sync.Mutex
+	var lastProg time.Time
+	for _, job := range jobs {
+		if job.skip || job.failMsg != "" {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return errExecStopped
+		}
+		if h.issueStopped(it.ID) {
+			return errExecStopped
+		}
+		mu.Lock()
+		prog.CurrentInstance = ""
+		prog.CurrentDB = job.dbName
+		prog.InstanceID = job.id
+		prog.Host = job.host
+		prog.SessionID = 0
+		prog.StmtIndex = 0
+		prog.StmtTotal = stmtN
+		if job.inst != nil {
+			prog.CurrentInstance = job.inst.Name
+			prog.DBType = job.inst.DBType
+			prog.Engine = ticketexec.EngineOf(job.inst.DBType)
+		}
+		cp := *prog
+		mu.Unlock()
+		h.saveProgress(it.ID, &cp)
+
+		t, err := h.execTarget(job.inst, job.dbName, job.domain)
+		if err != nil {
+			appendCompactDB(merged, ticketexec.Record{
+				InstanceID: job.id, InstanceName: job.inst.Name, Host: job.host, DB: job.dbName,
+				ErrorMessage: err.Error(),
+			}, false, 0, 1)
+			failN++
+			doneN++
+			mu.Lock()
+			prog.Done = doneN
+			prog.Failed = failN
+			prog.SessionID = 0
+			cp = *prog
+			mu.Unlock()
+			h.saveProgress(it.ID, &cp)
+			if err := h.checkpointExec(it, merged); err != nil {
+				return err
 			}
-			okDBs++
+			continue
+		}
+		t.Light = true
+		inst := job.inst
+		dbName := job.dbName
+		t.OnProgress = func(stmtIndex, stmtTotal int, sessionID int64) {
+			now := time.Now()
+			mu.Lock()
+			prog.StmtIndex = stmtIndex
+			prog.StmtTotal = stmtTotal
+			prog.SessionID = sessionID
+			prog.CurrentDB = dbName
+			prog.Host = t.Host
+			if inst != nil {
+				prog.CurrentInstance = inst.Name
+				prog.InstanceID = inst.ID
+				prog.DBType = inst.DBType
+				prog.Engine = ticketexec.EngineOf(inst.DBType)
+			}
+			write := stmtIndex == 1 || now.Sub(lastProg) >= 2*time.Second
+			if write {
+				lastProg = now
+			}
+			cp := *prog
+			mu.Unlock()
+			if write {
+				h.saveProgress(it.ID, &cp)
+			}
+		}
+		res := ticketexec.Run(ctx, it.IssueType, it.SQLContent, t)
+		if errors.Is(ctx.Err(), context.Canceled) || h.issueStopped(it.ID) {
+			return errExecStopped
+		}
+		rec := ticketexec.Record{InstanceID: job.id, InstanceName: inst.Name, Host: t.Host, DB: dbName}
+		successSt, failSt := 0, 0
+		ok := res != nil && res.Success
+		if res != nil {
+			successSt = res.SuccessCount
+			failSt = res.FailCount
+			rec.ErrorMessage = res.Message
+			res.Records = nil
+			res.SuccessSQLs = nil
+		}
+		if !ok && rec.ErrorMessage == "" {
+			rec.ErrorMessage = "执行失败"
+		}
+		appendCompactDB(merged, rec, ok, successSt, failSt)
+		doneN++
+		if ok {
+			successN++
+		} else {
+			failN++
+			merged.Message = rec.ErrorMessage
+		}
+		mu.Lock()
+		prog.Done = doneN
+		prog.Failed = failN
+		prog.SessionID = 0
+		prog.StmtIndex = 0
+		cp = *prog
+		mu.Unlock()
+		h.saveProgress(it.ID, &cp)
+		if err := h.checkpointExec(it, merged); err != nil {
+			return err
 		}
 	}
 	if shardPrefix != "" && plannedDBs > 0 && stmtN > 0 {
 		merged.StatementCount = stmtN * plannedDBs
 	}
 	merged.EndedAt = time.Now().UTC().Format(time.RFC3339)
-	if note := ddlExecOutcomeSummary(okDBs, failDBs); note != "" {
+	if note := ddlExecOutcomeSummary(successN, failN); note != "" {
 		merged.Summary = note
 		merged.Message = note
 	} else if merged.Success && merged.Summary == "" {
@@ -1887,6 +2034,9 @@ func (h *TicketHandler) loadIssueForActor(c *gin.Context, id string) (*store.Iss
 	if err != nil || raw == nil {
 		return raw, err
 	}
+	if h.actorCanStopIssue(c, raw) {
+		return raw, nil
+	}
 	if raw.IssueType != store.IssueTypeResourceApply {
 		return nil, nil
 	}
@@ -1932,8 +2082,24 @@ func (h *TicketHandler) executeRedisTicket(ctx context.Context, it *store.Issue)
 	started := time.Now().UTC().Format(time.RFC3339)
 	res := &ticketexec.Result{StartedAt: started, Engine: "redis", Success: true}
 	for i, cmd := range cmds {
+		if err := ctx.Err(); err != nil {
+			return errExecStopped
+		}
 		cmdStart := time.Now().UTC().Format(time.RFC3339)
-		out, execErr := redisquery.ExecuteAllowed(ctx, inst, opt, it.DBName, cmd, rules)
+		runCtx := redisquery.WithSessionHook(ctx, func(id int64) {
+			h.saveProgress(it.ID, &store.ExecProgress{
+				CurrentInstance: inst.Name,
+				CurrentDB:       it.DBName,
+				InstanceID:      inst.ID,
+				Host:            host,
+				DBType:          inst.DBType,
+				Engine:          "redis",
+				SessionID:       id,
+				StmtIndex:       i + 1,
+				StmtTotal:       len(cmds),
+			})
+		})
+		out, execErr := redisquery.ExecuteAllowed(runCtx, inst, opt, it.DBName, cmd, rules)
 		cmdEnd := time.Now().UTC().Format(time.RFC3339)
 		rec := ticketexec.Record{
 			InstanceID: inst.ID, InstanceName: inst.Name, Host: host, DB: it.DBName,
@@ -1941,6 +2107,9 @@ func (h *TicketHandler) executeRedisTicket(ctx context.Context, it *store.Issue)
 			StartedAt: cmdStart, EndedAt: cmdEnd, Order: i + 1,
 		}
 		if execErr != nil {
+			if errors.Is(ctx.Err(), context.Canceled) || errors.Is(execErr, context.Canceled) || h.issueStopped(it.ID) {
+				return errExecStopped
+			}
 			rec.Status = "failed"
 			rec.ErrorMessage = execErr.Error()
 			res.Records = append(res.Records, rec)
@@ -1981,6 +2150,9 @@ func tagExecRecords(res *ticketexec.Result, instanceID, instanceName string) {
 }
 
 func (h *TicketHandler) persistExec(it *store.Issue, res *ticketexec.Result) error {
+	if it != nil && h.issueStopped(it.ID) {
+		return nil
+	}
 	status := store.StatusFailed
 	if res != nil && res.Success {
 		status = store.StatusExecuted
@@ -1989,6 +2161,7 @@ func (h *TicketHandler) persistExec(it *store.Issue, res *ticketexec.Result) err
 	if err := h.Store.UpdateIssueExec(it.ID, status, payload); err != nil {
 		return err
 	}
+	_ = h.Store.ClearIssueProgress(it.ID)
 	it.Status = status
 	it.ExecuteResult = payload
 	if res != nil {

@@ -19,6 +19,37 @@ func New() *FlashbackImpl {
 	return &FlashbackImpl{store: Store{}}
 }
 
+var flashbackCancel sync.Map
+
+func flashbackTrack(id string, cancel context.CancelFunc) {
+	id = strings.TrimSpace(id)
+	if id == "" || cancel == nil {
+		return
+	}
+	flashbackCancel.Store(id, cancel)
+}
+
+func flashbackUntrack(id string) {
+	flashbackCancel.Delete(strings.TrimSpace(id))
+}
+
+// Stop 取消正在执行的闪回任务。
+func (s *FlashbackImpl) Stop(id string) {
+	id = strings.TrimSpace(id)
+	if v, ok := flashbackCancel.LoadAndDelete(id); ok {
+		if cancel, ok := v.(context.CancelFunc); ok && cancel != nil {
+			cancel()
+		}
+	}
+	if s == nil || id == "" {
+		return
+	}
+	if runtime == nil || runtime.Store == nil {
+		return
+	}
+	_ = s.store.UpdateStatus(context.Background(), id, store.StatusStopped, "执行已终止", "")
+}
+
 var (
 	flashbackBootstrapOnce sync.Once
 	flashbackBootstrapErr  error
@@ -81,14 +112,14 @@ func (s *FlashbackImpl) Create(ctx context.Context, req *FlashbackTaskReq, creat
 	}
 	taskID := NewID()
 	issue := &store.Issue{
-		IssueType:  store.IssueTypeFlashback,
-		Type:       store.IssueTypeFlashback,
-		InstanceID: req.InstanceID,
-		DBName:     strings.TrimSpace(req.Database),
+		IssueType:   store.IssueTypeFlashback,
+		Type:        store.IssueTypeFlashback,
+		InstanceID:  req.InstanceID,
+		DBName:      strings.TrimSpace(req.Database),
 		SQLContent:  flashbackIssueSQL(taskID, req, kind),
 		Description: fmt.Sprintf("数据闪回 %s.%s", strings.TrimSpace(req.Database), flashbackTablesBrief(req.Tables)),
 		Submitter:   createdBy,
-		AssignedTo: reviewer,
+		AssignedTo:  reviewer,
 	}
 	if err := runtime.Store.CreateIssue(issue); err != nil {
 		return nil, err
@@ -180,7 +211,13 @@ func (s *FlashbackImpl) StartApproved(ctx context.Context, id string) error {
 	_ = s.store.InsertLog(ctx, row.ID, "INFO", "审批已通过，开始执行")
 	go func() {
 		defer flashbackStarting.Delete(id)
-		s.runTask(context.Background(), id)
+		ctx, cancel := context.WithCancel(context.Background())
+		flashbackTrack(id, cancel)
+		defer func() {
+			cancel()
+			flashbackUntrack(id)
+		}()
+		s.runTask(ctx, id)
 	}()
 	return nil
 }
@@ -329,5 +366,3 @@ func (s *FlashbackImpl) SubmitDML(ctx context.Context, id, reviewer, submitter, 
 	_ = s.store.InsertLog(ctx, row.ID, "INFO", "已提交 DML 工单 "+it.TicketNo)
 	return it, nil
 }
-
-

@@ -78,6 +78,9 @@ func (d *DB) migrateFast() error {
 			if err := d.ensureIssueDomainColumn(); err != nil {
 				return err
 			}
+			if err := d.ensureIssueExecProgressColumn(); err != nil {
+				return err
+			}
 			if err := d.ensureAccessDomainsTable(); err != nil {
 				return err
 			}

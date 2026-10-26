@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { Button, Input, Select, Space, Tag } from 'antd'
+import { Button, Input, Progress, Select, Space, Tag } from 'antd'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import api from '../../api/request'
 import { navigateToWorkOrderCreate } from '../../utils/workOrderDraft'
+import { ddlProgressView } from './execProgress'
 
 const TYPES = [
   { value: 'ddl', label: 'DDL' },
@@ -31,6 +32,7 @@ const STATUSES = [
   { value: 'canceled', label: '已撤销' },
   { value: 'executed', label: '已执行/已下载' },
   { value: 'failed', label: '执行失败' },
+  { value: 'stopped', label: '已终止' },
 ]
 
 function typeText(t: string) {
@@ -69,6 +71,7 @@ function statusText(s: string, issueType?: string) {
       canceled: '已撤销',
       executed: '已执行',
       failed: '执行失败',
+      stopped: '已终止',
     }[s] ||
     s ||
     '-'
@@ -76,7 +79,7 @@ function statusText(s: string, issueType?: string) {
 }
 function statusColor(s: string) {
   if (s === 'approved' || s === 'executed') return 'success'
-  if (s === 'rejected' || s === 'failed') return 'error'
+  if (s === 'rejected' || s === 'failed' || s === 'stopped') return 'error'
   if (s === 'pending') return 'warning'
   return 'default'
 }
@@ -115,6 +118,18 @@ export default function TicketList() {
     load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  const hasRunning = rows.some((r) => r.status === 'running')
+  useEffect(() => {
+    if (!hasRunning) return
+    const timer = window.setInterval(() => {
+      api
+        .get('/tickets', { params: filters, silent: true })
+        .then(({ data }) => setRows(data.data || []))
+        .catch(() => undefined)
+    }, 3000)
+    return () => window.clearInterval(timer)
+  }, [hasRunning, filters])
 
   return (
     <div className="ops-page" style={{ overflow: 'auto' }}>
@@ -208,10 +223,27 @@ export default function TicketList() {
           { title: '库', dataIndex: 'db_name', ellipsis: true },
           {
             title: '状态',
-            width: 110,
-            render: (_, r) => (
-              <Tag color={statusColor(r.status)}>{statusText(r.status, r.issue_type)}</Tag>
-            ),
+            width: 160,
+            render: (_, r) => {
+              const view = r.issue_type === 'ddl' && r.status === 'running' ? ddlProgressView(r.exec_progress) : null
+              return (
+                <div>
+                  <Tag color={statusColor(r.status)}>{statusText(r.status, r.issue_type)}</Tag>
+                  {view ? (
+                    <div style={{ marginTop: 4 }}>
+                      <div style={{ fontSize: 12, color: '#4b5563' }}>{view.title}</div>
+                      <Progress
+                        percent={view.indeterminate ? 0 : view.percent}
+                        showInfo={false}
+                        status="active"
+                        strokeColor={view.indeterminate ? undefined : undefined}
+                        size="small"
+                      />
+                    </div>
+                  ) : null}
+                </div>
+              )
+            },
           },
           { title: '提交人', dataIndex: 'submitter_name', width: 120 },
           { title: '审批人', dataIndex: 'assigned_to', width: 120 },

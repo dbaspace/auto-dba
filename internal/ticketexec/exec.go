@@ -38,25 +38,29 @@ type Target struct {
 	ConnectDB string // 实际连库名；建库工单连管理库，与 DBName（新建库）分离
 	// LongStmtTimeout PG 长耗时语句单条超时；<=0 用 DefaultLongStmtTimeout
 	LongStmtTimeout time.Duration
+	// Light 为真时不在内存里保留每条语句的完整 SQL，只留计数和失败信息。
+	Light bool
+	// OnProgress 每条语句开始前回调。sessionID 为当前连接的后端会话号，取不到时为 0。
+	OnProgress func(stmtIndex, stmtTotal int, sessionID int64)
 }
 
 type Result struct {
-	Success      bool         `json:"success"`
-	Skipped      bool         `json:"skipped,omitempty"`
-	Message      string       `json:"message,omitempty"`
-	Summary      string       `json:"summary,omitempty"`
-	StartedAt    string       `json:"started_at,omitempty"`
-	EndedAt      string       `json:"ended_at,omitempty"`
-	Engine       string       `json:"engine,omitempty"`
-	ChangeID     string       `json:"change_id,omitempty"`
-	StatementCount int        `json:"statement_count,omitempty"` // 计划执行条数（SplitSQL）
-	SuccessCount int          `json:"success_count,omitempty"`
-	FailCount    int          `json:"fail_count,omitempty"`
-	RolledBack   bool         `json:"rolled_back,omitempty"`
-	Compacted    bool         `json:"compacted,omitempty"`
-	TargetStats  []TargetStat `json:"target_stats,omitempty"`
-	Records      []Record     `json:"records,omitempty"`
-	SuccessSQLs  []SuccSQL    `json:"success_sqls,omitempty"`
+	Success        bool         `json:"success"`
+	Skipped        bool         `json:"skipped,omitempty"`
+	Message        string       `json:"message,omitempty"`
+	Summary        string       `json:"summary,omitempty"`
+	StartedAt      string       `json:"started_at,omitempty"`
+	EndedAt        string       `json:"ended_at,omitempty"`
+	Engine         string       `json:"engine,omitempty"`
+	ChangeID       string       `json:"change_id,omitempty"`
+	StatementCount int          `json:"statement_count,omitempty"` // 计划执行条数（SplitSQL）
+	SuccessCount   int          `json:"success_count,omitempty"`
+	FailCount      int          `json:"fail_count,omitempty"`
+	RolledBack     bool         `json:"rolled_back,omitempty"`
+	Compacted      bool         `json:"compacted,omitempty"`
+	TargetStats    []TargetStat `json:"target_stats,omitempty"`
+	Records        []Record     `json:"records,omitempty"`
+	SuccessSQLs    []SuccSQL    `json:"success_sqls,omitempty"`
 
 	// 执行期有界采集（不落库）
 	sampleKept  map[string]int         `json:"-"`
@@ -120,7 +124,7 @@ func connectDB(t Target) string {
 
 func CanRetry(status string) bool {
 	switch strings.ToLower(strings.TrimSpace(status)) {
-	case store.StatusApproved, store.StatusFailed:
+	case store.StatusApproved, store.StatusFailed, store.StatusStopped:
 		return true
 	default:
 		return false
@@ -349,6 +353,9 @@ func (r *Result) appendRecord(rec Record) {
 func (r *Result) appendSuccess(t Target, sqlText string, started, ended time.Time, affected int64) {
 	r.SuccessCount++
 	r.bumpTarget(t.Host, t.DBName, "success")
+	if t.Light {
+		return
+	}
 	if r.SuccessCount > DetailCompactThreshold {
 		r.enableCompactMode()
 	}
@@ -370,10 +377,14 @@ func (r *Result) appendSuccess(t Target, sqlText string, started, ended time.Tim
 func (r *Result) appendFailure(t Target, sqlText string, started time.Time, err error) {
 	r.FailCount++
 	r.bumpTarget(t.Host, t.DBName, "failed")
+	sqlText = strings.TrimSpace(sqlText)
+	if t.Light {
+		sqlText = ""
+	}
 	r.appendRecord(Record{
 		Host: t.Host, DB: t.DBName, Port: t.Port, Username: t.Username,
 		// 失败语句保留全文，避免弹窗「查看」只能看到截断片段
-		SQL: strings.TrimSpace(sqlText), StartedAt: started.UTC().Format(time.RFC3339), EndedAt: nowRFC3339(),
+		SQL: sqlText, StartedAt: started.UTC().Format(time.RFC3339), EndedAt: nowRFC3339(),
 		Status: "failed", ErrorMessage: formatExecErr(err),
 	})
 }
@@ -460,10 +471,21 @@ func runPostgresDML(ctx context.Context, t Target, stmts []string, collect *Resu
 		return fmt.Errorf("开启事务失败: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	sid := querySessionID(ctx, db, "postgres")
+	total := len(stmts)
 	for i, stmt := range stmts {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if t.OnProgress != nil {
+			t.OnProgress(i+1, total, sid)
+		}
 		started := time.Now()
 		ret, exErr := tx.ExecContext(ctx, stmt)
 		if exErr != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			collect.appendFailure(t, stmt, started, exErr)
 			n := collect.markRolledBack()
 			collect.Summary = fmt.Sprintf("第 %d 条 SQL 失败，事务已回滚，此前已执行的 %d 条均未生效", i+1, n)
@@ -515,12 +537,43 @@ func runMySQLFamily(ctx context.Context, t Target, stmts []string, collect *Resu
 
 // execSerial 逐条执行；long>0（仅 PG）时按语句区分单条超时，并在 CREATE INDEX CONCURRENTLY 前清理同名无效索引。
 func execSerial(ctx context.Context, db *sql.DB, t Target, stmts []string, collect *Result, long time.Duration) error {
+	sid := querySessionID(ctx, db, EngineOf(t.DBType))
+	total := len(stmts)
 	for i, stmt := range stmts {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if t.OnProgress != nil {
+			t.OnProgress(i+1, total, sid)
+		}
 		if err := execOne(ctx, db, t, stmt, collect, long); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			return fmt.Errorf("执行第 %d 条 SQL 失败: %w", i+1, err)
 		}
 	}
 	return nil
+}
+
+func querySessionID(ctx context.Context, db *sql.DB, engine string) int64 {
+	if db == nil {
+		return 0
+	}
+	q := ""
+	switch engine {
+	case "postgres":
+		q = "SELECT pg_backend_pid()"
+	case "mysql", "starrocks":
+		q = "SELECT CONNECTION_ID()"
+	default:
+		return 0
+	}
+	var id int64
+	if err := db.QueryRowContext(ctx, q).Scan(&id); err != nil || id <= 0 {
+		return 0
+	}
+	return id
 }
 
 func execOne(ctx context.Context, db *sql.DB, t Target, stmt string, collect *Result, long time.Duration) error {

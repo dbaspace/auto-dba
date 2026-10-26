@@ -192,6 +192,29 @@ func (d *DB) ListRegionEnvs(regionID string) ([]Environment, error) {
 	return out, rows.Err()
 }
 
+// RegionEnvBinding 区域与环境的绑定。
+type RegionEnvBinding struct {
+	RegionID string
+	EnvID    string
+}
+
+func (d *DB) ListRegionEnvBindings() ([]RegionEnvBinding, error) {
+	rows, err := d.Query(`SELECT region_id, env_id FROM tbl_region_envs`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []RegionEnvBinding
+	for rows.Next() {
+		var b RegionEnvBinding
+		if err := rows.Scan(&b.RegionID, &b.EnvID); err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
 func (d *DB) HasRegionEnv(regionID, envID string) (bool, error) {
 	var n int
 	err := d.QueryRow(`SELECT COUNT(1) FROM tbl_region_envs WHERE region_id=? AND env_id=?`, regionID, envID).Scan(&n)

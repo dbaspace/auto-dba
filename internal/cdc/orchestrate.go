@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"auto-dba/internal/config"
@@ -24,6 +25,29 @@ type Orchestrator struct {
 
 func NewOrchestrator(st *store.DB, secret string, cfg config.CDCConfig) *Orchestrator {
 	return &Orchestrator{Store: st, Secret: secret, Cfg: cfg}
+}
+
+var cdcApplyCancel sync.Map
+
+func (o *Orchestrator) trackApply(taskID string, cancel context.CancelFunc) {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" || cancel == nil {
+		return
+	}
+	cdcApplyCancel.Store(taskID, cancel)
+}
+
+func (o *Orchestrator) untrackApply(taskID string) {
+	cdcApplyCancel.Delete(strings.TrimSpace(taskID))
+}
+
+// Stop 取消正在进行的编排步骤。
+func (o *Orchestrator) Stop(taskID string) {
+	if v, ok := cdcApplyCancel.LoadAndDelete(strings.TrimSpace(taskID)); ok {
+		if cancel, ok := v.(context.CancelFunc); ok && cancel != nil {
+			cancel()
+		}
+	}
 }
 
 type PipelineLog struct {
@@ -122,6 +146,12 @@ func (o *Orchestrator) Apply(ctx context.Context, taskID, fromStep string) error
 	}
 	o.markOrchestrating(t, true)
 	defer o.markOrchestrating(t, false)
+	ctx, cancel := context.WithCancel(ctx)
+	o.trackApply(t.ID, cancel)
+	defer func() {
+		cancel()
+		o.untrackApply(t.ID)
+	}()
 	switch strings.TrimSpace(t.TaskType) {
 	case "alter_schema":
 		return o.applyAlterSchema(ctx, t)

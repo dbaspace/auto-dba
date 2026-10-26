@@ -75,7 +75,7 @@ func TestRunEmptySQL(t *testing.T) {
 }
 
 func TestCanRetry(t *testing.T) {
-	if !CanRetry(store.StatusApproved) || !CanRetry(store.StatusFailed) {
+	if !CanRetry(store.StatusApproved) || !CanRetry(store.StatusFailed) || !CanRetry(store.StatusStopped) {
 		t.Fatal("approved/failed should retry")
 	}
 	if CanRetry(store.StatusExecuted) || CanRetry(store.StatusPending) {
