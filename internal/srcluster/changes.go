@@ -321,6 +321,22 @@ func (e *Engine) StartRestartNode(clusterID, nodeID, operator string) (string, e
 	return ch.ID, nil
 }
 
+// powerChangeSummary 启动/停止成功时用步骤标题（含主机）作为变更摘要。
+func powerChangeSummary(ch *store.SrChange) string {
+	if ch == nil || (ch.Type != store.SrChangeStartNode && ch.Type != store.SrChangeStopNode) {
+		return ""
+	}
+	for _, s := range ch.Steps {
+		if s.StepKey == "finalize" {
+			continue
+		}
+		if t := strings.TrimSpace(s.Title); t != "" {
+			return t
+		}
+	}
+	return ""
+}
+
 // StartNodeStart 单节点 systemctl start。
 func (e *Engine) StartNodeStart(clusterID, nodeID, operator string) (string, error) {
 	return e.startNodePower(clusterID, nodeID, operator, "start")
@@ -585,7 +601,7 @@ func (e *Engine) stepUpgradeNode(ctx context.Context, cl *store.SrCluster, n *st
 	soft := n.SoftwarePath
 	role := n.Component
 	if soft == "" {
-		soft = softwareBaseForRole(cl, role) + "/" + role
+		soft = softwareBaseForRole(e.Store, cl, role) + "/" + role
 	}
 	if unit == "" {
 		return fmt.Errorf("节点未配置 systemd_unit，无法启服（未停服、未替换）")
@@ -717,17 +733,11 @@ func (e *Engine) stepBackupNodeDirs(ctx context.Context, cl *store.SrCluster, n 
 		if n.Component == "be" {
 			role = "be"
 		}
-		soft = softwareBaseForRole(cl, role) + "/" + role
+		soft = softwareBaseForRole(e.Store, cl, role) + "/" + role
 	}
 	paths := []string{soft}
 	if n.Component == "be" {
-		dataRoot := strings.TrimSpace(n.DataRoot)
-		if dataRoot == "" {
-			dataRoot = strings.TrimSpace(cl.DataRoot)
-		}
-		if dataRoot == "" {
-			dataRoot = "/data"
-		}
+		dataRoot := beDataRoot(e.Store, cl, n)
 		if dataRoot != soft {
 			paths = append(paths, dataRoot)
 		}

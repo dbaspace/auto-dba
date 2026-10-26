@@ -90,7 +90,7 @@ func (e *Engine) collectStartDiag(ctx context.Context, auth AgentAuth, cl *store
 	}
 	dctx, cancel := context.WithTimeout(base, 30*time.Second)
 	defer cancel()
-	resp, code, err := e.Agent.Diag(dctx, auth, DiagReq{Unit: unit, Role: n.Component, SoftwarePath: nodeSoftwarePath(cl, n), Lines: 60})
+	resp, code, err := e.Agent.Diag(dctx, auth, DiagReq{Unit: unit, Role: n.Component, SoftwarePath: nodeSoftwarePath(e.Store, cl, n), Lines: 60})
 	if err == nil && resp != nil && strings.TrimSpace(resp.Message) != "" {
 		return truncateDiag("诊断信息：\n" + resp.Message)
 	}

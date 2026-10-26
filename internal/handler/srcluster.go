@@ -34,6 +34,17 @@ func (h *SrClusterHandler) eng() *srcluster.Engine {
 }
 
 func (h *SrClusterHandler) Meta(c *gin.Context) {
+	layout := store.SrLayoutDefaults{}
+	if h != nil && h.Store != nil {
+		h.Store.EnsureSrLayoutDefaults()
+		layout = h.Store.SrLayoutDefaults()
+	} else {
+		layout = store.SrLayoutDefaults{
+			FeSoftwareBase: store.DefaultSrSoftwareBase,
+			BeSoftwareBase: store.DefaultSrSoftwareBase,
+			BeDataRoot:     store.DefaultSrDataRoot,
+		}
+	}
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{
 		"change_types": []string{
 			store.SrChangeClusterInit, store.SrChangeClusterReinit, store.SrChangeAddFE, store.SrChangeAddBE,
@@ -42,8 +53,9 @@ func (h *SrClusterHandler) Meta(c *gin.Context) {
 			store.SrChangeDecommissionBE, store.SrChangeUpgrade, store.SrChangeConfigApply, store.SrChangeConfigRollback,
 		},
 		"defaults": gin.H{
-			"software_base":     "/home/dorisdb_base",
-			"data_root":         "/data",
+			"software_base":     layout.FeSoftwareBase,
+			"be_software_base":  layout.BeSoftwareBase,
+			"data_root":         layout.BeDataRoot,
 			"fe_http_port":      8030,
 			"fe_edit_port":      9010,
 			"fe_query_port":     9030,
@@ -395,10 +407,10 @@ func (h *SrClusterHandler) GetClusterLive(c *gin.Context) {
 // ProbeLayout POST /sr-cluster/probe-layout — 登记前自动发现 FE/BE software_base 与 BE storage_root_path（不写库）。
 func (h *SrClusterHandler) ProbeLayout(c *gin.Context) {
 	var req struct {
-		FeHost      string `json:"fe_host"`
-		FePassword  string `json:"fe_password"`
-		FeUser      string `json:"fe_user"`
-		FeQueryPort int    `json:"fe_query_port"`
+		FeHost      string   `json:"fe_host"`
+		FePassword  string   `json:"fe_password"`
+		FeUser      string   `json:"fe_user"`
+		FeQueryPort int      `json:"fe_query_port"`
 		Hosts       []string `json:"hosts"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -680,8 +692,6 @@ func (h *SrClusterHandler) CreateCluster(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
-	feSoftBase := strings.TrimRight(strings.TrimSpace(cl.SoftwareBase), "/")
-	beSoftBase := strings.TrimRight(cl.EffectiveBeSoftwareBase(), "/")
 	for i := range req.Nodes {
 		n := req.Nodes[i]
 		n.ClusterID = cl.ID
@@ -695,9 +705,8 @@ func (h *SrClusterHandler) CreateCluster(c *gin.Context) {
 			if n.SystemdUnit == "" {
 				n.SystemdUnit = "fe-" + strconv.Itoa(cl.FeQueryPort)
 			}
-			if n.SoftwarePath == "" {
-				n.SoftwarePath = feSoftBase + "/fe"
-			}
+			n.SoftwarePath = strings.TrimRight(strings.TrimSpace(n.SoftwarePath), "/")
+			n.DataRoot = ""
 		} else {
 			if n.HeartbeatPort <= 0 {
 				n.HeartbeatPort = cl.BeHeartbeatPort
@@ -705,15 +714,8 @@ func (h *SrClusterHandler) CreateCluster(c *gin.Context) {
 			if n.SystemdUnit == "" {
 				n.SystemdUnit = "be-" + strconv.Itoa(n.HeartbeatPort)
 			}
-			if n.SoftwarePath == "" {
-				n.SoftwarePath = beSoftBase + "/be"
-			}
-			if strings.TrimSpace(n.DataRoot) == "" {
-				n.DataRoot = strings.TrimSpace(cl.DataRoot)
-			}
-			if n.DataRoot == "" {
-				n.DataRoot = "/data"
-			}
+			n.SoftwarePath = strings.TrimRight(strings.TrimSpace(n.SoftwarePath), "/")
+			n.DataRoot = strings.TrimRight(strings.TrimSpace(n.DataRoot), "/")
 		}
 		if err := h.Store.CreateSrNode(&n); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"message": "节点写入失败: " + err.Error()})
@@ -878,18 +880,7 @@ func (h *SrClusterHandler) CreateNode(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "agent_id 必填（须先登记 Node Agent）"})
 		return
 	}
-	softBase := strings.TrimSpace(req.SoftwareBase)
-	if softBase == "" {
-		if n.Component == "be" {
-			softBase = cl.EffectiveBeSoftwareBase()
-		} else {
-			softBase = strings.TrimSpace(cl.SoftwareBase)
-		}
-	}
-	if softBase == "" {
-		softBase = "/home/dorisdb_base"
-	}
-	softBase = strings.TrimRight(softBase, "/")
+	explicitBase := strings.TrimRight(strings.TrimSpace(req.SoftwareBase), "/")
 	if n.Component == "fe" {
 		if n.HTTPPort <= 0 {
 			n.HTTPPort = cl.FeHTTPPort
@@ -900,8 +891,8 @@ func (h *SrClusterHandler) CreateNode(c *gin.Context) {
 		if n.SystemdUnit == "" {
 			n.SystemdUnit = "fe-" + strconv.Itoa(cl.FeQueryPort)
 		}
-		if strings.TrimSpace(n.SoftwarePath) == "" {
-			n.SoftwarePath = softBase + "/fe"
+		if strings.TrimSpace(n.SoftwarePath) == "" && explicitBase != "" {
+			n.SoftwarePath = explicitBase + "/fe"
 		}
 		n.DataRoot = "" // FE 不挂数据盘
 		role := strings.ToLower(strings.TrimSpace(n.FeRole))
@@ -926,15 +917,10 @@ func (h *SrClusterHandler) CreateNode(c *gin.Context) {
 		if n.SystemdUnit == "" {
 			n.SystemdUnit = "be-" + strconv.Itoa(n.HeartbeatPort)
 		}
-		if strings.TrimSpace(n.SoftwarePath) == "" {
-			n.SoftwarePath = softBase + "/be"
+		if strings.TrimSpace(n.SoftwarePath) == "" && explicitBase != "" {
+			n.SoftwarePath = explicitBase + "/be"
 		}
-		if strings.TrimSpace(n.DataRoot) == "" {
-			n.DataRoot = strings.TrimSpace(cl.DataRoot)
-		}
-		if n.DataRoot == "" {
-			n.DataRoot = "/data"
-		}
+		n.DataRoot = strings.TrimRight(strings.TrimSpace(n.DataRoot), "/")
 	}
 	if err := h.Store.CreateSrNode(&n); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
@@ -1109,7 +1095,7 @@ func (h *SrClusterHandler) PrecheckAddNode(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 40*time.Second)
 	defer cancel()
 	res := h.eng().PrecheckAddNode(ctx, cl.ID, srcluster.AddNodeCheckInput{
-		Node: n, HostInstanceID: n.HostInstanceID, AssignedTo: assigned,
+		Node: nodeWithGlobalPaths(h.Store, cl, n), HostInstanceID: n.HostInstanceID, AssignedTo: assigned,
 	})
 	c.JSON(http.StatusOK, gin.H{"data": res})
 }
@@ -1309,7 +1295,7 @@ func (h *SrClusterHandler) ConfDiff(c *gin.Context) {
 	}
 	var target string
 	if req.Content != nil {
-		full, err := srcluster.RenderEditableConf(cl, n, *req.Content)
+		full, err := srcluster.RenderEditableConf(h.Store, cl, n, *req.Content)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 			return
@@ -1578,6 +1564,32 @@ func (h *SrClusterHandler) StartRemoveNode(c *gin.Context) {
 }
 
 // --- OSS / Releases / Policies ---
+
+func (h *SrClusterHandler) GetLayoutDefaults(c *gin.Context) {
+	if h == nil || h.Store == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "存储未初始化"})
+		return
+	}
+	h.Store.EnsureSrLayoutDefaults()
+	c.JSON(http.StatusOK, gin.H{"data": h.Store.SrLayoutDefaults()})
+}
+
+func (h *SrClusterHandler) PutLayoutDefaults(c *gin.Context) {
+	if h == nil || h.Store == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "存储未初始化"})
+		return
+	}
+	var req store.SrLayoutDefaults
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	if err := h.Store.SetSrLayoutDefaults(req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": h.Store.SrLayoutDefaults()})
+}
 
 func (h *SrClusterHandler) GetOSS(c *gin.Context) {
 	s, err := h.Store.GetSrOSSSettings()

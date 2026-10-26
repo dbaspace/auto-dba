@@ -459,7 +459,8 @@ export default function DdlOrder() {
           affected_rows: r.affected_rows ?? '—',
         })),
       )
-      if (data.ok) message.success(n > 0 ? `检测通过，将按 ${n} 条语句执行` : '检测通过')
+      if (data.constraint_check_skipped) message.warning('平台已关闭 DDL 约束检查，仅做提交门禁')
+      else if (data.ok) message.success(n > 0 ? `检测通过，将按 ${n} 条语句执行` : '检测通过')
       else message.warning('检测未通过')
     } catch (e: any) {
       const msg = e.response?.data?.message || e.message || 'SQL 检测请求失败'

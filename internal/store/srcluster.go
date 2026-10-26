@@ -102,9 +102,9 @@ type SrCluster struct {
 	Environment     string `json:"environment"`
 	Version         string `json:"version"`
 	ReleaseID       string `json:"release_id,omitempty"`
-	SoftwareBase    string `json:"software_base"`                 // FE 软件根（…/dorisdb_base）
-	BeSoftwareBase  string `json:"be_software_base,omitempty"`    // BE 软件根；空则同 SoftwareBase
-	DataRoot        string `json:"data_root"`                     // BE 数据目录：挂载点或完整 storage_root_path
+	SoftwareBase    string `json:"software_base"`              // FE 软件根；空则用全局 sr_fe_software_base
+	BeSoftwareBase  string `json:"be_software_base,omitempty"` // BE 软件根；空则用全局 sr_be_software_base，不回退 FE
+	DataRoot        string `json:"data_root"`                  // BE 数据目录；空则用全局 sr_be_data_root
 	FeHTTPPort      int    `json:"fe_http_port"`
 	FeEditPort      int    `json:"fe_edit_port"`
 	FeQueryPort     int    `json:"fe_query_port"`
@@ -122,15 +122,12 @@ type SrCluster struct {
 	UpdatedAt       string `json:"updated_at"`
 }
 
-// EffectiveBeSoftwareBase BE 软件根；未单独配置时回退到 SoftwareBase。
+// EffectiveBeSoftwareBase 仅返回集群上单独配置的 BE 软件根。空表示未覆盖，运行时走全局默认。
 func (c *SrCluster) EffectiveBeSoftwareBase() string {
 	if c == nil {
 		return ""
 	}
-	if s := strings.TrimSpace(c.BeSoftwareBase); s != "" {
-		return s
-	}
-	return strings.TrimSpace(c.SoftwareBase)
+	return strings.TrimSpace(c.BeSoftwareBase)
 }
 
 // SrNode 集群节点。
@@ -632,12 +629,9 @@ func (d *DB) CreateSrCluster(c *SrCluster) error {
 	if c.ID == "" {
 		c.ID = uuid.NewString()
 	}
-	if c.SoftwareBase == "" {
-		c.SoftwareBase = "/home/dorisdb_base"
-	}
-	if c.DataRoot == "" {
-		c.DataRoot = "/data"
-	}
+	c.SoftwareBase = strings.TrimRight(strings.TrimSpace(c.SoftwareBase), "/")
+	c.BeSoftwareBase = strings.TrimRight(strings.TrimSpace(c.BeSoftwareBase), "/")
+	c.DataRoot = strings.TrimRight(strings.TrimSpace(c.DataRoot), "/")
 	if c.FeHTTPPort <= 0 {
 		c.FeHTTPPort = 8030
 	}

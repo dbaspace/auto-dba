@@ -20,13 +20,13 @@ func applyTicketCommentRules(stmts []string, dbType string, byName map[string]Ru
 		return
 	}
 	if dbType == "postgres" {
-		applyPostgresCommentRules(stmts, needCol, needTbl, byName, res)
+		applyPostgresCommentRules(stmts, needCol, needTbl, res)
 		return
 	}
 	applyInlineCommentRules(stmts, dbType, needCol, needTbl, byName, res)
 }
 
-func applyPostgresCommentRules(stmts []string, needCol, needTbl bool, byName map[string]Rule, res *Result) {
+func applyPostgresCommentRules(stmts []string, needCol, needTbl bool, res *Result) {
 	commentedCols := map[tableCol]bool{}
 	commentedTables := map[string]bool{}
 	commentedViews := map[string]bool{}
@@ -49,8 +49,7 @@ func applyPostgresCommentRules(stmts []string, needCol, needTbl bool, byName map
 			table := alterTableName(stmt)
 			for _, col := range alterAddedColumns(stmt) {
 				if !commentedCols[tableCol{normalizeTableRef(table), normalizeIdent(col)}] {
-					markStmt(res, i, errID("DDLCheckColumnComment",
-						ruleMsg(byName, "DDLCheckColumnComment", "新增列 "+displayTable(table)+"."+col+" 缺少列注释（需在工单中包含 COMMENT ON COLUMN "+displayTable(table)+"."+col+" IS '...'）")))
+					markStmt(res, i, errID("DDLCheckColumnComment", postgresMissingColumnComment(table, col)))
 					break
 				}
 			}
@@ -99,8 +98,7 @@ func applyInlineCommentRules(stmts []string, dbType string, needCol, needTbl boo
 			for _, def := range alterAddedColumnDefs(stmt) {
 				if !hasNonEmptyInlineComment(def) {
 					col := firstIdent(def)
-					markStmt(res, i, errID("DDLCheckColumnComment",
-						ruleMsg(byName, "DDLCheckColumnComment", "新增列 "+col+" 必须拥有列注释（须包含 COMMENT '...'）")))
+					markStmt(res, i, errID("DDLCheckColumnComment", inlineMissingColumnComment(col)))
 					break
 				}
 			}
@@ -119,14 +117,25 @@ func applyInlineCommentRules(stmts []string, dbType string, needCol, needTbl boo
 					continue
 				}
 				if !hasNonEmptyInlineComment(def) {
-					markStmt(res, i, errID("DDLCheckColumnComment",
-						ruleMsg(byName, "DDLCheckColumnComment", "强制表字段必须拥有列注释（须包含 COMMENT）")))
+					markStmt(res, i, errID("DDLCheckColumnComment", "强制表字段必须拥有列注释（须包含 COMMENT '...'）"))
 					break
 				}
 			}
 		}
 		_ = dbType
 	}
+}
+
+func postgresMissingColumnComment(table, col string) string {
+	table = displayTable(table)
+	return "新增列 " + table + "." + col + " 缺少列注释（需在工单中包含 COMMENT ON COLUMN " + table + "." + col + " IS '...'）"
+}
+
+func inlineMissingColumnComment(col string) string {
+	if strings.TrimSpace(col) == "" {
+		col = "该列"
+	}
+	return "新增列 " + col + " 必须拥有列注释（须包含 COMMENT '...'）"
 }
 
 func markStmt(res *Result, idx int, hit *ruleHit) {
@@ -221,7 +230,11 @@ func alterAddedColumnDefs(stmt string) []string {
 			continue
 		}
 		if strings.HasPrefix(strings.ToUpper(def), "COLUMN ") {
-			def = strings.TrimSpace(def[6:])
+			def = strings.TrimSpace(def[len("COLUMN"):])
+		}
+		// PostgreSQL: ADD [COLUMN] [IF NOT EXISTS] column_name
+		if strings.HasPrefix(strings.ToUpper(def), "IF NOT EXISTS ") {
+			def = strings.TrimSpace(def[len("IF NOT EXISTS"):])
 		}
 		if def != "" {
 			defs = append(defs, def)

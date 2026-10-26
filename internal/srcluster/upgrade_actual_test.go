@@ -79,8 +79,11 @@ func TestNodeLiveBackendResources(t *testing.T) {
 		t.Fatalf("be1=%+v", be)
 	}
 	fe := live["fe1"]
-	if be.ReplayedJournalID != "" || be.LastHeartbeat != "" || be.StartTime != "" {
-		t.Fatalf("BE 不应带 FE 字段: %+v", be)
+	if be.ReplayedJournalID != "" {
+		t.Fatalf("BE 不应带 FE 日志: %+v", be)
+	}
+	if be.LastHeartbeat != "2026-10-09 10:31:49" || be.StartTime != "2026-10-08 16:18:01" {
+		t.Fatalf("BE 应带 LastHeartbeat/LastStartTime: %+v", be)
 	}
 	if fe.ReplayedJournalID != "12345" || fe.LastHeartbeat != "2026-10-09 10:31:49" || fe.StartTime != "2026-10-08 16:18:01" {
 		t.Fatalf("fe1=%+v", fe)
@@ -108,6 +111,18 @@ func TestBackendResourceCols(t *testing.T) {
 	}
 	if got := backendResourceCols([]string{"BackendId", "IP", "Alive"}); got != (backendResourceIdx{-1, -1, -1, -1, -1}) {
 		t.Fatalf("缺列: %+v", got)
+	}
+}
+
+func TestProcStartTimeIdx(t *testing.T) {
+	if got := procStartTimeIdx(map[string]int{"starttime": 3, "laststarttime": 8}); got != 3 {
+		t.Fatalf("FE StartTime 优先: %d", got)
+	}
+	if got := procStartTimeIdx(map[string]int{"laststarttime": 6}); got != 6 {
+		t.Fatalf("BE LastStartTime: %d", got)
+	}
+	if got := procStartTimeIdx(map[string]int{}); got != -1 {
+		t.Fatalf("缺列: %d", got)
 	}
 }
 

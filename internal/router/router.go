@@ -896,6 +896,8 @@ func Init(e *gin.Engine, d Deps) {
 		sg.POST("/agents/:id/stop", gSrAg, d.SrCluster.StopAgent)
 		sg.GET("/oss", d.SrCluster.GetOSS)
 		sg.PUT("/oss", d.SrCluster.PutOSS)
+		sg.GET("/layout-defaults", d.SrCluster.GetLayoutDefaults)
+		sg.PUT("/layout-defaults", d.SrCluster.PutLayoutDefaults)
 		sg.POST("/oss/test", d.SrCluster.TestOSS)
 		sg.GET("/releases", d.SrCluster.ListReleases)
 		sg.POST("/releases", d.SrCluster.CreateRelease)

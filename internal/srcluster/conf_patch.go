@@ -90,7 +90,7 @@ func (e *Engine) PlanConfPatch(ctx context.Context, clusterID, sourceNodeID, con
 	if strings.TrimSpace(edited) == "" {
 		return nil, fmt.Errorf("编辑区内容为空")
 	}
-	if _, err := RenderEditableConf(cl, &src, edited); err != nil {
+	if _, err := RenderEditableConf(e.Store, cl, &src, edited); err != nil {
 		return nil, fmt.Errorf("编辑区内容无法渲染: %w", err)
 	}
 	base, baseLabel := e.sourceConfBase(ctx, cl, &src)
@@ -111,7 +111,7 @@ func (e *Engine) PlanConfPatch(ctx context.Context, clusterID, sourceNodeID, con
 				return nil, fmt.Errorf("%s: %w", n.Host, err)
 			}
 			pn.Content = ConfKeyPatch(StripLockedDataDirKeys(full), common)
-			if _, err := RenderEditableConf(cl, n, pn.Content); err != nil {
+			if _, err := RenderEditableConf(e.Store, cl, n, pn.Content); err != nil {
 				return nil, fmt.Errorf("%s 应用改动后无法渲染: %w", n.Host, err)
 			}
 		}

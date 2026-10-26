@@ -390,7 +390,7 @@ Host、状态、操作为两表共用；Host 悬停显示软件路径，首 FE �
 | FE 启动脚本 | `/home/dorisdb_base/fe/bin/start_fe.sh` |
 | BE 启动脚本 | `/home/dorisdb_base/be/bin/start_be.sh` |
 
-- 环境 / 集群可覆盖 `software_base`；扩容默认继承集群值，**添加节点时可单独指定** `dorisdb_base` 与 BE `data_root`。  
+- 全局参数 `sr_fe_software_base`、`sr_be_software_base`、`sr_be_data_root` 为缺省路径（启动时仅在参数不存在时写入）。集群或节点单独填写时优先；BE 软件根为空时用全局 BE 路径，不回退到 FE。工作台 `GET` / `PUT /sr-cluster/layout-defaults` 可查看和保存，须为绝对路径。**添加节点时可单独指定**目录。  
 - 数据盘挂载点默认为 **`/data`**（BE 初始化时按 [7.2](#72-be-预检) 规则：不存在则用未使用磁盘 `mkfs` + `mount`，已挂载非系统盘直接使用）；meta/storage 等子路径随 conf 模板固化到节点记录。  
 - **升级不得修改**已落库的数据目录字段。
 
@@ -861,7 +861,7 @@ update-alternatives --set javac /home/jdk-21.0.4/bin/javac
 - 连上后按实际角色写入各 FE 的 `fe_role`：OBSERVER 记为 observer，LEADER 和 FOLLOWER 记为 follower（与平台初始化一致，leader 由选举产生）。登记的 FE 与现场不一致时以 warning 提示。
 - 保存成功后自动「同步到配置中心」（见下节）。
 
-集群字段：`software_base`（FE 软件根）、`be_software_base`（BE 软件根，空则同 FE）、`data_root`（BE 挂载点或完整 `storage_root_path`）、`source`（`deploy`|`register`）。
+集群字段：`software_base`（FE 软件根）、`be_software_base`（BE 软件根）、`data_root`（BE 挂载点或完整 `storage_root_path`）、`source`（`deploy`|`register`）。三项都可留空，留空时用全局默认，BE 软件根不回退到 FE。
 
 #### 同步到配置中心（资源实例 + 监控目标注册）
 

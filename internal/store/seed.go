@@ -53,6 +53,7 @@ func (d *DB) seed() error {
 		{Key: "ticket_exclude_cdc_when_empty", Value: "true", Description: "工单列表无筛选时排除 cdc_sync"},
 		{Key: "ddl_forbid_drop_database", Value: "true", Description: "DDL 禁止 DROP DATABASE"},
 		{Key: ArgTicketDDLLongStmtTimeoutMinutes, Value: "360", Description: "DDL 工单长耗时语句（CREATE INDEX CONCURRENTLY 等）单条执行超时（分钟）"},
+		{Key: ArgTicketDDLConstraintCheckEnabled, Value: "true", Description: "DDL 工单 SQL 约束检查总开关：true=启用审核规则，false=跳过全部 SQL 校验（仅保留提交门禁）"},
 		{Key: "dml_require_where", Value: "true", Description: "UPDATE/DELETE 必须带 WHERE"},
 		{Key: "login_idle_timeout_min", Value: "30", Description: "登录闲置超时（分钟），无操作自动退出；0 表示关闭"},
 		{Key: ArgQueryDefaultLimit, Value: "1000", Description: "数据库查询默认条数限制：SQL 无 limit 时自动追加"},

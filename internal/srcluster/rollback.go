@@ -117,7 +117,7 @@ func (e *Engine) stepRollbackNode(ctx context.Context, cl *store.SrCluster, n *s
 	if err != nil {
 		return err
 	}
-	soft := nodeSoftwarePath(cl, n)
+	soft := nodeSoftwarePath(e.Store, cl, n)
 	unit := n.SystemdUnit
 	e.stepLog(step, "停服 %s", unit)
 	if _, err := e.Agent.SystemdCtrl(ctx, auth, SystemdCtrlReq{Action: "stop", Unit: unit, ChangeID: step.ChangeID, StepID: step.ID, DryRun: e.Cfg.DryRun}); err != nil {

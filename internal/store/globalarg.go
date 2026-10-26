@@ -28,6 +28,7 @@ const ArgLoginIdleTimeoutMin = "login_idle_timeout_min"
 const ArgUserWatermarkEnabled = "user_watermark_enabled"
 const ArgIssueGlobalApproverWhitelist = "issue_global_approver_whitelist"
 const ArgTicketDDLLongStmtTimeoutMinutes = "ticket_ddl_long_stmt_timeout_minutes"
+const ArgTicketDDLConstraintCheckEnabled = "ticket_ddl_constraint_check_enabled"
 const ArgQueryDefaultLimit = "query_default_limit"
 const ArgQueryMaxLimit = "query_max_limit"
 const ArgSlotMonitorCollectIntervalSec = "slot_monitor_collect_interval_sec"
@@ -155,6 +156,29 @@ func (d *DB) DeleteGlobalArg(key string) error {
 	}
 	d.invalidateArgCache(key)
 	return nil
+}
+
+// ParseDDLConstraintCheckEnabled 缺省、空、未识别值都视为开启。
+// 仅显式 false / 0 / no / off（忽略大小写与空白）才关闭。
+func ParseDDLConstraintCheckEnabled(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "false", "0", "no", "off":
+		return false
+	default:
+		return true
+	}
+}
+
+// TicketDDLConstraintCheckEnabled 读取 DDL 约束检查总开关。未配置或读失败时开启。
+func (d *DB) TicketDDLConstraintCheckEnabled() bool {
+	if d == nil {
+		return true
+	}
+	v, err := d.GetGlobalArg(ArgTicketDDLConstraintCheckEnabled)
+	if err != nil {
+		return true
+	}
+	return ParseDDLConstraintCheckEnabled(v)
 }
 
 func (d *DB) BoolArg(key string, def bool) bool {

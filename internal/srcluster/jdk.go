@@ -274,11 +274,17 @@ func pickJavaCandidate(chk *JavaCheckResp, min, max int) *JavaCandidate {
 
 func nodeLabel(n *store.SrNode) string { return n.Component + "@" + n.Host }
 
-func nodeSoftwarePath(cl *store.SrCluster, n *store.SrNode) string {
-	if sp := strings.TrimSpace(n.SoftwarePath); sp != "" {
-		return sp
+func nodeSoftwarePath(st *store.DB, cl *store.SrCluster, n *store.SrNode) string {
+	if n != nil {
+		if sp := strings.TrimSpace(n.SoftwarePath); sp != "" {
+			return sp
+		}
 	}
-	return softwareBaseForRole(cl, n.Component) + "/" + strings.ToLower(n.Component)
+	role := ""
+	if n != nil {
+		role = n.Component
+	}
+	return softwareBaseForRole(st, cl, role) + "/" + strings.ToLower(role)
 }
 
 // jdkNodeResult 某节点的 JDK 判定（Err 非空表示 Agent 调用失败）。
@@ -303,7 +309,7 @@ func (e *Engine) evalClusterJDK(ctx context.Context, cl *store.SrCluster, nodes 
 			continue
 		}
 		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		chk, err := e.Agent.JavaCheck(cctx, auth, JavaCheckReq{Role: n.Component, SoftwarePath: nodeSoftwarePath(cl, n), JDKMin: min, JDKMax: max})
+		chk, err := e.Agent.JavaCheck(cctx, auth, JavaCheckReq{Role: n.Component, SoftwarePath: nodeSoftwarePath(e.Store, cl, n), JDKMin: min, JDKMax: max})
 		cancel()
 		if err != nil {
 			out[i].Err = err
@@ -413,7 +419,7 @@ func (e *Engine) stepJDKPrepare(ctx context.Context, cl *store.SrCluster, nodes 
 				fails = append(fails, fmt.Sprintf("%s: %v", nodeLabel(n), err))
 				continue
 			}
-			chk, err := e.Agent.JavaCheck(ctx, auth, JavaCheckReq{Role: n.Component, SoftwarePath: nodeSoftwarePath(cl, n), JDKMin: min, JDKMax: max})
+			chk, err := e.Agent.JavaCheck(ctx, auth, JavaCheckReq{Role: n.Component, SoftwarePath: nodeSoftwarePath(e.Store, cl, n), JDKMin: min, JDKMax: max})
 			if err != nil {
 				fails = append(fails, fmt.Sprintf("%s 复验: %v", nodeLabel(n), err))
 				continue

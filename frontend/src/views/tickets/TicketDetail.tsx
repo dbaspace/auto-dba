@@ -142,6 +142,7 @@ function parseDDLApplyExtra(raw: string) {
       shardDBPrefix: String(parsed.shard_db_prefix || '').trim(),
       shardTable: !!parsed.shard_table,
       shardTablePrefix: String(parsed.shard_table_prefix || '').trim(),
+      constraintCheckSkipped: !!parsed.constraint_check_skipped,
     }
   } catch {
     return null
@@ -286,6 +287,9 @@ export default function TicketDetail() {
             lines.push(ddlExtra.shardTablePrefix ? `分表，前缀 ${ddlExtra.shardTablePrefix}` : '分表')
           }
           fields.push({ key: 'ddl_shard', label: '分库/分表', kind: 'pre', value: lines.join('\n') })
+        }
+        if (ddlExtra?.constraintCheckSkipped) {
+          fields.push({ key: 'ddl_constraint_skipped', label: '约束检查', value: '提交时已关闭 DDL 约束检查' })
         }
       }
     } else if (resourceApplyExtra?.items?.length) {

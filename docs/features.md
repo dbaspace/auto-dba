@@ -88,7 +88,7 @@ Client Secret（及 LDAP Bind 密码）用字段加密密钥落库（优先 `app
 | 页面 | 路径 | 说明 |
 |------|------|------|
 | 工单列表 | `/ops/tickets` | 全部工单的查询、审批与执行记录；展示申请原因、环境、数据库类型；DQL 导出完成后状态为「已下载」 |
-| DDL 工单 | `/ops/ddl` | 结构变更。提交前按审核规则做 SQL 检查（结果可按状态过滤、按屏分页），支持美化与关键字高亮；可看执行影响；可多选域名级数据源 |
+| DDL 工单 | `/ops/ddl` | 结构变更。提交前按审核规则做 SQL 检查（结果可按状态过滤、按屏分页），支持美化与关键字高亮；可看执行影响；可多选域名级数据源。全局参数 `ticket_ddl_constraint_check_enabled` 默认开启，关闭后跳过全部 SQL 审核、只保留提交门禁，详情会标明。PostgreSQL `ADD COLUMN IF NOT EXISTS` 在列注释规则开启时仍要带 `COMMENT ON COLUMN` |
 | DML 工单 | `/ops/dml` | 数据变更，同样走审核与审批；填写 SQL 支持美化/高亮，检测结果分页与状态过滤。PostgreSQL DML 由平台包事务执行，脚本中的 `BEGIN`/`COMMIT`/`ROLLBACK` 会被忽略（避免与外层事务双重提交） |
 | DQL 工单 | `/ops/dql` | 数据导出。左侧填环境、库、审批人和事由，右侧写查询 SQL |
 | Kafka 工单 | `/ops/kafka` | 创建或调整 Topic；地址选自域名管理（本租户可见），环境选自环境管理 |
@@ -161,7 +161,7 @@ Client Secret（及 LDAP Bind 密码）用字段加密密钥落库（优先 `app
 |------|------|------|
 | SQL 洞察 | `/ops/sql-insight` | 六 Tab：SQL洞察 / 洞察分析 / 可视汇总 / AWR报告 / 表空间分析 / 智能分析；壳上统一「设置」入口（`/config/sql-insight`）。写操作权限：活动快照采集 / AWR 生成 / 表空间采集 / 智能分析（见 rbac-permissions） |
 | 会话管理 | `/ops/sessions` | 查看会话与锁，可定时刷新，并结束异常会话（PostgreSQL / MySQL 族） |
-| 实例总览 | `/ops/instance-overview` | 已登记实例的横向一览，含角色与异常标记。打开只读元库；点刷新才限流采集，并显示采样进度与完成时间。表格在页内滚动，筛选、汇总和分页留在视口内。采集 PostgreSQL / Redis 的版本、角色、连接、内存、从库延迟，并可带云监控存储使用率。PostgreSQL 已用存储是各库文件合计。不是监控曲线 |
+| 实例总览 | `/ops/instance-overview` | 已登记实例的横向一览，含角色与异常标记。打开只读元库；点刷新才限流采集，并显示采样进度与完成时间。采集 PostgreSQL / Redis 的版本、角色、连接、内存、从库延迟，并可带云监控存储使用率。PostgreSQL 已用存储是各库文件合计。不是监控曲线 |
 | MySQL 慢 SQL | `/ops/mysql-slow` | performance_schema digest Top SQL（只读） |
 
 ## 告警管理
@@ -207,7 +207,7 @@ Client Secret（及 LDAP Bind 密码）用字段加密密钥落库（优先 `app
 | 多语模版 | `/ops/multilang` | 多语言模版任务的创建与列表 |
 | 海豚管理 | `/ops/dolphin` | 检查外部调度控制台是否可达，可达时打开控制台 |
 | SR 控制台 | `/ops/sr` | **仅**检查 StarRocks FE 管理端是否可达并打开控制台 |
-| 集群部署 | `/ops/cluster-deploy` | Hub 由 EngineRegistry 驱动：DB/OLAP 自建装机与登记；**接入层代理** HAProxy/Nginx/LVS（发行版包 + **Keepalived VIP**，VIP 占用校验）。详见 [db-cluster.md](db-cluster.md)、[proxy.md](proxy.md)。 |
+| 集群部署 | `/ops/cluster-deploy` | Hub 由 EngineRegistry 驱动：DB/OLAP 自建装机与登记；**接入层代理** HAProxy/Nginx/LVS（发行版包 + **Keepalived VIP**，VIP 占用校验）。StarRocks 的 FE/BE 软件根和 BE 数据目录未在集群或节点填写时，用全局参数 `sr_fe_software_base`、`sr_be_software_base`、`sr_be_data_root`；BE 软件根不回退到 FE。详见 [db-cluster.md](db-cluster.md)、[proxy.md](proxy.md)、[sr-cluster.md](sr-cluster.md)。 |
 | 主机终端 | `/ops/terminal` | 对类型为主机的实例打开 Web SSH。密钥布局、登记与排障见 [主机终端](terminal.md)。 |
 | 高可用服务维护 | `/ops/ha` | MySQL/PG/Redis HA：观测、维护、计划/强制切换；MHA/Orchestrator/ProxySQL；PostgreSQL·pg_autofailover / Patroni / repmgr（代装、Keeper 启停、VIP 钩子）。详见 [高可用服务维护](ha.md)。 |
 

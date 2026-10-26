@@ -20,13 +20,13 @@ import (
 
 // SrClusterTicketPayload 存于 Issue.SQLContent。
 type SrClusterTicketPayload struct {
-	ClusterID   string         `json:"cluster_id"`
-	ClusterName string         `json:"cluster_name"`
-	Action      string         `json:"action"`
-	NodeID      string         `json:"node_id,omitempty"`
-	ForceDrop   bool           `json:"force_drop,omitempty"`
-	ReleaseID   string         `json:"release_id,omitempty"`
-	Node        *store.SrNode  `json:"node,omitempty"`
+	ClusterID    string        `json:"cluster_id"`
+	ClusterName  string        `json:"cluster_name"`
+	Action       string        `json:"action"`
+	NodeID       string        `json:"node_id,omitempty"`
+	ForceDrop    bool          `json:"force_drop,omitempty"`
+	ReleaseID    string        `json:"release_id,omitempty"`
+	Node         *store.SrNode `json:"node,omitempty"`
 	SoftwareBase string        `json:"software_base,omitempty"`
 }
 
@@ -111,7 +111,7 @@ func (h *SrClusterHandler) CreateTicket(c *gin.Context) {
 				return
 			}
 			chk := h.eng().PrecheckAddNode(c.Request.Context(), cl.ID, srcluster.AddNodeCheckInput{
-				Node: n, HostInstanceID: n.HostInstanceID, AssignedTo: req.AssignedTo, SkipAgentCalls: true,
+				Node: nodeWithGlobalPaths(h.Store, cl, n), HostInstanceID: n.HostInstanceID, AssignedTo: req.AssignedTo, SkipAgentCalls: true,
 			})
 			blocking := []string{"agent_match", "duplicate", "role_rule"}
 			if n.HostInstanceID != "" {
@@ -168,7 +168,9 @@ func (h *SrClusterHandler) CreateTicket(c *gin.Context) {
 			NeedRollback: string(preJSON),
 		}
 		stampTenantID(c, func(tid string) {
-			if issue != nil { issue.TenantID = tid }
+			if issue != nil {
+				issue.TenantID = tid
+			}
 		})
 		if err := h.Store.CreateIssue(issue); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
@@ -233,7 +235,9 @@ func (h *SrClusterHandler) CreateTicket(c *gin.Context) {
 		AssignedTo:  assigned,
 	}
 	stampTenantID(c, func(tid string) {
-		if issue != nil { issue.TenantID = tid }
+		if issue != nil {
+			issue.TenantID = tid
+		}
 	})
 	if err := h.Store.CreateIssue(issue); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
@@ -268,18 +272,7 @@ func parseSrAddNodePayload(cl *store.SrCluster, body map[string]any) (*store.SrN
 		return nil, "", fmt.Errorf("agent_id 必填")
 	}
 	softBase, _ := body["software_base"].(string)
-	softBase = strings.TrimSpace(softBase)
-	if softBase == "" {
-		if comp == "be" {
-			softBase = cl.EffectiveBeSoftwareBase()
-		} else {
-			softBase = strings.TrimSpace(cl.SoftwareBase)
-		}
-	}
-	if softBase == "" {
-		softBase = "/home/dorisdb_base"
-	}
-	softBase = strings.TrimRight(softBase, "/")
+	explicitBase := strings.TrimRight(strings.TrimSpace(softBase), "/")
 
 	hostInstID, _ := body["host_instance_id"].(string)
 	n := &store.SrNode{
@@ -310,22 +303,40 @@ func parseSrAddNodePayload(cl *store.SrCluster, body map[string]any) (*store.SrN
 		n.HTTPPort = cl.FeHTTPPort
 		n.EditPort = cl.FeEditPort
 		n.SystemdUnit = "fe-" + strconv.Itoa(cl.FeQueryPort)
-		n.SoftwarePath = softBase + "/fe"
+		if explicitBase != "" {
+			n.SoftwarePath = explicitBase + "/fe"
+		}
 	} else {
 		dataRoot, _ := body["data_root"].(string)
-		dataRoot = strings.TrimSpace(dataRoot)
-		if dataRoot == "" {
-			dataRoot = strings.TrimSpace(cl.DataRoot)
-		}
-		if dataRoot == "" {
-			dataRoot = "/data"
-		}
+		dataRoot = strings.TrimRight(strings.TrimSpace(dataRoot), "/")
 		n.DataRoot = dataRoot
 		n.HeartbeatPort = cl.BeHeartbeatPort
 		n.SystemdUnit = "be-" + strconv.Itoa(n.HeartbeatPort)
-		n.SoftwarePath = softBase + "/be"
+		if explicitBase != "" {
+			n.SoftwarePath = explicitBase + "/be"
+		}
 	}
-	return n, softBase, nil
+	return n, explicitBase, nil
+}
+
+// nodeWithGlobalPaths 预检时把未填写的目录补成全局（或集群已填）路径，不写回节点登记。
+func nodeWithGlobalPaths(st *store.DB, cl *store.SrCluster, n *store.SrNode) *store.SrNode {
+	if n == nil {
+		return nil
+	}
+	cp := *n
+	fe, be, data := store.ResolveSrPaths(st, cl)
+	if strings.TrimSpace(cp.SoftwarePath) == "" {
+		base := fe
+		if cp.Component == "be" {
+			base = be
+		}
+		cp.SoftwarePath = strings.TrimRight(base, "/") + "/" + cp.Component
+	}
+	if cp.Component == "be" && strings.TrimSpace(cp.DataRoot) == "" {
+		cp.DataRoot = data
+	}
+	return &cp
 }
 
 // ExecuteSrClusterTicket 审批通过后由 TicketHandler 调用。

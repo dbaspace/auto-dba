@@ -19,10 +19,10 @@ import (
 
 // Config 引擎参数。
 type Config struct {
-	DryRun          bool   // true：Agent 侧也可传 dry_run；控制面跳过破坏性 SQL 时写日志说明
-	AgentArtifact   string // node-agent 本地制品路径
-	AgentRemoteDir  string
-	AgentListenPort int
+	DryRun             bool   // true：Agent 侧也可传 dry_run；控制面跳过破坏性 SQL 时写日志说明
+	AgentArtifact      string // node-agent 本地制品路径
+	AgentRemoteDir     string
+	AgentListenPort    int
 	SSHUser            string
 	SSHIdentityFile    string
 	SSHInsecureHostKey bool
@@ -581,6 +581,9 @@ func (e *Engine) runChange(changeID string) {
 		_ = e.Store.UpdateSrCluster(cl)
 	}
 	msg := "全部步骤完成"
+	if s := powerChangeSummary(ch); s != "" {
+		msg = s
+	}
 	if extra := e.syncRegistryAfterChange(ch, cl); extra != "" {
 		msg += "；" + extra
 	}
@@ -777,7 +780,7 @@ func (e *Engine) stepPrecheckAll(ctx context.Context, cl *store.SrCluster, nodes
 			if req.HBPort <= 0 {
 				req.HBPort = cl.BeHeartbeatPort
 			}
-			req.DataRoot = beDataRoot(cl, &n)
+			req.DataRoot = beDataRoot(e.Store, cl, &n)
 		}
 		resp, err := e.Agent.Precheck(ctx, auth, req)
 		if err != nil {
@@ -873,7 +876,7 @@ func (e *Engine) stepBootstrapFE(ctx context.Context, cl *store.SrCluster, n *st
 	}
 	soft := n.SoftwarePath
 	if soft == "" {
-		soft = softwareBaseForRole(cl, "fe") + "/fe"
+		soft = softwareBaseForRole(e.Store, cl, "fe") + "/fe"
 	}
 	unit := n.SystemdUnit
 	if unit == "" {
@@ -1044,7 +1047,7 @@ func (e *Engine) stepStartFollower(ctx context.Context, cl *store.SrCluster, n *
 	}
 	soft := n.SoftwarePath
 	if soft == "" {
-		soft = softwareBaseForRole(cl, "fe") + "/fe"
+		soft = softwareBaseForRole(e.Store, cl, "fe") + "/fe"
 	}
 	helperHost := cl.FeHost
 	helperPort := cl.FeEditPort
@@ -1100,9 +1103,9 @@ func (e *Engine) stepInitBE(ctx context.Context, cl *store.SrCluster, n *store.S
 	}
 	soft := n.SoftwarePath
 	if soft == "" {
-		soft = softwareBaseForRole(cl, "be") + "/be"
+		soft = softwareBaseForRole(e.Store, cl, "be") + "/be"
 	}
-	dataRoot := beDataRoot(cl, n)
+	dataRoot := beDataRoot(e.Store, cl, n)
 	diskResp, err := e.Agent.DiskInit(ctx, auth, DiskInitReq{
 		MountPoint: dataRoot, FSType: "xfs", PersistFstab: true, Auto: true,
 		ChangeID: step.ChangeID, StepID: step.ID, DryRun: e.Cfg.DryRun,
@@ -1167,14 +1170,17 @@ WantedBy=multi-user.target
 	return nil
 }
 
-func beDataRoot(cl *store.SrCluster, n *store.SrNode) string {
-	if v := strings.TrimSpace(n.DataRoot); v != "" {
-		return v
+func beDataRoot(st *store.DB, cl *store.SrCluster, n *store.SrNode) string {
+	if n != nil {
+		if v := strings.TrimSpace(n.DataRoot); v != "" {
+			return v
+		}
 	}
-	if v := strings.TrimSpace(cl.DataRoot); v != "" {
-		return v
+	_, _, data := store.ResolveSrPaths(st, cl)
+	if data != "" {
+		return data
 	}
-	return "/data"
+	return store.DefaultSrDataRoot
 }
 
 func hasPrecheckItem(resp *PrecheckResp, name string) bool {

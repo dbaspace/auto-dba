@@ -14,11 +14,12 @@ type StatementRow struct {
 }
 
 type Result struct {
-	OK             bool             `json:"ok"`
-	StatementCount int              `json:"statement_count,omitempty"` // len(SplitSQL)，与审核行数可能不同（extras）
-	Statements     []StatementRow   `json:"statements"`
-	Errors         []map[string]any `json:"errors,omitempty"`
-	Warns          []map[string]any `json:"warns,omitempty"`
+	OK                     bool             `json:"ok"`
+	ConstraintCheckSkipped bool             `json:"constraint_check_skipped,omitempty"`
+	StatementCount         int              `json:"statement_count,omitempty"` // len(SplitSQL)，与审核行数可能不同（extras）
+	Statements             []StatementRow   `json:"statements"`
+	Errors                 []map[string]any `json:"errors,omitempty"`
+	Warns                  []map[string]any `json:"warns,omitempty"`
 }
 
 // AttachStatementCount 写入按分号拆分的语句数（与执行侧口径一致）。

@@ -343,7 +343,21 @@ func toCheckRules(list []store.ReviewRule) []sqlcheck.Rule {
 	return out
 }
 
+// reviewRulesForCheck 仅测试注入审核规则，生产为 nil。
+var reviewRulesForCheck func(engine string) []sqlcheck.Rule
+
+// ddlConstraintCheckEnabled 读取总开关。测试可替换，避免依赖元库。
+var ddlConstraintCheckEnabled = func(h *TicketHandler) bool {
+	if h == nil || h.Store == nil {
+		return true
+	}
+	return h.Store.TicketDDLConstraintCheckEnabled()
+}
+
 func (h *TicketHandler) loadReviewRules(engine string) []sqlcheck.Rule {
+	if reviewRulesForCheck != nil {
+		return reviewRulesForCheck(engine)
+	}
 	if engine == "" || h == nil || h.Store == nil {
 		return nil
 	}
@@ -357,6 +371,9 @@ func (h *TicketHandler) loadReviewRules(engine string) []sqlcheck.Rule {
 func (h *TicketHandler) checkTicketSQL(sqlContent, issueType, dbType, instanceID, dbName string, skipSchemaCheck bool) sqlcheck.Result {
 	engine := h.resolveReviewEngine(dbType, instanceID)
 	issueType = strings.ToLower(strings.TrimSpace(issueType))
+	if issueType == store.IssueTypeDDL && !ddlConstraintCheckEnabled(h) {
+		return skippedDDLConstraintResult(sqlContent)
+	}
 	var res sqlcheck.Result
 	// 分库/分表：模板表名通常不存在于代表库，跳过 goInception 库表存在性审核，仅静态规则。
 	if !skipSchemaCheck && engine == "mysql" && (issueType == store.IssueTypeDDL || issueType == store.IssueTypeDML) {
@@ -376,6 +393,43 @@ func (h *TicketHandler) checkTicketSQL(sqlContent, issueType, dbType, instanceID
 	res = sqlcheck.CheckTicketWithRules(sqlContent, issueType, engine, rules)
 	sqlcheck.AttachStatementCount(&res, sqlContent)
 	return res
+}
+
+func skippedDDLConstraintResult(sqlContent string) sqlcheck.Result {
+	if strings.TrimSpace(sqlContent) == "" {
+		return sqlcheck.CheckTicketWithRules("", store.IssueTypeDDL, "postgres", nil)
+	}
+	log.Printf("ddl_constraint_check_skipped sql_len=%d", len(sqlContent))
+	res := sqlcheck.Result{
+		OK:                     true,
+		ConstraintCheckSkipped: true,
+		Statements: []sqlcheck.StatementRow{{
+			Stage:      "check",
+			ErrorLevel: "WARN",
+			Message:    "平台已关闭 DDL 约束检查，仅做提交门禁",
+			SQL:        sqlContent,
+		}},
+	}
+	sqlcheck.AttachStatementCount(&res, sqlContent)
+	return res
+}
+
+func stampConstraintCheckSkipped(raw string) string {
+	m := map[string]any{}
+	raw = strings.TrimSpace(raw)
+	if raw != "" {
+		if err := json.Unmarshal([]byte(raw), &m); err != nil || m == nil {
+			log.Printf("ddl_constraint_check_skipped_stamp_failed: %v", err)
+			return raw
+		}
+	}
+	m["constraint_check_skipped"] = true
+	b, err := json.Marshal(m)
+	if err != nil {
+		log.Printf("ddl_constraint_check_skipped_stamp_failed: %v", err)
+		return raw
+	}
+	return string(b)
 }
 
 func applyCreateDBReview(h *TicketHandler, sqlContent, dbType, instanceID string) sqlcheck.Result {
@@ -531,6 +585,10 @@ func (h *TicketHandler) Submit(c *gin.Context) {
 	if !res.OK {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "SQL 校验未通过", "details": res})
 		return
+	}
+	if req.Type == store.IssueTypeDDL && res.ConstraintCheckSkipped {
+		req.NeedRollback = stampConstraintCheckSkipped(req.NeedRollback)
+		log.Printf("ddl_constraint_check_skipped_submit instance_id=%s db=%s", req.InstanceID, req.DBName)
 	}
 	if req.Type == store.IssueTypeDQL && req.NeedRollback == "" {
 		extra, err := buildDQLSubmitExtra(&req, reviewer)

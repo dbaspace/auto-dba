@@ -412,6 +412,11 @@ export default function SrClusterPage() {
   const [deployMonTask, setDeployMonTask] = useState<string | undefined>()
   const [deployMonRows, setDeployMonRows] = useState<{ host: string; hostId?: string; name?: string }[]>([])
   const [deployMonSelected, setDeployMonSelected] = useState<string[]>([])
+  const [layoutDefaults, setLayoutDefaults] = useState({
+    fe_software_base: '/home/dorisdb_base',
+    be_software_base: '/home/dorisdb_base',
+    be_data_root: '/data',
+  })
   const [deployBusy, setDeployBusy] = useState(false)
   const [hosts, setHosts] = useState<HostInst[]>([])
   const [deploys, setDeploys] = useState<SrAgentDeploy[]>([])
@@ -455,6 +460,7 @@ export default function SrClusterPage() {
   const [agentForm] = Form.useForm()
   const [deployForm] = Form.useForm()
   const [ossForm] = Form.useForm()
+  const [layoutForm] = Form.useForm()
   const [releaseForm] = Form.useForm()
   const releaseJdkTouched = useRef(false)
   const [artifactForm] = Form.useForm()
@@ -719,13 +725,20 @@ export default function SrClusterPage() {
         hosts,
       })
       const layout = data?.data || {}
-      const patch: Record<string, string> = {}
-      if (layout.fe_software_base) patch.software_base = layout.fe_software_base
-      if (layout.be_software_base) patch.be_software_base = layout.be_software_base
-      if (layout.be_data_root) patch.data_root = layout.be_data_root
-      if (Object.keys(patch).length) {
-        clusterForm.setFieldsValue(patch)
-        message.success(`已回填路径：FE=${patch.software_base || '—'} BE=${patch.be_software_base || '—'} 数据=${patch.data_root || '—'}`)
+      const feNodes: Record<string, unknown>[] = clusterForm.getFieldValue('fe_nodes') || []
+      const beNodes: Record<string, unknown>[] = clusterForm.getFieldValue('be_nodes') || []
+      if (layout.fe_software_base) {
+        clusterForm.setFieldValue('fe_nodes', feNodes.map((n) => ({ ...n, software_base: layout.fe_software_base })))
+      }
+      if (layout.be_software_base || layout.be_data_root) {
+        clusterForm.setFieldValue('be_nodes', beNodes.map((n) => ({
+          ...n,
+          ...(layout.be_software_base ? { software_base: layout.be_software_base } : {}),
+          ...(layout.be_data_root ? { data_root: layout.be_data_root } : {}),
+        })))
+      }
+      if (layout.fe_software_base || layout.be_software_base || layout.be_data_root) {
+        message.success(`已回填到节点：FE=${layout.fe_software_base || '—'} BE=${layout.be_software_base || '—'} 数据=${layout.be_data_root || '—'}。清空某一节点的目录则该节点改走全局`)
       }
       const warns: string[] = layout.warnings || []
       if (warns.length) message.warning(warns.join('；'), 8)
@@ -927,6 +940,17 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
       prefix: d.prefix || 'starrocks/',
     })
   }, [ossForm])
+  const loadLayoutDefaults = useCallback(async () => {
+    const res = await api.get('/sr-cluster/layout-defaults')
+    const d = res.data?.data || {}
+    const next = {
+      fe_software_base: d.fe_software_base || '/home/dorisdb_base',
+      be_software_base: d.be_software_base || '/home/dorisdb_base',
+      be_data_root: d.be_data_root || '/data',
+    }
+    setLayoutDefaults(next)
+    layoutForm.setFieldsValue(next)
+  }, [layoutForm])
   const loadEnvironments = useCallback(async () => {
     try {
       const res = await api.get('/environments')
@@ -1069,15 +1093,21 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
   }
 
   useEffect(() => {
-    loadClusters(); loadAgents(); loadChanges(); loadReleases(); loadOSS(); loadHosts(); loadDeploys(); loadConfTemplates(); loadEnvironments()
-  }, [loadClusters, loadAgents, loadChanges, loadReleases, loadOSS, loadHosts, loadDeploys, loadConfTemplates, loadEnvironments])
+    loadClusters(); loadAgents(); loadChanges(); loadReleases(); loadOSS(); loadLayoutDefaults(); loadHosts(); loadDeploys(); loadConfTemplates(); loadEnvironments()
+  }, [loadClusters, loadAgents, loadChanges, loadReleases, loadOSS, loadLayoutDefaults, loadHosts, loadDeploys, loadConfTemplates, loadEnvironments])
 
   useEffect(() => {
     if (!changeDetail?.id) return
     if (changeDetail.status !== 'running' && changeDetail.status !== 'pending') return
     const t = setInterval(() => {
       void pollChange(changeDetail.id).then((ch) => {
-        if (ch && ch.status !== 'running' && ch.status !== 'pending') void loadChanges(selected?.id)
+        if (ch && ch.status !== 'running' && ch.status !== 'pending') {
+          void loadChanges(selected?.id)
+          if (selected?.id && ch.type === 'stop_node') {
+            void reloadClusterDetail(selected.id)
+            void loadNodeLive(selected.id)
+          }
+        }
       })
     }, 2000)
     return () => clearInterval(t)
@@ -1271,8 +1301,8 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
   }
 
   const startClusterReinit = (cluster: SrCluster) => {
-    const soft = cluster.software_base || '/home/dorisdb_base'
-    const data = cluster.data_root || '/data'
+    const soft = cluster.software_base || layoutDefaults.fe_software_base
+    const data = cluster.data_root || layoutDefaults.be_data_root
     openTicketDraft({
       action: 'cluster_reinit',
       title: '提交重新初始化审批',
@@ -1321,8 +1351,6 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
     clusterForm.resetFields()
     setFeProbedRoles({})
     clusterForm.setFieldsValue({
-      software_base: '/home/dorisdb_base',
-      data_root: '/data',
       fe_user: 'root',
       init_now: false,
       fe_nodes: [{ host: '', agent_id: undefined, is_primary_fe: true, fe_role: 'follower' }],
@@ -1631,8 +1659,8 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                             component: 'be',
                             is_primary_fe: false,
                             fe_role: 'follower',
-                            software_base: selected?.software_base || '/home/dorisdb_base',
-                            data_root: selected?.data_root || '/data',
+                            software_base: undefined,
+                            data_root: selected?.data_root || undefined,
                           })
                           setNodePrecheck(null)
                           void nodeApprovers.load(undefined)
@@ -1691,9 +1719,9 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                         </Space>
                       </Descriptions.Item>
                       <Descriptions.Item label="环境">{selected.environment}</Descriptions.Item>
-                      <Descriptions.Item label="FE software_base">{selected.software_base}</Descriptions.Item>
-                      <Descriptions.Item label="BE software_base">{selected.be_software_base || selected.software_base || '—'}</Descriptions.Item>
-                      <Descriptions.Item label="BE 数据目录">{selected.data_root || '—'}</Descriptions.Item>
+                      <Descriptions.Item label="FE software_base">{selected.software_base || `${layoutDefaults.fe_software_base}（全局）`}</Descriptions.Item>
+                      <Descriptions.Item label="BE software_base">{selected.be_software_base || `${layoutDefaults.be_software_base}（全局）`}</Descriptions.Item>
+                      <Descriptions.Item label="BE 数据目录">{selected.data_root || `${layoutDefaults.be_data_root}（全局）`}</Descriptions.Item>
                       <Descriptions.Item label="资源实例">
                         {clusterInst ? (
                           <Space size={4} wrap>
@@ -1792,7 +1820,7 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                         width: 190,
                         render: (v: string, row: SrNode) => (
                           <Space size={4}>
-                            <Tooltip title={`软件路径：${row.software_path || '—'}`}>
+                            <Tooltip title={`软件路径：${row.software_path || `${row.component === 'be' ? layoutDefaults.be_software_base : layoutDefaults.fe_software_base}/${row.component === 'be' ? 'be' : 'fe'}（全局）`}`}>
                               <span>{v}</span>
                             </Tooltip>
                             {row.is_primary_fe && (
@@ -1821,11 +1849,17 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                         width: 170,
                         render: (_: unknown, row: SrNode) => nodeLive[row.id]?.start_time || '—',
                       }
+                      const lastStartCol: ColumnType<SrNode> = {
+                        title: 'LastStartTime',
+                        key: 'last_start_time',
+                        width: 170,
+                        render: (_: unknown, row: SrNode) => nodeLive[row.id]?.start_time || '—',
+                      }
                       const dataRootCol: ColumnType<SrNode> = {
                         title: <Tooltip title="BE storage_root_path 或数据盘挂载点">数据目录</Tooltip>,
                         dataIndex: 'data_root',
                         ellipsis: true,
-                        render: (v: string) => v || selected?.data_root || '/data',
+                        render: (v: string) => v || (selected?.data_root ? selected.data_root : `${layoutDefaults.be_data_root}（全局）`),
                       }
                       const cpuCol: ColumnType<SrNode> = {
                         title: 'CPU核数',
@@ -1963,8 +1997,18 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                                     const res = await api.post(
                                       `/sr-cluster/clusters/${selected.id}/nodes/${row.id}/${running ? 'stop' : 'start'}`,
                                     )
-                                    message.success(running ? '已提交停止' : '已提交启动')
-                                    afterChange(res.data?.data?.change_id)
+                                    if (running) {
+                                      message.success('已提交停止')
+                                      const cid = selected.id
+                                      const changeId = res.data?.data?.change_id as string | undefined
+                                      await reloadClusterDetail(cid)
+                                      void loadNodeLive(cid)
+                                      loadClusters()
+                                      if (changeId) void pollChange(changeId)
+                                    } else {
+                                      message.success('已提交启动')
+                                      afterChange(res.data?.data?.change_id)
+                                    }
                                   } catch (e: any) {
                                     message.error(e?.response?.data?.message || e.message || (running ? '停止失败' : '启动失败'))
                                   }
@@ -2046,7 +2090,7 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                               showTotal: (total) => `共 ${total} 个 BE`,
                             }}
                             locale={{ emptyText: '暂无 BE 节点' }}
-                            columns={[hostCol, dataRootCol, cpuCol, storageCol, tabletCol, statusCol, actionCol]}
+                            columns={[hostCol, heartbeatCol, lastStartCol, dataRootCol, cpuCol, storageCol, tabletCol, statusCol, actionCol]}
                           />
                         </>
                       )
@@ -2341,6 +2385,40 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                       {ossBind.oss_configured ? ' · 已配置' : ' · 凭证不完整'}
                     </div>
                   )}
+                </Card>
+                <Card
+                  title="路径默认"
+                  extra={(
+                    <Button
+                      type="primary"
+                      onClick={async () => {
+                        const v = await layoutForm.validateFields()
+                        await api.put('/sr-cluster/layout-defaults', v)
+                        message.success('已保存')
+                        await loadLayoutDefaults()
+                      }}
+                    >
+                      保存
+                    </Button>
+                  )}
+                >
+                  <Alert
+                    type="info"
+                    showIcon
+                    style={{ marginBottom: 12 }}
+                    message="全局默认始终存在。新建或登记集群时，节点不填对应目录则使用这里的值；节点填写后只覆盖该节点。"
+                  />
+                  <Form form={layoutForm} layout="vertical" style={{ maxWidth: 560 }}>
+                    <Form.Item name="fe_software_base" label="FE software_base" rules={[{ required: true, message: '请填写 FE 软件目录' }]}>
+                      <Input placeholder="/home/dorisdb_base" />
+                    </Form.Item>
+                    <Form.Item name="be_software_base" label="BE software_base" rules={[{ required: true, message: '请填写 BE 软件目录' }]}>
+                      <Input placeholder="/home/dorisdb_base" />
+                    </Form.Item>
+                    <Form.Item name="be_data_root" label="BE 数据目录" rules={[{ required: true, message: '请填写 BE 数据目录' }]}>
+                      <Input placeholder="/data" />
+                    </Form.Item>
+                  </Form>
                 </Card>
                 <Card
                   title="版本目录"
@@ -2803,20 +2881,27 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
       <Modal
         title={clusterModalMode === 'register' ? '登记已有集群' : '新建集群（含 FE/BE 角色）'}
         open={clusterModal}
-        width={860}
+        width={1100}
         onOk={async () => {
           const v = await clusterForm.validateFields()
+          const rolePath = (base: unknown, role: 'fe' | 'be') => {
+            const b = String(base || '').trim().replace(/\/+$/, '')
+            return b ? `${b}/${role}` : undefined
+          }
           const feNodes = (v.fe_nodes || []).map((n: any) => ({
             component: 'fe',
             host: n.host,
             agent_id: n.agent_id,
             is_primary_fe: !!n.is_primary_fe,
             fe_role: n.is_primary_fe ? 'follower' : (n.fe_role || 'follower'),
+            software_path: rolePath(n.software_base, 'fe'),
           }))
           const beNodes = (v.be_nodes || []).map((n: any) => ({
             component: 'be',
             host: n.host,
             agent_id: n.agent_id,
+            software_path: rolePath(n.software_base, 'be'),
+            data_root: String(n.data_root || '').trim().replace(/\/+$/, '') || undefined,
           }))
           const nodes = [...feNodes, ...beNodes]
           if (!feNodes.length) {
@@ -2850,9 +2935,6 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
               environment: v.environment,
               version: String(v.version || matched?.version || '').trim(),
               release_id: matched?.id || v.release_id || undefined,
-              software_base: v.software_base,
-              be_software_base: v.be_software_base || v.software_base,
-              data_root: v.data_root,
               fe_password: v.fe_password,
               nodes,
               init_now: registering ? false : !!v.init_now,
@@ -2948,9 +3030,6 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
           form={clusterForm}
           layout="vertical"
           initialValues={{
-            software_base: '/home/dorisdb_base',
-            be_software_base: '/home/dorisdb_base',
-            data_root: '/data',
             fe_user: 'root',
             init_now: false,
             fe_nodes: [{ host: '', agent_id: undefined, is_primary_fe: true, fe_role: 'follower' }],
@@ -3019,29 +3098,6 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
             </Form.Item>
           )}
           <Form.Item
-            name="software_base"
-            label="FE software_base"
-            extra={clusterModalMode === 'register' ? '可由探测从 internal_log_dir 推断（如 /data1/dorisdb_base）' : '装包根目录；FE 路径为 {software_base}/fe'}
-          >
-            <Input placeholder="/home/dorisdb_base" />
-          </Form.Item>
-          <Form.Item
-            name="be_software_base"
-            label="BE software_base"
-            extra={clusterModalMode === 'register' ? '可由探测从 BE /varz 的 sys_minidump_dir 推断；可与 FE 不同' : '装包根目录；BE 路径为 {be_software_base}/be'}
-          >
-            <Input placeholder="/home/dorisdb_base" />
-          </Form.Item>
-          <Form.Item
-            name="data_root"
-            label="BE 数据目录（storage_root_path）"
-            extra={clusterModalMode === 'register'
-              ? '登记时填探测到的完整目录（如 /data1/dorisdb/be/storage），下发时原样写入，不拼接路径'
-              : '填写实际数据目录，下发时原样写入 be.conf。不存在时自动选用未使用磁盘格式化挂载；已存在时须位于非系统盘'}
-          >
-            <Input placeholder="/data1/dorisdb/be/storage" />
-          </Form.Item>
-          <Form.Item
             name="fe_password"
             label={clusterModalMode === 'register' ? 'FE 密码' : 'FE 密码（初装可空）'}
             extra={clusterModalMode === 'register'
@@ -3078,7 +3134,7 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                 </Button>
               </Space>
               <div className="muted" style={{ marginTop: 4 }}>
-                连接首个 FE（:9030）探测角色，并从 ADMIN SHOW FRONTEND CONFIG / BE :8040/varz 回填 software_base 与数据目录
+                连接首个 FE（:9030）探测角色，并从 ADMIN SHOW FRONTEND CONFIG / BE :8040/varz 回填到各节点目录。节点留空则使用全局配置。
               </div>
             </div>
           ) : null}
@@ -3122,6 +3178,9 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
             FE 节点（须奇数；填 Host 自动匹配已有 Agent
             {clusterModalMode === 'register' ? '，可暂空' : ''}
             ）
+            <span style={{ marginLeft: 8, fontWeight: 400, color: '#888' }}>
+              软件目录留空使用全局 {layoutDefaults.fe_software_base}，填写只覆盖该节点
+            </span>
           </div>
           <Form.List name="fe_nodes">
             {(fields, { add, remove }) => (
@@ -3166,6 +3225,9 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                         options={[{ value: 'follower', label: 'follower' }, { value: 'observer', label: 'observer' }]}
                       />
                     </Form.Item>
+                    <Form.Item {...field} name={[field.name, 'software_base']} style={{ width: 220, marginBottom: 0 }}>
+                      <Input placeholder={`软件目录，留空 ${layoutDefaults.fe_software_base}`} />
+                    </Form.Item>
                     {fields.length > 1 && <MinusCircleOutlined onClick={() => remove(field.name)} />}
                   </Space>
                   )
@@ -3181,6 +3243,9 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
             BE 节点（填 Host 自动匹配已有 Agent
             {clusterModalMode === 'register' ? '，可暂空' : ''}
             ）
+            <span style={{ marginLeft: 8, fontWeight: 400, color: '#888' }}>
+              软件目录留空使用全局 {layoutDefaults.be_software_base}，数据目录留空使用全局 {layoutDefaults.be_data_root}；填写只覆盖该节点
+            </span>
           </div>
           <Form.List name="be_nodes">
             {(fields, { add, remove }) => (
@@ -3211,6 +3276,12 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                     <Button type="link" size="small" onClick={() => openQuickAgentRegister('be_nodes', field.name)}>
                       按主机登记
                     </Button>
+                    <Form.Item {...field} name={[field.name, 'software_base']} style={{ width: 220, marginBottom: 0 }}>
+                      <Input placeholder={`软件目录，留空 ${layoutDefaults.be_software_base}`} />
+                    </Form.Item>
+                    <Form.Item {...field} name={[field.name, 'data_root']} style={{ width: 240, marginBottom: 0 }}>
+                      <Input placeholder={`数据目录，留空 ${layoutDefaults.be_data_root}`} />
+                    </Form.Item>
                     {fields.length > 0 && <MinusCircleOutlined onClick={() => remove(field.name)} />}
                   </Space>
                 ))}
@@ -3306,10 +3377,9 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
           <Form.Item
             name="software_base"
             label="dorisdb_base（软件程序目录）"
-            rules={[{ required: true, message: '请填写软件目录' }]}
-            extra="装包路径为 {dorisdb_base}/fe 或 {dorisdb_base}/be"
+            extra={`留空使用全局配置（FE ${layoutDefaults.fe_software_base}，BE ${layoutDefaults.be_software_base}），填写只覆盖该节点。装包路径为 {目录}/fe 或 {目录}/be`}
           >
-            <Input placeholder="/home/dorisdb_base" />
+            <Input placeholder={`${layoutDefaults.fe_software_base} / ${layoutDefaults.be_software_base}`} />
           </Form.Item>
           <Form.Item noStyle shouldUpdate={(prev, cur) => prev.component !== cur.component}>
             {() => nodeForm.getFieldValue('component') === 'fe' ? (
@@ -3324,10 +3394,9 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                 <Form.Item
                   name="data_root"
                   label="数据目录（storage_root_path）"
-                  rules={[{ required: true, message: '请填写数据目录' }]}
-                  extra="填写实际数据目录，下发时原样写入。不存在时自动选用未使用磁盘格式化挂载；已存在时须位于非系统盘"
+                  extra={`留空使用全局 ${layoutDefaults.be_data_root}，填写只覆盖该节点`}
                 >
-                  <Input placeholder="/data1/dorisdb/be/storage" />
+                  <Input placeholder={layoutDefaults.be_data_root} />
                 </Form.Item>
                 <Alert type="warning" showIcon message="BE：校验数据目录（空闲盘格式化挂载 / 已挂载直接使用 / 系统盘拒绝）→ 装包到 dorisdb_base/be → ADD BACKEND" />
               </>
@@ -3486,11 +3555,30 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                 {deployMonRows.length === 0 ? (
                   <span className="muted">请先选择监控任务</span>
                 ) : (
-                  <Checkbox.Group
-                    style={{ width: '100%' }}
-                    value={deployMonSelected}
-                    onChange={(vals) => setDeployMonSelected(vals as string[])}
-                  >
+                  <>
+                    <Space style={{ marginBottom: 8 }}>
+                      <Button
+                        size="small"
+                        onClick={() => setDeployMonSelected(deployMonRows.filter((r) => r.hostId).map((r) => r.hostId!))}
+                      >
+                        全选
+                      </Button>
+                      <Button
+                        size="small"
+                        onClick={() => {
+                          const matched = deployMonRows.filter((r) => r.hostId).map((r) => r.hostId!)
+                          const cur = new Set(deployMonSelected)
+                          setDeployMonSelected(matched.filter((id) => !cur.has(id)))
+                        }}
+                      >
+                        反选
+                      </Button>
+                    </Space>
+                    <Checkbox.Group
+                      style={{ width: '100%' }}
+                      value={deployMonSelected}
+                      onChange={(vals) => setDeployMonSelected(vals as string[])}
+                    >
                     <Space direction="vertical" style={{ width: '100%' }}>
                       {deployMonRows.map((r) => (
                         <Checkbox
@@ -3505,7 +3593,8 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                         </Checkbox>
                       ))}
                     </Space>
-                  </Checkbox.Group>
+                    </Checkbox.Group>
+                  </>
                 )}
               </Form.Item>
             </>

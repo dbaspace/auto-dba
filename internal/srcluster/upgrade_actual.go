@@ -18,7 +18,7 @@ type procVersionRow struct {
 	Alive   string
 	// HTTPPort BE 的 HttpPort（探测 /varz）；FE 也可能有，缺省 0
 	HTTPPort int
-	// 以下仅 FE：ReplayedJournalId、LastHeartbeat、StartTime 列
+	// 以下 FE 为 StartTime，BE 为 LastStartTime；LastHeartbeat 两边都有
 	ReplayedJournalID string
 	LastHeartbeat     string
 	StartTime         string
@@ -31,6 +31,17 @@ type procVersionRow struct {
 	AvailCapacity string
 	DataUsed      string
 	UsedPct       string
+}
+
+// procStartTimeIdx FE 列名 StartTime，BE 列名 LastStartTime。
+func procStartTimeIdx(idx map[string]int) int {
+	if i, ok := idx["starttime"]; ok {
+		return i
+	}
+	if i, ok := idx["laststarttime"]; ok {
+		return i
+	}
+	return -1
 }
 
 // backendResourceIdx /backends 中 CPU 与存储列的下标，缺列为 -1。
@@ -107,7 +118,8 @@ func queryProcRowsDB(ctx context.Context, db *sql.DB, path string, requireVersio
 	}
 	nameIdx, verIdx := col("name"), col("version")
 	roleIdx, aliveIdx := col("role"), col("alive")
-	journalIdx, heartbeatIdx, startIdx := col("replayedjournalid"), col("lastheartbeat"), col("starttime")
+	journalIdx, heartbeatIdx := col("replayedjournalid"), col("lastheartbeat")
+	startIdx := procStartTimeIdx(idx)
 	decomIdx, tabletIdx := col("systemdecommissioned"), col("tabletnum")
 	httpPortIdx := col("httpport")
 	res := backendResourceCols(cols)
@@ -168,7 +180,7 @@ type NodeLive struct {
 	Role    string `json:"role,omitempty"`
 	Alive   string `json:"alive,omitempty"`
 	Version string `json:"version,omitempty"`
-	// 以下仅 FE：元数据回放进度、最近心跳、启动时间（SHOW PROC '/frontends' 原样字符串）
+	// ReplayedJournalId 仅 FE。LastHeartbeat / StartTime（BE 列名为 LastStartTime）两边都保留。
 	ReplayedJournalID string `json:"replayed_journal_id,omitempty"`
 	LastHeartbeat     string `json:"last_heartbeat,omitempty"`
 	StartTime         string `json:"start_time,omitempty"`
@@ -200,6 +212,8 @@ func mapNodeLive(nodes []store.SrNode, fe, be []procVersionRow) map[string]NodeL
 					live.LastHeartbeat = r.LastHeartbeat
 					live.StartTime = r.StartTime
 				} else {
+					live.LastHeartbeat = r.LastHeartbeat
+					live.StartTime = r.StartTime
 					live.Decommissioned = r.Decommissioned
 					live.TabletNum = r.TabletNum
 					live.CpuCores = r.CpuCores

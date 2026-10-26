@@ -987,7 +987,7 @@ var (
 	reTruncate         = regexp.MustCompile(`TRUNCATE\b`)
 	reDropColumn       = regexp.MustCompile(`DROP\s+COLUMN`)
 	reCreateTable      = regexp.MustCompile(`CREATE\s+TABLE`)
-	reAlterAdd         = regexp.MustCompile(`(?i)ALTER\s+TABLE\s+.+\s+ADD\s+`)
+	reAlterAdd         = regexp.MustCompile(`(?is)ALTER\s+TABLE\s+.+\s+ADD\s+`)
 	reAddNonColumn     = regexp.MustCompile(`(?i)ADD\s+(?:CONSTRAINT|INDEX|UNIQUE|PRIMARY|FULLTEXT|SPATIAL|KEY)\b`)
 	reCreateTableAS    = regexp.MustCompile(`(?i)CREATE\s+TABLE[\s\S]+\bAS\s+SELECT\b`)
 	reSetNotNull       = regexp.MustCompile(`(?i)ALTER\s+COLUMN\s+\S+\s+SET\s+NOT\s+NULL`)

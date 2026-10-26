@@ -155,15 +155,13 @@ func EffectiveConfTemplate(st *store.DB, clusterID, role, nodeID string) (conten
 	return BuiltinConfTemplate(role), "builtin", nil
 }
 
-// softwareBaseForRole 按组件选 FE/BE 软件根。
-func softwareBaseForRole(cl *store.SrCluster, role string) string {
-	if cl == nil {
-		return ""
-	}
+// softwareBaseForRole 按组件选 FE/BE 软件根：集群字段 → 全局默认 → 内置缺省。
+func softwareBaseForRole(st *store.DB, cl *store.SrCluster, role string) string {
+	fe, be, _ := store.ResolveSrPaths(st, cl)
 	if strings.ToLower(role) == "be" {
-		return strings.TrimRight(cl.EffectiveBeSoftwareBase(), "/")
+		return be
 	}
-	return strings.TrimRight(strings.TrimSpace(cl.SoftwareBase), "/")
+	return fe
 }
 
 // resolveStorageRoot 原样使用 data_root：登记集群为探测到的目录，初始化为表单填写值。不拼接 be/storage。
@@ -180,19 +178,16 @@ func resolveStorageRoot(dataRoot string) string {
 }
 
 // BuildConfVars 从集群/节点推导端口与锁定路径。
-func BuildConfVars(cl *store.SrCluster, n *store.SrNode) ConfVars {
+func BuildConfVars(st *store.DB, cl *store.SrCluster, n *store.SrNode) ConfVars {
 	role := "fe"
 	soft := ""
-	dataRoot := "/data"
+	_, _, dataRoot := store.ResolveSrPaths(st, cl)
 	if cl != nil {
-		if strings.TrimSpace(cl.DataRoot) != "" {
-			dataRoot = strings.TrimSpace(cl.DataRoot)
-		}
 		if n != nil && strings.TrimSpace(n.SoftwarePath) != "" {
 			soft = strings.TrimSpace(n.SoftwarePath)
 		} else if n != nil {
 			role = strings.ToLower(n.Component)
-			soft = softwareBaseForRole(cl, role) + "/" + role
+			soft = softwareBaseForRole(st, cl, role) + "/" + role
 		}
 	}
 	if n != nil {
@@ -201,7 +196,7 @@ func BuildConfVars(cl *store.SrCluster, n *store.SrNode) ConfVars {
 			dataRoot = dr
 		}
 		if soft == "" && cl != nil {
-			soft = softwareBaseForRole(cl, role) + "/" + role
+			soft = softwareBaseForRole(st, cl, role) + "/" + role
 		}
 	}
 	v := ConfVars{
@@ -315,7 +310,7 @@ type NodeConfPreview struct {
 	Host       string   `json:"host"`
 	Role       string   `json:"role"`
 	RemotePath string   `json:"remote_path"`
-	Source     string   `json:"source"` // node|cluster|platform|builtin
+	Source     string   `json:"source"`   // node|cluster|platform|builtin
 	Content    string   `json:"content"`  // 最终将写入（含锁定路径）
 	Editable   string   `json:"editable"` // 可编辑区（无锁定路径）
 	Vars       ConfVars `json:"vars"`
@@ -343,7 +338,7 @@ func PreviewClusterConfs(st *store.DB, cl *store.SrCluster, nodes []store.SrNode
 			Source:     source,
 			Content:    content,
 			Editable:   StripLockedDataDirKeys(content),
-			Vars:       BuildConfVars(cl, n),
+			Vars:       BuildConfVars(st, cl, n),
 			HasDraft:   nc != nil && strings.TrimSpace(nc.Content) != "",
 		})
 	}
@@ -364,7 +359,7 @@ func MaterializeConf(st *store.DB, cl *store.SrCluster, n *store.SrNode) (remote
 	if err := RejectLockedDataDirKeys(tmpl); err != nil {
 		return "", "", source, fmt.Errorf("%s 模板: %w", source, err)
 	}
-	vars := BuildConfVars(cl, n)
+	vars := BuildConfVars(st, cl, n)
 	rendered, err := RenderConf(tmpl, vars)
 	if err != nil {
 		return "", "", source, err
@@ -372,7 +367,7 @@ func MaterializeConf(st *store.DB, cl *store.SrCluster, n *store.SrNode) (remote
 	content = AppendLockedDataPaths(role, rendered, vars)
 	soft := strings.TrimSpace(n.SoftwarePath)
 	if soft == "" {
-		soft = softwareBaseForRole(cl, role) + "/" + role
+		soft = softwareBaseForRole(st, cl, role) + "/" + role
 	}
 	remotePath = filepath.ToSlash(filepath.Join(soft, "conf", role+".conf"))
 	return remotePath, content, source, nil

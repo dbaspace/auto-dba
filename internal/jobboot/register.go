@@ -210,6 +210,7 @@ func RegisterPlatformJobs(r *jobreg.Registry, d Deps) {
 		"60",
 		"复制槽监控采集间隔（秒）：支持 30、60 或自定义；定时任务 sync.slots.collect 按此间隔采集",
 	)
+	d.DB.EnsureSrLayoutDefaults()
 	r.Register(jobreg.JobDesc{
 		Key: "sync.slots.collect", Name: "复制槽状态采集", Group: "collect",
 		Description:  "周期采集 PostgreSQL 复制槽（pid、LSN、滞后），供同步列表展示",

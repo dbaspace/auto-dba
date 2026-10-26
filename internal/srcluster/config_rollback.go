@@ -30,12 +30,12 @@ func (e *Engine) ReadRemoteConf(ctx context.Context, cl *store.SrCluster, n *sto
 }
 
 // RenderEditableConf 把编辑区正文渲染成将要下发的完整文件（含平台锁定路径）。
-func RenderEditableConf(cl *store.SrCluster, n *store.SrNode, editable string) (string, error) {
+func RenderEditableConf(st *store.DB, cl *store.SrCluster, n *store.SrNode, editable string) (string, error) {
 	body := StripLockedDataDirKeys(editable)
 	if err := RejectLockedDataDirKeys(body); err != nil {
 		return "", err
 	}
-	vars := BuildConfVars(cl, n)
+	vars := BuildConfVars(st, cl, n)
 	rendered, err := RenderConf(body, vars)
 	if err != nil {
 		return "", err
@@ -140,7 +140,7 @@ func (e *Engine) StartConfigRollback(clusterID, operator string, opts ConfigRoll
 			return "", fmt.Errorf("节点 %s 的目标版本内容为空", t.node.Host)
 		}
 		n := t.node
-		if _, err := RenderEditableConf(cl, &n, draft); err != nil {
+		if _, err := RenderEditableConf(e.Store, cl, &n, draft); err != nil {
 			return "", fmt.Errorf("节点 %s 的目标版本无法渲染: %w", t.node.Host, err)
 		}
 		drafts[i] = draft

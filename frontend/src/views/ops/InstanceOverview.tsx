@@ -556,7 +556,7 @@ export default function InstanceOverview() {
           loading={loading && !running}
           dataSource={sorted}
           columns={columns}
-          scroll={{ x: 1400, y: 'calc(100% - 47px)' }}
+          scroll={{ x: 1400 }}
           pagination={{ defaultPageSize: 20, showSizeChanger: true, pageSizeOptions: ['20', '50', '100'], showTotal: (n) => `共 ${n} 条` }}
           rowClassName={(row) => (stale(row.sample) ? 'instance-overview-stale' : '')}
         />
