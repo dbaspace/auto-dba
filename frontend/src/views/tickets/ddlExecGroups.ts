@@ -87,7 +87,8 @@ export function buildDdlExecGroups(
     const iid = String(r.instance_id || '').trim()
     const host = String(r.host || opts.fallbackHost || '').trim()
     const db = String(r.db || opts.fallbackDb || '').trim()
-    const key = iid || `${host}|${db}` || 'unknown'
+    const dbPart = db || '-'
+    const key = iid ? `${iid}|${dbPart}` : `${host}|${dbPart}`
     if (!map.has(key)) {
       map.set(key, [])
       order.push(key)

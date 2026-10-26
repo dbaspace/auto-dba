@@ -11,9 +11,13 @@ func ddlDoneSource(prev *ticketexec.Result, instanceID, dbName string, stmtN int
 	if prev == nil || stmtN <= 0 {
 		return nil
 	}
+	dbName = strings.TrimSpace(dbName)
 	var recs []ticketexec.Record
 	for _, r := range prev.Records {
 		if strings.TrimSpace(r.InstanceID) != instanceID {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(r.DB), dbName) {
 			continue
 		}
 		if strings.EqualFold(strings.TrimSpace(r.Status), "failed") {

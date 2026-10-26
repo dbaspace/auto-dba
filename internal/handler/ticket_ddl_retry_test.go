@@ -6,6 +6,18 @@ import (
 	"auto-dba/internal/ticketexec"
 )
 
+func TestDDLShardDBPrefix(t *testing.T) {
+	if ddlShardDBPrefix("") != "" {
+		t.Fatal("empty")
+	}
+	if ddlShardDBPrefix(`{"shard_db":false,"shard_db_prefix":"db_order_"}`) != "" {
+		t.Fatal("unchecked shard should not expand")
+	}
+	if got := ddlShardDBPrefix(`{"shard_db":true,"shard_db_prefix":" db_order_ "}`); got != "db_order_" {
+		t.Fatalf("prefix=%q", got)
+	}
+}
+
 func TestDDLDoneSource(t *testing.T) {
 	rec := func(inst, status, sql string) ticketexec.Record {
 		return ticketexec.Record{InstanceID: inst, Host: "h-" + inst, DB: "app", Status: status, SQL: sql}
@@ -52,5 +64,17 @@ func TestDDLDoneSource(t *testing.T) {
 	}
 	if ddlDoneSource(compacted, "sea", "app", 1600) != nil {
 		t.Fatal("成功数与语句数不一致不应跳过")
+	}
+
+	sharded := &ticketexec.Result{Records: []ticketexec.Record{
+		{InstanceID: "bj", Host: "h-bj", DB: "db_order_0", Status: "success", SQL: "s1"},
+		{InstanceID: "bj", Host: "h-bj", DB: "db_order_0", Status: "success", SQL: "s2"},
+		{InstanceID: "bj", Host: "h-bj", DB: "db_order_1", Status: "failed", SQL: "s1"},
+	}}
+	if d := ddlDoneSource(sharded, "bj", "db_order_0", 2); d == nil || !d.Success {
+		t.Fatal("同一实例已成功的分库应跳过")
+	}
+	if ddlDoneSource(sharded, "bj", "db_order_1", 2) != nil {
+		t.Fatal("同一实例失败的分库不应跳过")
 	}
 }

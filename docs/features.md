@@ -88,7 +88,7 @@ Client Secret（及 LDAP Bind 密码）用字段加密密钥落库（优先 `app
 | 页面 | 路径 | 说明 |
 |------|------|------|
 | 工单列表 | `/ops/tickets` | 全部工单的查询、审批与执行记录；展示申请原因、环境、数据库类型；DQL 导出完成后状态为「已下载」 |
-| DDL 工单 | `/ops/ddl` | 结构变更。提交前按审核规则做 SQL 检查（结果可按状态过滤、按屏分页），支持美化与关键字高亮；可看执行影响；可多选域名级数据源。全局参数 `ticket_ddl_constraint_check_enabled` 默认开启，关闭后跳过全部 SQL 审核、只保留提交门禁，详情会标明。PostgreSQL `ADD COLUMN IF NOT EXISTS` 在列注释规则开启时仍要带 `COMMENT ON COLUMN` |
+| DDL 工单 | `/ops/ddl` | 结构变更。提交前按审核规则做 SQL 检查（结果可按状态过滤、按屏分页），支持美化与关键字高亮；可看执行影响；可多选域名级数据源。勾选分库并填写前缀时，PostgreSQL 按前缀现查数字后缀库并逐库执行，代表库须已登记，其余分库不要求登记；重试按库跳过已成功的库。全局参数 `ticket_ddl_constraint_check_enabled` 默认开启，关闭后跳过全部 SQL 审核、只保留提交门禁，详情会标明。PostgreSQL `ADD COLUMN IF NOT EXISTS` 在列注释规则开启时仍要带 `COMMENT ON COLUMN` |
 | DML 工单 | `/ops/dml` | 数据变更，同样走审核与审批；填写 SQL 支持美化/高亮，检测结果分页与状态过滤。PostgreSQL DML 由平台包事务执行，脚本中的 `BEGIN`/`COMMIT`/`ROLLBACK` 会被忽略（避免与外层事务双重提交） |
 | DQL 工单 | `/ops/dql` | 数据导出。左侧填环境、库、审批人和事由，右侧写查询 SQL |
 | Kafka 工单 | `/ops/kafka` | 创建或调整 Topic；地址选自域名管理（本租户可见），环境选自环境管理 |

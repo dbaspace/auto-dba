@@ -54,6 +54,20 @@ describe('buildDdlExecGroups', () => {
     expect(groups[0].ok).toBe(false)
   })
 
+  it('同一实例的多个分库分成多块', () => {
+    const { groups, stats } = buildDdlExecGroups(
+      [
+        { instance_id: 'i1', host: 'pg.order.bj', port: 5432, db: 'db_order_0', sql: 's1', status: 'success' },
+        { instance_id: 'i1', host: 'pg.order.bj', port: 5432, db: 'db_order_1', sql: 's1', status: 'success' },
+      ],
+      { execSuccess: true },
+    )
+    expect(groups).toHaveLength(2)
+    expect(groups[0].label).toBe('db_order_0 - pg.order.bj:5432')
+    expect(groups[1].label).toBe('db_order_1 - pg.order.bj:5432')
+    expect(stats.instTotal).toBe(2)
+  })
+
   it('全部 success 且未失败时实例 ok', () => {
     const { groups, stats } = buildDdlExecGroups(
       [{ instance_id: 'i1', host: 'h', db: 'd', sql: 'u1', status: 'success' }],

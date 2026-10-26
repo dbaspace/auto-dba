@@ -134,10 +134,10 @@ export default function DdlExecImpact(props: {
 
   const bannerClass = allOk ? 'is-success' : allFail ? 'is-fail' : hasFail ? 'is-partial' : 'is-success'
   const bannerTitle = (() => {
-    if (!stats.instTotal) return '暂无实例执行结果'
-    if (allOk) return `共 ${stats.instTotal} 个实例，全部执行成功`
-    if (allFail) return `共 ${stats.instTotal} 个实例，全部执行失败`
-    return `共 ${stats.instTotal} 个实例，部分执行失败`
+    if (!stats.instTotal) return '暂无库执行结果'
+    if (allOk) return `共 ${stats.instTotal} 个库，全部执行成功`
+    if (allFail) return `共 ${stats.instTotal} 个库，全部执行失败`
+    return `共 ${stats.instTotal} 个库，部分执行失败`
   })()
 
   const okLabels = groups.filter((g) => g.ok).map((g) => g.label)

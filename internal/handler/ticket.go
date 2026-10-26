@@ -320,6 +320,22 @@ func ddlShardSkipSchema(needRollback string) bool {
 	return skipDDLSchemaCheck(extra.ShardDB, extra.ShardTable)
 }
 
+// ddlShardDBPrefix 勾选分库时返回前缀；未勾选或前缀为空则返回空，执行仍只跑代表库。
+func ddlShardDBPrefix(needRollback string) string {
+	raw := strings.TrimSpace(needRollback)
+	if raw == "" {
+		return ""
+	}
+	var extra struct {
+		ShardDB       bool   `json:"shard_db"`
+		ShardDBPrefix string `json:"shard_db_prefix"`
+	}
+	if json.Unmarshal([]byte(raw), &extra) != nil || !extra.ShardDB {
+		return ""
+	}
+	return strings.TrimSpace(extra.ShardDBPrefix)
+}
+
 func (h *TicketHandler) resolveReviewEngine(dbType, instanceID string) string {
 	if e := store.NormalizeReviewEngine(dbType); e != "" {
 		return e
@@ -1596,16 +1612,19 @@ func (h *TicketHandler) executeDDLTicket(ctx context.Context, it *store.Issue) e
 		return h.persistExec(it, &ticketexec.Result{Success: false, Message: "工单未指定实例"})
 	}
 	stmtN := len(sqlcheck.SplitSQL(it.SQLContent))
+	shardPrefix := ddlShardDBPrefix(it.NeedRollback)
 	merged := &ticketexec.Result{
 		StartedAt:      time.Now().UTC().Format(time.RFC3339),
 		Success:        true,
 		StatementCount: stmtN,
 	}
 	var prev *ticketexec.Result
-	if len(ids) > 1 {
+	if len(ids) > 1 || shardPrefix != "" {
 		prev = ticketexec.Parse(it.ExecuteResult)
 	}
 	var skipped []string
+	plannedDBs := 0
+	stop := false
 	for _, id := range ids {
 		inst, err := h.Store.GetInstanceUsableInTenant(id, it.TenantID)
 		if err != nil {
@@ -1619,13 +1638,15 @@ func (h *TicketHandler) executeDDLTicket(ctx context.Context, it *store.Issue) e
 			}))
 			break
 		}
-		// 多数据源重试：上次已全部成功的数据源不再执行
-		if done := ddlDoneSource(prev, id, it.DBName, stmtN); done != nil {
-			mergeExecResult(merged, done)
-			skipped = append(skipped, inst.Name)
-			continue
+		// 未分库：整实例只跑代表库，上次已全部成功则跳过
+		if shardPrefix == "" {
+			if done := ddlDoneSource(prev, id, it.DBName, stmtN); done != nil {
+				mergeExecResult(merged, done)
+				skipped = append(skipped, inst.Name)
+				continue
+			}
 		}
-		// 执行前再确认库仍已登记（与提交硬约束一致）
+		// 执行前再确认代表库仍已登记（与提交硬约束一致）。分库其余库按前缀现查，不要求逐个登记。
 		dbEnt, err := h.Store.FindDatabase(id, it.DBName)
 		if err != nil {
 			return err
@@ -1652,30 +1673,84 @@ func (h *TicketHandler) executeDDLTicket(ctx context.Context, it *store.Issue) e
 			break
 		}
 		domain := ddlDomainForInstance(it.NeedRollback, id, it.Domain)
-		t, err := h.execTarget(inst, it.DBName, domain)
-		if err != nil {
-			merged.Success = false
-			merged.Message = err.Error()
-			merged.Records = append(merged.Records, ticketexec.Record{
-				InstanceID: id, InstanceName: inst.Name, Host: resolveInstanceHost(inst, domain), DB: it.DBName,
-				Status: "failed", ErrorMessage: err.Error(), Order: len(merged.Records) + 1,
-			})
-			break
-		}
-		res := ticketexec.Run(ctx, it.IssueType, it.SQLContent, t)
-		tagExecRecords(res, id, inst.Name)
-		mergeExecResult(merged, res)
-		if res == nil || !res.Success {
-			if merged.Message == "" && res != nil {
-				merged.Message = res.Message
+		dbNames := []string{it.DBName}
+		if shardPrefix != "" {
+			if store.NormalizeReviewEngine(inst.DBType) != "postgres" {
+				merged.Success = false
+				merged.Message = "分库执行仅支持 PostgreSQL"
+				merged.Records = append(merged.Records, ticketexec.Record{
+					InstanceID: id, InstanceName: inst.Name, Host: resolveInstanceHost(inst, domain), DB: it.DBName,
+					Status: "failed", ErrorMessage: merged.Message, Order: len(merged.Records) + 1,
+				})
+				break
 			}
-			merged.Success = false
+			names, listErr := h.listShardDatabases(ctx, inst, domain, shardPrefix)
+			if listErr != nil {
+				merged.Success = false
+				merged.Message = listErr.Error()
+				merged.Records = append(merged.Records, ticketexec.Record{
+					InstanceID: id, InstanceName: inst.Name, Host: resolveInstanceHost(inst, domain), DB: "(获取库列表)",
+					Status: "failed", ErrorMessage: merged.Message, Order: len(merged.Records) + 1,
+				})
+				break
+			}
+			if len(names) == 0 {
+				merged.Success = false
+				merged.Message = fmt.Sprintf("未匹配到分库前缀 %q 且后缀为数字的库", shardPrefix)
+				merged.Records = append(merged.Records, ticketexec.Record{
+					InstanceID: id, InstanceName: inst.Name, Host: resolveInstanceHost(inst, domain), DB: "(获取库列表)",
+					Status: "failed", ErrorMessage: merged.Message, Order: len(merged.Records) + 1,
+				})
+				break
+			}
+			dbNames = names
+			plannedDBs += len(dbNames)
+		}
+		for _, dbName := range dbNames {
+			if shardPrefix != "" {
+				if done := ddlDoneSource(prev, id, dbName, stmtN); done != nil {
+					mergeExecResult(merged, done)
+					skipped = append(skipped, inst.Name+"/"+dbName)
+					continue
+				}
+			}
+			t, err := h.execTarget(inst, dbName, domain)
+			if err != nil {
+				merged.Success = false
+				merged.Message = err.Error()
+				merged.Records = append(merged.Records, ticketexec.Record{
+					InstanceID: id, InstanceName: inst.Name, Host: resolveInstanceHost(inst, domain), DB: dbName,
+					Status: "failed", ErrorMessage: err.Error(), Order: len(merged.Records) + 1,
+				})
+				stop = true
+				break
+			}
+			res := ticketexec.Run(ctx, it.IssueType, it.SQLContent, t)
+			tagExecRecords(res, id, inst.Name)
+			mergeExecResult(merged, res)
+			if res == nil || !res.Success {
+				if merged.Message == "" && res != nil {
+					merged.Message = res.Message
+				}
+				merged.Success = false
+				stop = true
+				break
+			}
+		}
+		if stop {
 			break
 		}
 	}
+	if shardPrefix != "" && plannedDBs > 0 && stmtN > 0 {
+		merged.StatementCount = stmtN * plannedDBs
+	}
 	merged.EndedAt = time.Now().UTC().Format(time.RFC3339)
 	if merged.Success && merged.Summary == "" {
-		merged.Summary = "DDL 已在全部目标实例执行"
+		if shardPrefix != "" {
+			merged.Summary = fmt.Sprintf("DDL 已在 %d 个分库执行", plannedDBs)
+		} else {
+			merged.Summary = "DDL 已在全部目标实例执行"
+		}
 	}
 	if len(skipped) > 0 {
 		note := "重试跳过此前已全部成功的数据源：" + strings.Join(skipped, "、")
@@ -1685,6 +1760,18 @@ func (h *TicketHandler) executeDDLTicket(ctx context.Context, it *store.Issue) e
 		merged.Summary = note
 	}
 	return h.persistExec(it, merged)
+}
+
+func (h *TicketHandler) listShardDatabases(ctx context.Context, inst *store.Instance, domain, prefix string) ([]string, error) {
+	t, err := h.execTarget(inst, "postgres", domain)
+	if err != nil {
+		return nil, err
+	}
+	names, err := ticketexec.ListPostgresDatabasesByPrefix(ctx, t, prefix)
+	if err != nil {
+		return nil, err
+	}
+	return cdc.FilterNumericShardNames(names, prefix), nil
 }
 
 func (h *TicketHandler) executeHATicket(ctx context.Context, it *store.Issue) error {
