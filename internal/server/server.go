@@ -177,6 +177,7 @@ func Run(cfg *config.Config, configPath string) {
 		AccessDomain:       &handler.AccessDomainHandler{Store: db},
 		Region:             &handler.RegionHandler{Store: db},
 		Env:                &handler.EnvironmentHandler{Store: db},
+		SQLExec:            &handler.SQLExecutorHandler{Store: db, Secret: fieldCrypto, Cfg: cfg},
 		Connector:          &handler.ConnectorHandler{Store: db},
 		Args:               &handler.GlobalArgHandler{Store: db},
 		Jobs:               &handler.JobsHandler{Reg: jobReg, Store: db},

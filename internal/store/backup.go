@@ -103,6 +103,8 @@ type BackupAgentDeploy struct {
 	CreatedAt      string `json:"created_at"`
 	UpdatedAt      string `json:"updated_at"`
 	FinishedAt     string `json:"finished_at,omitempty"`
+	Kind           string `json:"kind,omitempty"`
+	Payload        string `json:"payload,omitempty"`
 }
 
 const (
@@ -257,7 +259,10 @@ func (d *DB) ensureBackupTables() error {
 			return err
 		}
 	}
-	return d.ensureBackupRunExtraColumns()
+	if err := d.ensureBackupRunExtraColumns(); err != nil {
+		return err
+	}
+	return d.ensureSQLExecutorDeployColumns()
 }
 
 func (d *DB) ensureBackupRunExtraColumns() error {
@@ -942,10 +947,10 @@ func (d *DB) UpdateBackupAgentDeploy(it *BackupAgentDeploy) error {
 
 func (d *DB) GetBackupAgentDeploy(id string) (*BackupAgentDeploy, error) {
 	it := &BackupAgentDeploy{}
-	err := d.QueryRow(`SELECT id, host_instance_id, agent_id, status, listen_port, remote_dir, base_url, log_text, created_by, created_at, updated_at, finished_at
+	err := d.QueryRow(`SELECT id, host_instance_id, agent_id, status, listen_port, remote_dir, base_url, log_text, created_by, created_at, updated_at, finished_at, COALESCE(kind,'platform'), COALESCE(payload,'')
 		FROM tbl_backup_agent_deploys WHERE id=?`, id).Scan(
 		&it.ID, &it.HostInstanceID, &it.AgentID, &it.Status, &it.ListenPort, &it.RemoteDir, &it.BaseURL, &it.LogText,
-		&it.CreatedBy, &it.CreatedAt, &it.UpdatedAt, &it.FinishedAt,
+		&it.CreatedBy, &it.CreatedAt, &it.UpdatedAt, &it.FinishedAt, &it.Kind, &it.Payload,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -972,6 +977,7 @@ func (d *DB) ListBackupAgentDeploysInTenant(tenantID, hostInstanceID string, lim
 		q += ` AND host_instance_id=?`
 		args = append(args, id)
 	}
+	q += ` AND COALESCE(kind,'platform')<>'sql'`
 	q += ` ORDER BY created_at DESC LIMIT ?`
 	args = append(args, limit)
 	rows, err := d.Query(q, args...)
@@ -1014,14 +1020,14 @@ func (d *DB) LatestSuccessDeployForAgent(agentID, hostInstanceID string) (*Backu
 	}
 	const cols = `id, host_instance_id, agent_id, status, listen_port, remote_dir, base_url, log_text, created_by, created_at, updated_at, finished_at`
 	if agentID != "" {
-		it, err := scanOne(`SELECT `+cols+` FROM tbl_backup_agent_deploys WHERE agent_id=? AND status=? ORDER BY created_at DESC LIMIT 1`,
+		it, err := scanOne(`SELECT `+cols+` FROM tbl_backup_agent_deploys WHERE agent_id=? AND status=? AND COALESCE(kind,'platform')<>'sql' ORDER BY created_at DESC LIMIT 1`,
 			agentID, BackupDeploySuccess)
 		if err != nil || it != nil {
 			return it, err
 		}
 	}
 	if hostInstanceID != "" {
-		return scanOne(`SELECT `+cols+` FROM tbl_backup_agent_deploys WHERE host_instance_id=? AND status=? ORDER BY created_at DESC LIMIT 1`,
+		return scanOne(`SELECT `+cols+` FROM tbl_backup_agent_deploys WHERE host_instance_id=? AND status=? AND COALESCE(kind,'platform')<>'sql' ORDER BY created_at DESC LIMIT 1`,
 			hostInstanceID, BackupDeploySuccess)
 	}
 	return nil, nil

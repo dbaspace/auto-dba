@@ -238,6 +238,9 @@ func (d *DB) migrate() error {
 			return err
 		}
 	}
+	if err := d.ensureSQLExecutorTable(); err != nil {
+		return err
+	}
 	return d.ensureUserRoleID()
 }
 

@@ -81,6 +81,12 @@ func (d *DB) migrateFast() error {
 			if err := d.ensureIssueExecProgressColumn(); err != nil {
 				return err
 			}
+			if err := d.ensureSQLExecutorTable(); err != nil {
+				return err
+			}
+			if err := d.ensureSQLExecutorDeployColumns(); err != nil {
+				return err
+			}
 			if err := d.ensureAccessDomainsTable(); err != nil {
 				return err
 			}
@@ -143,6 +149,9 @@ func (d *DB) seedFast() error {
 				return err
 			}
 			if err := d.ensureScheduledJobsMenu(now); err != nil {
+				return err
+			}
+			if err := d.ensureSQLExecutorMenu(now); err != nil {
 				return err
 			}
 			if err := d.ensureScheduledJobsActionMenus(now); err != nil {

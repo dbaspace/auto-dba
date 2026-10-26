@@ -26,6 +26,7 @@ type Deps struct {
 	AccessDomain       *handler.AccessDomainHandler
 	Region             *handler.RegionHandler
 	Env                *handler.EnvironmentHandler
+	SQLExec            *handler.SQLExecutorHandler
 	Connector          *handler.ConnectorHandler
 	Args               *handler.GlobalArgHandler
 	Jobs               *handler.JobsHandler
@@ -296,6 +297,16 @@ func Init(e *gin.Engine, d Deps) {
 	secured.POST("/environments", requireURN(store.URNEnvironmentsCreate), d.Env.Create)
 	secured.PUT("/environments/:id", requireURN(store.URNEnvironmentsEdit), d.Env.Update)
 	secured.DELETE("/environments/:id", requireURN(store.URNEnvironmentsDelete), d.Env.Delete)
+
+	if d.SQLExec != nil {
+		execURN := requireURN(store.URNSidebarSQLExecutors)
+		secured.GET("/sql-executors", execURN, d.SQLExec.List)
+		secured.PUT("/sql-executors/local-idc", execURN, d.SQLExec.SaveLocalIDC)
+		secured.POST("/sql-executors", execURN, d.SQLExec.Create)
+		secured.PUT("/sql-executors/:id", execURN, d.SQLExec.Update)
+		secured.DELETE("/sql-executors/:id", execURN, d.SQLExec.Delete)
+		secured.POST("/sql-executors/:id/probe", execURN, d.SQLExec.Probe)
+	}
 
 	if d.DNS != nil {
 		view := requireURN(store.URNSidebarDNS)
@@ -819,6 +830,11 @@ func Init(e *gin.Engine, d Deps) {
 		pg.POST("/deploy", d.Backup.DeployAgent)
 		pg.GET("/deploys", d.Backup.ListDeploys)
 		pg.GET("/deploys/:id", d.Backup.GetDeploy)
+		if d.SQLExec != nil {
+			pg.GET("/sql-executors", d.SQLExec.List)
+			pg.GET("/sql-executors/deploys", d.SQLExec.ListDeploys)
+			pg.POST("/sql-executors/deploy", d.SQLExec.Deploy)
+		}
 		pg.DELETE("/:id", d.Backup.DeleteAgent)
 		pg.POST("/:id/probe", d.Backup.ProbeAgent)
 		pg.POST("/:id/start", d.Backup.StartAgent)

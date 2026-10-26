@@ -50,6 +50,10 @@ export default function PlatformAgent() {
   const [agents, setAgents] = useState<any[]>([])
   const [hosts, setHosts] = useState<any[]>([])
   const [deploys, setDeploys] = useState<any[]>([])
+  const [sqlExecs, setSqlExecs] = useState<any[]>([])
+  const [sqlDeploys, setSqlDeploys] = useState<any[]>([])
+  const [envOptions, setEnvOptions] = useState<{ value: string; label: string }[]>([])
+  const [sqlOpen, setSqlOpen] = useState(false)
   const [agentStatus, setAgentStatus] = useState<Record<string, string>>({})
   const [actingId, setActingId] = useState('')
   const [loading, setLoading] = useState(false)
@@ -68,6 +72,7 @@ export default function PlatformAgent() {
   } | null>(null)
   const [agForm] = Form.useForm()
   const [depForm] = Form.useForm()
+  const [sqlForm] = Form.useForm()
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const agGroups: string[] = Form.useWatch('enabled_groups', agForm) || []
   const depGroups: string[] = Form.useWatch('enabled_groups', depForm) || []
@@ -88,10 +93,24 @@ export default function PlatformAgent() {
   }
 
   async function loadDeploys() {
-    const { data } = await api.get('/platform/agents/deploys', { params: { limit: 50 } })
+    const [{ data }, sqlDep, sqlList, envRes] = await Promise.all([
+      api.get('/platform/agents/deploys', { params: { limit: 50 } }),
+      api.get('/platform/agents/sql-executors/deploys').catch(() => ({ data: { data: [] } })),
+      api.get('/platform/agents/sql-executors').catch(() => ({ data: { data: [] } })),
+      api.get('/environments').catch(() => ({ data: { data: [] } })),
+    ])
     const list = data.data || []
     setDeploys(list)
-    return list as any[]
+    setSqlDeploys(sqlDep.data.data || [])
+    setSqlExecs(sqlList.data.data || [])
+    setEnvOptions(
+      (envRes.data.data || []).map((e: any) => ({
+        value: e.code,
+        label: e.name ? `${e.name}（${e.code}）` : e.code,
+      })),
+    )
+    const sqlListRows = sqlDep.data.data || []
+    return [...list, ...sqlListRows] as any[]
   }
 
   async function refreshAgentStatus(list?: any[]) {
@@ -161,7 +180,7 @@ export default function PlatformAgent() {
         if (deployId) {
           const cur = list.find((d) => d.id === deployId)
           if (cur?.status === 'success') {
-            message.success('Agent 下发成功并已登记')
+            message.success(cur.kind === 'sql' || cur.listen_port === 8093 ? 'SQL 执行器下发成功并已登记' : 'Agent 下发成功并已登记')
             await load()
             stopPoll()
             return
@@ -284,6 +303,31 @@ export default function PlatformAgent() {
       await loadDeploys()
       if (deployId) startPoll(deployId)
     } catch (e: any) {
+      message.error(e?.response?.data?.message || '下发失败')
+    } finally {
+      setDeployBusy(false)
+    }
+  }
+
+  async function runSqlDeploy() {
+    const v = await sqlForm.validateFields()
+    setDeployBusy(true)
+    try {
+      const { data } = await api.post('/platform/agents/sql-executors/deploy', {
+        host_instance_id: v.host_instance_id,
+        listen_port: v.listen_port || 8093,
+        remote_dir: v.remote_dir || '',
+        escalate: v.escalate ? 'sudo_su' : '',
+        name: v.name || '',
+        env_codes: v.env_codes || [],
+      })
+      const deployId = data?.data?.deploy_id
+      message.success('已创建 SQL 执行器下发任务')
+      setSqlOpen(false)
+      await loadDeploys()
+      if (deployId) startPoll(deployId)
+    } catch (e: any) {
+      if (e?.errorFields) return
       message.error(e?.response?.data?.message || '下发失败')
     } finally {
       setDeployBusy(false)
@@ -535,6 +579,48 @@ export default function PlatformAgent() {
       </div>
       <ResponsiveTable rowKey="id" loading={loading} columns={agCols} dataSource={agents} />
       <div className="backup-toolbar" style={{ marginTop: 24 }}>
+        <h3>SQL 执行器</h3>
+        <span className="backup-hint">独立进程，默认端口 8093。下发成功后按所选环境登记，工单按实例环境发到这里。不并进上面的备份 / 高可用 Agent。</span>
+        <Button
+          onClick={() => {
+            sqlForm.resetFields()
+            sqlForm.setFieldsValue({
+              listen_port: 8093,
+              remote_dir: '/home/sysadmin/auto-dba/sql-agent',
+              escalate: false,
+              env_codes: [],
+            })
+            setSqlOpen(true)
+          }}
+        >
+          下发到主机
+        </Button>
+      </div>
+      <ResponsiveTable
+        rowKey="id"
+        loading={loading}
+        dataSource={sqlExecs}
+        locale={{ emptyText: '还没有 SQL 执行器。在能连上目标库的主机下发 sql-agent。' }}
+        columns={[
+          { title: '名称', dataIndex: 'name' },
+          { title: '地址', dataIndex: 'base_url' },
+          {
+            title: '绑定环境',
+            render: (_, row) =>
+              (row.environments || []).length
+                ? (row.environments || []).map((e: any) => (
+                    <Tag key={e.code}>{e.name || e.code}</Tag>
+                  ))
+                : '-',
+          },
+          { title: '启用', width: 80, render: (_, row) => (row.enabled ? '是' : '否') },
+        ]}
+      />
+      <div className="backup-toolbar" style={{ marginTop: 16 }}>
+        <h3>SQL 执行器下发记录</h3>
+      </div>
+      <ResponsiveTable rowKey="id" loading={loading} columns={depCols} dataSource={sqlDeploys} pagination={{ pageSize: 10 }} />
+      <div className="backup-toolbar" style={{ marginTop: 24 }}>
         <h3>下发记录</h3>
       </div>
       <ResponsiveTable rowKey="id" loading={loading} columns={depCols} dataSource={deploys} pagination={{ pageSize: 10 }} />
@@ -721,6 +807,55 @@ export default function PlatformAgent() {
 
       <Modal title="下发日志" open={logOpen} onCancel={() => setLogOpen(false)} footer={null} width={720}>
         <pre className="backup-deploy-log">{logText}</pre>
+      </Modal>
+
+      <Modal
+        title="下发 SQL 执行器"
+        open={sqlOpen}
+        onCancel={() => setSqlOpen(false)}
+        onOk={runSqlDeploy}
+        confirmLoading={deployBusy}
+        destroyOnClose
+        width={640}
+      >
+        <Form form={sqlForm} layout="vertical">
+          <Form.Item
+            name="host_instance_id"
+            label="目标主机"
+            rules={[{ required: true, message: '请选择 host 类型实例' }]}
+            extra="这台机器必须能连所选环境里的数据库。北京控制面只访问执行器地址。"
+          >
+            <Select
+              showSearch
+              optionFilterProp="label"
+              placeholder={hosts.length ? '选择主机' : '暂无 host 实例'}
+              options={hosts.map((h) => ({
+                value: h.id,
+                label: `${h.name} — ${h.host || h.domain_name || '-'} :${h.port || 22}`,
+              }))}
+            />
+          </Form.Item>
+          <Form.Item name="name" label="名称" extra="留空则使用 sql-agent-主机名">
+            <Input placeholder="如 新加坡执行器" />
+          </Form.Item>
+          <Form.Item name="escalate" label="提权执行（sudo su -）" valuePropName="checked">
+            <Switch checkedChildren="开" unCheckedChildren="关" />
+          </Form.Item>
+          <Form.Item name="listen_port" label="端口">
+            <InputNumber min={1024} max={65535} style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item name="remote_dir" label="远程目录">
+            <Input placeholder="/home/sysadmin/auto-dba/sql-agent" />
+          </Form.Item>
+          <Form.Item
+            name="env_codes"
+            label="绑定环境"
+            extra="从环境管理选择。一台执行器可以选多个，一个环境只能绑一台。"
+            rules={[{ required: true, message: '请选择环境' }]}
+          >
+            <Select mode="multiple" options={envOptions} placeholder="选择环境" />
+          </Form.Item>
+        </Form>
       </Modal>
     </div>
   )

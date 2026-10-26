@@ -34,6 +34,7 @@ import MigrationSchemaCompare from '../views/ops/MigrationSchemaCompare'
 import Flashback from '../views/flashback/Flashback'
 import FlashbackCloud from '../views/flashback/FlashbackCloud'
 import Environments from '../views/config/Environments'
+import SqlExecutors from '../views/config/SqlExecutors'
 import DnsRecords from '../views/dns/DnsRecords'
 import DnsZones from '../views/dns/DnsZones'
 import DnsNodes from '../views/dns/DnsNodes'
@@ -273,6 +274,7 @@ export function TabPagePanel({ pathname, search }: { pathname: string; search?: 
       <Route path="/config/instances" element={<Instances />} />
       <Route path="/config/regions" element={<Regions />} />
       <Route path="/config/environments" element={<Environments />} />
+      <Route path="/config/sql-executors" element={<SqlExecutors />} />
       <Route path="/dns" element={<Navigate to="/dns/records" replace />} />
       <Route path="/dns/records" element={<DnsRecords />} />
       <Route path="/dns/zones" element={<DnsZones />} />

@@ -38,6 +38,7 @@ import MigrationSchemaCompare from '../views/ops/MigrationSchemaCompare'
 import Flashback from '../views/flashback/Flashback'
 import FlashbackCloud from '../views/flashback/FlashbackCloud'
 import Environments from '../views/config/Environments'
+import SqlExecutors from '../views/config/SqlExecutors'
 import DnsRecords from '../views/dns/DnsRecords'
 import DnsZones from '../views/dns/DnsZones'
 import DnsNodes from '../views/dns/DnsNodes'
@@ -244,6 +245,7 @@ const router = createHashRouter([
       { path: 'config/instances', element: <Instances /> },
       { path: 'config/regions', element: <Regions /> },
       { path: 'config/environments', element: <Environments /> },
+      { path: 'config/sql-executors', element: <SqlExecutors /> },
       { path: 'dns', element: <Navigate to="/dns/records" replace /> },
       { path: 'dns/records', element: <DnsRecords /> },
       { path: 'dns/zones', element: <DnsZones /> },

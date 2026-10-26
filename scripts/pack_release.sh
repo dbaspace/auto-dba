@@ -88,11 +88,13 @@ build_agents() {
     ./deploy/node-agent/build.sh
     ./deploy/db-agent/build.sh
     ./deploy/backup-agent/build.sh
+    ./deploy/sql-agent/build.sh
   )
   local need=(
     deploy/node-agent/bin/node-agent
     deploy/db-agent/bin/db-agent
     deploy/backup-agent/bin/platform-agent
+    deploy/sql-agent/bin/sql-agent
   )
   local p
   for p in "${need[@]}"; do
@@ -108,10 +110,12 @@ copy_agents() {
   mkdir -p \
     "$stage/deploy/node-agent/bin" \
     "$stage/deploy/db-agent/bin" \
-    "$stage/deploy/backup-agent/bin"
+    "$stage/deploy/backup-agent/bin" \
+    "$stage/deploy/sql-agent/bin"
   cp -a deploy/node-agent/bin/node-agent "$stage/deploy/node-agent/bin/"
   cp -a deploy/db-agent/bin/db-agent "$stage/deploy/db-agent/bin/"
   cp -a deploy/backup-agent/bin/platform-agent "$stage/deploy/backup-agent/bin/"
+  cp -a deploy/sql-agent/bin/sql-agent "$stage/deploy/sql-agent/bin/"
   # 兼容旧路径名
   if [[ -f deploy/backup-agent/bin/backup-agent ]]; then
     cp -a deploy/backup-agent/bin/backup-agent "$stage/deploy/backup-agent/bin/"
@@ -119,6 +123,7 @@ copy_agents() {
   chmod a+x \
     "$stage/deploy/node-agent/bin/node-agent" \
     "$stage/deploy/db-agent/bin/db-agent" \
+    "$stage/deploy/sql-agent/bin/sql-agent" \
     "$stage/deploy/backup-agent/bin/"* 2>/dev/null || true
   # DNS 集群部署从包根读取 deploy/coredns/bin/coredns
   if [[ -f deploy/coredns/bin/coredns ]]; then
@@ -165,7 +170,7 @@ pack_tgz() {
 # ── docker ─────────────────────────────────────────────
 if [[ "$MODE" == "docker" ]]; then
   need_cmd docker
-  echo "[pack] docker build -f deploy/Dockerfile -t ${IMAGE_TAG}（含三类 Agent）"
+  echo "[pack] docker build -f deploy/Dockerfile -t ${IMAGE_TAG}（含 Agent 与 SQL 执行器）"
   docker build -f deploy/Dockerfile -t "$IMAGE_TAG" .
   echo "[pack] 镜像: $IMAGE_TAG"
   echo "[pack] 运行示例: docker run --rm -p 8800:8800 -v \$PWD/config:/app/config $IMAGE_TAG"
@@ -218,14 +223,14 @@ if [[ "$MODE" == "backend" ]]; then
 KeePlus 后端 API 包
 ==================
 含二进制、主机终端运行文件（scripts/terminal、assets/terminal），以及
-Node/DB/Platform Agent（deploy/*/bin），无前端。
+Node/DB/Platform Agent 与 SQL 执行器 sql-agent（deploy/*/bin），无前端。
 
 1. 配置 Nacos / config/config.yaml
 2. http.serve_static: false（页面由 Vite:5174 或 Nginx 提供）
 3. cd 本目录后：./bin/auto-dba -config config/config.yaml
 4. API：http://服务器:8800/api/v1/...
 5. 主机终端需本包根下 scripts/terminal/node-terminal.sh，并配置 terminal.ssh_identity_file
-6. 集群/库部署 SSH 下发 Agent：工作目录须为本包根（已含 deploy/node-agent 等制品）
+6. 集群/库部署 SSH 下发 Agent，以及 SQL 执行器下发：工作目录须为本包根（已含 deploy/node-agent、deploy/sql-agent 等制品）
 
 说明：docs/deploy.md、docs/terminal.md、docs/db-cluster.md
 EOF
@@ -265,7 +270,7 @@ deploy/*/bin Agent 制品）。
 3. 启动：./bin/auto-dba
 4. 浏览器：http://服务器:8800/
 5. 主机 Web 终端依赖 scripts/terminal/node-terminal.sh（已打入本包）与 terminal.ssh_identity_file
-6. Node/DB/Platform Agent 已打入 deploy/*/bin，SSH 下发无需再本机构建
+6. Node/DB/Platform Agent 与 SQL 执行器 sql-agent 已打入 deploy/*/bin，SSH 下发无需再本机构建
 
 运行机无需 Node/pnpm。说明：docs/deploy.md、docs/terminal.md、docs/db-cluster.md
 EOF

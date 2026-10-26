@@ -22,12 +22,13 @@ COPY . .
 ARG APP=auto-dba
 ARG GOARCH=amd64
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=${GOARCH} go build -o /out/${APP} ./cmd/${APP}
-# Node / DB / Platform Agent（SSH 下发相对 /app）
+# Node / DB / Platform Agent 与 SQL 执行器（SSH 下发相对 /app）
 ENV GOOS=linux GOARCH=${GOARCH} CGO_ENABLED=0
-RUN chmod +x deploy/node-agent/build.sh deploy/db-agent/build.sh deploy/backup-agent/build.sh \
+RUN chmod +x deploy/node-agent/build.sh deploy/db-agent/build.sh deploy/backup-agent/build.sh deploy/sql-agent/build.sh \
   && ./deploy/node-agent/build.sh \
   && ./deploy/db-agent/build.sh \
-  && ./deploy/backup-agent/build.sh
+  && ./deploy/backup-agent/build.sh \
+  && ./deploy/sql-agent/build.sh
 
 # ── 运行 ───────────────────────────────────────────────
 FROM alpine:3.20
@@ -43,9 +44,11 @@ COPY --from=backend /src/deploy/node-agent/bin/node-agent /app/deploy/node-agent
 COPY --from=backend /src/deploy/db-agent/bin/db-agent /app/deploy/db-agent/bin/db-agent
 COPY --from=backend /src/deploy/backup-agent/bin/platform-agent /app/deploy/backup-agent/bin/platform-agent
 COPY --from=backend /src/deploy/backup-agent/bin/backup-agent /app/deploy/backup-agent/bin/backup-agent
+COPY --from=backend /src/deploy/sql-agent/bin/sql-agent /app/deploy/sql-agent/bin/sql-agent
 RUN chmod a+x /app/scripts/terminal/*.sh \
   /app/deploy/node-agent/bin/node-agent \
   /app/deploy/db-agent/bin/db-agent \
+  /app/deploy/sql-agent/bin/sql-agent \
   /app/deploy/backup-agent/bin/*
 # 默认 serve_static: true；生产请挂载真实 config 或走 Nacos
 COPY deploy/config.docker.example.yaml /app/config/config.yaml

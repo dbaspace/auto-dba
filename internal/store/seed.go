@@ -274,6 +274,9 @@ func (d *DB) seedRBAC(now string) error {
 	if err := d.ensureScheduledJobsMenu(now); err != nil {
 		return err
 	}
+	if err := d.ensureSQLExecutorMenu(now); err != nil {
+		return err
+	}
 	if err := d.ensureScheduledJobsActionMenus(now); err != nil {
 		return err
 	}
@@ -665,6 +668,7 @@ func (d *DB) seedMenus(now string) error {
 		{"m-cfg-args", "m-cfg-base", "全局参数", "/config/args", "um.sidebar.config-args", "查看全局参数", "setting", 1},
 		{"m-cfg-region", "m-cfg-base", "区域管理", "/config/regions", "um.sidebar.config-regions", "查看区域管理", "location", 2},
 		{"m-cfg-env", "m-cfg-base", "环境管理", "/config/environments", "um.sidebar.config-environments", "查看环境管理", "grid", 3},
+		{"m-cfg-sql-exec", "m-cfg-base", "执行器", "/config/sql-executors", URNSidebarSQLExecutors, "查看 SQL 执行器", "connection", 4},
 		{"m-cfg-tags", "m-cfg-access", "标签管理", "/config/tags", "um.sidebar.config-tags", "查看标签管理", "tag", 1},
 		{"m-cfg-conn", "m-cfg-access", "连接器", "/config/connectors", "um.sidebar.config-connectors", "查看连接器", "connection", 2},
 		{"m-cfg-agent", "m-cfg-access", "平台 Agent", "/config/agents", "um.sidebar.config-agents", "查看平台 Agent", "connection", 3},
@@ -1156,6 +1160,7 @@ func (d *DB) ensureConfigCenterGroups(now string) error {
 		{"m-cfg-args", "m-cfg-base", 1},
 		{"m-cfg-region", "m-cfg-base", 2},
 		{"m-cfg-env", "m-cfg-base", 3},
+		{"m-cfg-sql-exec", "m-cfg-base", 4},
 		{"m-cfg-tags", "m-cfg-access", 1},
 		{"m-cfg-conn", "m-cfg-access", 2},
 		{"m-cfg-agent", "m-cfg-access", 3},
@@ -1430,6 +1435,24 @@ func (d *DB) ensureScheduledJobsMenu(now string) error {
 	m := &Menu{
 		ID: "m-cfg-scheduled-jobs", ParentID: "m-cfg-obs", Title: "定时任务", Path: "/config/scheduled-jobs",
 		URN: URNSidebarScheduledJobs, PermissionDesc: "查看平台定时任务", Icon: "clock",
+		SortOrder: 4, Enabled: true, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := d.EnsureMenu(m); err != nil {
+		return err
+	}
+	if err := d.GrantMenuFollowingParent(m.ID, m.ParentID); err != nil {
+		return err
+	}
+	return d.grantMenuToRoleCode(m.ID, "admin")
+}
+
+func (d *DB) ensureSQLExecutorMenu(now string) error {
+	if err := d.ensureConfigCenterGroups(now); err != nil {
+		return err
+	}
+	m := &Menu{
+		ID: "m-cfg-sql-exec", ParentID: "m-cfg-base", Title: "执行器", Path: "/config/sql-executors",
+		URN: URNSidebarSQLExecutors, PermissionDesc: "查看 SQL 执行器", Icon: "connection",
 		SortOrder: 4, Enabled: true, CreatedAt: now, UpdatedAt: now,
 	}
 	if err := d.EnsureMenu(m); err != nil {

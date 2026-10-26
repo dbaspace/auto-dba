@@ -129,6 +129,7 @@ const (
 	URNSidebarTenants     = "um.sidebar.tenants"
 
 	URNSidebarConfigDomains = "um.sidebar.config-domains"
+	URNSidebarSQLExecutors  = "um.sidebar.config-sql-executors"
 	URNDomainsSync          = "um.action.domains.sync"
 	URNDomainsAssign        = "um.action.domains.assign"
 	URNDomainsEdit          = "um.action.domains.edit"

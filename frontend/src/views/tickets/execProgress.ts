@@ -8,6 +8,8 @@ export type ExecProgress = {
   stmt_total?: number
   session_id?: number
   phase?: string
+  env?: string
+  executor?: string
 }
 
 export type ProgressView = {
@@ -45,5 +47,7 @@ export function ddlProgressView(p?: ExecProgress | null): ProgressView | null {
   }
   if (failed > 0) sub = sub ? `${sub} · 失败 ${failed} 个库` : `失败 ${failed} 个库`
   if (p.session_id) sub = sub ? `${sub} · 当前会话 ${p.session_id}` : `当前会话 ${p.session_id}`
+  const where = [p.env ? `环境 ${p.env}` : '', p.executor ? `执行器 ${p.executor}` : ''].filter(Boolean).join(' · ')
+  if (where) sub = sub ? `${sub} · ${where}` : where
   return { title, indeterminate: false, percent, sub }
 }

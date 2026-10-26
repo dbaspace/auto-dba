@@ -86,7 +86,11 @@ func (h *TicketHandler) Stop(c *gin.Context) {
 		return
 	}
 	user := middleware.Username(c)
+	remoteErr := h.stopRemoteJobs(c.Request.Context(), it.ID)
 	killErr := h.killTicketSession(c.Request.Context(), it)
+	if killErr == nil {
+		killErr = remoteErr
+	}
 	if killErr != nil {
 		if again := h.killTicketSession(c.Request.Context(), it); again != nil {
 			killErr = again
@@ -105,6 +109,9 @@ func (h *TicketHandler) Stop(c *gin.Context) {
 
 func (h *TicketHandler) killTicketSession(ctx context.Context, it *store.Issue) error {
 	if h == nil || it == nil || it.ExecProgress == nil || it.ExecProgress.SessionID <= 0 {
+		return nil
+	}
+	if strings.TrimSpace(it.ExecProgress.Executor) != "" {
 		return nil
 	}
 	p := it.ExecProgress

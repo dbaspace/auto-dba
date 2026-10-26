@@ -10,7 +10,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -26,6 +25,7 @@ import (
 	"auto-dba/internal/redisquery"
 	"auto-dba/internal/secret"
 	"auto-dba/internal/sqlcheck"
+	"auto-dba/internal/sqlexec"
 	"auto-dba/internal/store"
 	"auto-dba/internal/ticketexec"
 )
@@ -1523,6 +1523,22 @@ func (h *TicketHandler) executeTicket(ctx context.Context, it *store.Issue) erro
 		})
 		return h.persistExec(it, res)
 	}
+	if it.IssueType == store.IssueTypeDML {
+		localCodes, execs, routeErr := h.executionCatalog()
+		if routeErr != nil {
+			return routeErr
+		}
+		dec := sqlexec.Decide(inst.IDC, localCodes, execs)
+		if dec.Mode == sqlexec.ModeMissing {
+			return h.persistExec(it, ticketexec.FailBeforeExec(
+				fmt.Sprintf("环境 %s 未绑定执行器，不从本机直连", inst.IDC),
+				ticketexec.Record{InstanceID: inst.ID, InstanceName: inst.Name, Host: t.Host, DB: it.DBName},
+			))
+		}
+		if dec.Mode == sqlexec.ModeRemote {
+			return h.executeRemoteDML(ctx, it, inst, t, dec.Executor)
+		}
+	}
 	h.watchSession(it, inst, t.Host, it.DBName, &t)
 	res := ticketexec.Run(ctx, it.IssueType, it.SQLContent, t)
 	return h.persistExec(it, res)
@@ -1755,119 +1771,11 @@ func (h *TicketHandler) executeDDLTicket(ctx context.Context, it *store.Issue) e
 		return err
 	}
 
-	var mu sync.Mutex
-	var lastProg time.Time
-	for _, job := range jobs {
-		if job.skip || job.failMsg != "" {
-			continue
-		}
-		if err := ctx.Err(); err != nil {
-			return errExecStopped
-		}
-		if h.issueStopped(it.ID) {
-			return errExecStopped
-		}
-		mu.Lock()
-		prog.CurrentInstance = ""
-		prog.CurrentDB = job.dbName
-		prog.InstanceID = job.id
-		prog.Host = job.host
-		prog.SessionID = 0
-		prog.StmtIndex = 0
-		prog.StmtTotal = stmtN
-		if job.inst != nil {
-			prog.CurrentInstance = job.inst.Name
-			prog.DBType = job.inst.DBType
-			prog.Engine = ticketexec.EngineOf(job.inst.DBType)
-		}
-		cp := *prog
-		mu.Unlock()
-		h.saveProgress(it.ID, &cp)
-
-		t, err := h.execTarget(job.inst, job.dbName, job.domain)
-		if err != nil {
-			appendCompactDB(merged, ticketexec.Record{
-				InstanceID: job.id, InstanceName: job.inst.Name, Host: job.host, DB: job.dbName,
-				ErrorMessage: err.Error(),
-			}, false, 0, 1)
-			failN++
-			doneN++
-			mu.Lock()
-			prog.Done = doneN
-			prog.Failed = failN
-			prog.SessionID = 0
-			cp = *prog
-			mu.Unlock()
-			h.saveProgress(it.ID, &cp)
-			if err := h.checkpointExec(it, merged); err != nil {
-				return err
-			}
-			continue
-		}
-		t.Light = true
-		inst := job.inst
-		dbName := job.dbName
-		t.OnProgress = func(stmtIndex, stmtTotal int, sessionID int64) {
-			now := time.Now()
-			mu.Lock()
-			prog.StmtIndex = stmtIndex
-			prog.StmtTotal = stmtTotal
-			prog.SessionID = sessionID
-			prog.CurrentDB = dbName
-			prog.Host = t.Host
-			if inst != nil {
-				prog.CurrentInstance = inst.Name
-				prog.InstanceID = inst.ID
-				prog.DBType = inst.DBType
-				prog.Engine = ticketexec.EngineOf(inst.DBType)
-			}
-			write := stmtIndex == 1 || now.Sub(lastProg) >= 2*time.Second
-			if write {
-				lastProg = now
-			}
-			cp := *prog
-			mu.Unlock()
-			if write {
-				h.saveProgress(it.ID, &cp)
-			}
-		}
-		res := ticketexec.Run(ctx, it.IssueType, it.SQLContent, t)
-		if errors.Is(ctx.Err(), context.Canceled) || h.issueStopped(it.ID) {
-			return errExecStopped
-		}
-		rec := ticketexec.Record{InstanceID: job.id, InstanceName: inst.Name, Host: t.Host, DB: dbName}
-		successSt, failSt := 0, 0
-		ok := res != nil && res.Success
-		if res != nil {
-			successSt = res.SuccessCount
-			failSt = res.FailCount
-			rec.ErrorMessage = res.Message
-			res.Records = nil
-			res.SuccessSQLs = nil
-		}
-		if !ok && rec.ErrorMessage == "" {
-			rec.ErrorMessage = "执行失败"
-		}
-		appendCompactDB(merged, rec, ok, successSt, failSt)
-		doneN++
-		if ok {
-			successN++
-		} else {
-			failN++
-			merged.Message = rec.ErrorMessage
-		}
-		mu.Lock()
-		prog.Done = doneN
-		prog.Failed = failN
-		prog.SessionID = 0
-		prog.StmtIndex = 0
-		cp = *prog
-		mu.Unlock()
-		h.saveProgress(it.ID, &cp)
-		if err := h.checkpointExec(it, merged); err != nil {
-			return err
-		}
+	live := &ddlLive{prog: prog, merged: merged, doneN: doneN, failN: failN, okN: successN, it: it}
+	if err := h.runDDLLanes(ctx, it, jobs, stmtN, live); err != nil {
+		return err
 	}
+	doneN, failN, successN = live.doneN, live.failN, live.okN
 	if shardPrefix != "" && plannedDBs > 0 && stmtN > 0 {
 		merged.StatementCount = stmtN * plannedDBs
 	}

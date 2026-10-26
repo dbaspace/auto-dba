@@ -20,6 +20,8 @@ type ExecProgress struct {
 	SessionID       int64  `json:"session_id,omitempty"`
 	Engine          string `json:"engine,omitempty"`
 	Phase           string `json:"phase,omitempty"`
+	Env             string `json:"env,omitempty"`
+	Executor        string `json:"executor,omitempty"`
 }
 
 // Fraction 进度条比例。preparing 返回不确定。单库按语句，多库按已结束库加当前库的语句比例。
