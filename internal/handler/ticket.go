@@ -1624,25 +1624,23 @@ func (h *TicketHandler) executeDDLTicket(ctx context.Context, it *store.Issue) e
 	}
 	var skipped []string
 	plannedDBs := 0
-	stop := false
+	okDBs, failDBs := 0, 0
 	for _, id := range ids {
 		inst, err := h.Store.GetInstanceUsableInTenant(id, it.TenantID)
 		if err != nil {
 			return err
 		}
 		if inst == nil {
-			merged.Success = false
-			merged.Message = "实例不存在: " + id
-			mergeExecResult(merged, ticketexec.FailBeforeExec(merged.Message, ticketexec.Record{
-				InstanceID: id, DB: it.DBName,
-			}))
-			break
+			failDDLInstance(merged, "实例不存在: "+id, ticketexec.Record{InstanceID: id, DB: it.DBName})
+			failDBs++
+			continue
 		}
 		// 未分库：整实例只跑代表库，上次已全部成功则跳过
 		if shardPrefix == "" {
 			if done := ddlDoneSource(prev, id, it.DBName, stmtN); done != nil {
 				mergeExecResult(merged, done)
 				skipped = append(skipped, inst.Name)
+				okDBs++
 				continue
 			}
 		}
@@ -1652,13 +1650,12 @@ func (h *TicketHandler) executeDDLTicket(ctx context.Context, it *store.Issue) e
 			return err
 		}
 		if dbEnt == nil {
-			merged.Success = false
-			merged.Message = h.decorateTargetDeny(id, "库未登记，请先在「配置 → 已登记库」中登记 "+it.DBName)
-			merged.Records = append(merged.Records, ticketexec.Record{
+			msg := h.decorateTargetDeny(id, "库未登记，请先在「配置 → 已登记库」中登记 "+it.DBName)
+			failDDLInstance(merged, msg, ticketexec.Record{
 				InstanceID: id, InstanceName: inst.Name, Host: inst.Host, DB: it.DBName,
-				Status: "failed", ErrorMessage: merged.Message, Order: len(merged.Records) + 1,
 			})
-			break
+			failDBs++
+			continue
 		}
 		skipSchema := ddlShardSkipSchema(it.NeedRollback)
 		check := h.checkTicketSQL(it.SQLContent, it.IssueType, inst.DBType, id, it.DBName, skipSchema)
@@ -1666,42 +1663,33 @@ func (h *TicketHandler) executeDDLTicket(ctx context.Context, it *store.Issue) e
 			gate := reviewGateResult(check)
 			tagExecRecords(gate, id, inst.Name)
 			mergeExecResult(merged, gate)
-			merged.Success = false
-			if merged.Message == "" && gate != nil {
-				merged.Message = gate.Message
-			}
-			break
+			failDBs++
+			continue
 		}
 		domain := ddlDomainForInstance(it.NeedRollback, id, it.Domain)
 		dbNames := []string{it.DBName}
 		if shardPrefix != "" {
 			if store.NormalizeReviewEngine(inst.DBType) != "postgres" {
-				merged.Success = false
-				merged.Message = "分库执行仅支持 PostgreSQL"
-				merged.Records = append(merged.Records, ticketexec.Record{
+				failDDLInstance(merged, "分库执行仅支持 PostgreSQL", ticketexec.Record{
 					InstanceID: id, InstanceName: inst.Name, Host: resolveInstanceHost(inst, domain), DB: it.DBName,
-					Status: "failed", ErrorMessage: merged.Message, Order: len(merged.Records) + 1,
 				})
-				break
+				failDBs++
+				continue
 			}
 			names, listErr := h.listShardDatabases(ctx, inst, domain, shardPrefix)
 			if listErr != nil {
-				merged.Success = false
-				merged.Message = listErr.Error()
-				merged.Records = append(merged.Records, ticketexec.Record{
+				failDDLInstance(merged, listErr.Error(), ticketexec.Record{
 					InstanceID: id, InstanceName: inst.Name, Host: resolveInstanceHost(inst, domain), DB: "(获取库列表)",
-					Status: "failed", ErrorMessage: merged.Message, Order: len(merged.Records) + 1,
 				})
-				break
+				failDBs++
+				continue
 			}
 			if len(names) == 0 {
-				merged.Success = false
-				merged.Message = fmt.Sprintf("未匹配到分库前缀 %q 且后缀为数字的库", shardPrefix)
-				merged.Records = append(merged.Records, ticketexec.Record{
+				failDDLInstance(merged, fmt.Sprintf("未匹配到分库前缀 %q 且后缀为数字的库", shardPrefix), ticketexec.Record{
 					InstanceID: id, InstanceName: inst.Name, Host: resolveInstanceHost(inst, domain), DB: "(获取库列表)",
-					Status: "failed", ErrorMessage: merged.Message, Order: len(merged.Records) + 1,
 				})
-				break
+				failDBs++
+				continue
 			}
 			dbNames = names
 			plannedDBs += len(dbNames)
@@ -1711,41 +1699,36 @@ func (h *TicketHandler) executeDDLTicket(ctx context.Context, it *store.Issue) e
 				if done := ddlDoneSource(prev, id, dbName, stmtN); done != nil {
 					mergeExecResult(merged, done)
 					skipped = append(skipped, inst.Name+"/"+dbName)
+					okDBs++
 					continue
 				}
 			}
 			t, err := h.execTarget(inst, dbName, domain)
 			if err != nil {
-				merged.Success = false
-				merged.Message = err.Error()
-				merged.Records = append(merged.Records, ticketexec.Record{
+				failDDLInstance(merged, err.Error(), ticketexec.Record{
 					InstanceID: id, InstanceName: inst.Name, Host: resolveInstanceHost(inst, domain), DB: dbName,
-					Status: "failed", ErrorMessage: err.Error(), Order: len(merged.Records) + 1,
 				})
-				stop = true
-				break
+				failDBs++
+				continue
 			}
 			res := ticketexec.Run(ctx, it.IssueType, it.SQLContent, t)
 			tagExecRecords(res, id, inst.Name)
 			mergeExecResult(merged, res)
 			if res == nil || !res.Success {
-				if merged.Message == "" && res != nil {
-					merged.Message = res.Message
-				}
-				merged.Success = false
-				stop = true
-				break
+				failDBs++
+				continue
 			}
-		}
-		if stop {
-			break
+			okDBs++
 		}
 	}
 	if shardPrefix != "" && plannedDBs > 0 && stmtN > 0 {
 		merged.StatementCount = stmtN * plannedDBs
 	}
 	merged.EndedAt = time.Now().UTC().Format(time.RFC3339)
-	if merged.Success && merged.Summary == "" {
+	if note := ddlExecOutcomeSummary(okDBs, failDBs); note != "" {
+		merged.Summary = note
+		merged.Message = note
+	} else if merged.Success && merged.Summary == "" {
 		if shardPrefix != "" {
 			merged.Summary = fmt.Sprintf("DDL 已在 %d 个分库执行", plannedDBs)
 		} else {
@@ -1760,6 +1743,20 @@ func (h *TicketHandler) executeDDLTicket(ctx context.Context, it *store.Issue) e
 		merged.Summary = note
 	}
 	return h.persistExec(it, merged)
+}
+
+func failDDLInstance(merged *ticketexec.Result, msg string, rec ticketexec.Record) {
+	if merged == nil {
+		return
+	}
+	merged.Success = false
+	if msg != "" {
+		merged.Message = msg
+	}
+	rec.Status = "failed"
+	rec.ErrorMessage = msg
+	rec.Order = len(merged.Records) + 1
+	merged.Records = append(merged.Records, rec)
 }
 
 func (h *TicketHandler) listShardDatabases(ctx context.Context, inst *store.Instance, domain, prefix string) ([]string, error) {

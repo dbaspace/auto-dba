@@ -3,6 +3,7 @@ package sessionstore
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strconv"
@@ -15,26 +16,32 @@ import (
 	"auto-dba/internal/config"
 )
 
+// ErrSessionExpired 会话 expire_at 已过。调用方应提示重新登录，且不得续期。
+var ErrSessionExpired = errors.New("session expired")
+
+const slideMinInterval = time.Minute
+
 // Session 登录会话（Redis Hash field value；不存 JWT 明文）。
 type Session struct {
-	JTI       string `json:"jti"`
-	UserID    string `json:"user_id"`
-	TenantID  string `json:"tenant_id,omitempty"`
-	Username  string `json:"username"`
-	IP        string `json:"ip,omitempty"`
-	UA        string `json:"ua,omitempty"`
-	OnlineAt  string `json:"online_at"`
-	ExpireAt  string `json:"expire_at"`
-	Kind      string `json:"kind,omitempty"` // normal | impersonate
-	Status    string `json:"status,omitempty"` // 展示用：会话有效
+	JTI      string `json:"jti"`
+	UserID   string `json:"user_id"`
+	TenantID string `json:"tenant_id,omitempty"`
+	Username string `json:"username"`
+	IP       string `json:"ip,omitempty"`
+	UA       string `json:"ua,omitempty"`
+	OnlineAt string `json:"online_at"`
+	ExpireAt string `json:"expire_at"`
+	Kind     string `json:"kind,omitempty"`   // normal | impersonate
+	Status   string `json:"status,omitempty"` // 展示用：会话有效
 }
 
 // Store Redis 会话权威源；Enabled=false 时所有写/校验为 no-op，不影响现网。
 type Store struct {
-	mu     sync.RWMutex
-	rdb    *redis.Client
-	cfg    config.RedisConfig
-	jwtTTL int // hours fallback
+	mu        sync.RWMutex
+	rdb       *redis.Client
+	cfg       config.RedisConfig
+	jwtTTL    int // hours fallback
+	lastSlide map[string]time.Time
 }
 
 func New(cfg config.RedisConfig, jwtTTLHours int) *Store {
@@ -155,6 +162,14 @@ func (s *Store) sessionTTL() time.Duration {
 	return time.Duration(h) * time.Hour
 }
 
+// SessionTTL 登录有效期。空配置回退 jwt_ttl_hours，再空则 24 小时。
+func (s *Store) SessionTTL() time.Duration {
+	if s == nil {
+		return 24 * time.Hour
+	}
+	return s.sessionTTL()
+}
+
 // Create 登录：同一账号只保留最新会话，写入前清空该用户旧 Hash。
 func (s *Store) Create(ctx context.Context, sess Session) error {
 	cli := s.client()
@@ -196,6 +211,8 @@ func (s *Store) Create(ctx context.Context, sess Session) error {
 }
 
 // Valid 鉴权：HGET + expire_at。
+// 已过期则吊销并返回 ErrSessionExpired，不续期。
+// 仍有效则把 expire_at 与 key TTL 续到 now+sessionTTL；同一会话 1 分钟内不重复写。
 func (s *Store) Valid(ctx context.Context, userID, jti string) (bool, error) {
 	cli := s.client()
 	if cli == nil {
@@ -204,7 +221,8 @@ func (s *Store) Valid(ctx context.Context, userID, jti string) (bool, error) {
 	if userID == "" || jti == "" {
 		return false, nil
 	}
-	raw, err := cli.HGet(ctx, s.userKey(userID), jti).Result()
+	uk := s.userKey(userID)
+	raw, err := cli.HGet(ctx, uk, jti).Result()
 	if err == redis.Nil {
 		return false, nil
 	}
@@ -215,17 +233,73 @@ func (s *Store) Valid(ctx context.Context, userID, jti string) (bool, error) {
 	if err := json.Unmarshal([]byte(raw), &sess); err != nil {
 		return false, err
 	}
-	if exp, e := time.Parse(time.RFC3339, sess.ExpireAt); e == nil && time.Now().After(exp) {
+	now := time.Now()
+	if exp, e := time.Parse(time.RFC3339, sess.ExpireAt); e == nil && now.After(exp) {
 		_ = s.RevokeJTI(ctx, userID, jti)
-		return false, nil
+		s.forgetSlide(userID, jti)
+		return false, ErrSessionExpired
 	}
-	s.mu.RLock()
-	slide := s.cfg.SlidingExpire
-	s.mu.RUnlock()
-	if slide {
-		_ = cli.Expire(ctx, s.userKey(userID), s.sessionTTL()).Err()
+	if !s.slideDue(userID, jti, now) {
+		return true, nil
 	}
+	ttl := s.sessionTTL()
+	sess.ExpireAt = now.Add(ttl).UTC().Format(time.RFC3339)
+	b, err := json.Marshal(sess)
+	if err != nil {
+		return true, nil
+	}
+	pipe := cli.Pipeline()
+	pipe.HSet(ctx, uk, jti, string(b))
+	pipe.Expire(ctx, uk, ttl)
+	if _, err := pipe.Exec(ctx); err != nil {
+		return true, nil
+	}
+	s.markSlid(userID, jti, now)
 	return true, nil
+}
+
+func slideKey(userID, jti string) string {
+	return userID + "\x00" + jti
+}
+
+func (s *Store) slideDue(userID, jti string, now time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lastSlide == nil {
+		return true
+	}
+	prev, ok := s.lastSlide[slideKey(userID, jti)]
+	if !ok {
+		return true
+	}
+	return now.Sub(prev) >= slideMinInterval
+}
+
+func (s *Store) markSlid(userID, jti string, now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lastSlide == nil {
+		s.lastSlide = make(map[string]time.Time)
+	}
+	s.lastSlide[slideKey(userID, jti)] = now
+	if len(s.lastSlide) <= 4096 {
+		return
+	}
+	cut := now.Add(-2 * slideMinInterval)
+	for k, t := range s.lastSlide {
+		if t.Before(cut) {
+			delete(s.lastSlide, k)
+		}
+	}
+}
+
+func (s *Store) forgetSlide(userID, jti string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lastSlide == nil {
+		return
+	}
+	delete(s.lastSlide, slideKey(userID, jti))
 }
 
 // RevokeJTI 踢单端 / 登出。

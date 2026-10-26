@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"auto-dba/internal/config"
+	"auto-dba/internal/sessionstore"
 	"auto-dba/internal/store"
 )
 
@@ -74,6 +76,21 @@ func SignSessionToken(secret, userID, username, role, tenantID, tenantCode strin
 	return token, jti, err
 }
 
+// jwtRenewWithin 剩余不足该时长时，用原 jti 重签，把 exp 续到一个完整会话周期。
+const jwtRenewWithin = 12 * time.Hour
+
+// ResignSessionToken 沿用原 jti 重签。exp 为现在 + ttl，供有效期内换发。
+func ResignSessionToken(secret string, src *Claims, ttl time.Duration) (string, error) {
+	if strings.TrimSpace(secret) == "" || src == nil || strings.TrimSpace(src.ID) == "" || ttl <= 0 {
+		return "", errors.New("session claims required")
+	}
+	now := time.Now()
+	c := *src
+	c.ExpiresAt = jwt.NewNumericDate(now.Add(ttl))
+	c.IssuedAt = jwt.NewNumericDate(now)
+	return jwt.NewWithClaims(jwt.SigningMethodHS256, c).SignedString([]byte(secret))
+}
+
 // Auth 使用 config.CurrentJWT()（atomic，热更安全）；secret 参数保留兼容，优先 CurrentJWT。
 // sessions 可为 nil：不启用 Redis 会话校验（默认，不影响现网）。
 func Auth(secret *string, db *store.DB, sessions SessionGate, skipPrefixes ...string) gin.HandlerFunc {
@@ -112,6 +129,15 @@ func Auth(secret *string, db *store.DB, sessions SessionGate, skipPrefixes ...st
 			return []byte(sec), nil
 		})
 		if err != nil || !tok.Valid {
+			if errors.Is(err, jwt.ErrTokenExpired) {
+				c.JSON(http.StatusUnauthorized, gin.H{
+					"message":            "登录已过期，请重新登录",
+					"code":               "session_expired",
+					"diagnostic_message": "token expired",
+				})
+				c.Abort()
+				return
+			}
 			c.JSON(http.StatusUnauthorized, gin.H{"message": "unauthorized", "diagnostic_message": "invalid token"})
 			c.Abort()
 			return
@@ -140,6 +166,15 @@ func Auth(secret *string, db *store.DB, sessions SessionGate, skipPrefixes ...st
 		jti := strings.TrimSpace(claims.ID)
 		if sessions != nil && sessions.Enabled() && jti != "" && !sessions.FailOpen() {
 			ok, verr := sessions.Valid(c.Request.Context(), claims.UserID, jti)
+			if errors.Is(verr, sessionstore.ErrSessionExpired) {
+				c.JSON(http.StatusUnauthorized, gin.H{
+					"message":            "登录已过期，请重新登录",
+					"code":               "session_expired",
+					"diagnostic_message": "redis session expired",
+				})
+				c.Abort()
+				return
+			}
 			if verr != nil {
 				c.JSON(http.StatusUnauthorized, gin.H{
 					"message": "会话服务暂不可用，请稍后重试", "code": "session_unavailable",
@@ -151,12 +186,13 @@ func Auth(secret *string, db *store.DB, sessions SessionGate, skipPrefixes ...st
 			if !ok {
 				c.JSON(http.StatusUnauthorized, gin.H{
 					"message": "会话已失效，请重新登录", "code": "session_revoked",
-					"diagnostic_message": "redis session missing or expired",
+					"diagnostic_message": "redis session missing",
 				})
 				c.Abort()
 				return
 			}
 		}
+		renewAccessToken(c, sec, claims, sessions)
 		c.Set(CtxUserID, claims.UserID)
 		c.Set(CtxUsername, claims.Username)
 		c.Set(CtxRole, claims.Role)
@@ -166,6 +202,32 @@ func Auth(secret *string, db *store.DB, sessions SessionGate, skipPrefixes ...st
 		c.Set(CtxJTI, jti)
 		c.Next()
 	}
+}
+
+type sessionTTLSource interface {
+	SessionTTL() time.Duration
+}
+
+// renewAccessToken 在 JWT 剩余不足 12 小时时换发，响应头交给前端保存。jti 不变。
+func renewAccessToken(c *gin.Context, secret string, claims *Claims, sessions SessionGate) {
+	if claims == nil || claims.ExpiresAt == nil || strings.TrimSpace(secret) == "" || strings.TrimSpace(claims.ID) == "" {
+		return
+	}
+	remain := time.Until(claims.ExpiresAt.Time)
+	if remain <= 0 || remain >= jwtRenewWithin {
+		return
+	}
+	ttl := 24 * time.Hour
+	if src, ok := sessions.(sessionTTLSource); ok {
+		if d := src.SessionTTL(); d > 0 {
+			ttl = d
+		}
+	}
+	tok, err := ResignSessionToken(secret, claims, ttl)
+	if err != nil || tok == "" {
+		return
+	}
+	c.Header("X-Access-Token", tok)
 }
 
 // tokenIssuedBeforePasswordChange 改密时间晚于 token 签发时间时，旧登录应失效。

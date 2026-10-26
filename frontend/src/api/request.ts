@@ -43,7 +43,11 @@ client.interceptors.request.use((cfg) => {
 })
 
 client.interceptors.response.use(
-  (res) => res,
+  (res) => {
+    const renewed = res.headers?.['x-access-token']
+    if (typeof renewed === 'string' && renewed) localStorage.setItem('token', renewed)
+    return res
+  },
   async (err) => {
     const status = err.response?.status
     let msg = err.response?.data?.message || err.message || '请求失败'
@@ -58,7 +62,9 @@ client.interceptors.response.use(
     }
     if (status === 401) {
       const code = err.response?.data?.code
-      if (code === 'session_revoked') {
+      if (code === 'session_expired') {
+        msg = err.response?.data?.message || '登录已过期，请重新登录'
+      } else if (code === 'session_revoked') {
         msg = err.response?.data?.message || '会话已失效，请重新登录'
       } else if (/idle|未操作|idle timeout/i.test(String(msg))) {
         msg = msg || '长时间未操作，请重新登录'

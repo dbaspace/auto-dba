@@ -89,6 +89,7 @@ func Init(e *gin.Engine, d Deps) {
 		},
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization", "X-Tenant-Id"},
+		ExposeHeaders:    []string{"X-Access-Token"},
 		AllowCredentials: true,
 	}))
 

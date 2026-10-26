@@ -3,6 +3,7 @@ module auto-dba
 go 1.24.0
 
 require (
+	github.com/alicebob/miniredis/v2 v2.40.0
 	github.com/creack/pty v1.1.9
 	github.com/gin-contrib/cors v1.7.6
 	github.com/gin-gonic/gin v1.10.1
@@ -50,6 +51,7 @@ require (
 	github.com/mxk/go-flowrate v0.0.0-20140419014527-cca7078d478f // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
+	github.com/yuin/gopher-lua v1.1.1 // indirect
 	golang.org/x/oauth2 v0.23.0 // indirect
 	golang.org/x/term v0.32.0 // indirect
 	gopkg.in/evanphx/json-patch.v4 v4.12.0 // indirect

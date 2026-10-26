@@ -6,6 +6,16 @@ import (
 	"auto-dba/internal/ticketexec"
 )
 
+func TestDDLExecOutcomeSummary(t *testing.T) {
+	if ddlExecOutcomeSummary(2, 0) != "" || ddlExecOutcomeSummary(0, 3) != "" {
+		t.Fatal("all success or all failure keeps the original summary")
+	}
+	got := ddlExecOutcomeSummary(3, 1)
+	if got != "部分分库执行失败，成功 3 个库，失败 1 个库" {
+		t.Fatalf("summary=%q", got)
+	}
+}
+
 func TestDDLShardDBPrefix(t *testing.T) {
 	if ddlShardDBPrefix("") != "" {
 		t.Fatal("empty")

@@ -98,8 +98,8 @@ export default function LoginSessions() {
   return (
     <div className="ops-page">
       <p className="hint">
-        展示当前<strong>会话有效 / 已登录</strong>用户（以 Redis 为准）。关闭浏览器不等于登出；仅登出、踢人或 TTL
-        到期后会话结束。与「长时间未操作」闲置退出是两套规则，先到先失效。
+        展示当前<strong>会话有效 / 已登录</strong>用户（以 Redis 为准）。关闭浏览器不等于登出。有效期内再次访问会把过期时间续到当前时间
+        + 1 天；到期后需重新登录。与「长时间未操作」闲置退出是两套规则，先到先失效。
       </p>
       {disabledMsg ? <p className="hint" style={{ color: '#cf1322' }}>{disabledMsg}</p> : null}
       <div className="toolbar">

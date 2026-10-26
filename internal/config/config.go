@@ -59,8 +59,8 @@ type RedisConfig struct {
 	Password             string `yaml:"password"`
 	DB                   int    `yaml:"db"`
 	KeyPrefix            string `yaml:"key_prefix"`
-	SessionTTLHours      int    `yaml:"session_ttl_hours"` // 0 = 回退 app.jwt_ttl_hours
-	SlidingExpire        bool   `yaml:"sliding_expire"`
+	SessionTTLHours      int    `yaml:"session_ttl_hours"`      // 0 = 回退 app.jwt_ttl_hours
+	SlidingExpire        bool   `yaml:"sliding_expire"`         // 已忽略：有效会话鉴权时一律把 expire_at 续到 now+TTL
 	FailMode             string `yaml:"fail_mode"`              // closed | open；open=鉴权不强制 Redis（不推荐生产）
 	MaxSessionsPerUser   int    `yaml:"max_sessions_per_user"`  // 0=不限制；1=新登录踢旧
 	ReconcileIntervalMin int    `yaml:"reconcile_interval_min"` // 默认 5

@@ -1,10 +1,19 @@
 package handler
 
 import (
+	"fmt"
 	"strings"
 
 	"auto-dba/internal/ticketexec"
 )
+
+// ddlExecOutcomeSummary 有成功也有失败时的汇总。全成功或全失败返回空，交给原有文案。
+func ddlExecOutcomeSummary(okN, failN int) string {
+	if okN > 0 && failN > 0 {
+		return fmt.Sprintf("部分分库执行失败，成功 %d 个库，失败 %d 个库", okN, failN)
+	}
+	return ""
+}
 
 // ddlDoneSource 上次执行中某数据源的结果；重试时原样带入，保证再次重试仍能识别。
 func ddlDoneSource(prev *ticketexec.Result, instanceID, dbName string, stmtN int) *ticketexec.Result {

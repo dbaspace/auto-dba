@@ -27,13 +27,13 @@ KeePlus（进程 `auto-dba`）支持多种打包方式。**构建在有 Node 18+
 
 一体包与后端包解压后工作目录须为**包根**（存在 `deploy/node-agent/bin/node-agent` 等），集群部署 SSH 下发无需再本机构建 Agent。
 
-可选环境变量：`GOOS` `GOARCH`（默认 `linux`/`amd64`）、`STAMP`（默认时间戳；发版用 `STAMP=v1.12.39`）、`IMAGE_TAG`、`SKIP_PNPM_INSTALL=1`（已有 `node_modules` 时）。
+可选环境变量：`GOOS` `GOARCH`（默认 `linux`/`amd64`）、`STAMP`（默认时间戳；发版用 `STAMP=v1.12.40`）、`IMAGE_TAG`、`SKIP_PNPM_INSTALL=1`（已有 `node_modules` 时）。
 
 ```bash
-STAMP=v1.12.39 ./scripts/pack_release.sh all
-STAMP=v1.12.39 ./scripts/pack_release.sh backend
-STAMP=v1.12.39 ./scripts/pack_release.sh frontend
-IMAGE_TAG=auto-dba:v1.12.39 ./scripts/pack_release.sh docker
+STAMP=v1.12.40 ./scripts/pack_release.sh all
+STAMP=v1.12.40 ./scripts/pack_release.sh backend
+STAMP=v1.12.40 ./scripts/pack_release.sh frontend
+IMAGE_TAG=auto-dba:v1.12.40 ./scripts/pack_release.sh docker
 ```
 
 ## 发布到 GitHub Release（固定流程）
@@ -46,13 +46,13 @@ IMAGE_TAG=auto-dba:v1.12.39 ./scripts/pack_release.sh docker
 # 已 push 的提交 + 写好 docs/changelog-vX.Y.Z.md 后：
 
 # 推荐：打包 + 打 tag + 创建 Release（一体包）
-PACK=1 ./scripts/publish_github_release.sh v1.12.39
+PACK=1 ./scripts/publish_github_release.sh v1.12.40
 
-# 已有 dist/*-v1.12.39.tgz 时只发版
-./scripts/publish_github_release.sh v1.12.39
+# 已有 dist/*-v1.12.40.tgz 时只发版
+./scripts/publish_github_release.sh v1.12.40
 
 # 发版前顺带删若干旧 Release（不删受仓库 Rules 保护的 tag）
-DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12.39
+DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12.40
 ```
 
 前提：本机能 `git push origin HEAD`；已安装 `gh`。若 Keychain 无凭据，先手动 push 一次或导出 `GH_TOKEN=...`。
@@ -61,7 +61,8 @@ DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12
 
 | 版本 | 要点 |
 |------|------|
-| [v1.12.39](changelog-v1.12.39.md) | **当前推荐**。PostgreSQL DDL 分库按前缀现查并逐库执行，重试按库跳过 |
+| [v1.12.40](changelog-v1.12.40.md) | **当前推荐**。有效会话自动续期；DDL 分库失败后继续其余库 |
+| [v1.12.39](changelog-v1.12.39.md) | PostgreSQL DDL 分库按前缀现查并逐库执行，重试按库跳过 |
 | [v1.12.38](changelog-v1.12.38.md) | DDL 约束检查可关闭；StarRocks 路径走全局默认；实例总览整页滚动 |
 | [v1.12.37](changelog-v1.12.37.md) | 同步列表增加「刷新」，重新加载复制槽列表且不触发采集 |
 | [v1.12.36](changelog-v1.12.36.md) | Redis 查询页签从左侧起排，页签名只显示前 10 个字符 |
