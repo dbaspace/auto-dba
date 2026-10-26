@@ -437,6 +437,9 @@ export default function SlotList() {
             >
               重置
             </Button>
+            <Button loading={loading} disabled={loading} onClick={() => void load()}>
+              刷新
+            </Button>
             <Button loading={collectRunning} disabled={restartRunning} onClick={collect}>
               手动采集
             </Button>
