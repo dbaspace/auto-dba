@@ -80,6 +80,7 @@ func (s *FlashbackImpl) Create(ctx context.Context, req *FlashbackTaskReq, creat
 		return nil, err
 	}
 	req.normalize()
+	ctx = WithActor(ctx, createdBy)
 	pre, err := s.Precheck(ctx, req)
 	if err != nil {
 		return nil, err

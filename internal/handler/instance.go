@@ -53,6 +53,40 @@ func normalizeInstanceCloud(it *store.Instance) error {
 	return nil
 }
 
+func (h *InstanceHandler) checkCloudAccountBind(c *gin.Context, it *store.Instance) error {
+	if it == nil || strings.TrimSpace(it.CloudAccountID) == "" {
+		return nil
+	}
+	acc, err := h.Store.GetCloudAccount(it.CloudAccountID)
+	if err != nil {
+		return err
+	}
+	if acc == nil || (it.TenantID != "" && acc.TenantID != "" && acc.TenantID != it.TenantID) {
+		return fmt.Errorf("云账号不存在或不属于当前租户")
+	}
+	if it.CloudVendor != "" && acc.Vendor != it.CloudVendor {
+		return fmt.Errorf("云账号厂商与实例不一致")
+	}
+	user, err := h.Store.GetUserByUsername(middleware.Username(c))
+	if err != nil {
+		return err
+	}
+	if user == nil {
+		return fmt.Errorf("当前用户未绑定该云账号")
+	}
+	ok, err := h.Store.UserBoundToCloudAccount(acc.ID, user.ID)
+	if err != nil {
+		return err
+	}
+	if !ok && !middleware.IsAdminRole(middleware.Role(c)) {
+		return fmt.Errorf("当前用户未绑定该云账号")
+	}
+	if it.CloudVendor == "" {
+		it.CloudVendor = acc.Vendor
+	}
+	return nil
+}
+
 func instanceNeedsPassword(dbType string) bool {
 	switch strings.ToLower(strings.TrimSpace(dbType)) {
 	case "mysql", "postgres", "postgresql", "tidb", "starrocks", "clickhouse":
@@ -314,6 +348,10 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 		return
 	}
 	if err := normalizeInstanceCloud(&it); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	if err := h.checkCloudAccountBind(c, &it); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
@@ -798,6 +836,10 @@ func (h *InstanceHandler) Update(c *gin.Context) {
 		return
 	}
 	if err := normalizeInstanceCloud(&it); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	if err := h.checkCloudAccountBind(c, &it); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}

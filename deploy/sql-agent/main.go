@@ -5,6 +5,7 @@ import (
 	"flag"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -57,7 +58,7 @@ func main() {
 		}
 		id = strings.Trim(id, "/")
 		if id == "" || strings.Contains(id, "/") {
-			http.NotFound(w, r)
+			writeMissingJob(w, id)
 			return
 		}
 		if stop {
@@ -67,7 +68,7 @@ func main() {
 			}
 			view, ok := runner.Stop(id)
 			if !ok {
-				http.NotFound(w, r)
+				writeMissingJob(w, id)
 				return
 			}
 			writeJSON(w, http.StatusOK, view)
@@ -77,9 +78,10 @@ func main() {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		view, ok := runner.Get(id)
+		after, _ := strconv.Atoi(r.URL.Query().Get("after"))
+		view, ok := runner.Get(id, after)
 		if !ok {
-			http.NotFound(w, r)
+			writeMissingJob(w, id)
 			return
 		}
 		writeJSON(w, http.StatusOK, view)
@@ -106,6 +108,10 @@ func withAuth(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	}
+}
+
+func writeMissingJob(w http.ResponseWriter, id string) {
+	writeJSON(w, http.StatusNotFound, map[string]any{"error": "job_not_found", "id": id})
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

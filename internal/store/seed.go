@@ -54,6 +54,7 @@ func (d *DB) seed() error {
 		{Key: "ddl_forbid_drop_database", Value: "true", Description: "DDL 禁止 DROP DATABASE"},
 		{Key: ArgTicketDDLLongStmtTimeoutMinutes, Value: "360", Description: "DDL 工单长耗时语句（CREATE INDEX CONCURRENTLY 等）单条执行超时（分钟）"},
 		{Key: ArgTicketDDLConstraintCheckEnabled, Value: "true", Description: "DDL 工单 SQL 约束检查总开关：true=启用审核规则，false=跳过全部 SQL 校验（仅保留提交门禁）"},
+		{Key: ArgTicketDMLLockTimeoutSeconds, Value: "30", Description: "PostgreSQL DML 获取锁的最长等待时间（秒）；0 表示关闭，超时后工单失败并返回原因"},
 		{Key: "dml_require_where", Value: "true", Description: "UPDATE/DELETE 必须带 WHERE"},
 		{Key: "login_idle_timeout_min", Value: "30", Description: "登录闲置超时（分钟），无操作自动退出；0 表示关闭"},
 		{Key: ArgQueryDefaultLimit, Value: "1000", Description: "数据库查询默认条数限制：SQL 无 limit 时自动追加"},
@@ -100,6 +101,17 @@ func (d *DB) seed() error {
 		{Key: "sql_insight_analysis_cron", Value: "0 0 3 * * *", Description: "智能分析每日 Cron（6 段含秒）"},
 		{Key: "cmdb_sync_auto_apply", Value: "false", Description: "CMDB 外部同步是否自动入库（默认关，仅产出候选）"},
 		{Key: "cmdb_webhook_url", Value: "", Description: "CMDB CI/关系变更 Webhook URL（空则关闭）"},
+		{Key: ArgClientAccessEnabled, Value: "true", Description: "本地 AI/CLI/MCP 访问授权能力总开关：true=启用授权与 PAT 通道（不拦截浏览器 JWT）"},
+		{Key: ArgClientAccessEnforceMachinePAT, Value: "true", Description: "机器通道（X-Client-Type=mcp|cli|local_ai 或 PAT）是否强制个人访问令牌：true=禁止用登录 JWT 冒充机器客户端"},
+		{Key: ArgHardenViewCredential, Value: "false", Description: "二期加固：查看账号明文需 view_credential/账号菜单权限；开启后创建响应不再回传 real_password"},
+		{Key: ArgHardenStepUp, Value: "false", Description: "二期加固：查看明文前须 POST /auth/step-up 二次验证（约 10 分钟有效）"},
+		{Key: ArgHardenTicketExecute, Value: "false", Description: "二期加固：工单执行须为提交人/审批人/特权角色或持有 um.action.tickets.execute"},
+		{Key: ArgHardenK8sTunnel, Value: "false", Description: "二期加固：K8s agent tunnel 须携带与 k8s_agent_tunnel_token 一致的 token"},
+		{Key: ArgHardenReadOnlySession, Value: "false", Description: "二期加固：POST /query 启用会话级只读（WithReadOnlySession）"},
+		{Key: ArgAllowCredentialScope, Value: "false", Description: "二期：是否允许 PAT 签发 credential scope（仍须审计；默认关）"},
+		{Key: ArgAuditRetentionDays, Value: "90", Description: "查询/接口/凭证审计保留天数，定时任务按此清理"},
+		{Key: ArgSecurityAlertThreshold, Value: "20", Description: "单用户机器通道 10 分钟内拒绝达到该次数则通知管理员"},
+		{Key: ArgK8sAgentTunnelToken, Value: "", Description: "K8s agent 反向隧道共享 Token（harden_k8s_tunnel=true 时必填；agent --token 须一致）"},
 	}
 	for _, a := range defaults {
 		var exists int
@@ -244,6 +256,9 @@ func (d *DB) seedRBAC(now string) error {
 	if err := d.ensureSqlInsightActionMenus(now); err != nil {
 		return err
 	}
+	if err := d.ensureCloudMenus(now); err != nil {
+		return err
+	}
 	if err := d.ensureAlertMenus(now); err != nil {
 		return err
 	}
@@ -284,6 +299,9 @@ func (d *DB) seedRBAC(now string) error {
 		return err
 	}
 	if err := d.ensureQueryAuditsMenu(now); err != nil {
+		return err
+	}
+	if err := d.ensureClientAccessMenus(now); err != nil {
 		return err
 	}
 	if err := d.ensureLdapMenu(now); err != nil {
@@ -669,6 +687,7 @@ func (d *DB) seedMenus(now string) error {
 		{"m-cfg-region", "m-cfg-base", "区域管理", "/config/regions", "um.sidebar.config-regions", "查看区域管理", "location", 2},
 		{"m-cfg-env", "m-cfg-base", "环境管理", "/config/environments", "um.sidebar.config-environments", "查看环境管理", "grid", 3},
 		{"m-cfg-sql-exec", "m-cfg-base", "执行器", "/config/sql-executors", URNSidebarSQLExecutors, "查看 SQL 执行器", "connection", 4},
+		{"m-cloud-accounts", "m-cfg-base", "云账号", "/config/cloud-accounts", URNSidebarCloudAccounts, "查看云账号", "key", 5},
 		{"m-cfg-tags", "m-cfg-access", "标签管理", "/config/tags", "um.sidebar.config-tags", "查看标签管理", "tag", 1},
 		{"m-cfg-conn", "m-cfg-access", "连接器", "/config/connectors", "um.sidebar.config-connectors", "查看连接器", "connection", 2},
 		{"m-cfg-agent", "m-cfg-access", "平台 Agent", "/config/agents", "um.sidebar.config-agents", "查看平台 Agent", "connection", 3},
@@ -1161,6 +1180,7 @@ func (d *DB) ensureConfigCenterGroups(now string) error {
 		{"m-cfg-region", "m-cfg-base", 2},
 		{"m-cfg-env", "m-cfg-base", 3},
 		{"m-cfg-sql-exec", "m-cfg-base", 4},
+		{"m-cloud-accounts", "m-cfg-base", 5},
 		{"m-cfg-tags", "m-cfg-access", 1},
 		{"m-cfg-conn", "m-cfg-access", 2},
 		{"m-cfg-agent", "m-cfg-access", 3},
@@ -1543,6 +1563,29 @@ func (d *DB) ensureQueryAuditsMenu(now string) error {
 	return d.grantMenuToRoleCode(m.ID, "admin")
 }
 
+func (d *DB) ensureClientAccessMenus(now string) error {
+	items := []seedMenu{
+		{"m-cfg-client-access", "m-rbac", "客户端访问授权", "/config/client-access", URNSidebarClientAccess, "管理本地 AI/CLI/MCP 访问授权与接口审计", "key", 62},
+		{"m-cfg-my-access-tokens", "m-rbac", "我的访问令牌", "/config/my-access-tokens", URNSidebarMyAccessTokens, "签发与吊销个人访问令牌(PAT)", "api", 63},
+		{"m-act-accounts-view-cred", "m-cfg-accounts", "查看账号密码", "", URNAccountsViewCred, "查看数据库账号明文密码", "key", 90},
+		{"m-act-tickets-execute", "m-tickets", "执行工单", "", URNTicketsExecute, "执行已通过的工单", "play", 90},
+	}
+	for _, it := range items {
+		m := &Menu{
+			ID: it.ID, ParentID: it.Parent, Title: it.Title, Path: it.Path,
+			URN: it.URN, PermissionDesc: it.Perm, Icon: it.Icon, SortOrder: it.Sort, Enabled: true,
+			CreatedAt: now, UpdatedAt: now,
+		}
+		if err := d.EnsureMenu(m); err != nil {
+			return err
+		}
+		if err := d.grantMenuToRoleCode(m.ID, "admin"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (d *DB) ensureLdapMenu(now string) error {
 	m := &Menu{
 		ID: "m-cfg-ldap", ParentID: "m-rbac", Title: "认证配置", Path: "/config/ldap",
@@ -1672,6 +1715,7 @@ func (d *DB) ensureSqlInsightActionMenus(now string) error {
 		{"m-act-si-awr-gen", "m-diag-sql", "手动生成 AWR 报告", "", URNSqlInsightAwrGenerate, "手动触发生成 / 管理 AWR 生成任务", "histogram", 91},
 		{"m-act-si-space-collect", "m-diag-sql", "手动采集表空间", "", URNSqlInsightSpaceCollect, "手动采集表空间快照 / 管理采集任务", "download", 92},
 		{"m-act-si-analyze", "m-diag-sql", "手动智能分析", "", URNSqlInsightAnalyze, "手动触发智能分析运行", "search", 93},
+		{"m-act-si-cloud-slow-sync", "m-diag-sql", "同步云慢日志", "", URNSqlInsightCloudSlow, "手动补齐云数据库慢日志", "cloud", 94},
 	}
 	for _, it := range items {
 		m := &Menu{
@@ -1688,6 +1732,68 @@ func (d *DB) ensureSqlInsightActionMenus(now string) error {
 	}
 	log.Printf("seed: sql-insight action menus ensured")
 	return nil
+}
+
+func (d *DB) ensureCloudMenus(now string) error {
+	items := []seedMenu{
+		{"m-cloud", "", "云资源", "", URNSidebarCloud, "查看云资源", "cloud", 51},
+		{"m-cloud-pg", "m-cloud", "PostgreSQL", "/ops/cloud/postgres", URNSidebarCloudPostgres, "查看云 PostgreSQL", "database", 1},
+		{"m-cloud-mysql", "m-cloud", "MySQL", "/ops/cloud/mysql", URNSidebarCloudMySQL, "查看云 MySQL", "mysql", 2},
+		{"m-cloud-redis", "m-cloud", "Redis", "/ops/cloud/redis", URNSidebarCloudRedis, "查看云 Redis", "redis", 3},
+		{"m-cloud-host", "m-cloud", "主机", "/ops/cloud/hosts", URNSidebarCloudHost, "查看云主机", "server", 4},
+		{"m-cloud-policies", "m-cloud", "自愈策略", "/ops/cloud/policies", URNSidebarCloudPolicies, "查看云自愈策略", "safety", 5},
+		{"m-act-cloud-submit", "m-cloud-pg", "提交云变更", "", URNCloudSubmit, "提交云资源变更工单", "edit", 90},
+	}
+	for _, it := range items {
+		m := &Menu{
+			ID: it.ID, ParentID: it.Parent, Title: it.Title, Path: it.Path,
+			URN: it.URN, PermissionDesc: it.Perm, Icon: it.Icon, SortOrder: it.Sort, Enabled: true,
+			CreatedAt: now, UpdatedAt: now,
+		}
+		if err := d.EnsureMenu(m); err != nil {
+			return err
+		}
+	}
+	if err := d.GrantMenuToAllRoles("m-cloud"); err != nil {
+		return err
+	}
+	for _, id := range []string{"m-cloud-pg", "m-cloud-mysql", "m-cloud-redis", "m-cloud-host", "m-cloud-policies"} {
+		if err := d.GrantMenuFollowingParent(id, "m-cloud"); err != nil {
+			return err
+		}
+	}
+	// 云账号只挂在配置中心·基础设置，不出现在云资源下
+	if err := d.relocateCloudAccountsMenu(now); err != nil {
+		return err
+	}
+	if err := d.grantMenuToRoleCode("m-act-cloud-submit", "admin"); err != nil {
+		return err
+	}
+	log.Printf("seed: cloud menus ensured")
+	return nil
+}
+
+func (d *DB) relocateCloudAccountsMenu(now string) error {
+	m := &Menu{
+		ID: "m-cloud-accounts", ParentID: "m-cfg-base", Title: "云账号", Path: "/config/cloud-accounts",
+		URN: URNSidebarCloudAccounts, PermissionDesc: "查看云账号", Icon: "key",
+		SortOrder: 5, Enabled: true, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := d.EnsureMenu(m); err != nil {
+		return err
+	}
+	if err := d.GrantMenuFollowingParent(m.ID, "m-cfg-base"); err != nil {
+		return err
+	}
+	keys := &Menu{
+		ID: "m-act-cloud-keys", ParentID: "m-cloud-accounts", Title: "登记云密钥", Path: "",
+		URN: URNCloudKeys, PermissionDesc: "登记云账号密钥和绑定用户", Icon: "lock",
+		SortOrder: 91, Enabled: true, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := d.EnsureMenu(keys); err != nil {
+		return err
+	}
+	return d.grantMenuToRoleCode(keys.ID, "admin")
 }
 
 func (d *DB) ensureInstanceOverviewMenu(now string) error {
@@ -2022,6 +2128,7 @@ func (d *DB) ensureTopLevelMenuSort(now string) error {
 		{"m-diag", "诊断", "um.sidebar.diag", "monitor", 40},
 		{"m-k8s", "容器管理", "um.sidebar.k8s", "cluster", 45},
 		{"m-plat", "平台运维", "um.sidebar.platform", "grid", 50},
+		{"m-cloud", "云资源", URNSidebarCloud, "cloud", 51},
 		{"m-rbac", "用户权限", "um.sidebar.rbac", "lock", 55},
 		{"m-cfg-dns", "DNS管理", URNSidebarDNS, "global", 60},
 		{"m-alert", "告警管理", "um.sidebar.alerts", "bell", 70},

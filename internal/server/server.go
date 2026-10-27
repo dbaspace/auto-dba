@@ -18,6 +18,7 @@ import (
 	"auto-dba/internal/awr"
 	"auto-dba/internal/backup"
 	"auto-dba/internal/cdc"
+	"auto-dba/internal/cloudsvc"
 	"auto-dba/internal/config"
 	"auto-dba/internal/copilot"
 	"auto-dba/internal/dbdeploy"
@@ -119,6 +120,9 @@ func Run(cfg *config.Config, configPath string) {
 	flashback.SetRuntime(&flashback.Runtime{Store: db, Secret: fieldCrypto, Cfg: cfg.Flashback})
 	fbEngine := flashback.New()
 	ticketH := &handler.TicketHandler{Store: db, Secret: fieldCrypto, Flashback: fbEngine, Migration: migEngine, Archive: arcEngine, CDC: cdcOrch, Backup: bakEngine}
+	cloudSvc := cloudsvc.New(db, fieldCrypto)
+	cloudSvc.Install()
+	ticketH.Cloud = cloudSvc
 	pgSpaceSvc := pgspace.New(db, fieldCrypto)
 	redisRDBSvc := redisrdb.New(db, fieldCrypto, filepath.Join(os.TempDir(), "auto-dba-redis-rdb"))
 	awrSvc := awr.New(db, fieldCrypto)
@@ -163,7 +167,7 @@ func Run(cfg *config.Config, configPath string) {
 		DB: db, Sessions: sessStore, PgSpace: pgSpaceSvc, AWR: awrSvc, SQLInsight: siSvc,
 		Migration: migEngine, Archive: arcEngine, Backup: bakEngine,
 		Ticket: ticketH, CDC: cdcH, Slot: slotH, AlertSecret: fieldCrypto, PgSecret: &cryptoLive,
-		DNS: dnsH,
+		DNS: dnsH, Cloud: cloudSvc,
 	})
 	jobReg.OnFailure = func(jobKey, jobName, runID, errMsg string) {
 		notify.JobFailed(db, fieldCrypto, jobKey, jobName, runID, errMsg)
@@ -189,6 +193,8 @@ func Run(cfg *config.Config, configPath string) {
 		Slot:               slotH,
 		Migration:          &handler.MigrationHandler{Store: db, Cfg: cfg, Secret: fieldCrypto, Engine: migEngine},
 		Flashback:          &handler.FlashbackHandler{Store: db, Secret: fieldCrypto, Cfg: cfg, Engine: fbEngine},
+		Cloud:              &handler.CloudHandler{Store: db, Secret: fieldCrypto, Svc: cloudSvc},
+		ClientAccess:       &handler.ClientAccessHandler{Store: db},
 		Archive:            &handler.ArchiveHandler{Store: db, Secret: fieldCrypto, Engine: arcEngine},
 		Kafka:              &handler.KafkaHandler{Store: db, Secret: fieldCrypto},
 		Redis:              &handler.RedisHandler{Store: db, Secret: fieldCrypto},

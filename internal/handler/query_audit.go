@@ -25,6 +25,12 @@ func recordQueryAudit(st *store.DB, c *gin.Context, it *store.QueryAudit) {
 	}
 	it.IP = clientLoginIP(c)
 	it.UserAgent = c.Request.UserAgent()
+	if it.ClientType == "" {
+		it.ClientType = middleware.ClientType(c)
+	}
+	if it.TokenID == "" {
+		it.TokenID = middleware.TokenID(c)
+	}
 	if err := st.CreateQueryAudit(it); err != nil {
 		log.Printf("query audit: %v", err)
 	}

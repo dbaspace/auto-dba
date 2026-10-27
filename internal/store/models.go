@@ -102,6 +102,7 @@ type Instance struct {
 	CloudVendor     string   `json:"cloud_vendor,omitempty"`
 	CloudInstanceID string   `json:"cloud_instance_id,omitempty"`
 	CloudRegion     string   `json:"cloud_region,omitempty"`
+	CloudAccountID  string   `json:"cloud_account_id,omitempty"`
 	Visibility      string   `json:"visibility,omitempty"`
 	AccessUsers     []string `json:"access_users,omitempty"`
 	RoleIDs         []string `json:"role_ids,omitempty"`
@@ -168,14 +169,14 @@ type Issue struct {
 	RejectReason string `json:"reject_reason,omitempty"`
 	NeedRollback string `json:"need_rollback,omitempty"`
 	// AssigneeTransferHistory JSON 字符串数组，如 ["a->b by=a at=..."]
-	AssigneeTransferHistory string `json:"assignee_transfer_history,omitempty"`
-	ScheduledAt             string `json:"scheduled_at,omitempty"`
+	AssigneeTransferHistory string        `json:"assignee_transfer_history,omitempty"`
+	ScheduledAt             string        `json:"scheduled_at,omitempty"`
 	ExecuteResult           string        `json:"-"`
 	Exec                    any           `json:"exec,omitempty"`
 	ExecProgressRaw         string        `json:"-"`
 	ExecProgress            *ExecProgress `json:"exec_progress,omitempty"`
-	CreatedAt               string `json:"created_at"`
-	UpdatedAt               string `json:"updated_at"`
+	CreatedAt               string        `json:"created_at"`
+	UpdatedAt               string        `json:"updated_at"`
 }
 
 type CDCConnectorConfigVersion struct {
@@ -654,6 +655,8 @@ type QueryAudit struct {
 	Message      string `json:"message,omitempty"`
 	RowCount     int    `json:"row_count"`
 	ElapsedMS    int64  `json:"elapsed_ms"`
+	ClientType   string `json:"client_type,omitempty"`
+	TokenID      string `json:"token_id,omitempty"`
 	CreatedAt    string `json:"created_at"`
 }
 
@@ -751,6 +754,10 @@ const (
 	IssueTypeResourceApply = "resource_apply" // 平台资源申请（库/域名/主机/集群）
 	IssueTypeK8sChange     = "k8s_change"     // K8s 生产变更（apply/删除/drain/缩零等）
 	IssueTypeDnsChange     = "dns_change"     // DNS 记录变更（需审批的解析域）
+	IssueTypeCloudPg       = "cloud_pg"       // 公有云 PostgreSQL 变更
+	IssueTypeCloudMysql    = "cloud_mysql"    // 公有云 MySQL 变更
+	IssueTypeCloudRedis    = "cloud_redis"    // 公有云 Redis 变更
+	IssueTypeCloudHost     = "cloud_host"     // 公有云主机变更
 
 	StatusPending        = "pending"
 	StatusApproved       = "approved"
@@ -770,3 +777,39 @@ const (
 	StatusSucceeded      = "succeeded"
 	StatusReinitializing = "reinitializing"
 )
+
+// IsCloudIssueType 公有云变更工单（PG/MySQL/Redis/主机）。
+func IsCloudIssueType(t string) bool {
+	switch t {
+	case IssueTypeCloudPg, IssueTypeCloudMysql, IssueTypeCloudRedis, IssueTypeCloudHost:
+		return true
+	default:
+		return false
+	}
+}
+
+func CloudIssueTypeForEngine(engine string) string {
+	switch engine {
+	case "mysql":
+		return IssueTypeCloudMysql
+	case "redis":
+		return IssueTypeCloudRedis
+	case "host":
+		return IssueTypeCloudHost
+	default:
+		return IssueTypeCloudPg
+	}
+}
+
+func EngineForCloudIssueType(t string) string {
+	switch t {
+	case IssueTypeCloudMysql:
+		return "mysql"
+	case IssueTypeCloudRedis:
+		return "redis"
+	case IssueTypeCloudHost:
+		return "host"
+	default:
+		return "postgres"
+	}
+}

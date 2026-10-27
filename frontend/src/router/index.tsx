@@ -27,6 +27,9 @@ import DolphinOps from '../views/ops/DolphinOps'
 import SrNodes from '../views/ops/SrNodes'
 import Sessions from '../views/ops/Sessions'
 import SqlInsight from '../views/ops/SqlInsight'
+import CloudPostgres from '../views/ops/cloud/CloudPostgres'
+import CloudPolicies from '../views/ops/cloud/CloudPolicies'
+import CloudAccounts from '../views/ops/cloud/CloudAccounts'
 import InstanceOverview from '../views/ops/InstanceOverview'
 import DbMonitor from '../views/ops/DbMonitor'
 import RedisRdb from '../views/ops/redis-rdb/RedisRdb'
@@ -53,6 +56,8 @@ import SqlInsightSettings from '../views/config/SqlInsightSettings'
 import LoginLogs from '../views/config/LoginLogs'
 import LoginSessions from '../views/config/LoginSessions'
 import QueryAudits from '../views/config/QueryAudits'
+import ClientAccess from '../views/config/ClientAccess'
+import MyAccessTokens from '../views/config/MyAccessTokens'
 import Connectors from '../views/config/Connectors'
 import MonitorTargets from '../views/config/MonitorTargets'
 import FeAdmin from '../views/config/FeAdmin'
@@ -200,6 +205,13 @@ const router = createHashRouter([
       { path: 'ops/backup/settings', element: <BackupSettings /> },
 
       { path: 'ops/sql-insight', element: <SqlInsight /> },
+      { path: 'ops/cloud/postgres', element: <CloudPostgres engine="postgres" /> },
+      { path: 'ops/cloud/mysql', element: <CloudPostgres engine="mysql" /> },
+      { path: 'ops/cloud/redis', element: <CloudPostgres engine="redis" /> },
+      { path: 'ops/cloud/hosts', element: <CloudPostgres engine="host" /> },
+      { path: 'ops/cloud/policies', element: <CloudPolicies /> },
+      { path: 'ops/cloud/accounts', element: <Navigate to="/config/cloud-accounts" replace /> },
+      { path: 'config/cloud-accounts', element: <CloudAccounts /> },
       { path: 'ops/instance-overview', element: <InstanceOverview /> },
       { path: 'ops/redis-rdb', element: <RedisRdb /> },
       { path: 'ops/db-monitor', element: <Navigate to="/ops/db-monitor/postgres" replace /> },
@@ -279,6 +291,8 @@ const router = createHashRouter([
       { path: 'config/login-logs', element: <LoginLogs /> },
       { path: 'config/login-sessions', element: <LoginSessions /> },
       { path: 'config/query-audits', element: <QueryAudits /> },
+      { path: 'config/client-access', element: <ClientAccess /> },
+      { path: 'config/my-access-tokens', element: <MyAccessTokens /> },
       { path: 'config/ldap', element: <AuthConfig /> },
       { path: '*', element: null },
     ],

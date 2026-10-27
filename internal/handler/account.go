@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"log"
 	"net/http"
 	"strings"
 
@@ -92,15 +93,80 @@ func (h *AccountHandler) Get(c *gin.Context) {
 	out := *it
 	redactAccount(&out)
 	if c.Query("view_credential") == "1" || c.Query("view_credential") == "true" {
+		if !h.allowViewCredential(c, it) {
+			return
+		}
 		plain, err := secret.Decrypt(h.Secret, it.Password)
 		if err != nil {
+			h.recordCredAudit(c, it, false, "decrypt failed")
 			c.JSON(http.StatusInternalServerError, gin.H{"message": "密码解密失败"})
 			return
 		}
+		h.recordCredAudit(c, it, true, "")
 		c.JSON(http.StatusOK, gin.H{"data": out, "real_password": plain})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": out})
+}
+
+func (h *AccountHandler) allowViewCredential(c *gin.Context, it *store.DBAccount) bool {
+	// PAT：须开 credential scope 开关且令牌含 credential
+	if middleware.IsPATAuth(c) {
+		if !h.Store.AllowCredentialScope() || !store.ScopeHas(c.GetString(middleware.CtxPATScopes), store.ClientScopeCredential) {
+			h.recordCredAudit(c, it, false, "pat missing credential scope")
+			c.JSON(http.StatusForbidden, gin.H{"message": "令牌无权查看明文密码", "code": "credential_scope_denied"})
+			return false
+		}
+		return true
+	}
+	if h.Store.HardenViewCredential() {
+		uid := middleware.UserID(c)
+		ok, err := h.Store.UserHasURN(uid, store.URNAccountsViewCred)
+		if err != nil || !ok {
+			// 兼容：持有账号管理侧栏也可（避免角色未配动作 URN 时全员被挡）；平台 admin 已由 UserHasURN 短路
+			ok2, _ := h.Store.UserHasURN(uid, "um.sidebar.config-accounts")
+			if !ok2 {
+				h.recordCredAudit(c, it, false, "missing view_credential urn")
+				c.JSON(http.StatusForbidden, gin.H{
+					"message":      "无查看密码权限",
+					"code":         "credential_forbidden",
+					"required_urn": store.URNAccountsViewCred,
+				})
+				return false
+			}
+		}
+	}
+	if h.Store.HardenStepUp() && !store.HasValidStepUp(middleware.UserID(c)) {
+		h.recordCredAudit(c, it, false, "step_up required")
+		c.JSON(http.StatusForbidden, gin.H{
+			"message": "查看密码需二次验证",
+			"code":    "step_up_required",
+		})
+		return false
+	}
+	return true
+}
+
+func (h *AccountHandler) recordCredAudit(c *gin.Context, it *store.DBAccount, ok bool, msg string) {
+	if h.Store == nil {
+		return
+	}
+	target := ""
+	aid, iid := "", ""
+	if it != nil {
+		aid = it.ID
+		iid = it.InstanceID
+		target = strings.TrimSpace(it.Username) + "@" + strings.TrimSpace(it.DBName)
+	}
+	err := h.Store.CreateCredentialAudit(&store.CredentialAudit{
+		UserID: middleware.UserID(c), Username: middleware.Username(c),
+		AccountID: aid, InstanceID: iid, Target: target,
+		Success: ok, Message: msg, IP: clientLoginIP(c), UserAgent: c.Request.UserAgent(),
+		ClientType: middleware.ClientType(c),
+	})
+	if err != nil {
+		log.Printf("credential audit: %v", err)
+	}
 }
 
 type accountSaveReq struct {
@@ -195,7 +261,12 @@ func (h *AccountHandler) Create(c *gin.Context) {
 	}
 	enrichAccount(h.Store, it)
 	redactAccount(it)
-	c.JSON(http.StatusOK, gin.H{"data": it, "real_password": plain})
+	payload := gin.H{"data": it}
+	// 加固开启时不在创建响应回传明文，避免 MCP/脚本截获；前端可再调 view_credential
+	if !h.Store.HardenViewCredential() {
+		payload["real_password"] = plain
+	}
+	c.JSON(http.StatusOK, payload)
 }
 
 func (h *AccountHandler) Update(c *gin.Context) {

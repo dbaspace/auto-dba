@@ -183,7 +183,15 @@ export default function Accounts() {
       } else {
         const { data } = await api.post('/db-accounts', payload)
         const pwd = data.real_password || ''
-        message.success(pwd ? `已创建，初始密码：${pwd}` : '已创建')
+        if (pwd) {
+          message.success(`已创建，初始密码：${pwd}`)
+        } else {
+          message.success('已创建（明文未回传，请在详情中查看密码）')
+          if (data?.data?.id) {
+            setViewing(data.data)
+            setViewVisible(true)
+          }
+        }
       }
       setFormVisible(false)
       await load()
@@ -205,6 +213,34 @@ export default function Accounts() {
       const { data } = await api.get('/db-accounts/' + viewing.id, { params: { view_credential: 1 } })
       setPlainPassword(data.real_password || '')
       if (!data.real_password) message.warning('未存储密码')
+    } catch (e: any) {
+      const code = e?.response?.data?.code
+      if (code === 'step_up_required') {
+        Modal.confirm({
+          title: '二次验证',
+          content: (
+            <Input.Password
+              id="step-up-pwd"
+              placeholder="请输入登录密码（LDAP/SSO 账号可留空并确认）"
+              autoComplete="current-password"
+            />
+          ),
+          onOk: async () => {
+            const el = document.getElementById('step-up-pwd') as HTMLInputElement | null
+            const password = el?.value || ''
+            try {
+              await api.post('/auth/step-up', password ? { password } : { confirm: true })
+              message.success('验证成功')
+              await revealPwd()
+            } catch (err: any) {
+              message.error(err?.response?.data?.message || '验证失败')
+              return Promise.reject(err)
+            }
+          },
+        })
+      } else {
+        message.error(e?.response?.data?.message || '无法查看密码')
+      }
     } finally {
       setPwdLoading(false)
     }

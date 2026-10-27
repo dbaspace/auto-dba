@@ -48,6 +48,13 @@ export const PAGE_ROUTES = [
   { path: '/k8s/db-clusters', title: 'K8s 数据库服务' },
   { path: '/k8s/apps', title: 'K8s Helm 应用' },
   { path: '/ops/sql-insight', title: 'SQL 洞察' },
+  { path: '/ops/cloud/postgres', title: '云 PostgreSQL' },
+  { path: '/ops/cloud/mysql', title: '云 MySQL' },
+  { path: '/ops/cloud/redis', title: '云 Redis' },
+  { path: '/ops/cloud/hosts', title: '云主机' },
+  { path: '/ops/cloud/policies', title: '云自愈策略' },
+  { path: '/config/cloud-accounts', title: '云账号' },
+  { path: '/ops/cloud/accounts', title: '云账号' },
   { path: '/ops/instance-overview', title: '实例总览' },
   { path: '/ops/redis-rdb', title: 'Redis 内存分析' },
   { path: '/ops/db-monitor/postgres', title: 'Postgres监控' },
@@ -123,6 +130,9 @@ export const PAGE_ROUTES = [
   { path: '/config/tenants', title: '租户管理' },
   { path: '/config/login-logs', title: '登录日志' },
   { path: '/config/login-sessions', title: '登录会话' },
+  { path: '/config/query-audits', title: '查询审计' },
+  { path: '/config/client-access', title: '客户端访问授权' },
+  { path: '/config/my-access-tokens', title: '我的访问令牌' },
   { path: '/config/ldap', title: '认证配置' },
 ]
 

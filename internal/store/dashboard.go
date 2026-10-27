@@ -477,6 +477,14 @@ func issueTypeLabel(t string) string {
 		return "数据库集群部署"
 	case IssueTypeResourceApply:
 		return "平台资源申请"
+	case IssueTypeCloudPg:
+		return "云 PostgreSQL 变更"
+	case IssueTypeCloudMysql:
+		return "云 MySQL 变更"
+	case IssueTypeCloudRedis:
+		return "云 Redis 变更"
+	case IssueTypeCloudHost:
+		return "云主机变更"
 	default:
 		return t
 	}

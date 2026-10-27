@@ -8,6 +8,7 @@ import (
 	"auto-dba/internal/archive"
 	"auto-dba/internal/awr"
 	"auto-dba/internal/backup"
+	"auto-dba/internal/cloudsvc"
 	"auto-dba/internal/cmdb"
 	"auto-dba/internal/dbmig"
 	"auto-dba/internal/handler"
@@ -36,6 +37,7 @@ type Deps struct {
 	PgSecret    *string
 	Cmdb        *cmdb.Service
 	DNS         *handler.DNSHandler
+	Cloud       *cloudsvc.Service
 }
 
 // RegisterPlatformJobs 注册全部平台系统任务（不含启动循环）。
@@ -274,6 +276,55 @@ func RegisterPlatformJobs(r *jobreg.Registry, d Deps) {
 		return handler.RunDueScheduledIssuesOnce(ctx, d.Ticket)
 	})
 
+	r.Register(jobreg.JobDesc{
+		Key: "cloud.pg.sync", Name: "云资源同步(PG/MySQL/Redis/主机)", Group: "cloud",
+		Description:  "按已启用云账号及其地域同步 PG/MySQL/Redis/主机清单；无只读密钥的账号自动跳过",
+		ScheduleKind: jobreg.ScheduleInterval, DefaultSpec: "5m",
+		Mutable: true, Triggerable: true, Pauseable: true, RiskLevel: jobreg.RiskLow,
+		MisfirePolicy: jobreg.MisfireSkip,
+	}, func(ctx context.Context) error {
+		if d.Cloud == nil {
+			return nil
+		}
+		return d.Cloud.SyncAll(ctx)
+	})
+	r.Register(jobreg.JobDesc{
+		Key: "cloud.pg.slowlog", Name: "云 PostgreSQL 慢日志", Group: "cloud",
+		Description:  "每 5 分钟增量同步云慢日志",
+		ScheduleKind: jobreg.ScheduleInterval, DefaultSpec: "5m",
+		Mutable: true, Triggerable: true, Pauseable: true, RiskLevel: jobreg.RiskLow,
+		MisfirePolicy: jobreg.MisfireSkip,
+	}, func(ctx context.Context) error {
+		if d.Cloud == nil {
+			return nil
+		}
+		return d.Cloud.SlowlogAll(ctx, "")
+	})
+	r.Register(jobreg.JobDesc{
+		Key: "cloud.pg.heal", Name: "云 PostgreSQL 自愈", Group: "cloud",
+		Description:  "按策略处理触发中的告警，默认只建工单",
+		ScheduleKind: jobreg.ScheduleInterval, DefaultSpec: "60s",
+		Mutable: true, Triggerable: true, Pauseable: true, RiskLevel: jobreg.RiskHigh,
+		MisfirePolicy: jobreg.MisfireSkip,
+	}, func(ctx context.Context) error {
+		if d.Cloud == nil {
+			return nil
+		}
+		return d.Cloud.Heal(ctx)
+	})
+	r.Register(jobreg.JobDesc{
+		Key: "cloud.pg.tasks", Name: "云变更任务续跑", Group: "cloud",
+		Description:  "对已提交的云上任务只查询进度，不重复下发",
+		ScheduleKind: jobreg.ScheduleInterval, DefaultSpec: "30s",
+		Mutable: true, Triggerable: true, Pauseable: true, RiskLevel: jobreg.RiskMedium,
+		MisfirePolicy: jobreg.MisfireSkip,
+	}, func(ctx context.Context) error {
+		if d.Cloud == nil {
+			return nil
+		}
+		return d.Cloud.Resume(ctx)
+	})
+
 	if d.DNS != nil && d.DNS.DNS.Configured() {
 		r.Register(jobreg.JobDesc{
 			Key: "dns.health", Name: "DNS 节点巡检", Group: "dns",
@@ -283,6 +334,38 @@ func RegisterPlatformJobs(r *jobreg.Registry, d Deps) {
 			MisfirePolicy: jobreg.MisfireSkip,
 		}, d.DNS.RunHealth)
 	}
+
+	if d.Ticket != nil {
+		if n := d.Ticket.ReclaimOrphanRunning(true); n > 0 {
+			log.Printf("ticket reclaim orphan running: %d", n)
+		}
+		r.Register(jobreg.JobDesc{
+			Key: "ticket.reclaim_running", Name: "收回中断的执行中工单", Group: "ticket",
+			Description:  "本进程已无执行标记、且超过宽限仍为执行中的 DDL/DML/建库工单记为失败",
+			ScheduleKind: jobreg.ScheduleInterval, DefaultSpec: "1m",
+			Mutable: true, Triggerable: true, Pauseable: true, RiskLevel: jobreg.RiskLow,
+			MisfirePolicy: jobreg.MisfireSkip,
+		}, func(context.Context) error {
+			d.Ticket.ReclaimOrphanRunning(false)
+			return nil
+		})
+	}
+
+	r.Register(jobreg.JobDesc{
+		Key: "client_access.audit_purge", Name: "客户端审计清理", Group: "security",
+		Description:  "按 client_access_audit_retention_days 清理查询/接口/凭证审计",
+		ScheduleKind: jobreg.ScheduleCron6, DefaultSpec: "0 0 4 * * *",
+		Mutable: true, Triggerable: true, Pauseable: true, RiskLevel: jobreg.RiskLow,
+		MisfirePolicy: jobreg.MisfireSkip,
+	}, func(ctx context.Context) error {
+		days := d.DB.AuditRetentionDays()
+		q, a, c, err := d.DB.PurgeClientAccessAudits(days)
+		if err != nil {
+			return err
+		}
+		log.Printf("client_access.audit_purge: retention=%dd query=%d api=%d cred=%d", days, q, a, c)
+		return nil
+	})
 }
 
 func deref(p *string) string {

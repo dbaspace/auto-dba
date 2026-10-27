@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react'
-import { Tag } from 'antd'
+import { Collapse, Tag } from 'antd'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import {
   buildDdlExecGroups,
@@ -223,31 +223,42 @@ export default function DdlExecImpact(props: {
       {visible.length === 0 ? (
         <div className="exec-empty">{props.emptyText || '暂无数据'}</div>
       ) : (
-        visible.map((g) => {
-          const ord = groups.findIndex((x) => x.key === g.key) + 1
-          return (
-            <div key={g.key} className={`exec-inst-card ${g.ok ? '' : 'is-fail'}`}>
-              <div className="impact-head">
-                <span className={`db-pill ${g.ok ? '' : 'is-fail'}`}>数据库 {ord}</span>
-                <span className="db-path">{g.path}</span>
-                <Tag color={g.ok ? 'success' : 'error'}>{g.ok ? '执行成功' : '执行失败'}</Tag>
-              </div>
-              {!g.ok && g.error ? <div className="exec-inst-error">{g.error}</div> : null}
-              {!g.ok && g.rolledBack > 0 ? (
-                <div className="exec-inst-note">事务已回滚，本库 SQL 均未生效</div>
-              ) : null}
-              <ResponsiveTable
-                dataSource={g.rows}
-                bordered
-                size="small"
-                rowKey="key"
-                pagination={false}
-                scroll={{ x: 'max-content' }}
-                columns={tableColumns as any}
-              />
-            </div>
-          )
-        })
+        <Collapse
+          key={tab}
+          className="exec-inst-collapse"
+          bordered={false}
+          defaultActiveKey={[]}
+          items={visible.map((g) => {
+            const ord = groups.findIndex((x) => x.key === g.key) + 1
+            return {
+              key: g.key,
+              label: (
+                <div className={`impact-head ${g.ok ? '' : 'is-fail'}`}>
+                  <span className={`db-pill ${g.ok ? '' : 'is-fail'}`}>数据库 {ord}</span>
+                  <span className="db-path">{g.path}</span>
+                  <Tag color={g.ok ? 'success' : 'error'}>{g.ok ? '执行成功' : '执行失败'}</Tag>
+                  {!g.ok && g.error ? <span className="exec-inst-error">{g.error}</span> : null}
+                </div>
+              ),
+              children: (
+                <div className={`exec-inst-card ${g.ok ? '' : 'is-fail'}`}>
+                  {!g.ok && g.rolledBack > 0 ? (
+                    <div className="exec-inst-note">事务已回滚，本库 SQL 均未生效</div>
+                  ) : null}
+                  <ResponsiveTable
+                    dataSource={g.rows}
+                    bordered
+                    size="small"
+                    rowKey="key"
+                    pagination={{ pageSize: 20, showSizeChanger: false, hideOnSinglePage: true }}
+                    scroll={{ x: 'max-content' }}
+                    columns={tableColumns as any}
+                  />
+                </div>
+              ),
+            }
+          })}
+        />
       )}
     </div>
   )

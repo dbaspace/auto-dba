@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -140,12 +141,45 @@ func (h *TicketHandler) runDDLLanes(ctx context.Context, it *store.Issue, jobs [
 	var wg sync.WaitGroup
 	var stopErr error
 	var once sync.Once
+	unhealthy := map[string]string{}
+	for _, key := range order {
+		if key == "local" {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		ex := laneExec[key]
+		if ex == nil {
+			unhealthy[key] = "执行器不存在"
+			continue
+		}
+		if err := sqlexec.Probe(ctx, ex.BaseURL, ex.Username, ex.Password); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			unhealthy[key] = err.Error()
+		}
+	}
 	for _, key := range order {
 		key := key
 		group := lanes[key]
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			if msg := unhealthy[key]; msg != "" {
+				for _, job := range group {
+					name := job.id
+					if job.inst != nil {
+						name = job.inst.Name
+					}
+					h.liveFail(live, ticketexec.Record{
+						InstanceID: job.id, InstanceName: name, Host: job.host, DB: job.dbName,
+						ErrorMessage: msg,
+					}, 0, 1)
+				}
+				return
+			}
 			var runErr error
 			if key == "local" {
 				runErr = h.runLocalDDLLane(ctx, it, group, stmtN, live)
@@ -278,9 +312,12 @@ func (h *TicketHandler) runRemoteDDLLane(ctx context.Context, it *store.Issue, e
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		view, err := sqlexec.Get(ctx, exec.BaseURL, exec.Username, exec.Password, jobID)
+		view, err := sqlexec.Get(ctx, exec.BaseURL, exec.Username, exec.Password, jobID, applied)
 		if err != nil {
 			miss++
+			if errors.Is(err, sqlexec.ErrJobNotFound) {
+				miss = 5
+			}
 			if miss >= 5 {
 				for _, job := range kept[applied:] {
 					name := job.id
@@ -296,14 +333,19 @@ func (h *TicketHandler) runRemoteDDLLane(ctx context.Context, it *store.Issue, e
 			}
 		} else {
 			miss = 0
-			if applied < len(view.Results) {
-				for _, item := range view.Results[applied:] {
-					h.liveRecord(live, ticketexec.Record{
-						InstanceID: item.InstanceID, InstanceName: item.InstanceName, Host: item.Host, DB: item.DB,
-						ErrorMessage: item.Error,
-					}, item.OK, item.SuccessCount, item.FailCount)
+			fresh := view.Results
+			if !view.Incremental && applied < len(view.Results) {
+				fresh = view.Results[applied:]
+			}
+			if view.Incremental || applied < len(view.Results) {
+				for _, item := range fresh {
+					h.applyRemoteDB(live, item)
 				}
-				applied = len(view.Results)
+				if view.Incremental {
+					applied += len(fresh)
+				} else {
+					applied = len(view.Results)
+				}
 			}
 			env := ""
 			if view.CurrentDB != "" {
@@ -331,6 +373,17 @@ func (h *TicketHandler) runRemoteDDLLane(ctx context.Context, it *store.Issue, e
 	}
 }
 
+func (h *TicketHandler) applyRemoteDB(live *ddlLive, item sqlexec.DBResult) {
+	if len(item.Records) > 0 {
+		h.liveStatements(live, item)
+		return
+	}
+	h.liveRecord(live, ticketexec.Record{
+		InstanceID: item.InstanceID, InstanceName: item.InstanceName, Host: item.Host, DB: item.DB,
+		ErrorMessage: item.Error,
+	}, item.OK, item.SuccessCount, item.FailCount)
+}
+
 func (h *TicketHandler) liveFail(live *ddlLive, rec ticketexec.Record, successN, failN int) {
 	h.liveRecord(live, rec, false, successN, failN)
 }
@@ -346,6 +399,25 @@ func (h *TicketHandler) liveRecord(live *ddlLive, rec ticketexec.Record, ok bool
 		if rec.ErrorMessage != "" {
 			live.merged.Message = rec.ErrorMessage
 		}
+	}
+	live.prog.Done = live.doneN
+	live.prog.Failed = live.failN
+	live.prog.SessionID = 0
+	live.prog.StmtIndex = 0
+	cp := *live.prog
+	h.saveProgress(live.it.ID, &cp)
+	_ = h.checkpointExec(live.it, live.merged)
+	live.mu.Unlock()
+}
+
+func (h *TicketHandler) liveStatements(live *ddlLive, item sqlexec.DBResult) {
+	live.mu.Lock()
+	appendStatementRecords(live.merged, item.Records, item.OK, item.SuccessCount, item.FailCount, item.Error)
+	live.doneN++
+	if item.OK {
+		live.okN++
+	} else {
+		live.failN++
 	}
 	live.prog.Done = live.doneN
 	live.prog.Failed = live.failN
@@ -416,9 +488,18 @@ func (h *TicketHandler) liveRemoteProgress(live *ddlLive, executor, env string, 
 
 // executeRemoteDML 把单库 DML 整段交给绑定了该环境的执行器。
 func (h *TicketHandler) executeRemoteDML(ctx context.Context, it *store.Issue, inst *store.Instance, t ticketexec.Target, exec *sqlexec.Executor) error {
+	if err := sqlexec.Probe(ctx, exec.BaseURL, exec.Username, exec.Password); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return h.persistExec(it, ticketexec.FailBeforeExec(err.Error(), ticketexec.Record{
+			InstanceID: inst.ID, InstanceName: inst.Name, Host: t.Host, DB: it.DBName,
+		}))
+	}
 	target := sqlexec.Target{
 		InstanceID: inst.ID, InstanceName: inst.Name, Host: t.Host, Port: t.Port,
 		Username: t.Username, Password: t.Password, DBName: it.DBName, DBType: inst.DBType, Env: inst.IDC,
+		LockTimeoutMS: t.LockTimeout.Milliseconds(),
 	}
 	jobID, err := sqlexec.Submit(ctx, exec.BaseURL, exec.Username, exec.Password, sqlexec.JobRequest{
 		IssueType: it.IssueType, SQL: it.SQLContent, Targets: []sqlexec.Target{target},
@@ -434,6 +515,7 @@ func (h *TicketHandler) executeRemoteDML(ctx context.Context, it *store.Issue, i
 		Total: 1, Phase: "running", CurrentInstance: inst.Name, CurrentDB: it.DBName,
 		InstanceID: inst.ID, Host: t.Host, DBType: inst.DBType, Engine: ticketexec.EngineOf(inst.DBType),
 		Env: inst.IDC, Executor: exec.Name,
+		JobID: jobID, ExecutorURL: exec.BaseURL, TargetUser: t.Username,
 	}
 	h.saveProgress(it.ID, prog)
 	for {
@@ -446,8 +528,19 @@ func (h *TicketHandler) executeRemoteDML(ctx context.Context, it *store.Issue, i
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		view, err := sqlexec.Get(ctx, exec.BaseURL, exec.Username, exec.Password, jobID)
-		if err == nil {
+		view, err := sqlexec.Get(ctx, exec.BaseURL, exec.Username, exec.Password, jobID, 0)
+		if err != nil {
+			prog.GetFailures++
+			prog.LastError = err.Error()
+			h.saveProgress(it.ID, prog)
+			log.Printf("ticket remote get %s job %s failures=%d: %v", it.ID, jobID, prog.GetFailures, err)
+			if remoteGetGiveUp(prog.GetFailures, err) {
+				return h.persistExec(it, remotePollFailure(it, inst, t, err))
+			}
+		} else {
+			prog.GetFailures = 0
+			prog.LastError = ""
+			prog.LastGetAt = time.Now().UTC().Format(time.RFC3339)
 			prog.StmtIndex = view.StmtIndex
 			prog.StmtTotal = view.StmtTotal
 			prog.SessionID = view.SessionID
@@ -462,12 +555,15 @@ func (h *TicketHandler) executeRemoteDML(ctx context.Context, it *store.Issue, i
 				if len(view.Results) > 0 {
 					item := view.Results[len(view.Results)-1]
 					res.Success = item.OK
-					res.SuccessCount = item.SuccessCount
-					res.FailCount = item.FailCount
 					res.Message = item.Error
-					appendCompactDB(res, ticketexec.Record{
-						InstanceID: inst.ID, InstanceName: inst.Name, Host: t.Host, DB: it.DBName, ErrorMessage: item.Error,
-					}, item.OK, item.SuccessCount, item.FailCount)
+					if len(item.Records) > 0 {
+						appendStatementRecords(res, item.Records, item.OK, item.SuccessCount, item.FailCount, item.Error)
+					} else {
+						appendCompactDB(res, ticketexec.Record{
+							InstanceID: inst.ID, InstanceName: inst.Name, Host: t.Host, DB: it.DBName, SQL: it.SQLContent, ErrorMessage: item.Error,
+						}, item.OK, item.SuccessCount, item.FailCount)
+					}
+					res.Success = item.OK
 				}
 				return h.persistExec(it, res)
 			}
@@ -477,4 +573,30 @@ func (h *TicketHandler) executeRemoteDML(ctx context.Context, it *store.Issue, i
 		case <-time.After(2 * time.Second):
 		}
 	}
+}
+
+const remoteGetFailLimit = 5
+
+func remoteGetGiveUp(failures int, err error) bool {
+	if errors.Is(err, sqlexec.ErrJobNotFound) {
+		return true
+	}
+	return failures >= remoteGetFailLimit
+}
+
+func remotePollFailure(it *store.Issue, inst *store.Instance, t ticketexec.Target, err error) *ticketexec.Result {
+	msg := "读取执行器进度失败: " + err.Error()
+	if errors.Is(err, sqlexec.ErrJobNotFound) {
+		msg = "执行器上没有这个任务（执行器可能已重启）: " + err.Error()
+	}
+	rec := ticketexec.Record{Host: t.Host, Port: t.Port, Username: t.Username}
+	if inst != nil {
+		rec.InstanceID = inst.ID
+		rec.InstanceName = inst.Name
+	}
+	if it != nil {
+		rec.DB = it.DBName
+		rec.SQL = it.SQLContent
+	}
+	return ticketexec.FailBeforeExec(msg, rec)
 }

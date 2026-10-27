@@ -54,7 +54,7 @@ func (h *FlashbackHandler) Precheck(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "message": "参数无效"})
 		return
 	}
-	out, err := h.engine().Precheck(c.Request.Context(), &req)
+	out, err := h.engine().Precheck(flashback.WithActor(c.Request.Context(), middleware.Username(c)), &req)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"ok": false, "message": err.Error()})
 		return
@@ -157,12 +157,23 @@ func (h *FlashbackHandler) PutCloudSettings(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"message": "不支持的参数 key: " + item.Key})
 			return
 		}
+		if store.IsFlashbackSecretArg(item.Key) && strings.TrimSpace(item.Value) != "" && !store.IsMaskedSecret(item.Value) {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "云厂商 AK/SK 已停用全局参数，请到「配置中心 → 基础设置 → 云账号」按用户绑定"})
+			return
+		}
 	}
-	if err := h.Store.SaveFlashbackCloudSettings(req.Args); err != nil {
+	kept := make([]store.FlashbackCloudArgItem, 0, len(req.Args))
+	for _, item := range req.Args {
+		if store.IsFlashbackSecretArg(item.Key) {
+			continue
+		}
+		kept = append(kept, item)
+	}
+	if err := h.Store.SaveFlashbackCloudSettings(kept); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"ok": true, "data": h.Store.GetFlashbackCloudSettings()})
+	c.JSON(http.StatusOK, gin.H{"ok": true, "data": h.Store.GetFlashbackCloudSettings(), "retired_secrets": true})
 }
 
 func (h *FlashbackHandler) SubmitDML(c *gin.Context) {

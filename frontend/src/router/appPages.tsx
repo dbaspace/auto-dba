@@ -23,6 +23,9 @@ import ClusterDeployEngine from '../views/ops/ClusterDeployEngine'
 import Sessions from '../views/ops/Sessions'
 import MysqlSlow from '../views/ops/MysqlSlow'
 import SqlInsight from '../views/ops/SqlInsight'
+import CloudPostgres from '../views/ops/cloud/CloudPostgres'
+import CloudPolicies from '../views/ops/cloud/CloudPolicies'
+import CloudAccounts from '../views/ops/cloud/CloudAccounts'
 import InstanceOverview from '../views/ops/InstanceOverview'
 import DbMonitor from '../views/ops/DbMonitor'
 import RedisRdb from '../views/ops/redis-rdb/RedisRdb'
@@ -50,6 +53,8 @@ import SqlInsightSettings from '../views/config/SqlInsightSettings'
 import LoginLogs from '../views/config/LoginLogs'
 import LoginSessions from '../views/config/LoginSessions'
 import QueryAudits from '../views/config/QueryAudits'
+import ClientAccess from '../views/config/ClientAccess'
+import MyAccessTokens from '../views/config/MyAccessTokens'
 import Connectors from '../views/config/Connectors'
 import MonitorTargets from '../views/config/MonitorTargets'
 import FeAdmin from '../views/config/FeAdmin'
@@ -228,6 +233,13 @@ export function TabPagePanel({ pathname, search }: { pathname: string; search?: 
       <Route path="/k8s/apps" element={<K8sApps />} />
 
       <Route path="/ops/sql-insight" element={<SqlInsight />} />
+      <Route path="/ops/cloud/postgres" element={<CloudPostgres engine="postgres" />} />
+      <Route path="/ops/cloud/mysql" element={<CloudPostgres engine="mysql" />} />
+      <Route path="/ops/cloud/redis" element={<CloudPostgres engine="redis" />} />
+      <Route path="/ops/cloud/hosts" element={<CloudPostgres engine="host" />} />
+      <Route path="/ops/cloud/policies" element={<CloudPolicies />} />
+      <Route path="/ops/cloud/accounts" element={<Navigate to="/config/cloud-accounts" replace />} />
+      <Route path="/config/cloud-accounts" element={<CloudAccounts />} />
       <Route path="/ops/instance-overview" element={<InstanceOverview />} />
       <Route path="/ops/redis-rdb" element={<RedisRdb />} />
       <Route path="/ops/db-monitor" element={<Navigate to="/ops/db-monitor/postgres" replace />} />
@@ -309,6 +321,8 @@ export function TabPagePanel({ pathname, search }: { pathname: string; search?: 
       <Route path="/config/login-logs" element={<LoginLogs />} />
       <Route path="/config/login-sessions" element={<LoginSessions />} />
       <Route path="/config/query-audits" element={<QueryAudits />} />
+      <Route path="/config/client-access" element={<ClientAccess />} />
+      <Route path="/config/my-access-tokens" element={<MyAccessTokens />} />
       <Route path="/config/ldap" element={<AuthConfig />} />
 
       <Route path="/ops/todo" element={<TodoFollowUp />} />

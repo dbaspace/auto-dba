@@ -77,6 +77,21 @@ describe('buildDdlExecGroups', () => {
     expect(stats.instOk).toBe(1)
   })
 
+  it('整单失败但各库有成功有失败时，成功库仍标成功', () => {
+    const { groups, stats } = buildDdlExecGroups(
+      [
+        { instance_id: 'a', host: 'h', db: 'okdb', sql: 's1', status: 'success' },
+        { instance_id: 'b', host: 'h', db: 'baddb', sql: 's1', status: 'failed', error_message: 'boom' },
+      ],
+      { execFailed: true, execSuccess: false, execMessage: '部分分库执行失败，成功 1 个库，失败 1 个库' },
+    )
+    expect(groups[0].ok).toBe(true)
+    expect(groups[1].ok).toBe(false)
+    expect(groups[1].error).toBe('boom')
+    expect(stats.instOk).toBe(1)
+    expect(stats.instFail).toBe(1)
+  })
+
   it('优先使用后端 success_count / statement_count', () => {
     const { stats } = buildDdlExecGroups(
       [

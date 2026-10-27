@@ -1,4 +1,4 @@
-export type InsightTabKey = 'sql' | 'analysis' | 'visual' | 'awr' | 'space' | 'smart'
+export type InsightTabKey = 'sql' | 'analysis' | 'visual' | 'awr' | 'space' | 'smart' | 'cloud'
 
 export interface SnapshotFilter {
   instanceId: string

@@ -108,6 +108,23 @@ interface ApplyField {
   label: string
   value: any
   kind?: string
+  span?: number
+}
+
+function DmlSourceInfo({ value }: { value: any }) {
+  const domain = String(value?.domain || '').trim()
+  const name = String(value?.name || '').trim()
+  const host = String(value?.host || '').trim()
+  const port = Number(value?.port || 0)
+  const addr = host ? (port > 0 ? `${host}:${port}` : host) : ''
+  const title = domain || name || '-'
+  return (
+    <div className="apply-source">
+      <div className="apply-source-title">{title}</div>
+      {name && domain ? <div className="apply-source-sub">实例 {name}</div> : null}
+      {addr ? <div className="apply-source-sub">{addr}</div> : null}
+    </div>
+  )
 }
 
 function DDLSourceList({ sources }: { sources: string[] }) {
@@ -249,6 +266,33 @@ export default function TicketDetail() {
   const applyFields = useMemo<ApplyField[]>(() => {
     const it = item
     if (!it) return []
+    if (it.issue_type === 'dml') {
+      const domain = String(it.domain || inst?.domain_name || '').trim()
+      const name = String(inst?.name || '').trim()
+      const host = String(inst?.host || '').trim()
+      const port = Number(inst?.port || 0)
+      return [
+        { key: 'reason', label: '原因', value: it.description || '-' },
+        { key: 'created', label: '申请时间', value: fmtTime(it.created_at) },
+        { key: 'env', label: '环境', value: dbEnv || '-' },
+        { key: 'db_type', label: '数据库类型', kind: 'type-tag', value: dbType || '-' },
+        {
+          key: 'source',
+          label: '数据源',
+          kind: 'dml-source',
+          value: { domain, name, host, port },
+        },
+        { key: 'db', label: '数据库', kind: 'db-tag', value: it.db_name || '-' },
+        { key: 'approver', label: '指定审批人', value: it.assigned_to || '-' },
+        {
+          key: 'schedule',
+          label: 'SQL执行时间',
+          kind: 'schedule',
+          value: it.scheduled_at ? `定时 ${fmtTime(it.scheduled_at)}` : '审批完立即执行',
+        },
+        { key: 'sql', label: '执行SQL', kind: 'sql', span: 2, value: it.sql_content || '' },
+      ]
+    }
     const isResourceApply = it.issue_type === 'resource_apply'
     const fields: ApplyField[] = [
       { key: 'reason', label: '原因', value: it.description || resourceApplyExtra?.reason || '-' },
@@ -263,6 +307,17 @@ export default function TicketDetail() {
         kind: 'schedule',
         value: '审批通过后自动执行 DNS 变更（执行前重新校验并检查冲突）',
       })
+      return fields
+    }
+    if (it.issue_type === 'cloud_pg' || it.issue_type === 'cloud_mysql' || it.issue_type === 'cloud_redis' || it.issue_type === 'cloud_host') {
+      let p: any = {}
+      try { p = JSON.parse(it.sql_content || '{}') } catch { p = {} }
+      fields.push({ key: 'action', label: '动作', value: p.action || '-' })
+      fields.push({ key: 'before', label: '变更前', value: `${p.before_cpu || 0}核 / ${p.before_memory_mb || 0}MB / ${p.before_disk_gb || 0}GB` })
+      fields.push({ key: 'after', label: '变更后', value: `${p.cpu || 0}核 / ${p.memory_mb || 0}MB / ${p.disk_gb || 0}GB` })
+      fields.push({ key: 'impact', label: '影响', value: `${p.impact || '-'}；${p.blip ? '会造成闪断' : '默认不闪断'}` })
+      fields.push({ key: 'quote', label: '询价差额', value: p.quote?.amount ?? '-' })
+      fields.push({ key: 'task', label: '云上任务', value: p.task_id || '尚未提交' })
       return fields
     }
     if (!isResourceApply) {
@@ -416,7 +471,7 @@ export default function TicketDetail() {
     }
     fields.push({ key: 'created', label: '申请时间', value: fmtTime(it.created_at) })
     return fields
-  }, [item, dbType, dbPath, createdbExtra, dqlExtra, resourceApplyExtra])
+  }, [item, inst, dbType, dbEnv, dbPath, createdbExtra, dqlExtra, resourceApplyExtra])
 
   const canApprove = useMemo(() => {
     if (item?.status !== 'pending') return false
@@ -698,17 +753,16 @@ export default function TicketDetail() {
     [item],
   )
 
-  const execEmptyText = useMemo(
-    () =>
-      item?.status === 'executed' || item?.status === 'failed' || item?.status === 'stopped'
-        ? '暂无数据'
-        : item?.status === 'running'
-          ? item?.issue_type === 'ddl'
-            ? '已结束的库会显示在这里'
-            : '正在后台执行，完成后自动刷新结果'
-          : '暂无数据，执行后获取',
-    [item],
-  )
+  const execEmptyText = useMemo(() => {
+    if (item?.status === 'executed' || item?.status === 'failed' || item?.status === 'stopped') return '暂无数据'
+    if (item?.status === 'running') {
+      const base = item?.issue_type === 'ddl' ? '已结束的库会显示在这里' : '正在后台执行，完成后自动刷新结果'
+      const hint = String(item?.exec_progress?.last_error || '').trim()
+      if (!hint) return base
+      return `${base}（${hint.length > 180 ? hint.slice(0, 180) + '…' : hint}）`
+    }
+    return '暂无数据，执行后获取'
+  }, [item])
 
   async function load() {
     setLoading(true)
@@ -1390,9 +1444,13 @@ export default function TicketDetail() {
 
           <section className="review-main">
             <div className="sec-title">申请信息</div>
-            <Descriptions column={1} bordered className="apply-desc">
+            <Descriptions
+              column={item?.issue_type === 'dml' ? { xs: 1, sm: 1, xl: 2 } : 1}
+              bordered
+              className="apply-desc"
+            >
               {applyFields.map((f) => (
-                <Descriptions.Item key={f.key} label={f.label}>
+                <Descriptions.Item key={f.key} label={f.label} span={f.span}>
                   {f.kind === 'type-tag' ? (
                     <Tag color="processing">{f.value}</Tag>
                   ) : f.kind === 'db-tag' ? (
@@ -1413,6 +1471,8 @@ export default function TicketDetail() {
                     <DnsChangeDiff rows={payloadRows(f.value).rows} />
                   ) : f.kind === 'schedule' ? (
                     <Tag color="warning">{f.value}</Tag>
+                  ) : f.kind === 'dml-source' ? (
+                    <DmlSourceInfo value={f.value} />
                   ) : f.kind === 'ddl-sources' ? (
                     <DDLSourceList sources={Array.isArray(f.value) ? f.value.map(String) : []} />
                   ) : f.kind === 'pre' ? (

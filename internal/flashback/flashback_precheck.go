@@ -167,7 +167,7 @@ func (s *FlashbackImpl) Precheck(c context.Context, req *FlashbackTaskReq) (*Fla
 	if err := s.ensureReady(c); err != nil {
 		return nil, err
 	}
-	ctx := c
+	ctx := flashbackUseAccount(c, req.InstanceID, Actor(c))
 	out := &FlashbackPrecheckResult{Items: []FlashbackCheckItem{}}
 	target, err := flashbackParseTime(req.TargetTime)
 	if err != nil {
@@ -426,9 +426,7 @@ func flashbackPrecheckPGCloud(ctx context.Context, db *sql.DB, out *FlashbackPre
 		flashbackAddCheck(&out.Items, "cloud_creds", "云厂商凭证", flashbackCheckFailed, err.Error())
 		return flashbackPrecheckFinalize(out), nil
 	}
-	idKey, keyKey, _, _, _ := flashbackCloudVendorKeyPair(src.Vendor)
-	flashbackAddCheck(&out.Items, "cloud_creds", "云厂商凭证", flashbackCheckPassed,
-		"已配置「多云密钥」"+idKey+" / "+keyKey)
+	flashbackAddCheck(&out.Items, "cloud_creds", "云厂商凭证", flashbackCheckPassed, "已使用当前用户绑定的云账号只读密钥")
 
 	region := strings.TrimSpace(cloudRegion)
 	switch src.Kind {

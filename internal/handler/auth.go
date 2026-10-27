@@ -1146,11 +1146,12 @@ func (h *AuthHandler) ListQueryAudits(c *gin.Context) {
 	page, _ := strconv.Atoi(c.Query("page"))
 	pageSize, _ := strconv.Atoi(c.Query("page_size"))
 	f := store.QueryAuditFilter{
-		Username: c.Query("username"),
-		Kind:     c.Query("kind"),
-		Q:        c.Query("q"),
-		Page:     page,
-		PageSize: pageSize,
+		Username:   c.Query("username"),
+		Kind:       c.Query("kind"),
+		Q:          c.Query("q"),
+		ClientType: c.Query("client_type"),
+		Page:       page,
+		PageSize:   pageSize,
 	}
 	if raw := strings.TrimSpace(c.Query("success")); raw != "" {
 		ok := raw == "1" || strings.EqualFold(raw, "true")
@@ -1398,6 +1399,35 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 	}
 	kickUserSessions(c, h.Sessions, h.Store, u.ID, "password_changed")
 	c.JSON(http.StatusOK, gin.H{"ok": true, "message": "密码已更新"})
+}
+
+// StepUp 二次验证：本地账号校验密码；LDAP/SSO 需 confirm=true（无平台本地密码）。
+// 成功后短时允许查看明文密码（见 HardenStepUp）。
+func (h *AuthHandler) StepUp(c *gin.Context) {
+	u, err := h.Store.GetUserByUsername(middleware.Username(c))
+	if err != nil || u == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"message": "unauthorized"})
+		return
+	}
+	var req struct {
+		Password string `json:"password"`
+		Confirm  bool   `json:"confirm"`
+	}
+	_ = c.ShouldBindJSON(&req)
+	switch u.Source {
+	case store.UserSourceLDAP, store.UserSourceSSO:
+		if !req.Confirm {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "请确认二次验证（confirm=true）"})
+			return
+		}
+	default:
+		if strings.TrimSpace(u.PasswordHash) == "" || bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(req.Password)) != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "密码错误"})
+			return
+		}
+	}
+	store.MarkStepUp(u.ID)
+	c.JSON(http.StatusOK, gin.H{"ok": true, "message": "二次验证成功", "ttl_sec": 600})
 }
 
 // kickUserSessions 改密后下线该账号全部会话。Redis 未启用时由 password_changed_at 在鉴权处拒绝旧 JWT。

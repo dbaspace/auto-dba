@@ -83,6 +83,8 @@ terminal:
 | `scripts_dir` | 含 `node-terminal.sh`：实际执行 `ssh -tt -i <key> user@host` |
 | `max_lifetime_sec` | JWT / 会话生命周期 |
 
+WebSocket 由服务端约每 20 秒发协议层 Ping；SSH 带 `ServerAliveInterval=30`。前面若有 Nginx，须给 `/api/v1/terminal/ws` 配 `Upgrade`/`Connection`，`proxy_read_timeout` 建议 ≥ 120 秒（见 `deploy/nginx.conf.example`）。命令执行中关页会确认提示；浏览器无法禁止切标签，切走后标题会标「命令执行中」。
+
 Backup Agent **SSH 下发**复用同一套 `terminal.ssh_identity_file` / `ssh_user`，密钥与终端共用。
 
 ### Agent SSH 下发的主机密钥校验

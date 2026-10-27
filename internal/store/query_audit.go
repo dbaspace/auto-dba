@@ -39,6 +39,8 @@ func (d *DB) CreateQueryAudit(it *QueryAudit) error {
 	}
 	it.Statement = TruncateQueryAuditStatement(it.Statement)
 	it.Message = TruncateQueryAuditStatement(it.Message)
+	it.ClientType = strings.TrimSpace(it.ClientType)
+	it.TokenID = strings.TrimSpace(it.TokenID)
 	success := 0
 	if it.Success {
 		success = 1
@@ -47,24 +49,25 @@ func (d *DB) CreateQueryAudit(it *QueryAudit) error {
 		`INSERT INTO tbl_query_audits(
 			id, kind, user_id, username, display_name, ip, user_agent,
 			instance_id, instance_name, db_type, target, statement,
-			success, message, row_count, elapsed_ms, created_at)
-		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			success, message, row_count, elapsed_ms, client_type, token_id, created_at)
+		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		it.ID, it.Kind, it.UserID, it.Username, it.DisplayName, it.IP, it.UserAgent,
 		it.InstanceID, it.InstanceName, it.DBType, it.Target, it.Statement,
-		success, it.Message, it.RowCount, it.ElapsedMS, it.CreatedAt,
+		success, it.Message, it.RowCount, it.ElapsedMS, it.ClientType, it.TokenID, it.CreatedAt,
 	)
 	return err
 }
 
 type QueryAuditFilter struct {
-	Username string
-	Kind     string
-	Success  *bool
-	Q        string
-	DateFrom string
-	DateTo   string
-	Page     int
-	PageSize int
+	Username   string
+	Kind       string
+	Success    *bool
+	Q          string
+	ClientType string
+	DateFrom   string
+	DateTo     string
+	Page       int
+	PageSize   int
 }
 
 func buildQueryAuditWhere(f QueryAuditFilter) (string, []any) {
@@ -85,6 +88,10 @@ func buildQueryAuditWhere(f QueryAuditFilter) (string, []any) {
 		}
 		where += ` AND success=?`
 		args = append(args, v)
+	}
+	if s := strings.ToLower(strings.TrimSpace(f.ClientType)); s != "" {
+		where += ` AND client_type=?`
+		args = append(args, s)
 	}
 	if s := strings.TrimSpace(f.Q); s != "" {
 		where += ` AND (statement LIKE ? OR target LIKE ? OR instance_name LIKE ?)`
@@ -116,7 +123,8 @@ func (d *DB) ListQueryAudits(f QueryAuditFilter) ([]QueryAudit, int, error) {
 	}
 	q := `SELECT id, kind, user_id, username, display_name, ip, user_agent,
 		instance_id, instance_name, db_type, target, statement,
-		success, message, row_count, elapsed_ms, created_at
+		success, message, row_count, elapsed_ms,
+		COALESCE(client_type,''), COALESCE(token_id,''), created_at
 		FROM tbl_query_audits ` + where + ` ORDER BY created_at DESC LIMIT ? OFFSET ?`
 	args = append(args, f.PageSize, (f.Page-1)*f.PageSize)
 	rows, err := d.Query(q, args...)
@@ -131,7 +139,7 @@ func (d *DB) ListQueryAudits(f QueryAuditFilter) ([]QueryAudit, int, error) {
 		if err := rows.Scan(
 			&it.ID, &it.Kind, &it.UserID, &it.Username, &it.DisplayName, &it.IP, &it.UserAgent,
 			&it.InstanceID, &it.InstanceName, &it.DBType, &it.Target, &it.Statement,
-			&success, &it.Message, &it.RowCount, &it.ElapsedMS, &it.CreatedAt,
+			&success, &it.Message, &it.RowCount, &it.ElapsedMS, &it.ClientType, &it.TokenID, &it.CreatedAt,
 		); err != nil {
 			return nil, 0, err
 		}

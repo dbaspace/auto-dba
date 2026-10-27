@@ -3,6 +3,7 @@ package conn
 import (
 	"io"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/pkg/errors"
@@ -37,6 +38,8 @@ func (wsw *wsWrapper) Read(p []byte) (n int, err error) {
 		if err != nil {
 			return 0, err
 		}
+		// 有业务帧也刷新读超时，配合服务端协议层 Ping
+		_ = wsw.Conn.SetReadDeadline(time.Now().Add(90 * time.Second))
 
 		if msgType != websocket.TextMessage {
 			continue

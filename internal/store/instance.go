@@ -135,7 +135,7 @@ func scanInstance(scanner interface {
 	if err := scanner.Scan(
 		&it.ID, &tenantID, &it.Name, &it.DomainName, &it.Port, &it.DBType, &it.IDC, &regionID, &envID, &it.Host,
 		&it.Username, &it.Password, &approvers, &it.Description, &it.CreatedAt, &it.UpdatedAt, &domains, &tags,
-		&it.CloudVendor, &it.CloudInstanceID, &it.CloudRegion,
+		&it.CloudVendor, &it.CloudInstanceID, &it.CloudRegion, &it.CloudAccountID,
 		&visibility, &accessUsers, &roleIDs,
 	); err != nil {
 		return nil, err
@@ -228,7 +228,7 @@ func normalizeInstanceDomains(it *Instance) {
 	}
 }
 
-const instanceCols = `id, COALESCE(tenant_id,''), name, domain_name, port, db_type, idc, region_id, env_id, host, username, password, approvers, description, created_at, updated_at, domains, tags, cloud_vendor, cloud_instance_id, cloud_region, COALESCE(visibility,'global'), COALESCE(access_users,'[]'), COALESCE(role_ids,'[]')`
+const instanceCols = `id, COALESCE(tenant_id,''), name, domain_name, port, db_type, idc, region_id, env_id, host, username, password, approvers, description, created_at, updated_at, domains, tags, cloud_vendor, cloud_instance_id, cloud_region, COALESCE(cloud_account_id,''), COALESCE(visibility,'global'), COALESCE(access_users,'[]'), COALESCE(role_ids,'[]')`
 
 // GetInstanceUsableInTenant 本租户拥有该实例，或该实例上有本租户的已登记库。
 func (d *DB) GetInstanceUsableInTenant(id, tenantID string) (*Instance, error) {
@@ -349,11 +349,11 @@ func (d *DB) CreateInstance(it *Instance) error {
 	it.Tags = uniqueTrimmed(it.Tags)
 	normalizeInstanceVisibility(it)
 	_, err := d.Exec(
-		`INSERT INTO tbl_instances(id, tenant_id, name, domain_name, port, db_type, idc, region_id, env_id, host, username, password, approvers, description, created_at, updated_at, domains, tags, cloud_vendor, cloud_instance_id, cloud_region, visibility, access_users, role_ids)
-		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		`INSERT INTO tbl_instances(id, tenant_id, name, domain_name, port, db_type, idc, region_id, env_id, host, username, password, approvers, description, created_at, updated_at, domains, tags, cloud_vendor, cloud_instance_id, cloud_region, cloud_account_id, visibility, access_users, role_ids)
+		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		it.ID, it.TenantID, it.Name, it.DomainName, it.Port, it.DBType, it.IDC, it.RegionID, it.EnvID, it.Host,
 		it.Username, it.Password, encodeJSON(it.Approvers), it.Description, it.CreatedAt, it.UpdatedAt, encodeJSON(it.Domains), encodeJSON(it.Tags),
-		it.CloudVendor, it.CloudInstanceID, it.CloudRegion, it.Visibility, encodeJSON(it.AccessUsers), encodeJSON(it.RoleIDs),
+		it.CloudVendor, it.CloudInstanceID, it.CloudRegion, it.CloudAccountID, it.Visibility, encodeJSON(it.AccessUsers), encodeJSON(it.RoleIDs),
 	)
 	return err
 }
@@ -364,10 +364,10 @@ func (d *DB) UpdateInstance(it *Instance) error {
 	it.Tags = uniqueTrimmed(it.Tags)
 	normalizeInstanceVisibility(it)
 	_, err := d.Exec(
-		`UPDATE tbl_instances SET name=?, domain_name=?, port=?, db_type=?, idc=?, region_id=?, env_id=?, host=?, username=?, password=?, approvers=?, description=?, updated_at=?, domains=?, tags=?, cloud_vendor=?, cloud_instance_id=?, cloud_region=?, visibility=?, access_users=?, role_ids=? WHERE id=? AND COALESCE(tenant_id,?)=?`,
+		`UPDATE tbl_instances SET name=?, domain_name=?, port=?, db_type=?, idc=?, region_id=?, env_id=?, host=?, username=?, password=?, approvers=?, description=?, updated_at=?, domains=?, tags=?, cloud_vendor=?, cloud_instance_id=?, cloud_region=?, cloud_account_id=?, visibility=?, access_users=?, role_ids=? WHERE id=? AND COALESCE(tenant_id,?)=?`,
 		it.Name, it.DomainName, it.Port, it.DBType, it.IDC, it.RegionID, it.EnvID, it.Host, it.Username, it.Password,
 		encodeJSON(it.Approvers), it.Description, it.UpdatedAt, encodeJSON(it.Domains), encodeJSON(it.Tags),
-		it.CloudVendor, it.CloudInstanceID, it.CloudRegion, it.Visibility, encodeJSON(it.AccessUsers), encodeJSON(it.RoleIDs),
+		it.CloudVendor, it.CloudInstanceID, it.CloudRegion, it.CloudAccountID, it.Visibility, encodeJSON(it.AccessUsers), encodeJSON(it.RoleIDs),
 		it.ID, it.TenantID, it.TenantID,
 	)
 	if err == nil {

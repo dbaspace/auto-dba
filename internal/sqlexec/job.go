@@ -16,15 +16,16 @@ const (
 
 // Target 是执行器要在当地连上的一个库。
 type Target struct {
-	InstanceID   string `json:"instance_id"`
-	InstanceName string `json:"instance_name"`
-	Host         string `json:"host"`
-	Port         int    `json:"port"`
-	Username     string `json:"username"`
-	Password     string `json:"password"`
-	DBName       string `json:"db_name"`
-	DBType       string `json:"db_type"`
-	Env          string `json:"env"`
+	InstanceID    string `json:"instance_id"`
+	InstanceName  string `json:"instance_name"`
+	Host          string `json:"host"`
+	Port          int    `json:"port"`
+	Username      string `json:"username"`
+	Password      string `json:"password"`
+	DBName        string `json:"db_name"`
+	DBType        string `json:"db_type"`
+	Env           string `json:"env"`
+	LockTimeoutMS int64  `json:"lock_timeout_ms,omitempty"`
 }
 
 // JobRequest 一次下发。密码只在内存里用，执行器不落盘。
@@ -34,16 +35,17 @@ type JobRequest struct {
 	Targets   []Target `json:"targets"`
 }
 
-// DBResult 一个库跑完后的收敛结果，不含语句原文。
+// DBResult 一个库跑完后的结果。Records 是该库的全部语句，不含数据库密码。
 type DBResult struct {
-	InstanceID   string `json:"instance_id"`
-	InstanceName string `json:"instance_name"`
-	Host         string `json:"host"`
-	DB           string `json:"db"`
-	OK           bool   `json:"ok"`
-	SuccessCount int    `json:"success_count"`
-	FailCount    int    `json:"fail_count"`
-	Error        string `json:"error,omitempty"`
+	InstanceID   string              `json:"instance_id"`
+	InstanceName string              `json:"instance_name"`
+	Host         string              `json:"host"`
+	DB           string              `json:"db"`
+	OK           bool                `json:"ok"`
+	SuccessCount int                 `json:"success_count"`
+	FailCount    int                 `json:"fail_count"`
+	Error        string              `json:"error,omitempty"`
+	Records      []ticketexec.Record `json:"records,omitempty"`
 }
 
 // JobView 是轮询看到的进度。
@@ -60,8 +62,15 @@ type JobView struct {
 	StmtTotal       int        `json:"stmt_total"`
 	SessionID       int64      `json:"session_id,omitempty"`
 	Engine          string     `json:"engine,omitempty"`
+	StartedAt       string     `json:"started_at,omitempty"`
+	EndedAt         string     `json:"ended_at,omitempty"`
 	Results         []DBResult `json:"results"`
+	// Incremental 为真时 Results 只含 after 之后新完成的库。旧执行器没有该字段。
+	Incremental bool `json:"incremental,omitempty"`
 }
+
+// jobRetain 终态任务在内存中保留的时间。过期后按 jobID 查询会返回不存在。
+const jobRetain = 24 * time.Hour
 
 type runningJob struct {
 	mu        sync.Mutex
@@ -69,13 +78,30 @@ type runningJob struct {
 	cancel    context.CancelFunc
 	current   ticketexec.Target
 	sessionID int64
+	started   time.Time
+	ended     time.Time
 }
 
-func (j *runningJob) snapshot() JobView {
+// snapshot 只带下标 >= after 的库。已经交给控制面的库不再重复带语句。
+func (j *runningJob) snapshot(after int) JobView {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	out := j.view
-	out.Results = append([]DBResult(nil), j.view.Results...)
+	if after < 0 {
+		after = 0
+	}
+	if after > len(j.view.Results) {
+		after = len(j.view.Results)
+	}
+	out.Results = append([]DBResult(nil), j.view.Results[after:]...)
+	out.Done = len(j.view.Results)
+	out.Incremental = true
+	if !j.started.IsZero() {
+		out.StartedAt = j.started.UTC().Format(time.RFC3339)
+	}
+	if !j.ended.IsZero() {
+		out.EndedAt = j.ended.UTC().Format(time.RFC3339)
+	}
 	return out
 }
 
@@ -90,28 +116,46 @@ func NewRunner() *Runner {
 }
 
 func (r *Runner) Submit(id string, req JobRequest) JobView {
+	now := time.Now()
 	ctx, cancel := context.WithCancel(context.Background())
 	job := &runningJob{
-		cancel: cancel,
+		cancel:  cancel,
+		started: now,
 		view: JobView{
 			ID: id, Status: JobRunning, Total: len(req.Targets), Results: []DBResult{},
+			StartedAt: now.UTC().Format(time.RFC3339),
 		},
 	}
 	r.mu.Lock()
+	r.sweepLocked(now)
 	r.jobs[id] = job
 	r.mu.Unlock()
 	go r.run(ctx, job, req)
-	return job.snapshot()
+	return job.snapshot(0)
 }
 
-func (r *Runner) Get(id string) (JobView, bool) {
+func (r *Runner) Get(id string, after int) (JobView, bool) {
 	r.mu.Lock()
+	r.sweepLocked(time.Now())
 	job := r.jobs[id]
 	r.mu.Unlock()
 	if job == nil {
 		return JobView{}, false
 	}
-	return job.snapshot(), true
+	return job.snapshot(after), true
+}
+
+// sweepLocked 删掉已结束且超过保留期的任务。调用方须持有 r.mu。
+func (r *Runner) sweepLocked(now time.Time) {
+	for id, job := range r.jobs {
+		job.mu.Lock()
+		ended := job.ended
+		status := job.view.Status
+		job.mu.Unlock()
+		if status != JobRunning && !ended.IsZero() && now.Sub(ended) > jobRetain {
+			delete(r.jobs, id)
+		}
+	}
 }
 
 // Stop 取消任务，并在当地终止当前会话。终止失败会再试一次。
@@ -145,7 +189,7 @@ func (r *Runner) Stop(id string) (JobView, bool) {
 			job.mu.Unlock()
 		}
 	}
-	return job.snapshot(), true
+	return job.snapshot(1 << 30), true
 }
 
 func (r *Runner) run(ctx context.Context, job *runningJob, req JobRequest) {
@@ -153,6 +197,9 @@ func (r *Runner) run(ctx context.Context, job *runningJob, req JobRequest) {
 		job.mu.Lock()
 		if job.view.Status == JobRunning {
 			job.view.Status = JobDone
+		}
+		if job.ended.IsZero() {
+			job.ended = time.Now()
 		}
 		job.sessionID = 0
 		job.mu.Unlock()
@@ -166,7 +213,8 @@ func (r *Runner) run(ctx context.Context, job *runningJob, req JobRequest) {
 		}
 		t := ticketexec.Target{
 			Host: raw.Host, Port: raw.Port, Username: raw.Username, Password: raw.Password,
-			DBName: raw.DBName, DBType: raw.DBType, Light: true,
+			DBName: raw.DBName, DBType: raw.DBType, KeepAll: true,
+			LockTimeout: time.Duration(raw.LockTimeoutMS) * time.Millisecond,
 		}
 		job.mu.Lock()
 		job.current = t
@@ -203,6 +251,7 @@ func (r *Runner) run(ctx context.Context, job *runningJob, req JobRequest) {
 			item.SuccessCount = res.SuccessCount
 			item.FailCount = res.FailCount
 			item.Error = res.Message
+			item.Records = statementRecords(raw, res.Records)
 		}
 		if !item.OK && item.Error == "" {
 			item.Error = "执行失败"
@@ -218,4 +267,18 @@ func (r *Runner) run(ctx context.Context, job *runningJob, req JobRequest) {
 		job.sessionID = 0
 		job.mu.Unlock()
 	}
+}
+
+func statementRecords(raw Target, recs []ticketexec.Record) []ticketexec.Record {
+	if len(recs) == 0 {
+		return nil
+	}
+	out := make([]ticketexec.Record, len(recs))
+	for i, rec := range recs {
+		rec.InstanceID = raw.InstanceID
+		rec.InstanceName = raw.InstanceName
+		rec.Username = ""
+		out[i] = rec
+	}
+	return out
 }

@@ -124,11 +124,10 @@ export function buildDdlExecGroups(
     const path = `${env} / ${db}${hostPort ? ` · ${hostPort}` : ''}`
     const failed = list.filter((r) => String(r.status || '').toLowerCase() === 'failed')
     const rolledBack = list.filter((r) => String(r.status || '').toLowerCase() === 'rolled_back').length
-    // 有 failed / rolled_back，或整单已失败时，实例不得标成功（防御脏明细全 success）
-    const ok = list.length > 0 && failed.length === 0 && rolledBack === 0 && !ticketFailed
+    const ownOk = list.length > 0 && failed.length === 0 && rolledBack === 0
     const error =
       (failed[0] && String(failed[0].error_message || '').trim()) ||
-      (!ok ? String(opts.execMessage || '').trim() || NO_DETAIL_ERROR : '') ||
+      (!ownOk ? String(opts.execMessage || '').trim() || NO_DETAIL_ERROR : '') ||
       ''
 
     const rows = list.map((r, i) => {
@@ -151,12 +150,22 @@ export function buildDdlExecGroups(
       instanceId: String(first.instance_id || ''),
       label,
       path,
-      ok,
+      ok: ownOk,
       error,
       rolledBack,
       rows,
     }
   })
+
+  // 整单失败且每个库的明细都是成功时，才把库改判失败（提交失败但明细未记下失败）。
+  // 已经有库自己失败时，其余成功库保持成功。
+  if (ticketFailed && groups.length > 0 && groups.every((g) => g.ok)) {
+    const msg = String(opts.execMessage || '').trim() || NO_DETAIL_ERROR
+    for (const g of groups) {
+      g.ok = false
+      if (!g.error) g.error = msg
+    }
+  }
 
   let successSQL = recs.filter((r) => String(r.status || '').toLowerCase() === 'success').length
   if (!recs.length && groups.length) {

@@ -81,6 +81,8 @@ type Deps struct {
 	DNS                *handler.DNSHandler
 	Terminal           *terminal.Handler
 	Static             string
+	Cloud              *handler.CloudHandler
+	ClientAccess       *handler.ClientAccessHandler
 }
 
 func Init(e *gin.Engine, d Deps) {
@@ -89,7 +91,7 @@ func Init(e *gin.Engine, d Deps) {
 			return strings.HasPrefix(origin, "http://localhost:") || strings.HasPrefix(origin, "http://127.0.0.1:")
 		},
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization", "X-Tenant-Id"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization", "X-Tenant-Id", "X-Client-Type"},
 		ExposeHeaders:    []string{"X-Access-Token"},
 		AllowCredentials: true,
 	}))
@@ -122,6 +124,9 @@ func Init(e *gin.Engine, d Deps) {
 	secured := e.Group("/api/v1")
 	secured.Use(auth)
 	secured.Use(middleware.IdleSession(d.Auth.Store))
+	if d.ClientAccess != nil && d.Auth != nil && d.Auth.Store != nil {
+		secured.Use(middleware.ClientAccessGate(d.Auth.Store))
+	}
 	secured.Use(middleware.TenantGuard(d.Auth.Store,
 		"/api/v1/auth/me",
 		"/api/v1/auth/logout",
@@ -154,6 +159,7 @@ func Init(e *gin.Engine, d Deps) {
 	secured.POST("/auth/select-tenant", d.Auth.SelectTenant)
 	secured.POST("/auth/logout", d.Auth.Logout)
 	secured.PUT("/auth/password", d.Auth.ChangePassword)
+	secured.POST("/auth/step-up", d.Auth.StepUp)
 	secured.PUT("/auth/profile", d.Auth.UpdateProfile)
 
 	if d.LoginSession != nil {
@@ -185,6 +191,18 @@ func Init(e *gin.Engine, d Deps) {
 	}
 	secured.GET("/login-logs", d.Auth.ListLoginLogs)
 	secured.GET("/query-audits", d.Auth.ListQueryAudits)
+
+	if d.ClientAccess != nil {
+		ca := secured.Group("/client-access")
+		ca.GET("/grants", d.ClientAccess.ListGrants)
+		ca.POST("/grants", d.ClientAccess.CreateGrant)
+		ca.DELETE("/grants/:id", d.ClientAccess.RevokeGrant)
+		ca.GET("/me", d.ClientAccess.MyStatus)
+		ca.GET("/pats", d.ClientAccess.ListMyPATs)
+		ca.POST("/pats", d.ClientAccess.CreateMyPAT)
+		ca.DELETE("/pats/:id", d.ClientAccess.RevokeMyPAT)
+		ca.GET("/api-audits", d.ClientAccess.ListAPIAudits)
+	}
 
 	secured.GET("/settings/ldap", d.Ldap.Get)
 	secured.PUT("/settings/ldap", requireURN(store.URNLdapEdit), d.Ldap.Update)
@@ -670,6 +688,28 @@ func Init(e *gin.Engine, d Deps) {
 	fb := secured.Group("/flashback")
 	fb.GET("/cloud-settings", d.Flashback.GetCloudSettings)
 	fb.PUT("/cloud-settings", d.Flashback.PutCloudSettings)
+	if d.Cloud != nil {
+		view := requireURN(store.URNSidebarCloudPostgres)
+		submit := requireURN(store.URNCloudSubmit)
+		keys := requireURN(store.URNCloudKeys)
+		secured.GET("/cloud/accounts", requireURN(store.URNSidebarCloudAccounts), d.Cloud.ListAccounts)
+		secured.POST("/cloud/accounts", keys, d.Cloud.CreateAccount)
+		secured.PUT("/cloud/accounts/:id", keys, d.Cloud.UpdateAccount)
+		secured.PUT("/cloud/accounts/:id/keys", keys, d.Cloud.SaveKey)
+		secured.PUT("/cloud/accounts/:id/users", keys, d.Cloud.BindUsers)
+		secured.GET("/cloud/postgres", view, d.Cloud.ListPostgres)
+		secured.POST("/cloud/postgres/sync", view, d.Cloud.SyncPostgres)
+		secured.GET("/cloud/postgres/health", view, d.Cloud.Health)
+		secured.POST("/cloud/postgres/quote", submit, d.Cloud.Quote)
+		secured.POST("/cloud/postgres/tickets", submit, d.Cloud.SubmitTicket)
+		secured.GET("/cloud/postgres/specs", view, d.Cloud.Specs)
+		secured.PUT("/cloud/postgres/resources/:id/account", submit, d.Cloud.AssignAccount)
+		secured.GET("/cloud/postgres/:cloudId/parameters", view, d.Cloud.Parameters)
+		secured.GET("/cloud/policies", requireURN(store.URNSidebarCloudPolicies), d.Cloud.ListPolicies)
+		secured.PUT("/cloud/policies", submit, d.Cloud.SavePolicy)
+		secured.GET("/cloud/slow-logs", requireURN(store.URNSidebarCloudPostgres), d.Cloud.SlowLogs)
+		secured.POST("/cloud/slow-logs/sync", requireURN(store.URNSqlInsightCloudSlow), d.Cloud.SyncSlow)
+	}
 	fb.GET("/tasks", d.Flashback.List)
 	fb.POST("/tasks", d.Flashback.Create)
 	fb.POST("/tasks/precheck", d.Flashback.Precheck)

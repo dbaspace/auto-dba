@@ -43,6 +43,11 @@ func ClearIdle(userID string) {
 // 全局参数 login_idle_timeout_min：>0 启用，0 关闭；非法/空按 30 分钟。
 func IdleSession(src IdleTimeoutSource) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// PAT 机器通道不受浏览器闲置超时影响
+		if IsPATAuth(c) {
+			c.Next()
+			return
+		}
 		uid, _ := c.Get(CtxUserID)
 		userID, _ := uid.(string)
 		userID = strings.TrimSpace(userID)

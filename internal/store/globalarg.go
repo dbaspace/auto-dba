@@ -29,6 +29,7 @@ const ArgUserWatermarkEnabled = "user_watermark_enabled"
 const ArgIssueGlobalApproverWhitelist = "issue_global_approver_whitelist"
 const ArgTicketDDLLongStmtTimeoutMinutes = "ticket_ddl_long_stmt_timeout_minutes"
 const ArgTicketDDLConstraintCheckEnabled = "ticket_ddl_constraint_check_enabled"
+const ArgTicketDMLLockTimeoutSeconds = "ticket_dml_lock_timeout_seconds"
 const ArgQueryDefaultLimit = "query_default_limit"
 const ArgQueryMaxLimit = "query_max_limit"
 const ArgSlotMonitorCollectIntervalSec = "slot_monitor_collect_interval_sec"
@@ -40,6 +41,7 @@ const (
 )
 
 const defaultTicketDDLLongStmtTimeout = 6 * time.Hour
+const defaultTicketDMLLockTimeout = 30 * time.Second
 
 func (d *DB) ListGlobalArgs() ([]GlobalArg, error) {
 	rows, err := d.Query(`SELECT key, value, description, updated_at FROM tbl_global_args ORDER BY key`)
@@ -263,6 +265,25 @@ func (d *DB) TicketDDLLongStmtTimeout() time.Duration {
 		return defaultTicketDDLLongStmtTimeout
 	}
 	return time.Duration(n) * time.Minute
+}
+
+// TicketDMLLockTimeout DML 获取 PostgreSQL 锁的最长等待时间；未配置时为 30 秒，0 表示关闭。
+func (d *DB) TicketDMLLockTimeout() time.Duration {
+	if d == nil {
+		return defaultTicketDMLLockTimeout
+	}
+	v, err := d.GetGlobalArg(ArgTicketDMLLockTimeoutSeconds)
+	if err != nil {
+		return defaultTicketDMLLockTimeout
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil {
+		return defaultTicketDMLLockTimeout
+	}
+	if n <= 0 {
+		return 0
+	}
+	return time.Duration(n) * time.Second
 }
 
 // UserWatermarkEnabled 是否开启用户水印。未配置时默认关闭。

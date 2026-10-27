@@ -198,6 +198,11 @@ func (p *flashbackTencentWALProvider) DownloadURL(ctx context.Context, spec flas
 }
 
 func (p *flashbackTencentWALProvider) call(ctx context.Context, action string, payload any) ([]byte, error) {
+	if st, ok := flashbackCred(ctx); ok && st.account != "" {
+		if err := cloudWait(ctx, st.account); err != nil {
+			return nil, err
+		}
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err

@@ -87,6 +87,15 @@ func TestStmtAndRunTimeout(t *testing.T) {
 	}
 }
 
+func TestPostgresDMLLockTimeoutSQL(t *testing.T) {
+	if got := postgresLockTimeoutSQL(30 * time.Second); got != "SET LOCAL lock_timeout = '30000ms'" {
+		t.Fatalf("got %q", got)
+	}
+	if got := postgresLockTimeoutSQL(0); got != "" {
+		t.Fatalf("disabled got %q", got)
+	}
+}
+
 func TestAsyncMaxWait(t *testing.T) {
 	if got := AsyncMaxWait("ALTER TABLE t ADD COLUMN c int;", 3, time.Hour); got != AsyncAutoExecMaxWait {
 		t.Fatalf("不含长语句时保持原上限: %v", got)

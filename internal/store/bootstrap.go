@@ -81,6 +81,9 @@ func (d *DB) migrateFast() error {
 			if err := d.ensureIssueExecProgressColumn(); err != nil {
 				return err
 			}
+			if err := d.ensureCloudSchema(); err != nil {
+				return err
+			}
 			if err := d.ensureSQLExecutorTable(); err != nil {
 				return err
 			}
@@ -162,6 +165,12 @@ func (d *DB) seedFast() error {
 			}
 			// 实例总览须在 skip 路径幂等补齐，否则已有库不会写入菜单
 			if err := d.ensureInstanceOverviewMenu(now); err != nil {
+				return err
+			}
+			if err := d.ensureCloudMenus(now); err != nil {
+				return err
+			}
+			if err := d.ensureSqlInsightActionMenus(now); err != nil {
 				return err
 			}
 			if err := d.SyncDefaultTenantMemberships(); err != nil {

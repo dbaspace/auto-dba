@@ -13,6 +13,7 @@ import VisualSummaryTab from './sql-insight/VisualSummaryTab'
 import AwrReportTab from './sql-insight/AwrReportTab'
 import PgSpaceTab from './sql-insight/PgSpaceTab'
 import SmartAnalysisTab from './sql-insight/SmartAnalysisTab'
+import CloudSlowLogTab from './sql-insight/CloudSlowLogTab'
 import './SqlInsight.css'
 
 const { RangePicker } = DatePicker
@@ -231,6 +232,11 @@ export default function SqlInsight() {
             key: 'smart',
             label: '智能分析',
             children: <SmartAnalysisTab filter={filter} active={tab === 'smart'} />,
+          },
+          {
+            key: 'cloud',
+            label: '云慢日志',
+            children: <CloudSlowLogTab filter={filter} active={tab === 'cloud'} />,
           },
         ]}
       />

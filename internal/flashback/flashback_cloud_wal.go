@@ -372,22 +372,15 @@ func flashbackCloudPkgRetries(ctx context.Context) int {
 // flashbackCloudVendorCreds 按厂商码读 global_args 对照表中的两把密钥。
 // MDM 只提供 Vendor，不存键名；tencent→flashback_tencent_secret_id/flashback_tencent_secret_key，以此类推。
 func flashbackCloudVendorCreds(ctx context.Context, vendor string) (id, key string, err error) {
-	idKey, keyKey, envID, envKey, err := flashbackCloudVendorKeyPair(vendor)
-	if err != nil {
-		return "", "", err
+	if st, ok := flashbackCred(ctx); ok {
+		if st.err != "" {
+			return "", "", fmt.Errorf("%s", st.err)
+		}
+		if st.id != "" && st.key != "" {
+			return st.id, st.key, nil
+		}
 	}
-	id = strings.TrimSpace(os.Getenv(envID))
-	if id == "" {
-		id = flashbackSafeGlobalArg(ctx, idKey)
-	}
-	key = strings.TrimSpace(os.Getenv(envKey))
-	if key == "" {
-		key = flashbackSafeGlobalArg(ctx, keyKey)
-	}
-	if id == "" || key == "" {
-		return "", "", fmt.Errorf("未配置该厂商密钥，请在「数据闪回 → 多云密钥」填写 %s / %s，并在「配置 → 实例」关联云厂商", idKey, keyKey)
-	}
-	return id, key, nil
+	return "", "", fmt.Errorf("未绑定云账号，请在实例上选择云账号，并确认当前用户已绑定该账号的只读密钥")
 }
 
 func flashbackCloudVendorKeyPair(vendor string) (idKey, keyKey, envID, envKey string, err error) {

@@ -17,14 +17,20 @@ import (
 )
 
 const (
-	CtxUserID      = "user_id"
-	CtxUsername    = "username"
-	CtxRole        = "role"
-	CtxTenantID    = "tenant_id"
-	CtxTenantCode  = "tenant_code"
-	CtxImpersonate = "tenant_impersonate"
-	CtxJTI         = "jti"
-	HeaderTenantID = "X-Tenant-Id"
+	CtxUserID        = "user_id"
+	CtxUsername      = "username"
+	CtxRole          = "role"
+	CtxTenantID      = "tenant_id"
+	CtxTenantCode    = "tenant_code"
+	CtxImpersonate   = "tenant_impersonate"
+	CtxJTI           = "jti"
+	CtxAuthKind      = "auth_kind"   // jwt | pat
+	CtxTokenID       = "token_id"    // PAT id
+	CtxClientType    = "client_type" // mcp | cli | local_ai | browser | machine
+	CtxGrantID       = "grant_id"
+	CtxPATScopes     = "pat_scopes"
+	HeaderTenantID   = "X-Tenant-Id"
+	HeaderClientType = "X-Client-Type"
 )
 
 // SessionGate 可选 Redis 会话校验；nil 或不启用时鉴权与改造前一致。
@@ -120,6 +126,55 @@ func Auth(secret *string, db *store.DB, sessions SessionGate, skipPrefixes ...st
 			c.Abort()
 			return
 		}
+		// 个人访问令牌（MCP/CLI/本地 AI）
+		if db != nil && strings.HasPrefix(raw, store.PATPrefix) {
+			pat, grant, u, perr := db.LookupValidClientPAT(raw)
+			if perr != nil || pat == nil || u == nil || grant == nil {
+				msg := "invalid personal access token"
+				if perr != nil {
+					msg = perr.Error()
+				}
+				c.JSON(http.StatusUnauthorized, gin.H{"message": "unauthorized", "diagnostic_message": msg})
+				c.Abort()
+				return
+			}
+			tid := strings.TrimSpace(grant.TenantID)
+			tcode := ""
+			if tid == "" {
+				if ts, _ := db.ListUserTenants(u.ID); len(ts) > 0 {
+					tid = ts[0].ID
+					tcode = ts[0].Code
+				}
+			} else if t, _ := db.GetTenant(tid); t != nil {
+				tcode = t.Code
+			}
+			if tid == "" {
+				c.JSON(http.StatusForbidden, gin.H{"message": "访问授权未绑定租户且用户无可用租户", "diagnostic_message": "pat tenant empty"})
+				c.Abort()
+				return
+			}
+			c.Set(CtxUserID, u.ID)
+			c.Set(CtxUsername, u.Username)
+			c.Set(CtxRole, u.Role)
+			c.Set(CtxTenantID, tid)
+			c.Set(CtxTenantCode, tcode)
+			c.Set(CtxImpersonate, false)
+			c.Set(CtxJTI, "")
+			c.Set(CtxAuthKind, "pat")
+			c.Set(CtxTokenID, pat.ID)
+			c.Set(CtxGrantID, grant.ID)
+			c.Set(CtxPATScopes, pat.Scopes)
+			ct := strings.TrimSpace(pat.ClientType)
+			if h := strings.TrimSpace(c.GetHeader(HeaderClientType)); h != "" {
+				ct = h
+			}
+			if ct == "" {
+				ct = "machine"
+			}
+			c.Set(CtxClientType, strings.ToLower(ct))
+			c.Next()
+			return
+		}
 		sec := config.CurrentJWT()
 		if sec == "" && secret != nil {
 			sec = *secret
@@ -200,6 +255,12 @@ func Auth(secret *string, db *store.DB, sessions SessionGate, skipPrefixes ...st
 		c.Set(CtxTenantCode, strings.TrimSpace(claims.TenantCode))
 		c.Set(CtxImpersonate, claims.Impersonate)
 		c.Set(CtxJTI, jti)
+		c.Set(CtxAuthKind, "jwt")
+		ct := strings.ToLower(strings.TrimSpace(c.GetHeader(HeaderClientType)))
+		if ct == "" {
+			ct = "browser"
+		}
+		c.Set(CtxClientType, ct)
 		c.Next()
 	}
 }
@@ -251,6 +312,28 @@ func JTI(c *gin.Context) string {
 	v, _ := c.Get(CtxJTI)
 	s, _ := v.(string)
 	return strings.TrimSpace(s)
+}
+
+func AuthKind(c *gin.Context) string {
+	v, _ := c.Get(CtxAuthKind)
+	s, _ := v.(string)
+	return strings.TrimSpace(s)
+}
+
+func TokenID(c *gin.Context) string {
+	v, _ := c.Get(CtxTokenID)
+	s, _ := v.(string)
+	return strings.TrimSpace(s)
+}
+
+func ClientType(c *gin.Context) string {
+	v, _ := c.Get(CtxClientType)
+	s, _ := v.(string)
+	return strings.TrimSpace(s)
+}
+
+func IsPATAuth(c *gin.Context) bool {
+	return AuthKind(c) == "pat"
 }
 
 func Username(c *gin.Context) string {

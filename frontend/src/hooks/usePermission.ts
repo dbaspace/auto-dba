@@ -117,7 +117,13 @@ export const Perm = {
     awrGenerate: 'um.action.sql-insight.awr-generate',
     spaceCollect: 'um.action.sql-insight.space-collect',
     analyze: 'um.action.sql-insight.analyze',
+    cloudSlowSync: 'um.action.sql-insight.cloud-slow-sync',
     settings: 'um.sidebar.config-sql-insight',
+  },
+  cloud: {
+    view: 'um.sidebar.cloud-postgres',
+    submit: 'um.action.cloud.submit',
+    keys: 'um.action.cloud.keys',
   },
   todo: {
     create: 'um.action.todo.create',

@@ -16,7 +16,8 @@ func ValidIssueType(t string) bool {
 	case IssueTypeDDL, IssueTypeDML, IssueTypeDCL, IssueTypeDQL, IssueTypeKafka,
 		IssueTypeCDC, IssueTypeArchive, IssueTypeFlashback, IssueTypeMigration, IssueTypeMullang, IssueTypeCreateDB,
 		IssueTypeHA, IssueTypeRedis, IssueTypeBackupRestore, IssueTypeSrCluster, IssueTypeDbDeploy,
-		IssueTypeResourceApply, IssueTypeK8sChange, IssueTypeDnsChange:
+		IssueTypeResourceApply, IssueTypeK8sChange, IssueTypeDnsChange,
+		IssueTypeCloudPg, IssueTypeCloudMysql, IssueTypeCloudRedis, IssueTypeCloudHost:
 		return true
 	default:
 		return false
@@ -166,6 +167,29 @@ func (d *DB) UpdateIssueStatus(id, status, reason string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := d.Exec(`UPDATE tbl_issues SET status=?, reject_reason=?, updated_at=? WHERE id=?`, status, reason, now, id)
 	return err
+}
+
+// ListRunningAutoExecIssueIDs 返回仍在后台执行的 DDL/DML/建库工单。
+func (d *DB) ListRunningAutoExecIssueIDs() ([]string, error) {
+	rows, err := d.Query(
+		`SELECT id FROM tbl_issues WHERE status=? AND issue_type IN (?,?,?) ORDER BY updated_at ASC`,
+		StatusRunning, IssueTypeDDL, IssueTypeDML, IssueTypeCreateDB,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(id) != "" {
+			out = append(out, id)
+		}
+	}
+	return out, rows.Err()
 }
 
 // ListStalePendingIssues 返回仍待审批且创建时间早于 before 的工单。

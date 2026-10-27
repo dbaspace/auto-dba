@@ -241,7 +241,10 @@ func (d *DB) migrate() error {
 	if err := d.ensureSQLExecutorTable(); err != nil {
 		return err
 	}
-	return d.ensureUserRoleID()
+	if err := d.ensureUserRoleID(); err != nil {
+		return err
+	}
+	return d.ensureCloudSchema()
 }
 
 func (d *DB) ensureUserRoleID() error {
@@ -601,6 +604,9 @@ func (d *DB) ensureLoginLogsTable() error {
 		return err
 	}
 	if err := d.ensureQueryAuditsTable(); err != nil {
+		return err
+	}
+	if err := d.ensureClientAccessSchema(); err != nil {
 		return err
 	}
 	if err := d.ensureQueryFavoritesTable(); err != nil {

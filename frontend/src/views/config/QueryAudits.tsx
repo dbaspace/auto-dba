@@ -19,6 +19,8 @@ interface AuditRow {
   row_count?: number
   elapsed_ms?: number
   ip?: string
+  client_type?: string
+  token_id?: string
 }
 
 const PAGE_SIZE = 10
@@ -57,6 +59,7 @@ export default function QueryAudits() {
   const [username, setUsername] = useState('')
   const [kind, setKind] = useState('')
   const [success, setSuccess] = useState('')
+  const [clientType, setClientType] = useState('')
   const [q, setQ] = useState('')
   const [page, setPage] = useState(1)
   const [detail, setDetail] = useState<AuditRow | null>(null)
@@ -69,6 +72,7 @@ export default function QueryAudits() {
           username: username.trim() || undefined,
           kind: kind || undefined,
           success: success || undefined,
+          client_type: clientType || undefined,
           q: q.trim() || undefined,
           page: nextPage,
           page_size: PAGE_SIZE,
@@ -135,6 +139,24 @@ export default function QueryAudits() {
             { value: 'false', label: '失败' },
           ]}
         />
+        <Select
+          allowClear
+          placeholder="客户端"
+          style={{ width: 130 }}
+          value={clientType || undefined}
+          onChange={(v) => {
+            setClientType(v || '')
+            setPage(1)
+            load(1)
+          }}
+          options={[
+            { value: 'browser', label: 'browser' },
+            { value: 'mcp', label: 'mcp' },
+            { value: 'cli', label: 'cli' },
+            { value: 'local_ai', label: 'local_ai' },
+            { value: 'machine', label: 'machine' },
+          ]}
+        />
         <Input
           allowClear
           placeholder="语句关键字"
@@ -168,6 +190,12 @@ export default function QueryAudits() {
               dataIndex: 'kind',
               width: 90,
               render: (v: string) => KIND_LABEL[v] || v || '-',
+            },
+            {
+              title: '客户端',
+              dataIndex: 'client_type',
+              width: 90,
+              render: (v: string) => v || 'browser',
             },
             { title: '实例', dataIndex: 'instance_name', width: 140, ellipsis: true },
             { title: '目标', dataIndex: 'target', width: 140, ellipsis: true },

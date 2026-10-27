@@ -9,4 +9,9 @@ HOST=$1
 USER=$2
 SSHKEY=$3
 PORT=${4:-22}
-exec ssh -tt -p "$PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i "$SSHKEY" "$USER@$HOST"
+exec ssh -tt -p "$PORT" \
+  -o StrictHostKeyChecking=no \
+  -o UserKnownHostsFile=/dev/null \
+  -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=3 \
+  -i "$SSHKEY" "$USER@$HOST"

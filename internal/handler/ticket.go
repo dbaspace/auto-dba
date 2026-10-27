@@ -17,6 +17,7 @@ import (
 	"auto-dba/internal/archive"
 	"auto-dba/internal/backup"
 	"auto-dba/internal/cdc"
+	"auto-dba/internal/cloudsvc"
 	"auto-dba/internal/dbmig"
 	"auto-dba/internal/flashback"
 	"auto-dba/internal/goinception"
@@ -38,6 +39,7 @@ type TicketHandler struct {
 	Archive   *archive.Engine
 	CDC       *cdc.Orchestrator
 	Backup    *backup.Engine
+	Cloud     *cloudsvc.Service
 	DNS       *DNSHandler
 }
 
@@ -917,6 +919,20 @@ func (h *TicketHandler) Approve(c *gin.Context) {
 			_ = h.Store.UpdateIssueNeedRollback(it.ID, it.NeedRollback)
 		}
 	}
+	if store.IsCloudIssueType(it.IssueType) && h.Cloud != nil {
+		var body struct {
+			Comment string `json:"comment"`
+		}
+		_ = c.ShouldBindJSON(&body)
+		opinion := strings.TrimSpace(body.Comment)
+		if opinion == "" {
+			opinion = "审批通过"
+		}
+		if err := h.Cloud.AttachApproval(it, user, opinion, "", ""); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+			return
+		}
+	}
 	if err := h.Store.UpdateIssueStatus(it.ID, store.StatusApproved, ""); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -1170,6 +1186,14 @@ func (h *TicketHandler) Execute(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"message": "工单不存在"})
 		return
 	}
+	if h.Store != nil && h.Store.HardenTicketExecute() && !h.actorCanExecuteIssue(c, it) {
+		c.JSON(http.StatusForbidden, gin.H{
+			"message":      "无权执行该工单（须为提交人、审批人或持有执行权限）",
+			"code":         "ticket_execute_forbidden",
+			"required_urn": store.URNTicketsExecute,
+		})
+		return
+	}
 	if ticketexec.IsExecuting(it.Status) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "工单正在后台执行中，请稍后刷新"})
 		return
@@ -1233,7 +1257,9 @@ func (h *TicketHandler) beginAsyncAutoExec(it *store.Issue) error {
 	}
 	it.Status = store.StatusRunning
 	id := it.ID
+	markExecLive(id)
 	go func() {
+		defer unbindExecCancel(id)
 		defer func() {
 			if r := recover(); r != nil {
 				log.Printf("ticket async exec panic %s: %v", id, r)
@@ -1294,6 +1320,9 @@ func (h *TicketHandler) failAsyncIssue(id, msg string) {
 	}
 	// 已由 persistExec 落成终态则不再覆盖
 	if !ticketexec.IsExecuting(cur.Status) {
+		return
+	}
+	if store.IsCloudIssueType(cur.IssueType) && strings.Contains(cur.SQLContent, `"task_id":"`) && !strings.Contains(cur.SQLContent, `"task_id":""`) {
 		return
 	}
 	res := ticketexec.FailBeforeExec(msg, ticketexec.Record{
@@ -1469,6 +1498,12 @@ func (h *TicketHandler) executeTicket(ctx context.Context, it *store.Issue) erro
 	if it == nil {
 		return errors.New("工单不存在")
 	}
+	if store.IsCloudIssueType(it.IssueType) {
+		if h.Cloud == nil {
+			return h.persistExec(it, &ticketexec.Result{Success: false, Message: "云资源未启用"})
+		}
+		return h.Cloud.Execute(ctx, it)
+	}
 	if it.IssueType == store.IssueTypeCreateDB {
 		return h.executeCreateDBTicket(ctx, it)
 	}
@@ -1524,6 +1559,9 @@ func (h *TicketHandler) executeTicket(ctx context.Context, it *store.Issue) erro
 		return h.persistExec(it, res)
 	}
 	if it.IssueType == store.IssueTypeDML {
+		if ticketexec.EngineOf(inst.DBType) == "postgres" {
+			t.LockTimeout = h.Store.TicketDMLLockTimeout()
+		}
 		localCodes, execs, routeErr := h.executionCatalog()
 		if routeErr != nil {
 			return routeErr
@@ -1926,6 +1964,25 @@ func (h *TicketHandler) actorCanApproveIssue(c *gin.Context, it *store.Issue) bo
 		return true
 	}
 	return h.Store.CanApproveIssue(it, user, priv)
+}
+
+// actorCanExecuteIssue 加固开启时：提交人、可审批人、特权角色或持有 tickets.execute URN。
+func (h *TicketHandler) actorCanExecuteIssue(c *gin.Context, it *store.Issue) bool {
+	if it == nil {
+		return false
+	}
+	user := middleware.Username(c)
+	if strings.EqualFold(strings.TrimSpace(it.Submitter), user) {
+		return true
+	}
+	if h.actorCanApproveIssue(c, it) {
+		return true
+	}
+	if middleware.IsPrivileged(middleware.Role(c)) {
+		return true
+	}
+	ok, _ := h.Store.UserHasURN(middleware.UserID(c), store.URNTicketsExecute)
+	return ok
 }
 
 // loadIssueForActor 本租可见；平台资源申请额外允许：提交人/指定审批人，或平台管理员/白名单跨租打开。

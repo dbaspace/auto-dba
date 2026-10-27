@@ -22,6 +22,13 @@ type ExecProgress struct {
 	Phase           string `json:"phase,omitempty"`
 	Env             string `json:"env,omitempty"`
 	Executor        string `json:"executor,omitempty"`
+	// 远程执行器诊断。密码不下发到进度里。
+	JobID       string `json:"job_id,omitempty"`
+	ExecutorURL string `json:"executor_url,omitempty"`
+	TargetUser  string `json:"target_user,omitempty"`
+	LastGetAt   string `json:"last_get_at,omitempty"`
+	GetFailures int    `json:"get_failures,omitempty"`
+	LastError   string `json:"last_error,omitempty"`
 }
 
 // Fraction 进度条比例。preparing 返回不确定。单库按语句，多库按已结束库加当前库的语句比例。

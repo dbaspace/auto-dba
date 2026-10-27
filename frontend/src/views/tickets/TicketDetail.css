@@ -184,9 +184,19 @@
 .sec-title { font-weight: 600; color: #111827; margin-bottom: 12px; }
 .sec-title.mt { margin-top: 28px; }
 .apply-desc .ant-descriptions-item-label {
-  width: 140px;
+  width: 120px;
   background: var(--app-page-bg, #fafafa);
   color: #4b5563;
+}
+.apply-source-title {
+  color: #111827;
+  word-break: break-all;
+}
+.apply-source-sub {
+  margin-top: 2px;
+  color: #6b7280;
+  font-size: 12px;
+  word-break: break-all;
 }
 .sql-pre {
   margin: 0;
@@ -321,8 +331,29 @@
   color: #9ca3af;
   padding: 12px 0;
 }
-.ddl-exec-impact .exec-inst-card {
-  margin-bottom: 12px;
+.ddl-exec-impact .exec-inst-collapse {
+  background: transparent;
+}
+.ddl-exec-impact .exec-inst-collapse .ant-collapse-item {
+  margin-bottom: 8px;
+  border: 1px solid var(--ant-color-border-secondary, #f0f0f0);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.ddl-exec-impact .exec-inst-collapse .ant-collapse-header {
+  align-items: center !important;
+}
+.ddl-exec-impact .impact-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.ddl-exec-impact .impact-head .exec-inst-error {
+  margin-bottom: 0;
+  flex: 1;
+  min-width: 160px;
 }
 .ddl-exec-impact .exec-inst-card.is-fail .db-pill,
 .ddl-exec-impact .db-pill.is-fail {

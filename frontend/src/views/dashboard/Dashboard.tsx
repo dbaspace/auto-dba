@@ -26,7 +26,7 @@ import {
 import './Dashboard.css'
 
 const TYPE_LABEL: Record<string, string> = {
-  dql: '数据导出', dml: 'DML', ddl: 'DDL', dcl: '权限申请', resource_apply: '平台资源申请',
+  dql: '数据导出', dml: 'DML', ddl: 'DDL', dcl: '权限申请', resource_apply: '平台资源申请', cloud_pg: '云 PostgreSQL 变更', cloud_mysql: '云 MySQL 变更', cloud_redis: '云 Redis 变更', cloud_host: '云主机变更',
   kafka: 'Kafka', redis: 'Redis',
   mullang: '多语模版', cdc_sync: 'CDC同步', cdc: 'CDC同步', migration: '数据迁移',
   archive: '数据归档', flashback: '闪回', createdb: '新增数据库',

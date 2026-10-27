@@ -10,6 +10,12 @@ export type ExecProgress = {
   phase?: string
   env?: string
   executor?: string
+  job_id?: string
+  executor_url?: string
+  target_user?: string
+  last_get_at?: string
+  get_failures?: number
+  last_error?: string
 }
 
 export type ProgressView = {

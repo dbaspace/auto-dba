@@ -38,8 +38,12 @@ type Target struct {
 	ConnectDB string // 实际连库名；建库工单连管理库，与 DBName（新建库）分离
 	// LongStmtTimeout PG 长耗时语句单条超时；<=0 用 DefaultLongStmtTimeout
 	LongStmtTimeout time.Duration
+	// LockTimeout PG DML 获取锁的最长等待时间；<=0 表示不设置。
+	LockTimeout time.Duration
 	// Light 为真时不在内存里保留每条语句的完整 SQL，只留计数和失败信息。
 	Light bool
+	// KeepAll 为真时保留全部语句明细，不按 1000 条阈值抽样。执行器回传使用。
+	KeepAll bool
 	// OnProgress 每条语句开始前回调。sessionID 为当前连接的后端会话号，取不到时为 0。
 	OnProgress func(stmtIndex, stmtTotal int, sessionID int64)
 }
@@ -95,7 +99,8 @@ func ShouldAutoRun(issueType string) bool {
 	switch strings.ToLower(strings.TrimSpace(issueType)) {
 	case store.IssueTypeDDL, store.IssueTypeDML, store.IssueTypeCreateDB, store.IssueTypeHA,
 		store.IssueTypeSrCluster, store.IssueTypeDbDeploy, store.IssueTypeResourceApply, store.IssueTypeRedis,
-		store.IssueTypeK8sChange, store.IssueTypeBackupRestore, store.IssueTypeDnsChange:
+		store.IssueTypeK8sChange, store.IssueTypeBackupRestore, store.IssueTypeDnsChange,
+		store.IssueTypeCloudPg, store.IssueTypeCloudMysql, store.IssueTypeCloudRedis, store.IssueTypeCloudHost:
 		return true
 	default:
 		return false
@@ -223,8 +228,8 @@ func Run(ctx context.Context, issueType string, sqlContent string, t Target) *Re
 	if len(stmts) == 0 {
 		return fail(res, t, "SQL 不能为空")
 	}
-	// 语句数已超阈值：一开始就按库抽样，避免执行过程中堆出百兆明细
-	if len(stmts) > DetailCompactThreshold {
+	// 语句数已超阈值：一开始就按库抽样，避免执行过程中堆出百兆明细。执行器要全量回传，不抽样。
+	if !t.KeepAll && len(stmts) > DetailCompactThreshold {
 		res.enableCompactMode()
 	}
 
@@ -248,10 +253,17 @@ func Run(ctx context.Context, issueType string, sqlContent string, t Target) *Re
 		if res.SuccessCount > 0 && !res.RolledBack {
 			res.Summary = fmt.Sprintf("部分执行后失败，已成功 %d / %d 条语句", res.SuccessCount, res.StatementCount)
 		}
-		return Compact(res)
+		return finishRun(t, res)
 	}
 	res.Success = true
 	res.Summary = fmt.Sprintf("成功执行 %d / %d 条语句（按分号拆分）", res.SuccessCount, res.StatementCount)
+	return finishRun(t, res)
+}
+
+func finishRun(t Target, res *Result) *Result {
+	if t.KeepAll {
+		return res
+	}
 	return Compact(res)
 }
 
@@ -354,6 +366,14 @@ func (r *Result) appendSuccess(t Target, sqlText string, started, ended time.Tim
 	r.SuccessCount++
 	r.bumpTarget(t.Host, t.DBName, "success")
 	if t.Light {
+		return
+	}
+	if t.KeepAll {
+		r.appendRecord(Record{
+			Host: t.Host, DB: t.DBName, Port: t.Port,
+			SQL: strings.TrimSpace(sqlText), StartedAt: started.UTC().Format(time.RFC3339), EndedAt: ended.UTC().Format(time.RFC3339),
+			Status: "success", AffectedRow: affected,
+		})
 		return
 	}
 	if r.SuccessCount > DetailCompactThreshold {
@@ -471,11 +491,20 @@ func runPostgresDML(ctx context.Context, t Target, stmts []string, collect *Resu
 		return fmt.Errorf("开启事务失败: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	if sqlText := postgresLockTimeoutSQL(t.LockTimeout); sqlText != "" {
+		if _, err := tx.ExecContext(ctx, sqlText); err != nil {
+			collect.appendFailure(t, "(SET lock_timeout)", time.Now(), err)
+			return fmt.Errorf("设置锁等待超时失败: %w", err)
+		}
+	}
 	sid := querySessionID(ctx, db, "postgres")
+	if err := ctx.Err(); err != nil {
+		return failOnCtx(collect, t, stmts[0], time.Now(), err)
+	}
 	total := len(stmts)
 	for i, stmt := range stmts {
 		if err := ctx.Err(); err != nil {
-			return err
+			return failOnCtx(collect, t, stmt, time.Now(), err)
 		}
 		if t.OnProgress != nil {
 			t.OnProgress(i+1, total, sid)
@@ -484,7 +513,7 @@ func runPostgresDML(ctx context.Context, t Target, stmts []string, collect *Resu
 		ret, exErr := tx.ExecContext(ctx, stmt)
 		if exErr != nil {
 			if ctx.Err() != nil {
-				return ctx.Err()
+				return failOnCtx(collect, t, stmt, started, ctx.Err())
 			}
 			collect.appendFailure(t, stmt, started, exErr)
 			n := collect.markRolledBack()
@@ -493,13 +522,62 @@ func runPostgresDML(ctx context.Context, t Target, stmts []string, collect *Resu
 		}
 		collect.appendSuccess(t, stmt, started, time.Now(), rowsAffected(ret))
 	}
-	if err := tx.Commit(); err != nil {
+	if err := commitOrTimeout(ctx, tx); err != nil {
+		if ctx.Err() != nil {
+			return failOnCtx(collect, t, "(COMMIT)", time.Now(), err)
+		}
 		collect.appendFailure(t, "(COMMIT)", time.Now(), err)
 		n := collect.markRolledBack()
 		collect.Summary = fmt.Sprintf("提交事务失败，事务已回滚，%d 条 SQL 均未生效", n)
 		return fmt.Errorf("提交事务失败: %w", err)
 	}
 	return nil
+}
+
+func postgresLockTimeoutSQL(timeout time.Duration) string {
+	if timeout <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("SET LOCAL lock_timeout = '%dms'", timeout.Milliseconds())
+}
+
+// failOnCtx 把超时或取消写成语句失败明细，避免任务结束时 Records 为空。
+func failOnCtx(collect *Result, t Target, sqlText string, started time.Time, err error) error {
+	if err == nil {
+		return nil
+	}
+	wrapped := err
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		wrapped = fmt.Errorf("执行超时: %w", err)
+	case errors.Is(err, context.Canceled):
+		wrapped = fmt.Errorf("执行已取消: %w", err)
+	}
+	if collect != nil {
+		collect.appendFailure(t, sqlText, started, wrapped)
+		if collect.Message == "" {
+			collect.Message = formatExecErr(wrapped)
+		}
+	}
+	return wrapped
+}
+
+// commitOrTimeout 在执行上下文截止前提交。database/sql 的 Commit 不接收 context。
+func commitOrTimeout(ctx context.Context, tx *sql.Tx) error {
+	if tx == nil {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("提交事务超时: %w", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- tx.Commit() }()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return fmt.Errorf("提交事务超时: %w", ctx.Err())
+	}
 }
 
 // markRolledBack 事务回滚后，把已记为成功的语句改为 rolled_back，返回回滚的语句数。

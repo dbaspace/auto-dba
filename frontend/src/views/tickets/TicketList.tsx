@@ -55,6 +55,10 @@ function typeText(t: string) {
       db_deploy: '数据库集群部署',
       resource_apply: '平台资源申请',
       dns_change: 'DNS 变更',
+      cloud_pg: '云 PostgreSQL 变更',
+      cloud_mysql: '云 MySQL 变更',
+      cloud_redis: '云 Redis 变更',
+      cloud_host: '云主机变更',
     }[t] ||
     t ||
     '-'

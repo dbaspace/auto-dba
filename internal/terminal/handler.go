@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -349,6 +350,8 @@ func (h *Handler) WS(c *gin.Context) {
 		return
 	}
 	defer ws.Close()
+	stopPing := keepAliveWS(ws, 20*time.Second, 60*time.Second)
+	defer stopPing()
 
 	_ = h.Store.UpdateTerminalSessionStatus(sess.ID, store.TermStatusRunning)
 
@@ -367,7 +370,10 @@ func (h *Handler) WS(c *gin.Context) {
 		return
 	}
 
-	wtOpts := []webtty.Option{webtty.WithWindowTitle(ec.Title)}
+	wtOpts := []webtty.Option{
+		webtty.WithWindowTitle(ec.Title),
+		webtty.WithReconnect(5),
+	}
 	if ec.PermitWrite {
 		wtOpts = append(wtOpts, webtty.WithPermitWrite())
 	}
@@ -383,6 +389,41 @@ func (h *Handler) WS(c *gin.Context) {
 		return
 	}
 	_ = h.Store.UpdateTerminalSessionStatus(sess.ID, store.TermStatusFinished)
+}
+
+// keepAliveWS 发协议层 Ping，不依赖前台标签页里的 JS 定时器。返回停止函数。
+func keepAliveWS(ws *websocket.Conn, every, idle time.Duration) func() {
+	if ws == nil {
+		return func() {}
+	}
+	if every <= 0 {
+		every = 20 * time.Second
+	}
+	if idle <= 0 {
+		idle = 60 * time.Second
+	}
+	_ = ws.SetReadDeadline(time.Now().Add(idle))
+	ws.SetPongHandler(func(string) error {
+		return ws.SetReadDeadline(time.Now().Add(idle))
+	})
+	done := make(chan struct{})
+	var once sync.Once
+	go func() {
+		t := time.NewTicker(every)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-t.C:
+				deadline := time.Now().Add(10 * time.Second)
+				if err := ws.WriteControl(websocket.PingMessage, []byte("ping"), deadline); err != nil {
+					return
+				}
+			}
+		}
+	}()
+	return func() { once.Do(func() { close(done) }) }
 }
 
 // MountStatic 托管 gotty 静态资源（挂在 /api/v1/terminal/static，便于同源代理）

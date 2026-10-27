@@ -1,6 +1,7 @@
 package ticketexec
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -138,5 +139,35 @@ func TestFailBeforeExec(t *testing.T) {
 	rec := res.Records[0]
 	if rec.InstanceID != "i1" || rec.SQL != PrecheckSQL || rec.ErrorMessage != "工单实例不存在" || rec.Order != 1 {
 		t.Fatalf("%+v", rec)
+	}
+}
+
+func TestFailOnCtxWritesTimeoutRecord(t *testing.T) {
+	res := &Result{}
+	err := failOnCtx(res, Target{Host: "h", DBName: "d"}, "UPDATE t SET a=1", time.Now(), context.DeadlineExceeded)
+	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err=%v", err)
+	}
+	if len(res.Records) != 1 || res.Records[0].Status != "failed" || res.Records[0].SQL != "UPDATE t SET a=1" {
+		t.Fatalf("records %+v", res.Records)
+	}
+	if !strings.Contains(res.Records[0].ErrorMessage, "执行超时") || res.Message == "" {
+		t.Fatalf("message=%q record=%+v", res.Message, res.Records[0])
+	}
+}
+
+func TestKeepAllRetainsBeyondCompactThreshold(t *testing.T) {
+	res := &Result{}
+	target := Target{Host: "h", DBName: "d", KeepAll: true}
+	n := DetailCompactThreshold + 5
+	now := time.Now()
+	for i := 0; i < n; i++ {
+		res.appendSuccess(target, fmt.Sprintf("select %d", i), now, now, 1)
+	}
+	if len(res.Records) != n || res.SuccessCount != n {
+		t.Fatalf("records=%d success=%d want %d", len(res.Records), res.SuccessCount, n)
+	}
+	if res.Compacted || res.compactMode {
+		t.Fatal("keep-all should not compact")
 	}
 }

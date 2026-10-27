@@ -326,6 +326,31 @@ func (h *K8sHandler) AgentTunnel(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "agentId 必填"})
 		return
 	}
+	// 加固开关开启时校验 agent token（与 k8s-agent --token / KEEPLUS_AGENT_TOKEN 对齐）
+	if h.Store != nil && h.Store.HardenK8sTunnel() {
+		expect := h.Store.K8sAgentTunnelToken()
+		if expect == "" {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"message": "已开启 K8s tunnel 校验，但未配置全局参数 k8s_agent_tunnel_token",
+				"code":    "k8s_tunnel_token_unconfigured",
+			})
+			return
+		}
+		got := strings.TrimSpace(c.Query("token"))
+		if got == "" {
+			got = strings.TrimSpace(c.GetHeader("X-Agent-Token"))
+		}
+		if got == "" {
+			raw := strings.TrimSpace(c.GetHeader("Authorization"))
+			if strings.HasPrefix(strings.ToLower(raw), "bearer ") {
+				got = strings.TrimSpace(raw[7:])
+			}
+		}
+		if got != expect {
+			c.JSON(http.StatusUnauthorized, gin.H{"message": "invalid agent token", "code": "k8s_tunnel_unauthorized"})
+			return
+		}
+	}
 	_ = h.Hub.ServeAgentWS(c.Writer, c.Request, agentID)
 }
 

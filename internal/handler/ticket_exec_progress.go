@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +25,26 @@ func bindExecCancel(id string, cancel context.CancelFunc) {
 	ticketExecCancel.Store(id, cancel)
 }
 
+func markExecLive(id string) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return
+	}
+	ticketExecCancel.LoadOrStore(id, context.CancelFunc(func() {}))
+}
+
+func execIsLive(id string) bool {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return false
+	}
+	if _, ok := ticketExecCancel.Load(id); ok {
+		return true
+	}
+	_, ok := ticketRemoteJobs.Load(id)
+	return ok
+}
+
 func unbindExecCancel(id string) {
 	ticketExecCancel.Delete(strings.TrimSpace(id))
 }
@@ -35,6 +56,40 @@ func cancelExec(id string) {
 			cancel()
 		}
 	}
+}
+
+const orphanRunningGrace = 2 * time.Minute
+
+// ReclaimOrphanRunning 把本进程已没有执行标记的 running DDL/DML/建库工单记为失败。
+// startup 为真时不看更新时间：进程刚起来，内存里的执行标记都已丢失。
+func (h *TicketHandler) ReclaimOrphanRunning(startup bool) int {
+	if h == nil || h.Store == nil {
+		return 0
+	}
+	ids, err := h.Store.ListRunningAutoExecIssueIDs()
+	if err != nil {
+		log.Printf("ticket reclaim running: %v", err)
+		return 0
+	}
+	n := 0
+	for _, id := range ids {
+		if execIsLive(id) {
+			continue
+		}
+		if !startup {
+			cur, err := h.Store.GetIssue(id)
+			if err != nil || cur == nil || cur.Status != store.StatusRunning {
+				continue
+			}
+			updated, perr := time.Parse(time.RFC3339, cur.UpdatedAt)
+			if perr == nil && time.Since(updated) < orphanRunningGrace {
+				continue
+			}
+		}
+		h.failAsyncIssue(id, "执行进程已不在，后台执行已中断")
+		n++
+	}
+	return n
 }
 
 func (h *TicketHandler) issueStopped(id string) bool {
@@ -91,6 +146,24 @@ func appendCompactDB(merged *ticketexec.Result, rec ticketexec.Record, ok bool, 
 	}
 	rec.Order = len(merged.Records) + 1
 	merged.Records = append(merged.Records, rec)
+	merged.SuccessCount += successN
+	merged.FailCount += failN
+}
+
+func appendStatementRecords(merged *ticketexec.Result, recs []ticketexec.Record, ok bool, successN, failN int, errMsg string) {
+	if merged == nil {
+		return
+	}
+	for _, rec := range recs {
+		rec.Order = len(merged.Records) + 1
+		merged.Records = append(merged.Records, rec)
+	}
+	if !ok {
+		merged.Success = false
+		if strings.TrimSpace(errMsg) != "" {
+			merged.Message = errMsg
+		}
+	}
 	merged.SuccessCount += successN
 	merged.FailCount += failN
 }

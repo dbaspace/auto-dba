@@ -127,7 +127,11 @@ func (h *DatabaseHandler) Query(c *gin.Context) {
 		defLimit = h.Store.QueryDefaultLimit()
 		maxLimit = h.Store.QueryMaxLimit()
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
+	qctx := c.Request.Context()
+	if h.Store != nil && h.Store.HardenReadOnlySession() {
+		qctx = dbprobe.WithReadOnlySession(qctx)
+	}
+	ctx, cancel := context.WithTimeout(qctx, 20*time.Second)
 	defer cancel()
 
 	results := make([]*dbprobe.QueryResult, 0, len(stmts))

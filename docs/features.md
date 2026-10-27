@@ -87,7 +87,7 @@ Client Secret（及 LDAP Bind 密码）用字段加密密钥落库（优先 `app
 
 | 页面 | 路径 | 说明 |
 |------|------|------|
-| 工单列表 | `/ops/tickets` | 全部工单的查询、审批与执行记录；展示申请原因、环境、数据库类型；DQL 导出完成后状态为「已下载」。DDL 执行中显示进度；可筛选「已终止」 |
+| 工单列表 | `/ops/tickets` | 全部工单的查询、审批与执行记录；展示申请原因、环境、数据库类型；DQL 导出完成后状态为「已下载」。DDL 执行中显示进度（含远程执行器当前库与语句）；可筛选「已终止」。服务重启后会回收仍标执行中、但进程已不在的工单 |
 | DDL 工单 | `/ops/ddl` | 结构变更。提交前按审核规则做 SQL 检查（结果可按状态过滤、按屏分页），支持美化与关键字高亮；可看执行影响；可多选域名级数据源。勾选分库并填写前缀时，PostgreSQL 按前缀现查数字后缀库并逐库执行，代表库须已登记，其余分库不要求登记；某个库失败后继续其余库，汇总写明成功与失败个数；重试按库跳过已成功的库。执行中显示进度，审核人、admin 或 DBA 租户成员可终止当前会话，工单变为「已终止」。全局参数 `ticket_ddl_constraint_check_enabled` 默认开启，关闭后跳过全部 SQL 审核、只保留提交门禁，详情会标明。PostgreSQL `ADD COLUMN IF NOT EXISTS` 在列注释规则开启时仍要带 `COMMENT ON COLUMN` |
 | DML 工单 | `/ops/dml` | 数据变更，同样走审核与审批；填写 SQL 支持美化/高亮，检测结果分页与状态过滤。PostgreSQL DML 由平台包事务执行，脚本中的 `BEGIN`/`COMMIT`/`ROLLBACK` 会被忽略（避免与外层事务双重提交） |
 | DQL 工单 | `/ops/dql` | 数据导出。左侧填环境、库、审批人和事由，右侧写查询 SQL |
@@ -159,7 +159,7 @@ Client Secret（及 LDAP Bind 密码）用字段加密密钥落库（优先 `app
 
 | 页面 | 路径 | 说明 |
 |------|------|------|
-| SQL 洞察 | `/ops/sql-insight` | 六 Tab：SQL洞察 / 洞察分析 / 可视汇总 / AWR报告 / 表空间分析 / 智能分析；壳上统一「设置」入口（`/config/sql-insight`）。写操作权限：活动快照采集 / AWR 生成 / 表空间采集 / 智能分析（见 rbac-permissions） |
+| SQL 洞察 | `/ops/sql-insight` | 六 Tab：SQL洞察 / 洞察分析 / 可视汇总 / AWR报告 / 表空间分析 / 智能分析；壳上统一「设置」入口（`/config/sql-insight`）。写操作权限：活动快照采集 / AWR 生成 / 表空间采集 / 智能分析；可同步云慢日志（见 rbac-permissions） |
 | 会话管理 | `/ops/sessions` | 查看会话与锁，可定时刷新，并结束异常会话（PostgreSQL / MySQL 族） |
 | 实例总览 | `/ops/instance-overview` | 已登记实例的横向一览，含角色与异常标记。打开只读元库；点刷新才限流采集，并显示采样进度与完成时间。采集 PostgreSQL / Redis 的版本、角色、连接、内存、从库延迟，并可带云监控存储使用率。PostgreSQL 已用存储是各库文件合计。不是监控曲线 |
 | MySQL 慢 SQL | `/ops/mysql-slow` | performance_schema digest Top SQL（只读） |
@@ -213,6 +213,14 @@ Client Secret（及 LDAP Bind 密码）用字段加密密钥落库（优先 `app
 
 海豚与 SR 控制台未配置外部地址时，页面只提示未配置，不提供入口。高可用未配置匹配控制器时不自动 failover。**集群部署**负责新建/登记后的扩缩/升级编排，**不是**高可用切换；各引擎工作台布局不同，见 `docs/sr-cluster.md` / `docs/db-cluster.md` / `docs/redis-cluster.md`。
 
+## 云资源
+
+| 页面 | 路径 | 说明 |
+|------|------|------|
+| 云 PostgreSQL / MySQL / Redis / 主机 | `/ops/cloud/...` | 按云账号同步资源、看健康、报价与提交变更工单 |
+| 自愈策略 | `/ops/cloud/policies` | 云资源自愈策略 |
+| 云账号 | `/config/cloud-accounts` | 登记云厂商密钥；旧路径 `/ops/cloud/accounts` 跳转到此 |
+
 ## 多租户
 
 共享部署 + 元库行级 `tenant_id`。默认严格隔离；跨租仅通过**成员加入**、**资源授权（grant，只读）**或平台管理员**审计 impersonate**。设计、API 与防串租清单见 [tenancy.md](tenancy.md)。
@@ -239,8 +247,10 @@ Client Secret（及 LDAP Bind 密码）用字段加密密钥落库（优先 `app
 | 菜单管理 | `/config/menus` | 维护侧栏页面与操作权限节点 |
 | 登录日志 | `/config/login-logs` | 登录成功与失败记录 |
 | 登录会话 | `/config/login-sessions` | 以 Redis 为准展示仍有效的登录。有效期内再次访问会把过期时间续到当前时间 + 会话 TTL（默认 1 天）；到期后需重新登录。与闲置退出是两套规则 |
+| 客户端访问授权 | `/config/client-access` | 管理员开通本地 AI / CLI / MCP 访问；接口审计。见 [client-access.md](client-access.md) |
+| 我的访问令牌 | `/config/my-access-tokens` | 用户签发与吊销个人访问令牌（PAT） |
 | 认证配置 | `/config/ldap` | LDAP、SSO、邮件、通知四个配置页 |
-| 查询审计 | `/config/query-audits` | 数据库、Kafka、Redis 查询语句的审计检索 |
+| 查询审计 | `/config/query-audits` | 数据库、Kafka、Redis 查询语句的审计检索；可按客户端类型筛选 |
 
 ## CMDB
 
@@ -288,7 +298,8 @@ DBA 域配置管理门面：统一目录（含 SR/部署/代理/账号/CDC）、
 | 全局参数 | `/config/args` | 审批开关、默认审批人、SQL 约束、登录空闲时长、水印等 |
 | 区域管理 | `/config/regions` | 机房或区域，并可绑定环境 |
 | 环境管理 | `/config/environments` | 生产、测试等环境 |
-| 执行器 | `/config/sql-executors` | 从平台 Agent 下发成功的记录登记 SQL 执行器并绑定环境，地址自动带出，本页不填账号密码。`ticket_local_idc` 中的环境在本进程直连，其余已绑定环境把 DDL/DML 下发到执行器。一体包含 `deploy/sql-agent/bin/sql-agent` |
+| 执行器 | `/config/sql-executors` | 从平台 Agent 下发成功的记录登记 SQL 执行器并绑定环境，地址自动带出，本页不填账号密码。`ticket_local_idc` 中的环境在本进程直连，其余已绑定环境把 DDL/DML 下发到执行器。一体包、后端包与 Docker 镜像均含 `deploy/sql-agent/bin/sql-agent` |
+| 云账号 | `/config/cloud-accounts` | 登记云厂商密钥，供云资源同步与变更 |
 | 连接器 | `/config/connectors` | CDC、迁移等外部组件的连接信息。可按环境、Kafka 地址、Debezium 地址筛选 |
 | 平台 Agent | `/config/agents` | 平台级执行面登记 / 下发；备份、RDB、高可用按归属引用 |
 | FE 管理 | `/config/fe-admin` | StarRocks FE 运维凭据；「从监控同步」拉取任务/环境/域名/全部 FE 节点，账号密码事后编辑补全 |

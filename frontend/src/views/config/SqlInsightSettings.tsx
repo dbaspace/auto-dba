@@ -30,7 +30,7 @@ const JOB_MANAGED_KEYS = new Set([
 
 type FieldType = 'bool' | 'number' | 'cron' | 'text' | 'url' | 'password'
 type AwrGroup = 'prometheus' | 'report' | 'push'
-type SettingTab = 'awr' | 'space' | 'smart'
+type SettingTab = 'awr' | 'space' | 'smart' | 'cloud'
 
 interface FieldDef {
   key: string
@@ -303,7 +303,7 @@ export default function SqlInsightSettings() {
   const [params, setParams] = useSearchParams()
   const tabParam = params.get('tab')
   const activeTab: SettingTab =
-    tabParam === 'space' || tabParam === 'smart' || tabParam === 'awr' ? tabParam : 'awr'
+    tabParam === 'space' || tabParam === 'smart' || tabParam === 'awr' || tabParam === 'cloud' ? tabParam : 'awr'
 
   const [awrForm] = Form.useForm<FormValues>()
   const [spaceForm] = Form.useForm<FormValues>()
@@ -438,6 +438,19 @@ export default function SqlInsightSettings() {
                 </Typography.Paragraph>
                 {SPACE_DEFS.map(renderField)}
               </Form>
+            ),
+          },
+          {
+            key: 'cloud',
+            label: '云慢日志',
+            children: (
+              <div>
+                <Typography.Paragraph type="secondary">
+                  每 5 分钟增量同步由定时任务 cloud.pg.slowlog 负责，表达式在定时任务页修改。
+                  保留天数使用全局参数 cloud_slowlog_retention_days，默认 15 天，只删除本库记录。
+                </Typography.Paragraph>
+                <Link to="/config/scheduled-jobs">打开定时任务</Link>
+              </div>
             ),
           },
           {

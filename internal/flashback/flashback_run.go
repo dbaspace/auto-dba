@@ -92,6 +92,7 @@ func (s *FlashbackImpl) executeTask(ctx context.Context, taskID string) error {
 	if row == nil {
 		return fmt.Errorf("task not found")
 	}
+	ctx = flashbackUseAccount(ctx, row.InstanceID, row.CreatedBy)
 	if !flashbackApproved(row) {
 		return fmt.Errorf("闪回任务须审批通过后才能执行")
 	}

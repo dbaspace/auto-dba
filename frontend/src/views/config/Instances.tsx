@@ -36,6 +36,7 @@ interface InstanceRow {
   cloud_vendor?: string
   cloud_instance_id?: string
   cloud_region?: string
+  cloud_account_id?: string
   visibility?: string
   access_users?: string[]
   role_ids?: string[]
@@ -194,6 +195,7 @@ export default function Instances() {
   const [visible, setVisible] = useState(false)
   const [testing, setTesting] = useState(false)
   const [form, setForm] = useState<InstanceRow>({})
+  const [cloudAccounts, setCloudAccounts] = useState<any[]>([])
   const [approverText, setApproverText] = useState('admin')
   const [activeType, setActiveType] = useState('')
   const [userOptions, setUserOptions] = useState<string[]>(['admin'])
@@ -455,6 +457,7 @@ export default function Instances() {
           cloud_vendor: '',
           cloud_instance_id: '',
           cloud_region: '',
+          cloud_account_id: '',
         }
     const cur = String(next.db_type || '').trim()
     if (cur && !typeOptions.some((t) => t.value === cur)) {
@@ -1130,8 +1133,33 @@ export default function Instances() {
                   onChange={(v) => setForm((f) => ({ ...f, cloud_vendor: v ?? '' }))}
                 />
                 <div className="type-hint">
-                  闪回下载 WAL 时按厂商匹配「数据闪回 → 多云密钥」中的 AK/SK。连库仍用上方主机/账密。
+                  闪回和云同步使用实例绑定的云账号只读密钥。连库仍用上方主机/账密。
                 </div>
+              </div>
+            </div>
+          )}
+          {showCloud && (
+            <div className="fi">
+              <label>云账号</label>
+              <div className="fi-body">
+                <Select
+                  value={form.cloud_account_id || undefined}
+                  allowClear
+                  showSearch
+                  optionFilterProp="label"
+                  placeholder="选择已绑定给当前用户的账号"
+                  style={{ width: '100%' }}
+                  options={cloudAccounts
+                    .filter((a) => !form.cloud_vendor || a.vendor === form.cloud_vendor)
+                    .map((a) => ({ value: a.id, label: `${a.name}（${a.vendor}）` }))}
+                  onDropdownVisibleChange={(open) => {
+                    if (!open) return
+                    api.get('/cloud/accounts', { params: { mine: 1, vendor: form.cloud_vendor || undefined } })
+                      .then(({ data }) => setCloudAccounts(data.data || []))
+                      .catch(() => setCloudAccounts([]))
+                  }}
+                  onChange={(v) => setForm((f) => ({ ...f, cloud_account_id: v || '' }))}
+                />
               </div>
             </div>
           )}
