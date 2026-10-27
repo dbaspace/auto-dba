@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -46,6 +47,11 @@ func (h *SQLExecutorHandler) List(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
+	hosts, err := h.Store.MapLatestSQLExecutorHostByAgent()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
 	out := make([]gin.H, 0, len(list))
 	for _, e := range list {
 		var bound []gin.H
@@ -56,6 +62,7 @@ func (h *SQLExecutorHandler) List(c *gin.Context) {
 			"id": e.ID, "name": e.Name, "base_url": e.BaseURL,
 			"env_codes": e.EnvCodes, "environments": bound,
 			"enabled": e.Enabled, "updated_at": e.UpdatedAt,
+			"host_instance_id": hosts[e.ID],
 		})
 	}
 	c.JSON(http.StatusOK, gin.H{"data": out, "local_idc_codes": splitCodes(local)})
@@ -148,11 +155,155 @@ func (h *SQLExecutorHandler) save(c *gin.Context, id string) {
 }
 
 func (h *SQLExecutorHandler) Delete(c *gin.Context) {
-	if err := h.Store.DeleteSQLExecutor(c.Param("id")); err != nil {
+	id := c.Param("id")
+	row, err := h.Store.GetSQLExecutor(id)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"ok": true})
+	if row == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "执行器不存在"})
+		return
+	}
+	force := c.Query("force") == "1" || c.Query("force") == "true"
+	dep, err := h.Store.FindLatestSuccessSQLExecutorDeploy(id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	stoppedRemote := false
+	if dep != nil && strings.TrimSpace(dep.HostInstanceID) != "" {
+		if err := h.stopDeployed(dep); err != nil {
+			if !force {
+				c.JSON(http.StatusBadRequest, gin.H{"message": err.Error() + "；若仅删登记可加 force=1"})
+				return
+			}
+		} else {
+			stoppedRemote = true
+		}
+	}
+	if err := h.Store.DeleteSQLExecutor(id); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "stopped_remote": stoppedRemote})
+}
+
+func (h *SQLExecutorHandler) Stop(c *gin.Context) {
+	row, dep, err := h.loadExecutorDeploy(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	if row == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "执行器不存在"})
+		return
+	}
+	if dep == nil || strings.TrimSpace(dep.HostInstanceID) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "该执行器没有成功的下发记录，无法停止远端进程"})
+		return
+	}
+	if err := h.stopDeployed(dep); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	row.Enabled = false
+	if err := h.Store.SaveSQLExecutor(row); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "enabled": false, "message": "已停止远端进程，执行器已禁用"})
+}
+
+func (h *SQLExecutorHandler) Redeploy(c *gin.Context) {
+	row, dep, err := h.loadExecutorDeploy(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	if row == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "执行器不存在"})
+		return
+	}
+	if dep == nil || strings.TrimSpace(dep.HostInstanceID) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "该执行器没有成功的下发记录，无法重新下发"})
+		return
+	}
+	if h.Cfg == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "未配置 SSH，无法下发"})
+		return
+	}
+	if len(row.EnvCodes) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "执行器未绑定环境，请先编辑绑定后再重新下发"})
+		return
+	}
+	if other, code := h.envBoundElsewhere(row.EnvCodes, row.ID); other != "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "环境 " + code + " 已经绑在执行器「" + other + "」上"})
+		return
+	}
+	escalate := sqlexec.DeployPayloadEscalate(dep.Payload)
+	if escalate == "" {
+		escalate = sqlexec.DetectSystemdEscalate(h.Store, sqlexec.StopOpts{
+			HostInstanceID:  dep.HostInstanceID,
+			SSHIdentityFile: h.Cfg.Terminal.SSHIdentityFile,
+			SSHUser:         h.Cfg.Terminal.SSHUser,
+			SSHInsecure:     h.Cfg.Terminal.SSHInsecureHostKey,
+		})
+	}
+	id, err := sqlexec.StartDeploy(h.Store, sqlexec.DeployOpts{
+		HostInstanceID:  dep.HostInstanceID,
+		ListenPort:      dep.ListenPort,
+		RemoteDir:       dep.RemoteDir,
+		Escalate:        escalate,
+		Operator:        middleware.Username(c),
+		Name:            row.Name,
+		EnvCodes:        row.EnvCodes,
+		Secret:          h.Secret,
+		SSHIdentityFile: h.Cfg.Terminal.SSHIdentityFile,
+		SSHUser:         h.Cfg.Terminal.SSHUser,
+		SSHInsecure:     h.Cfg.Terminal.SSHInsecureHostKey,
+	})
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"deploy_id": id}})
+}
+
+func (h *SQLExecutorHandler) loadExecutorDeploy(id string) (*store.SQLExecutor, *store.BackupAgentDeploy, error) {
+	row, err := h.Store.GetSQLExecutor(id)
+	if err != nil {
+		return nil, nil, err
+	}
+	if row == nil {
+		return nil, nil, nil
+	}
+	dep, err := h.Store.FindLatestSuccessSQLExecutorDeploy(id)
+	return row, dep, err
+}
+
+func (h *SQLExecutorHandler) stopDeployed(dep *store.BackupAgentDeploy) error {
+	if h.Cfg == nil {
+		return fmt.Errorf("未配置 SSH，无法停止远端")
+	}
+	escalate := sqlexec.DeployPayloadEscalate(dep.Payload)
+	if escalate == "" {
+		escalate = sqlexec.DetectSystemdEscalate(h.Store, sqlexec.StopOpts{
+			HostInstanceID:  dep.HostInstanceID,
+			SSHIdentityFile: h.Cfg.Terminal.SSHIdentityFile,
+			SSHUser:         h.Cfg.Terminal.SSHUser,
+			SSHInsecure:     h.Cfg.Terminal.SSHInsecureHostKey,
+		})
+	}
+	return sqlexec.StopRemote(h.Store, sqlexec.StopOpts{
+		HostInstanceID:  dep.HostInstanceID,
+		RemoteDir:       dep.RemoteDir,
+		ListenPort:      dep.ListenPort,
+		Escalate:        escalate,
+		SSHIdentityFile: h.Cfg.Terminal.SSHIdentityFile,
+		SSHUser:         h.Cfg.Terminal.SSHUser,
+		SSHInsecure:     h.Cfg.Terminal.SSHInsecureHostKey,
+	})
 }
 
 func (h *SQLExecutorHandler) Probe(c *gin.Context) {

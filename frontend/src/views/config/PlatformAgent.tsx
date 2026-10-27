@@ -344,6 +344,84 @@ export default function PlatformAgent() {
     })
   }
 
+  async function stopSqlExec(row: any) {
+    Modal.confirm({
+      title: '停止 SQL 执行器',
+      content: `确认停止「${row.name}」远端进程（${row.base_url || ''}）？停止后该执行器会禁用，绑定环境的工单不再发到这里。`,
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        setActingId(row.id)
+        try {
+          await api.post(`/platform/agents/sql-executors/${row.id}/stop`)
+          message.success('已停止并禁用')
+          await loadDeploys()
+        } catch (e: any) {
+          message.error(e?.response?.data?.message || '停止失败')
+        } finally {
+          setActingId('')
+        }
+      },
+    })
+  }
+
+  async function redeploySqlExec(row: any) {
+    Modal.confirm({
+      title: '重新下发 SQL 执行器',
+      content: `将通过 SSH 覆盖部署「${row.name}」绑定主机上的 sql-agent，确认继续？`,
+      onOk: async () => {
+        setActingId(row.id)
+        try {
+          const { data } = await api.post(`/platform/agents/sql-executors/${row.id}/redeploy`, {})
+          const deployId = data?.data?.deploy_id
+          message.success('已创建重新下发任务')
+          await loadDeploys()
+          if (deployId) startPoll(deployId)
+        } catch (e: any) {
+          message.error(e?.response?.data?.message || '重新下发失败')
+        } finally {
+          setActingId('')
+        }
+      },
+    })
+  }
+
+  function delSqlExec(row: any) {
+    const isDeployed = !!row.host_instance_id
+    const envs = (row.environments || []).map((e: any) => e.name || e.code).filter(Boolean).join('、')
+    Modal.confirm({
+      title: '删除 SQL 执行器',
+      content: isDeployed
+        ? `将先 SSH 停止「${row.name}」远端进程（${row.base_url || ''}），再删除登记。${
+            envs ? `绑定环境：${envs}。` : ''
+          }这些环境的 DDL/DML 将不再发到这台机器。确认继续？`
+        : `确认删除「${row.name}」登记？${envs ? `绑定环境：${envs}。` : ''}（无下发记录，仅删平台登记）`,
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        setActingId(row.id)
+        try {
+          await api.delete(`/platform/agents/sql-executors/${row.id}`)
+          message.success(isDeployed ? '已停止远端并删除' : '已删除')
+          await loadDeploys()
+        } catch (e: any) {
+          const msg = e?.response?.data?.message || '删除失败'
+          Modal.confirm({
+            title: '停止远端失败',
+            content: `${msg}\n\n是否仅删除平台登记（远端进程可能仍存活）？`,
+            okText: '仅删登记',
+            okButtonProps: { danger: true },
+            onOk: async () => {
+              await api.delete(`/platform/agents/sql-executors/${row.id}`, { params: { force: 1 } })
+              message.success('已删除登记')
+              await loadDeploys()
+            },
+          })
+        } finally {
+          setActingId('')
+        }
+      },
+    })
+  }
+
   async function probe(row: any) {
     setActingId(row.id)
     try {
@@ -611,6 +689,31 @@ export default function PlatformAgent() {
                 : '-',
           },
           { title: '启用', width: 80, render: (_, row) => (row.enabled ? '是' : '否') },
+          {
+            title: '操作',
+            width: 280,
+            render: (_, row) => {
+              const busy = actingId === row.id
+              const deployed = !!row.host_instance_id
+              return (
+                <Space wrap size={0}>
+                  {deployed ? (
+                    <Button type="link" size="small" danger loading={busy} onClick={() => stopSqlExec(row)}>
+                      停止
+                    </Button>
+                  ) : null}
+                  {deployed ? (
+                    <Button type="link" size="small" loading={busy} onClick={() => redeploySqlExec(row)}>
+                      重新下发
+                    </Button>
+                  ) : null}
+                  <Button type="link" danger size="small" loading={busy} onClick={() => delSqlExec(row)}>
+                    删除
+                  </Button>
+                </Space>
+              )
+            },
+          },
         ]}
       />
       <div className="backup-toolbar" style={{ marginTop: 24 }}>

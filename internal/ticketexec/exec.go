@@ -497,7 +497,8 @@ func runPostgresDML(ctx context.Context, t Target, stmts []string, collect *Resu
 			return fmt.Errorf("设置锁等待超时失败: %w", err)
 		}
 	}
-	sid := querySessionID(ctx, db, "postgres")
+	// 必须在 tx 上取会话号：MaxOpenConns(1) 时对 db 再查会占死唯一连接，DML 永不执行。
+	sid := querySessionID(ctx, tx, "postgres")
 	if err := ctx.Err(); err != nil {
 		return failOnCtx(collect, t, stmts[0], time.Now(), err)
 	}
@@ -634,21 +635,26 @@ func execSerial(ctx context.Context, db *sql.DB, t Target, stmts []string, colle
 	return nil
 }
 
-func querySessionID(ctx context.Context, db *sql.DB, engine string) int64 {
-	if db == nil {
+// sessionQuerier 取后端会话号；*sql.DB 与 *sql.Tx 均可，事务内必须用 Tx。
+type sessionQuerier interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+func querySessionID(ctx context.Context, q sessionQuerier, engine string) int64 {
+	if q == nil {
 		return 0
 	}
-	q := ""
+	sqlText := ""
 	switch engine {
 	case "postgres":
-		q = "SELECT pg_backend_pid()"
+		sqlText = "SELECT pg_backend_pid()"
 	case "mysql", "starrocks":
-		q = "SELECT CONNECTION_ID()"
+		sqlText = "SELECT CONNECTION_ID()"
 	default:
 		return 0
 	}
 	var id int64
-	if err := db.QueryRowContext(ctx, q).Scan(&id); err != nil || id <= 0 {
+	if err := q.QueryRowContext(ctx, sqlText).Scan(&id); err != nil || id <= 0 {
 		return 0
 	}
 	return id

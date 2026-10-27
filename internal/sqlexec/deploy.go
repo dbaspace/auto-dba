@@ -189,6 +189,7 @@ func StartDeploy(db *store.DB, opts DeployOpts) (string, error) {
 	payload, _ := json.Marshal(map[string]any{
 		"env_codes": opts.EnvCodes,
 		"name":      strings.TrimSpace(opts.Name),
+		"escalate":  sshx.NormalizeEscalate(opts.Escalate),
 	})
 	dep := &store.BackupAgentDeploy{
 		HostInstanceID: hostID,
@@ -423,6 +424,11 @@ func runDeploy(db *store.DB, deployID string, opts DeployOpts) {
 func killSQLAgentScript(pidFile string, listenPort int) string {
 	return fmt.Sprintf(
 		`set +e
+if command -v systemctl >/dev/null 2>&1; then
+  if systemctl list-unit-files sql-agent.service >/dev/null 2>&1 || [ -f /etc/systemd/system/sql-agent.service ]; then
+    systemctl disable --now sql-agent 2>/dev/null || systemctl stop sql-agent 2>/dev/null
+  fi
+fi
 PIDF=%s
 PORT=%d
 if [ -f "$PIDF" ]; then
@@ -445,6 +451,145 @@ fi
 %s
 exit 0
 `, shellQuote(pidFile), listenPort, agentport.FuserKillSnippet(listenPort))
+}
+
+// DeployPayloadEscalate 从下发记录 payload 取出提权方式。
+func DeployPayloadEscalate(payload string) string {
+	var body struct {
+		Escalate string `json:"escalate"`
+	}
+	_ = json.Unmarshal([]byte(payload), &body)
+	return sshx.NormalizeEscalate(body.Escalate)
+}
+
+// StopOpts 停止远端 sql-agent。
+type StopOpts struct {
+	HostInstanceID  string
+	RemoteDir       string
+	ListenPort      int
+	Escalate        string
+	SSHIdentityFile string
+	SSHUser         string
+	SSHInsecure     bool
+}
+
+// StopRemote 停掉目标机上的 sql-agent（systemd 禁用并杀进程）。
+func StopRemote(db *store.DB, opts StopOpts) error {
+	if db == nil {
+		return fmt.Errorf("数据库未初始化")
+	}
+	hostID := strings.TrimSpace(opts.HostInstanceID)
+	if hostID == "" {
+		return fmt.Errorf("缺少主机")
+	}
+	inst, err := db.GetInstance(hostID)
+	if err != nil || inst == nil {
+		return fmt.Errorf("主机实例不存在")
+	}
+	if strings.TrimSpace(opts.SSHIdentityFile) == "" {
+		return fmt.Errorf("未配置 terminal.ssh_identity_file，无法 SSH 停止")
+	}
+	remoteDir := strings.TrimSpace(opts.RemoteDir)
+	if remoteDir == "" {
+		sshName := strings.TrimSpace(inst.Username)
+		if sshName == "" {
+			sshName = strings.TrimSpace(opts.SSHUser)
+		}
+		if sshName == "" {
+			sshName = "sysadmin"
+		}
+		remoteDir = "/home/" + sshName + "/auto-dba/sql-agent"
+	}
+	port := opts.ListenPort
+	if port <= 0 {
+		port = 8093
+	}
+	host := strings.TrimSpace(inst.Host)
+	if host == "" {
+		host = strings.TrimSpace(inst.DomainName)
+	}
+	if host == "" {
+		return fmt.Errorf("主机缺少 Host/Domain")
+	}
+	sshUser := strings.TrimSpace(inst.Username)
+	if sshUser == "" {
+		sshUser = opts.SSHUser
+	}
+	if sshUser == "" {
+		sshUser = "sysadmin"
+	}
+	sshPort := inst.Port
+	if sshPort <= 0 {
+		sshPort = 22
+	}
+	escalate := sshx.NormalizeEscalate(opts.Escalate)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	client, err := sshx.Dial(host, sshPort, sshx.Config{
+		User:            sshUser,
+		IdentityFile:    opts.SSHIdentityFile,
+		Timeout:         30 * time.Second,
+		InsecureHostKey: opts.SSHInsecure,
+	})
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	pidFile := path.Join(remoteDir, "agent.pid")
+	out, errOut, err := client.RunEscalated(ctx, escalate, killSQLAgentScript(pidFile, port))
+	if err != nil {
+		return fmt.Errorf("停止失败: %v; out=%s err=%s", err, strings.TrimSpace(out), strings.TrimSpace(errOut))
+	}
+	return nil
+}
+
+// DetectSystemdEscalate 目标机已有 sql-agent 单元时返回提权模式，供旧下发记录重发。
+func DetectSystemdEscalate(db *store.DB, opts StopOpts) string {
+	if db == nil || strings.TrimSpace(opts.HostInstanceID) == "" {
+		return ""
+	}
+	inst, err := db.GetInstance(strings.TrimSpace(opts.HostInstanceID))
+	if err != nil || inst == nil {
+		return ""
+	}
+	if strings.TrimSpace(opts.SSHIdentityFile) == "" {
+		return ""
+	}
+	host := strings.TrimSpace(inst.Host)
+	if host == "" {
+		host = strings.TrimSpace(inst.DomainName)
+	}
+	if host == "" {
+		return ""
+	}
+	sshUser := strings.TrimSpace(inst.Username)
+	if sshUser == "" {
+		sshUser = opts.SSHUser
+	}
+	if sshUser == "" {
+		sshUser = "sysadmin"
+	}
+	sshPort := inst.Port
+	if sshPort <= 0 {
+		sshPort = 22
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	client, err := sshx.Dial(host, sshPort, sshx.Config{
+		User:            sshUser,
+		IdentityFile:    opts.SSHIdentityFile,
+		Timeout:         20 * time.Second,
+		InsecureHostKey: opts.SSHInsecure,
+	})
+	if err != nil {
+		return ""
+	}
+	defer client.Close()
+	out, _, err := client.RunEscalated(ctx, sshx.EscalateSudoSu, `test -f /etc/systemd/system/sql-agent.service && echo yes`)
+	if err == nil && strings.Contains(out, "yes") {
+		return sshx.EscalateSudoSu
+	}
+	return ""
 }
 
 func randomToken(n int) string {

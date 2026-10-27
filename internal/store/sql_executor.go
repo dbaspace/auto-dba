@@ -143,7 +143,7 @@ func (d *DB) ListSQLExecutorDeploys(hostInstanceID string, limit int) ([]BackupA
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	q := `SELECT id, host_instance_id, agent_id, status, listen_port, remote_dir, base_url, log_text, created_by, created_at, updated_at, finished_at
+	q := `SELECT id, host_instance_id, agent_id, status, listen_port, remote_dir, base_url, log_text, created_by, created_at, updated_at, finished_at, COALESCE(payload,'')
 		FROM tbl_backup_agent_deploys WHERE kind='sql'`
 	var args []any
 	if id := strings.TrimSpace(hostInstanceID); id != "" {
@@ -161,7 +161,7 @@ func (d *DB) ListSQLExecutorDeploys(hostInstanceID string, limit int) ([]BackupA
 	for rows.Next() {
 		var it BackupAgentDeploy
 		if err := rows.Scan(&it.ID, &it.HostInstanceID, &it.AgentID, &it.Status, &it.ListenPort, &it.RemoteDir, &it.BaseURL, &it.LogText,
-			&it.CreatedBy, &it.CreatedAt, &it.UpdatedAt, &it.FinishedAt); err != nil {
+			&it.CreatedBy, &it.CreatedAt, &it.UpdatedAt, &it.FinishedAt, &it.Payload); err != nil {
 			return nil, err
 		}
 		it.Kind = "sql"
@@ -169,6 +169,63 @@ func (d *DB) ListSQLExecutorDeploys(hostInstanceID string, limit int) ([]BackupA
 	}
 	if out == nil {
 		out = []BackupAgentDeploy{}
+	}
+	return out, rows.Err()
+}
+
+// FindLatestSuccessSQLExecutorDeploy 返回该执行器最近一次下发成功记录。
+func (d *DB) FindLatestSuccessSQLExecutorDeploy(agentID string) (*BackupAgentDeploy, error) {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return nil, nil
+	}
+	it := &BackupAgentDeploy{}
+	err := d.QueryRow(
+		`SELECT id, host_instance_id, agent_id, status, listen_port, remote_dir, base_url, log_text, created_by, created_at, updated_at, finished_at, COALESCE(payload,'')
+		 FROM tbl_backup_agent_deploys
+		 WHERE kind='sql' AND status=? AND agent_id=?
+		 ORDER BY created_at DESC LIMIT 1`,
+		BackupDeploySuccess, agentID,
+	).Scan(
+		&it.ID, &it.HostInstanceID, &it.AgentID, &it.Status, &it.ListenPort, &it.RemoteDir, &it.BaseURL, &it.LogText,
+		&it.CreatedBy, &it.CreatedAt, &it.UpdatedAt, &it.FinishedAt, &it.Payload,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	it.Kind = "sql"
+	return it, nil
+}
+
+// MapLatestSQLExecutorHostByAgent 每个执行器对应最近一次成功下发的主机。
+func (d *DB) MapLatestSQLExecutorHostByAgent() (map[string]string, error) {
+	rows, err := d.Query(
+		`SELECT agent_id, host_instance_id FROM tbl_backup_agent_deploys
+		 WHERE kind='sql' AND status=? AND agent_id<>''
+		 ORDER BY created_at DESC`,
+		BackupDeploySuccess,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var agentID, hostID string
+		if err := rows.Scan(&agentID, &hostID); err != nil {
+			return nil, err
+		}
+		agentID = strings.TrimSpace(agentID)
+		if agentID == "" {
+			continue
+		}
+		if _, ok := out[agentID]; ok {
+			continue
+		}
+		out[agentID] = strings.TrimSpace(hostID)
 	}
 	return out, rows.Err()
 }

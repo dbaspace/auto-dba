@@ -21,6 +21,7 @@ interface Row {
   environments?: BoundEnv[]
   enabled?: boolean
   updated_at?: string
+  host_instance_id?: string
 }
 
 interface DeployRow {
@@ -40,6 +41,7 @@ export default function SqlExecutors() {
   const [visible, setVisible] = useState(false)
   const [saving, setSaving] = useState(false)
   const [editingId, setEditingId] = useState('')
+  const [actingId, setActingId] = useState('')
   const [form] = Form.useForm()
 
   async function load() {
@@ -113,13 +115,78 @@ export default function SqlExecutors() {
     }
   }
 
-  async function remove(row: Row) {
+  async function stop(row: Row) {
     Modal.confirm({
-      title: `删除执行器「${row.name}」？`,
+      title: '停止 SQL 执行器',
+      content: `确认停止「${row.name}」远端进程（${row.base_url || ''}）？停止后该执行器会禁用，绑定环境的工单不再发到这里。`,
+      okButtonProps: { danger: true },
       onOk: async () => {
-        await api.delete(`/sql-executors/${row.id}`)
-        message.success('已删除')
-        await load()
+        setActingId(row.id)
+        try {
+          await api.post(`/sql-executors/${row.id}/stop`)
+          message.success('已停止并禁用')
+          await load()
+        } catch (e: any) {
+          message.error(e?.response?.data?.message || '停止失败')
+        } finally {
+          setActingId('')
+        }
+      },
+    })
+  }
+
+  async function redeploy(row: Row) {
+    Modal.confirm({
+      title: '重新下发 SQL 执行器',
+      content: `将通过 SSH 覆盖部署「${row.name}」绑定主机上的 sql-agent，确认继续？`,
+      onOk: async () => {
+        setActingId(row.id)
+        try {
+          await api.post(`/sql-executors/${row.id}/redeploy`, {})
+          message.success('已创建重新下发任务')
+          await load()
+        } catch (e: any) {
+          message.error(e?.response?.data?.message || '重新下发失败')
+        } finally {
+          setActingId('')
+        }
+      },
+    })
+  }
+
+  function remove(row: Row) {
+    const isDeployed = !!row.host_instance_id
+    const envs = (row.environments || []).map((e) => e.name || e.code).filter(Boolean).join('、')
+    Modal.confirm({
+      title: '删除 SQL 执行器',
+      content: isDeployed
+        ? `将先 SSH 停止「${row.name}」远端进程（${row.base_url || ''}），再删除登记。${
+            envs ? `绑定环境：${envs}。` : ''
+          }这些环境的 DDL/DML 将不再发到这台机器。确认继续？`
+        : `确认删除「${row.name}」登记？${envs ? `绑定环境：${envs}。` : ''}`,
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        setActingId(row.id)
+        try {
+          await api.delete(`/sql-executors/${row.id}`)
+          message.success(isDeployed ? '已停止远端并删除' : '已删除')
+          await load()
+        } catch (e: any) {
+          const msg = e?.response?.data?.message || '删除失败'
+          Modal.confirm({
+            title: '停止远端失败',
+            content: `${msg}\n\n是否仅删除平台登记（远端进程可能仍存活）？`,
+            okText: '仅删登记',
+            okButtonProps: { danger: true },
+            onOk: async () => {
+              await api.delete(`/sql-executors/${row.id}`, { params: { force: 1 } })
+              message.success('已删除登记')
+              await load()
+            },
+          })
+        } finally {
+          setActingId('')
+        }
       },
     })
   }
@@ -181,20 +248,34 @@ export default function SqlExecutors() {
           },
           {
             title: '操作',
-            width: 220,
-            render: (_, row) => (
-              <Space>
-                <Button size="small" onClick={() => probe(row)}>
-                  探活
-                </Button>
-                <Button size="small" onClick={() => open(row)}>
-                  编辑
-                </Button>
-                <Button size="small" danger onClick={() => remove(row)}>
-                  删除
-                </Button>
-              </Space>
-            ),
+            width: 360,
+            render: (_, row) => {
+              const busy = actingId === row.id
+              const deployed = !!row.host_instance_id
+              return (
+                <Space wrap>
+                  <Button size="small" loading={busy} onClick={() => probe(row)}>
+                    探活
+                  </Button>
+                  <Button size="small" loading={busy} onClick={() => open(row)}>
+                    编辑
+                  </Button>
+                  {deployed ? (
+                    <Button size="small" danger loading={busy} onClick={() => stop(row)}>
+                      停止
+                    </Button>
+                  ) : null}
+                  {deployed ? (
+                    <Button size="small" loading={busy} onClick={() => redeploy(row)}>
+                      重新下发
+                    </Button>
+                  ) : null}
+                  <Button size="small" danger loading={busy} onClick={() => remove(row)}>
+                    删除
+                  </Button>
+                </Space>
+              )
+            },
           },
         ]}
       />

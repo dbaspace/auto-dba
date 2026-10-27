@@ -325,6 +325,8 @@ func Init(e *gin.Engine, d Deps) {
 		secured.PUT("/sql-executors/:id", execURN, d.SQLExec.Update)
 		secured.DELETE("/sql-executors/:id", execURN, d.SQLExec.Delete)
 		secured.POST("/sql-executors/:id/probe", execURN, d.SQLExec.Probe)
+		secured.POST("/sql-executors/:id/stop", execURN, d.SQLExec.Stop)
+		secured.POST("/sql-executors/:id/redeploy", execURN, d.SQLExec.Redeploy)
 	}
 
 	if d.DNS != nil {
@@ -875,6 +877,10 @@ func Init(e *gin.Engine, d Deps) {
 			pg.GET("/sql-executors", d.SQLExec.List)
 			pg.GET("/sql-executors/deploys", d.SQLExec.ListDeploys)
 			pg.POST("/sql-executors/deploy", d.SQLExec.Deploy)
+			pg.DELETE("/sql-executors/:id", d.SQLExec.Delete)
+			pg.POST("/sql-executors/:id/probe", d.SQLExec.Probe)
+			pg.POST("/sql-executors/:id/stop", d.SQLExec.Stop)
+			pg.POST("/sql-executors/:id/redeploy", d.SQLExec.Redeploy)
 		}
 		pg.DELETE("/:id", d.Backup.DeleteAgent)
 		pg.POST("/:id/probe", d.Backup.ProbeAgent)
