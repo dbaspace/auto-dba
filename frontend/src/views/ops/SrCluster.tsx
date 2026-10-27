@@ -3603,7 +3603,7 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
               name="host_instance_ids"
               label="目标主机"
               rules={[{ required: true, type: 'array', min: 1, message: '请选择至少一台主机' }]}
-              extra="须在实例管理登记类型为 host；依赖 terminal.ssh_identity_file。"
+              extra="须在实例管理登记类型为 host；按主机环境（idc）选用 Nacos SSH 密钥档案，未配置则用全局密钥。"
             >
               <Select
                 mode="multiple"

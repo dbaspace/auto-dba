@@ -19,6 +19,8 @@ const (
 	ActionRestart   = "restart"
 	ActionSwitch    = "switchover"
 	ActionParam     = "modify_param"
+	ActionRegister  = "register_platform" // 把云清单登记为平台实例
+	ActionRebind    = "rebind_account"    // 已关联平台实例时改云账号归属
 
 	ReconcileLinked    = "linked"
 	ReconcileCloudOnly = "cloud_only"
@@ -189,6 +191,10 @@ func ImpactOf(action string, beforeCPU, beforeMem, cpu, mem int) (blip bool, tex
 		return true, "修改参数可能触发重启并造成闪断"
 	case ActionCreate:
 		return false, "新建实例，不影响已有实例"
+	case ActionRegister:
+		return false, "审批通过后才会把云实例登记到平台资源"
+	case ActionRebind:
+		return false, "审批通过后才会修改平台实例绑定的云账号"
 	default:
 		return false, ""
 	}

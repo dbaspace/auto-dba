@@ -110,6 +110,7 @@ func Run(cfg *config.Config, configPath string) {
 		SSHUser:            cfg.Terminal.SSHUser,
 		SSHIdentityFile:    cfg.Terminal.SSHIdentityFile,
 		SSHInsecureHostKey: cfg.Terminal.SSHInsecureHostKey,
+		ResolveIdentity:    cfg.Terminal.ResolveSSHIdentity,
 	})
 	cdcOrch := cdc.NewOrchestrator(db, fieldCrypto, cfg.CDC)
 	if n, err := cdcOrch.RecoverInflight(); err != nil {
@@ -136,6 +137,7 @@ func Run(cfg *config.Config, configPath string) {
 		SSHUser:            cfg.Terminal.SSHUser,
 		SSHIdentityFile:    cfg.Terminal.SSHIdentityFile,
 		SSHInsecureHostKey: cfg.Terminal.SSHInsecureHostKey,
+		ResolveIdentity:    cfg.Terminal.ResolveSSHIdentity,
 	})
 	dbDeployEng := dbdeploy.New(db, fieldCrypto, dbdeploy.Config{
 		AgentArtifact:      "deploy/db-agent/bin/db-agent",
@@ -144,6 +146,7 @@ func Run(cfg *config.Config, configPath string) {
 		SSHUser:            cfg.Terminal.SSHUser,
 		SSHIdentityFile:    cfg.Terminal.SSHIdentityFile,
 		SSHInsecureHostKey: cfg.Terminal.SSHInsecureHostKey,
+		ResolveIdentity:    cfg.Terminal.ResolveSSHIdentity,
 		DNSDSN:             cfg.DNS.DSN,
 		DNSNodeUser:        cfg.DNS.NodeUser,
 		DNSNodePassword:    cfg.DNS.NodePassword,
@@ -211,6 +214,7 @@ func Run(cfg *config.Config, configPath string) {
 		MonitorTag:         &handler.MonitorLabelTagHandler{Store: db},
 		FeAdmin:            &handler.FeAdminHandler{Store: db, Secret: fieldCrypto},
 		DsAdmin:            &handler.DsAdminHandler{Store: db, Secret: fieldCrypto},
+		NacosAdmin:         &handler.NacosAdminHandler{Store: db, Secret: fieldCrypto},
 		OSSSettings:        &handler.OSSSettingsHandler{Store: db, Secret: fieldCrypto},
 		OSSUpload:          &handler.OSSUploadHandler{Engine: ossUploadEng},
 		StarRocksWeb:       starRocksWebH,
@@ -294,7 +298,7 @@ func Run(cfg *config.Config, configPath string) {
 			&deps.CDC.Secret, &deps.Migration.Secret, &deps.Flashback.Secret,
 			&deps.Archive.Secret, &deps.Kafka.Secret, &deps.Redis.Secret,
 			&deps.Insight.Secret, &deps.Session.Secret, &deps.FeAdmin.Secret,
-			&deps.DsAdmin.Secret, &deps.OSSSettings.Secret,
+			&deps.DsAdmin.Secret, &deps.NacosAdmin.Secret, &deps.OSSSettings.Secret,
 			&deps.HA.Secret, &deps.Proxy.Secret, &deps.Backup.Secret,
 			&deps.SrCluster.Secret, &deps.DbDeploy.Secret, &deps.Cmdb.Secret,
 			&deps.DCL.Secret, &deps.RBAC.Secret, &deps.Terminal.Secret,

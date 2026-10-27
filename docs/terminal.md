@@ -67,6 +67,7 @@ terminal:
   enabled: true
   ssh_user: sysadmin              # 实例未填 Username 时回退
   ssh_identity_file: config/terminal/id_ed25519
+  # 生产：私钥在 Nacos（ssh_private_key / ssh_key_profiles），见 nacos-config.md
   ssh_host_key_policy: accept-new # accept-new | strict | insecure
   ssh_known_hosts_file: ""        # 空则默认 config/terminal/known_hosts
   scripts_dir: ""                 # 空则默认 scripts/terminal
@@ -77,15 +78,16 @@ terminal:
 | 项 | 说明 |
 |----|------|
 | `enabled` | `false` 时打开终端接口直接拒绝 |
-| `ssh_identity_file` | 平台私钥路径；文件不存在会创建会话失败 |
-| `ssh_private_key` | 可选；Nacos 中的 PEM 或裸 Base64（须 `\|` 块标量且每行缩进）。启动/热更时归一化为 PEM，写入 `config/terminal/.runtime_id_ed25519`（0600）并覆盖 `ssh_identity_file`；见 [nacos-config.md](nacos-config.md)「SSH 私钥」 |
+| `ssh_identity_file` | 全局私钥路径（开发兜底或全局物化结果）；文件不存在且无匹配档案时会话失败 |
+| `ssh_private_key` | 可选；Nacos 全局 PEM/裸 Base64。物化为 `.runtime_id_ed25519`；见 [nacos-config.md](nacos-config.md)「SSH 私钥」 |
+| `ssh_key_profiles` | 按实例 `idc` 选钥的档案列表（`name`/`env_codes`/`ssh_private_key`）；Agent 下发与终端共用 |
 | `ssh_user` | 默认 SSH 用户，默认回退为 `sysadmin` |
 | `scripts_dir` | 含 `node-terminal.sh`：实际执行 `ssh -tt -i <key> user@host` |
 | `max_lifetime_sec` | JWT / 会话生命周期 |
 
 WebSocket 由服务端约每 20 秒发协议层 Ping；SSH 带 `ServerAliveInterval=30`。前面若有 Nginx，须给 `/api/v1/terminal/ws` 配 `Upgrade`/`Connection`，`proxy_read_timeout` 建议 ≥ 120 秒（见 `deploy/nginx.conf.example`）。命令执行中关页会确认提示；浏览器无法禁止切标签，切走后标题会标「命令执行中」。
 
-Backup Agent **SSH 下发**复用同一套 `terminal.ssh_identity_file` / `ssh_user`，密钥与终端共用。
+**Agent / 集群 SSH 下发**（sql-agent、platform-agent、node-agent、db-agent）与 Web 终端共用同一套选钥：按主机实例 `idc` 命中 `ssh_key_profiles`，否则回退全局钥。
 
 ### Agent SSH 下发的主机密钥校验
 

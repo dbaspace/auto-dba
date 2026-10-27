@@ -29,6 +29,7 @@ func (d *DB) ensureCloudSchema() error {
 			regions TEXT NOT NULL DEFAULT '[]',
 			platform_region_ids TEXT NOT NULL DEFAULT '[]',
 			env_ids TEXT NOT NULL DEFAULT '[]',
+			sync_engines TEXT NOT NULL DEFAULT '[]',
 			enabled INTEGER NOT NULL DEFAULT 1,
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL
@@ -162,7 +163,10 @@ func (d *DB) ensureCloudAccountPlatformBindings() error {
 	if err := d.ensureColumnIfMissing("tbl_cloud_accounts", "platform_region_ids", "TEXT NOT NULL DEFAULT '[]'"); err != nil {
 		return err
 	}
-	return d.ensureColumnIfMissing("tbl_cloud_accounts", "env_ids", "TEXT NOT NULL DEFAULT '[]'")
+	if err := d.ensureColumnIfMissing("tbl_cloud_accounts", "env_ids", "TEXT NOT NULL DEFAULT '[]'"); err != nil {
+		return err
+	}
+	return d.ensureColumnIfMissing("tbl_cloud_accounts", "sync_engines", "TEXT NOT NULL DEFAULT '[]'")
 }
 
 // renameLegacyCloudPGTables 去掉历史表名中的 pg 前缀（多引擎共用）。
@@ -259,6 +263,7 @@ type CloudAccount struct {
 	Regions           []string `json:"regions"`              // 云厂商地域，如 ap-beijing
 	PlatformRegionIDs []string `json:"platform_region_ids"`  // 本平台区域 id
 	EnvIDs            []string `json:"env_ids"`              // 本平台环境 id
+	SyncEngines       []string `json:"sync_engines"`         // 定时同步的引擎；空则不参与定时任务
 	Enabled           bool     `json:"enabled"`
 	HasRead           bool     `json:"has_readonly"`
 	HasOperate        bool     `json:"has_operate"`
@@ -296,9 +301,10 @@ func (d *DB) CreateCloudAccount(a *CloudAccount) error {
 	if a.EnvIDs == nil {
 		a.EnvIDs = []string{}
 	}
-	_, err := d.Exec(`INSERT INTO tbl_cloud_accounts(id, tenant_id, vendor, name, regions, platform_region_ids, env_ids, enabled, created_at, updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?)`,
-		a.ID, a.TenantID, a.Vendor, a.Name, encodeJSON(a.Regions), encodeJSON(a.PlatformRegionIDs), encodeJSON(a.EnvIDs), 1, a.CreatedAt, a.UpdatedAt)
+	a.SyncEngines = normalizeSyncEngines(a.SyncEngines)
+	_, err := d.Exec(`INSERT INTO tbl_cloud_accounts(id, tenant_id, vendor, name, regions, platform_region_ids, env_ids, sync_engines, enabled, created_at, updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+		a.ID, a.TenantID, a.Vendor, a.Name, encodeJSON(a.Regions), encodeJSON(a.PlatformRegionIDs), encodeJSON(a.EnvIDs), encodeJSON(a.SyncEngines), 1, a.CreatedAt, a.UpdatedAt)
 	return err
 }
 
@@ -317,13 +323,14 @@ func (d *DB) UpdateCloudAccount(a *CloudAccount) error {
 	if a.EnvIDs == nil {
 		a.EnvIDs = []string{}
 	}
+	a.SyncEngines = normalizeSyncEngines(a.SyncEngines)
 	enabled := 0
 	if a.Enabled {
 		enabled = 1
 	}
 	a.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-	res, err := d.Exec(`UPDATE tbl_cloud_accounts SET name=?, regions=?, platform_region_ids=?, env_ids=?, enabled=?, updated_at=? WHERE id=?`,
-		a.Name, encodeJSON(a.Regions), encodeJSON(a.PlatformRegionIDs), encodeJSON(a.EnvIDs), enabled, a.UpdatedAt, a.ID)
+	res, err := d.Exec(`UPDATE tbl_cloud_accounts SET name=?, regions=?, platform_region_ids=?, env_ids=?, sync_engines=?, enabled=?, updated_at=? WHERE id=?`,
+		a.Name, encodeJSON(a.Regions), encodeJSON(a.PlatformRegionIDs), encodeJSON(a.EnvIDs), encodeJSON(a.SyncEngines), enabled, a.UpdatedAt, a.ID)
 	if err != nil {
 		return err
 	}
@@ -335,7 +342,7 @@ func (d *DB) UpdateCloudAccount(a *CloudAccount) error {
 }
 
 func (d *DB) ListCloudAccounts(tenantID string, onlyEnabled bool) ([]CloudAccount, error) {
-	q := `SELECT id, tenant_id, vendor, name, regions, COALESCE(platform_region_ids,'[]'), COALESCE(env_ids,'[]'), enabled, created_at, updated_at FROM tbl_cloud_accounts WHERE 1=1`
+	q := `SELECT id, tenant_id, vendor, name, regions, COALESCE(platform_region_ids,'[]'), COALESCE(env_ids,'[]'), COALESCE(sync_engines,'[]'), enabled, created_at, updated_at FROM tbl_cloud_accounts WHERE 1=1`
 	var args []any
 	if strings.TrimSpace(tenantID) != "" {
 		q += ` AND tenant_id=?`
@@ -364,9 +371,9 @@ func (d *DB) ListCloudAccounts(tenantID string, onlyEnabled bool) ([]CloudAccoun
 
 func scanCloudAccount(sc interface{ Scan(...any) error }) (CloudAccount, error) {
 	var a CloudAccount
-	var regions, platformRegions, envIDs string
+	var regions, platformRegions, envIDs, syncEngines string
 	var enabled int
-	err := sc.Scan(&a.ID, &a.TenantID, &a.Vendor, &a.Name, &regions, &platformRegions, &envIDs, &enabled, &a.CreatedAt, &a.UpdatedAt)
+	err := sc.Scan(&a.ID, &a.TenantID, &a.Vendor, &a.Name, &regions, &platformRegions, &envIDs, &syncEngines, &enabled, &a.CreatedAt, &a.UpdatedAt)
 	if err != nil {
 		return a, err
 	}
@@ -374,6 +381,7 @@ func scanCloudAccount(sc interface{ Scan(...any) error }) (CloudAccount, error) 
 	_ = json.Unmarshal([]byte(regions), &a.Regions)
 	_ = json.Unmarshal([]byte(platformRegions), &a.PlatformRegionIDs)
 	_ = json.Unmarshal([]byte(envIDs), &a.EnvIDs)
+	_ = json.Unmarshal([]byte(syncEngines), &a.SyncEngines)
 	if a.Regions == nil {
 		a.Regions = []string{}
 	}
@@ -383,7 +391,26 @@ func scanCloudAccount(sc interface{ Scan(...any) error }) (CloudAccount, error) 
 	if a.EnvIDs == nil {
 		a.EnvIDs = []string{}
 	}
+	a.SyncEngines = normalizeSyncEngines(a.SyncEngines)
 	return a, nil
+}
+
+func normalizeSyncEngines(in []string) []string {
+	allow := map[string]bool{"postgres": true, "mysql": true, "redis": true, "host": true}
+	var out []string
+	seen := map[string]bool{}
+	for _, e := range in {
+		e = strings.TrimSpace(e)
+		if !allow[e] || seen[e] {
+			continue
+		}
+		seen[e] = true
+		out = append(out, e)
+	}
+	if out == nil {
+		out = []string{}
+	}
+	return out
 }
 
 func (d *DB) fillCloudAccount(a *CloudAccount) {
@@ -416,7 +443,7 @@ func (d *DB) fillCloudAccount(a *CloudAccount) {
 }
 
 func (d *DB) GetCloudAccount(id string) (*CloudAccount, error) {
-	row := d.QueryRow(`SELECT id, tenant_id, vendor, name, regions, COALESCE(platform_region_ids,'[]'), COALESCE(env_ids,'[]'), enabled, created_at, updated_at FROM tbl_cloud_accounts WHERE id=?`, id)
+	row := d.QueryRow(`SELECT id, tenant_id, vendor, name, regions, COALESCE(platform_region_ids,'[]'), COALESCE(env_ids,'[]'), COALESCE(sync_engines,'[]'), enabled, created_at, updated_at FROM tbl_cloud_accounts WHERE id=?`, id)
 	a, err := scanCloudAccount(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -487,7 +514,7 @@ func (d *DB) UserBoundToCloudAccount(accountID, userID string) (bool, error) {
 }
 
 func (d *DB) FindCloudAccountByName(tenantID, vendor, name string) (*CloudAccount, error) {
-	row := d.QueryRow(`SELECT id, tenant_id, vendor, name, regions, COALESCE(platform_region_ids,'[]'), COALESCE(env_ids,'[]'), enabled, created_at, updated_at FROM tbl_cloud_accounts WHERE tenant_id=? AND vendor=? AND name=?`,
+	row := d.QueryRow(`SELECT id, tenant_id, vendor, name, regions, COALESCE(platform_region_ids,'[]'), COALESCE(env_ids,'[]'), COALESCE(sync_engines,'[]'), enabled, created_at, updated_at FROM tbl_cloud_accounts WHERE tenant_id=? AND vendor=? AND name=?`,
 		tenantID, vendor, name)
 	a, err := scanCloudAccount(row)
 	if err == sql.ErrNoRows {

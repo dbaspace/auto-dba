@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"auto-dba/internal/agentport"
+	"auto-dba/internal/config"
 	"auto-dba/internal/secret"
 	"auto-dba/internal/sshx"
 	"auto-dba/internal/store"
@@ -35,6 +36,22 @@ type DeployOpts struct {
 	SSHIdentityFile string
 	SSHUser         string
 	SSHInsecure     bool
+	// ResolveIdentity 按实例 idc 选钥；Dial 时优先于 SSHIdentityFile
+	ResolveIdentity func(envCode string) string
+}
+
+func resolveSSHIdentity(envCode, fallback string, resolve func(string) string) string {
+	if resolve != nil {
+		if p := strings.TrimSpace(resolve(envCode)); p != "" {
+			return p
+		}
+	}
+	if cfg := config.Live(); cfg != nil {
+		if p := cfg.Terminal.ResolveSSHIdentity(envCode); p != "" {
+			return p
+		}
+	}
+	return strings.TrimSpace(fallback)
 }
 
 const sqlAgentRel = "deploy/sql-agent/bin/sql-agent"
@@ -156,8 +173,8 @@ func StartDeploy(db *store.DB, opts DeployOpts) (string, error) {
 	if !store.IsHostInstanceType(inst.DBType) {
 		return "", fmt.Errorf("仅支持 host 类型实例下发 SQL 执行器")
 	}
-	if strings.TrimSpace(opts.SSHIdentityFile) == "" {
-		return "", fmt.Errorf("未配置 terminal.ssh_identity_file，无法 SSH 下发")
+	if resolveSSHIdentity(inst.IDC, opts.SSHIdentityFile, opts.ResolveIdentity) == "" {
+		return "", fmt.Errorf("未配置 terminal.ssh_identity_file / ssh_key_profiles，无法 SSH 下发")
 	}
 	port := opts.ListenPort
 	if port <= 0 {
@@ -281,13 +298,18 @@ func runDeploy(db *store.DB, deployID string, opts DeployOpts) {
 	if escalate != "" {
 		logf("提权模式: %s", escalate)
 	}
+	identity := resolveSSHIdentity(inst.IDC, opts.SSHIdentityFile, opts.ResolveIdentity)
+	if identity == "" {
+		fail("未配置 terminal.ssh_identity_file / ssh_key_profiles，无法 SSH 下发")
+		return
+	}
 	logf("连接 %s@%s:%d …", sshUser, host, sshPort)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
 	client, err := sshx.Dial(host, sshPort, sshx.Config{
 		User:            sshUser,
-		IdentityFile:    opts.SSHIdentityFile,
+		IdentityFile:    identity,
 		Timeout:         30 * time.Second,
 		InsecureHostKey: opts.SSHInsecure,
 	})
@@ -471,6 +493,7 @@ type StopOpts struct {
 	SSHIdentityFile string
 	SSHUser         string
 	SSHInsecure     bool
+	ResolveIdentity func(envCode string) string
 }
 
 // StopRemote 停掉目标机上的 sql-agent（systemd 禁用并杀进程）。
@@ -486,8 +509,9 @@ func StopRemote(db *store.DB, opts StopOpts) error {
 	if err != nil || inst == nil {
 		return fmt.Errorf("主机实例不存在")
 	}
-	if strings.TrimSpace(opts.SSHIdentityFile) == "" {
-		return fmt.Errorf("未配置 terminal.ssh_identity_file，无法 SSH 停止")
+	identity := resolveSSHIdentity(inst.IDC, opts.SSHIdentityFile, opts.ResolveIdentity)
+	if identity == "" {
+		return fmt.Errorf("未配置 terminal.ssh_identity_file / ssh_key_profiles，无法 SSH 停止")
 	}
 	remoteDir := strings.TrimSpace(opts.RemoteDir)
 	if remoteDir == "" {
@@ -527,7 +551,7 @@ func StopRemote(db *store.DB, opts StopOpts) error {
 	defer cancel()
 	client, err := sshx.Dial(host, sshPort, sshx.Config{
 		User:            sshUser,
-		IdentityFile:    opts.SSHIdentityFile,
+		IdentityFile:    identity,
 		Timeout:         30 * time.Second,
 		InsecureHostKey: opts.SSHInsecure,
 	})
@@ -552,7 +576,8 @@ func DetectSystemdEscalate(db *store.DB, opts StopOpts) string {
 	if err != nil || inst == nil {
 		return ""
 	}
-	if strings.TrimSpace(opts.SSHIdentityFile) == "" {
+	identity := resolveSSHIdentity(inst.IDC, opts.SSHIdentityFile, opts.ResolveIdentity)
+	if identity == "" {
 		return ""
 	}
 	host := strings.TrimSpace(inst.Host)
@@ -577,7 +602,7 @@ func DetectSystemdEscalate(db *store.DB, opts StopOpts) string {
 	defer cancel()
 	client, err := sshx.Dial(host, sshPort, sshx.Config{
 		User:            sshUser,
-		IdentityFile:    opts.SSHIdentityFile,
+		IdentityFile:    identity,
 		Timeout:         20 * time.Second,
 		InsecureHostKey: opts.SSHInsecure,
 	})

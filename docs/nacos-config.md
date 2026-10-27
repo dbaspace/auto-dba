@@ -324,12 +324,39 @@ curl -u 'nacos:密码' \
 
 ## SSH 私钥
 
-- Nacos 字段：`terminal.ssh_private_key`（PEM 正文，或**无头尾的裸 Base64**）
+主机登录私钥**保存在 Nacos**（不进业务库、不做页面上传）。用于：sql-agent / platform-agent / node-agent / db-agent 的 SSH 下发与启停预检，以及 Web 主机终端。
+
+- 全局字段：`terminal.ssh_private_key`（PEM 正文，或**无头尾的裸 Base64**）
+- 按环境档案：`terminal.ssh_key_profiles`（每个档案 `name` + `env_codes` + `ssh_private_key`）；匹配实例 `idc`（大小写不敏感）；未命中回退全局钥
 - 支持格式：`BEGIN OPENSSH PRIVATE KEY`、`BEGIN RSA PRIVATE KEY` / `BEGIN PRIVATE KEY`（PKCS#1/8）、以及对应裸 Base64（OpenSSH 正文以 `openssh-key-v1` 识别）
-- 启动 / 热更时归一化为 PEM，写入 `config/terminal/.runtime_id_ed25519`（`0600`），并设置 `ssh_identity_file`
-- 热更用 PEM 内容指纹判断变更；仅改私钥也会 `nacos watch: applied … sections=[terminal]`
+- 启动 / 热更时归一化为 PEM：全局写入 `config/terminal/.runtime_id_ed25519`（`0600`）；档案写入 `config/terminal/.runtime_<name>`
+- 热更用 PEM 内容指纹判断变更（含档案）；仅改私钥也会 `nacos watch: applied … sections=[terminal]`
+- 同一 `env_code` 不得出现在多个档案；`name` / `env_codes` 必填
 - **带口令的加密私钥暂不支持**热更（请用无口令钥，或 `ssh-keygen -p -N ''` 去口令后再贴）
 - `config/terminal/` 已 gitignore
+
+按环境档案示例：
+
+```yaml
+terminal:
+  ssh_user: sysadmin
+  ssh_private_key: |
+    -----BEGIN OPENSSH PRIVATE KEY-----
+    …全局回退钥…
+  ssh_key_profiles:
+    - name: pobeice
+      env_codes: [pobeice]
+      ssh_private_key: |
+        -----BEGIN OPENSSH PRIVATE KEY-----
+        …
+    - name: cn-shared
+      env_codes: [beijing, test, ai-beijing]
+      ssh_private_key: |
+        -----BEGIN OPENSSH PRIVATE KEY-----
+        …
+```
+
+导出档案公钥：`ssh-keygen -y -f config/terminal/.runtime_pobeice`，写入对应环境主机 `authorized_keys`。
 
 ### 写法与常见报错
 

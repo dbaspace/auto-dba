@@ -42,8 +42,23 @@ type DsAdmin struct {
 	UpdatedAt   string `json:"updated_at"`
 }
 
+type NacosAdmin struct {
+	ID          string `json:"id"`
+	TenantID    string `json:"tenant_id,omitempty"`
+	Environment string `json:"environment"`
+	ConsoleURL  string `json:"console_url"`
+	Username    string `json:"username"`
+	Password    string `json:"password"`
+	PasswordEnc string `json:"-"`
+	CreatedBy   string `json:"created_by,omitempty"`
+	UpdatedBy   string `json:"updated_by,omitempty"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
+}
+
 const feAdminCols = `id, task_name, environment, domain, port, fe_node, username, password_enc, created_by, updated_by, created_at, updated_at`
 const dsAdminCols = `id, environment, login_url, username, password_enc, created_by, updated_by, created_at, updated_at`
+const nacosAdminCols = `id, environment, console_url, username, password_enc, created_by, updated_by, created_at, updated_at`
 
 func maskPassword(enc string) string {
 	if strings.TrimSpace(enc) == "" {
@@ -279,5 +294,126 @@ func (d *DB) UpdateDsAdmin(it *DsAdmin) error {
 
 func (d *DB) DeleteDsAdmin(id string) error {
 	_, err := d.Exec(`DELETE FROM tbl_ds_admin WHERE id=?`, id)
+	return err
+}
+
+func scanNacosAdmin(scanner interface {
+	Scan(dest ...any) error
+}) (*NacosAdmin, error) {
+	var it NacosAdmin
+	if err := scanner.Scan(
+		&it.ID, &it.Environment, &it.ConsoleURL, &it.Username, &it.PasswordEnc,
+		&it.CreatedBy, &it.UpdatedBy, &it.CreatedAt, &it.UpdatedAt,
+	); err != nil {
+		return nil, err
+	}
+	it.Password = maskPassword(it.PasswordEnc)
+	return &it, nil
+}
+
+func (d *DB) ListNacosAdmins(env, keyword string) ([]NacosAdmin, error) {
+	return d.ListNacosAdminsInTenant("", env, keyword)
+}
+
+func (d *DB) ListNacosAdminsInTenant(tenantID, env, keyword string) ([]NacosAdmin, error) {
+	q := `SELECT ` + nacosAdminCols + ` FROM tbl_nacos_admin WHERE 1=1`
+	var args []any
+	q, args = appendTenantFilter(q, args, tenantID)
+	if e := strings.TrimSpace(env); e != "" {
+		q += ` AND environment=?`
+		args = append(args, e)
+	}
+	if kw := strings.TrimSpace(keyword); kw != "" {
+		q += ` AND (environment ILIKE ? OR console_url ILIKE ? OR username ILIKE ?)`
+		like := "%" + kw + "%"
+		args = append(args, like, like, like)
+	}
+	q += ` ORDER BY updated_at DESC, created_at DESC`
+	rows, err := d.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []NacosAdmin
+	for rows.Next() {
+		it, err := scanNacosAdmin(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *it)
+	}
+	return out, rows.Err()
+}
+
+func (d *DB) GetNacosAdmin(id string) (*NacosAdmin, error) {
+	it, err := scanNacosAdmin(d.QueryRow(`SELECT `+nacosAdminCols+` FROM tbl_nacos_admin WHERE id=?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return it, err
+}
+
+func (d *DB) GetNacosAdminInTenant(id, tenantID string) (*NacosAdmin, error) {
+	it, err := d.GetNacosAdmin(id)
+	return ownedInTenant(d, it, err, "tbl_nacos_admin", id, tenantID)
+}
+
+func (d *DB) GetNacosAdminByEnv(env string) (*NacosAdmin, error) {
+	return d.GetNacosAdminByEnvInTenant(env, "")
+}
+
+func (d *DB) GetNacosAdminByEnvInTenant(env, tenantID string) (*NacosAdmin, error) {
+	env = strings.TrimSpace(env)
+	q := `SELECT ` + nacosAdminCols + ` FROM tbl_nacos_admin WHERE environment=?`
+	args := []any{env}
+	q, args = appendTenantFilter(q, args, tenantID)
+	q += ` ORDER BY updated_at DESC LIMIT 1`
+	it, err := scanNacosAdmin(d.QueryRow(q, args...))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return it, err
+}
+
+func (d *DB) CreateNacosAdmin(it *NacosAdmin) error {
+	if it.ID == "" {
+		it.ID = uuid.NewString()
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	it.CreatedAt = now
+	it.UpdatedAt = now
+	it.Environment = strings.TrimSpace(it.Environment)
+	it.ConsoleURL = strings.TrimSpace(it.ConsoleURL)
+	it.Username = strings.TrimSpace(it.Username)
+	_, err := d.Exec(
+		`INSERT INTO tbl_nacos_admin(`+nacosAdminCols+`) VALUES(?,?,?,?,?,?,?,?,?)`,
+		it.ID, it.Environment, it.ConsoleURL, it.Username, it.PasswordEnc,
+		it.CreatedBy, it.UpdatedBy, it.CreatedAt, it.UpdatedAt,
+	)
+	if err != nil {
+		return err
+	}
+	it.Password = maskPassword(it.PasswordEnc)
+	return d.AssignTenantID("tbl_nacos_admin", it.ID, it.TenantID)
+}
+
+func (d *DB) UpdateNacosAdmin(it *NacosAdmin) error {
+	it.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	it.Environment = strings.TrimSpace(it.Environment)
+	it.ConsoleURL = strings.TrimSpace(it.ConsoleURL)
+	it.Username = strings.TrimSpace(it.Username)
+	_, err := d.Exec(
+		`UPDATE tbl_nacos_admin SET environment=?, console_url=?, username=?, password_enc=?, updated_by=?, updated_at=? WHERE id=?`,
+		it.Environment, it.ConsoleURL, it.Username, it.PasswordEnc, it.UpdatedBy, it.UpdatedAt, it.ID,
+	)
+	if err != nil {
+		return err
+	}
+	it.Password = maskPassword(it.PasswordEnc)
+	return nil
+}
+
+func (d *DB) DeleteNacosAdmin(id string) error {
+	_, err := d.Exec(`DELETE FROM tbl_nacos_admin WHERE id=?`, id)
 	return err
 }

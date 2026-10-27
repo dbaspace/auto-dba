@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -365,6 +366,142 @@ func materializeSSHPrivateKey(cfg *Config, configPath string) error {
 	cfg.Terminal.SSHPrivateKey = ""
 	cfg.Terminal.SSHKeyFingerprint = fp
 	return nil
+}
+
+// materializeSSHKeyProfiles 校验 env_codes 唯一，并将各档案私钥物化为 .runtime_<name>。
+func materializeSSHKeyProfiles(cfg *Config, configPath string) error {
+	if cfg == nil {
+		return nil
+	}
+	profiles := cfg.Terminal.SSHKeyProfiles
+	if len(profiles) == 0 {
+		return nil
+	}
+	seenEnv := map[string]string{}
+	seenName := map[string]struct{}{}
+	root := repoRootFromConfigPath(configPath)
+	dir := filepath.Join(root, "config", "terminal")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("创建 terminal 目录: %w", err)
+	}
+	for i := range profiles {
+		p := &profiles[i]
+		name := strings.TrimSpace(p.Name)
+		if name == "" {
+			return fmt.Errorf("ssh_key_profiles[%d]: name 不能为空", i)
+		}
+		safe := sanitizeSSHProfileName(name)
+		if safe == "" {
+			return fmt.Errorf("ssh_key_profiles: name %q 无效", name)
+		}
+		if _, ok := seenName[safe]; ok {
+			return fmt.Errorf("ssh_key_profiles: name %q 重复", name)
+		}
+		seenName[safe] = struct{}{}
+		p.Name = name
+		hasEnv := false
+		for _, code := range p.EnvCodes {
+			k := strings.ToLower(strings.TrimSpace(code))
+			if k == "" {
+				continue
+			}
+			hasEnv = true
+			if prev, ok := seenEnv[k]; ok {
+				return fmt.Errorf("ssh_key_profiles: env_code %q 同时出现在档案 %q 与 %q", code, prev, name)
+			}
+			seenEnv[k] = name
+		}
+		if !hasEnv {
+			return fmt.Errorf("ssh_key_profiles[%q]: env_codes 不能为空", name)
+		}
+		raw := strings.TrimSpace(p.SSHPrivateKey)
+		if raw != "" {
+			pemText, err := normalizeSSHPrivateKeyPEM(raw)
+			if err != nil {
+				return fmt.Errorf("ssh_key_profiles[%q].ssh_private_key: %w", name, err)
+			}
+			fp := sshKeyFingerprint(pemText)
+			path := filepath.Join(dir, ".runtime_"+safe)
+			if prev, err := os.ReadFile(path); err == nil && string(prev) == pemText {
+				p.SSHIdentityFile = path
+				p.SSHPrivateKey = ""
+				p.Fingerprint = fp
+				continue
+			}
+			if err := os.WriteFile(path, []byte(pemText), 0o600); err != nil {
+				return fmt.Errorf("写入 SSH 档案私钥 %s: %w", path, err)
+			}
+			_ = os.Chmod(path, 0o600)
+			p.SSHIdentityFile = path
+			p.SSHPrivateKey = ""
+			p.Fingerprint = fp
+			continue
+		}
+		idFile := strings.TrimSpace(p.SSHIdentityFile)
+		if idFile == "" {
+			return fmt.Errorf("ssh_key_profiles[%q]: 需配置 ssh_private_key 或 ssh_identity_file", name)
+		}
+		if !filepath.IsAbs(idFile) {
+			idFile = filepath.Join(root, idFile)
+			p.SSHIdentityFile = idFile
+		}
+		if st, err := os.Stat(idFile); err != nil || st.IsDir() {
+			return fmt.Errorf("ssh_key_profiles[%q]: ssh_identity_file 不可用: %s", name, idFile)
+		}
+		if b, err := os.ReadFile(idFile); err == nil {
+			p.Fingerprint = sshKeyFingerprint(string(b))
+		}
+	}
+	cfg.Terminal.SSHKeyProfiles = profiles
+	return nil
+}
+
+func sanitizeSSHProfileName(name string) string {
+	var b strings.Builder
+	for _, r := range strings.TrimSpace(name) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	return b.String()
+}
+
+func sshKeyProfilesFingerprintEqual(a, b []SSHKeyProfile) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Name != b[i].Name ||
+			a[i].Fingerprint != b[i].Fingerprint ||
+			a[i].SSHIdentityFile != b[i].SSHIdentityFile ||
+			!stringSliceEqualFoldSorted(a[i].EnvCodes, b[i].EnvCodes) {
+			return false
+		}
+	}
+	return true
+}
+
+func stringSliceEqualFoldSorted(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	aa := append([]string(nil), a...)
+	bb := append([]string(nil), b...)
+	for i := range aa {
+		aa[i] = strings.ToLower(strings.TrimSpace(aa[i]))
+		bb[i] = strings.ToLower(strings.TrimSpace(bb[i]))
+	}
+	sort.Strings(aa)
+	sort.Strings(bb)
+	for i := range aa {
+		if aa[i] != bb[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func repoRootFromConfigPath(configPath string) string {

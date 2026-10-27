@@ -124,6 +124,7 @@ func (t *hotReloadTargets) apply(diff config.ReloadDiff) {
 		t.backup.Cfg.SSHUser = t.cfg.Terminal.SSHUser
 		t.backup.Cfg.SSHIdentityFile = t.cfg.Terminal.SSHIdentityFile
 		t.backup.Cfg.SSHInsecureHostKey = t.cfg.Terminal.SSHInsecureHostKey
+		t.backup.Cfg.ResolveIdentity = t.cfg.Terminal.ResolveSSHIdentity
 		log.Printf("nacos reload: backup 引擎配置已同步")
 	}
 
@@ -131,12 +132,14 @@ func (t *hotReloadTargets) apply(diff config.ReloadDiff) {
 		t.sr.Cfg.SSHUser = t.cfg.Terminal.SSHUser
 		t.sr.Cfg.SSHIdentityFile = t.cfg.Terminal.SSHIdentityFile
 		t.sr.Cfg.SSHInsecureHostKey = t.cfg.Terminal.SSHInsecureHostKey
+		t.sr.Cfg.ResolveIdentity = t.cfg.Terminal.ResolveSSHIdentity
 		log.Printf("nacos reload: srcluster SSH 已同步")
 	}
 	if (diff.Terminal || diff.SSHKey) && t.dbdeploy != nil {
 		t.dbdeploy.Cfg.SSHUser = t.cfg.Terminal.SSHUser
 		t.dbdeploy.Cfg.SSHIdentityFile = t.cfg.Terminal.SSHIdentityFile
 		t.dbdeploy.Cfg.SSHInsecureHostKey = t.cfg.Terminal.SSHInsecureHostKey
+		t.dbdeploy.Cfg.ResolveIdentity = t.cfg.Terminal.ResolveSSHIdentity
 		log.Printf("nacos reload: dbdeploy SSH 已同步")
 	}
 

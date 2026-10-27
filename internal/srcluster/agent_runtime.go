@@ -87,12 +87,13 @@ func (e *Engine) resolveNodeRemoteTarget(a *store.SrAgent) (remoteDir string, li
 }
 
 func (e *Engine) dialNodeHost(hostInstanceID string) (*sshx.Client, *store.Instance, error) {
-	if strings.TrimSpace(e.Cfg.SSHIdentityFile) == "" {
-		return nil, nil, fmt.Errorf("未配置 terminal.ssh_identity_file")
-	}
 	inst, err := e.Store.GetInstance(hostInstanceID)
 	if err != nil || inst == nil {
 		return nil, nil, fmt.Errorf("主机实例不存在")
+	}
+	identity := e.sshIdentityForInstance(inst)
+	if identity == "" {
+		return nil, nil, fmt.Errorf("未配置 terminal.ssh_identity_file / ssh_key_profiles")
 	}
 	host := strings.TrimSpace(inst.Host)
 	if host == "" {
@@ -114,7 +115,7 @@ func (e *Engine) dialNodeHost(hostInstanceID string) (*sshx.Client, *store.Insta
 	}
 	client, err := sshx.Dial(host, sshPort, sshx.Config{
 		User:            sshUser,
-		IdentityFile:    e.Cfg.SSHIdentityFile,
+		IdentityFile:    identity,
 		Timeout:         30 * time.Second,
 		InsecureHostKey: e.Cfg.SSHInsecureHostKey,
 	})

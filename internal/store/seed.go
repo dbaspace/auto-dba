@@ -483,6 +483,8 @@ func defaultMenuIcon(id, path string) string {
 		return "files"
 	case "m-plat-ds":
 		return "histogram"
+	case "m-plat-nacos":
+		return "setting"
 	case "m-plat-sr":
 		return "coin"
 	case "m-plat-term":
@@ -537,6 +539,8 @@ func defaultMenuIcon(id, path string) string {
 		return "coin"
 	case "m-cfg-ds-admin":
 		return "histogram"
+	case "m-cfg-nacos-admin":
+		return "setting"
 	case "m-cfg-scheduled-jobs":
 		return "clock"
 	case "m-cfg-db":
@@ -668,6 +672,7 @@ func (d *DB) seedMenus(now string) error {
 		{"m-plat", "", "平台运维", "", "um.sidebar.platform", "查看平台运维", "grid", 50},
 		{"m-plat-ml", "m-plat", "多语模版", "/ops/multilang", "um.sidebar.ops-multilang", "查看多语模版", "files", 51},
 		{"m-plat-ds", "m-plat", "海豚管理", "/ops/dolphin", "um.sidebar.ops-dolphin", "查看海豚管理", "histogram", 52},
+		{"m-plat-nacos", "m-plat", "Nacos 管理", "/ops/nacos", "um.sidebar.ops-nacos", "查看 Nacos 管理", "setting", 53},
 		{"m-plat-sr", "m-plat", "SR控制台", "/ops/sr", "um.sidebar.ops-sr", "查看 SR 控制台", "coin", 52},
 		{"m-plat-term", "m-plat", "主机终端", "/ops/terminal", "um.sidebar.ops-terminal", "查看主机终端", "monitor", 54},
 		{"m-plat-ha", "m-plat", "高可用服务维护", "/ops/ha", "um.sidebar.ops-ha", "查看高可用服务维护", "safety", 55},
@@ -695,7 +700,8 @@ func (d *DB) seedMenus(now string) error {
 		{"m-cfg-monitor", "m-cfg-obs", "监控目标注册", "/config/monitor-targets", "um.sidebar.config-monitor-targets", "查看监控目标注册", "monitor", 1},
 		{"m-cfg-fe-admin", "m-cfg-obs", "FE管理", "/config/fe-admin", "um.sidebar.config-fe-admin", "查看 FE 管理", "coin", 2},
 		{"m-cfg-ds-admin", "m-cfg-obs", "海豚配置", "/config/ds-admin", "um.sidebar.config-ds-admin", "查看海豚配置", "histogram", 3},
-		{"m-cfg-scheduled-jobs", "m-cfg-obs", "定时任务", "/config/scheduled-jobs", URNSidebarScheduledJobs, "查看平台定时任务", "clock", 4},
+		{"m-cfg-nacos-admin", "m-cfg-obs", "Nacos 配置", "/config/nacos-admin", "um.sidebar.config-nacos-admin", "查看 Nacos 配置", "setting", 4},
+		{"m-cfg-scheduled-jobs", "m-cfg-obs", "定时任务", "/config/scheduled-jobs", URNSidebarScheduledJobs, "查看平台定时任务", "clock", 5},
 		{"m-db-config", "", "资源配置", "", "um.sidebar.db-config", "查看资源配置", "coin", 3},
 		{"m-cfg-inst", "m-db-config", "实例管理", "/config/instances", "um.sidebar.config-instances", "查看实例管理", "monitor", 1},
 		{"m-cfg-db", "m-db-config", "已登记库", "/config/databases", "um.sidebar.config-databases", "查看已登记库", "coin", 2},
@@ -1188,7 +1194,8 @@ func (d *DB) ensureConfigCenterGroups(now string) error {
 		{"m-cfg-monitor", "m-cfg-obs", 1},
 		{"m-cfg-fe-admin", "m-cfg-obs", 2},
 		{"m-cfg-ds-admin", "m-cfg-obs", 3},
-		{"m-cfg-scheduled-jobs", "m-cfg-obs", 4},
+		{"m-cfg-nacos-admin", "m-cfg-obs", 4},
+		{"m-cfg-scheduled-jobs", "m-cfg-obs", 5},
 	}
 	for _, leaf := range leaves {
 		exist, err := d.GetMenu(leaf.id)
@@ -1685,6 +1692,8 @@ func (d *DB) ensureMonitorOpsMenus(now string) error {
 		{"m-cfg-monitor", "m-cfg", "监控目标注册", "/config/monitor-targets", "um.sidebar.config-monitor-targets", "查看监控目标注册", "monitor", 70},
 		{"m-cfg-fe-admin", "m-cfg", "FE管理", "/config/fe-admin", "um.sidebar.config-fe-admin", "查看 FE 管理", "coin", 71},
 		{"m-cfg-ds-admin", "m-cfg", "海豚配置", "/config/ds-admin", "um.sidebar.config-ds-admin", "查看海豚配置", "histogram", 72},
+		{"m-cfg-nacos-admin", "m-cfg", "Nacos 配置", "/config/nacos-admin", "um.sidebar.config-nacos-admin", "查看 Nacos 配置", "setting", 73},
+		{"m-plat-nacos", "m-plat", "Nacos 管理", "/ops/nacos", "um.sidebar.ops-nacos", "查看 Nacos 管理", "setting", 53},
 	}
 	for _, it := range items {
 		m := &Menu{

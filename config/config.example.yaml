@@ -110,6 +110,18 @@ terminal:
   #   -----BEGIN OPENSSH PRIVATE KEY-----
   #   ...
   #   -----END OPENSSH PRIVATE KEY-----
+  # 按环境（实例 idc）选钥；Agent 下发 / 集群部署 / 终端共用。未命中回退上方全局钥。生产在 Nacos 配置。
+  # ssh_key_profiles:
+  #   - name: pobeice
+  #     env_codes: [pobeice]
+  #     ssh_private_key: |
+  #       -----BEGIN OPENSSH PRIVATE KEY-----
+  #       ...
+  #   - name: cn-shared
+  #     env_codes: [beijing, test]
+  #     ssh_private_key: |
+  #       -----BEGIN OPENSSH PRIVATE KEY-----
+  #       ...
   # Agent SSH 下发的主机密钥校验：
   #   accept-new（默认）首次连接自动记录指纹，之后指纹变化才拒绝（同 OpenSSH StrictHostKeyChecking=accept-new）
   #   strict 必须预先登记指纹；insecure 不校验（仅开发）

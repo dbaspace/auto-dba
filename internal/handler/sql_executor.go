@@ -243,26 +243,18 @@ func (h *SQLExecutorHandler) Redeploy(c *gin.Context) {
 	}
 	escalate := sqlexec.DeployPayloadEscalate(dep.Payload)
 	if escalate == "" {
-		escalate = sqlexec.DetectSystemdEscalate(h.Store, sqlexec.StopOpts{
-			HostInstanceID:  dep.HostInstanceID,
-			SSHIdentityFile: h.Cfg.Terminal.SSHIdentityFile,
-			SSHUser:         h.Cfg.Terminal.SSHUser,
-			SSHInsecure:     h.Cfg.Terminal.SSHInsecureHostKey,
-		})
+		escalate = sqlexec.DetectSystemdEscalate(h.Store, h.sqlSSHStopOpts(dep.HostInstanceID, "", 0, ""))
 	}
-	id, err := sqlexec.StartDeploy(h.Store, sqlexec.DeployOpts{
-		HostInstanceID:  dep.HostInstanceID,
-		ListenPort:      dep.ListenPort,
-		RemoteDir:       dep.RemoteDir,
-		Escalate:        escalate,
-		Operator:        middleware.Username(c),
-		Name:            row.Name,
-		EnvCodes:        row.EnvCodes,
-		Secret:          h.Secret,
-		SSHIdentityFile: h.Cfg.Terminal.SSHIdentityFile,
-		SSHUser:         h.Cfg.Terminal.SSHUser,
-		SSHInsecure:     h.Cfg.Terminal.SSHInsecureHostKey,
-	})
+	id, err := sqlexec.StartDeploy(h.Store, h.sqlSSHDeployOpts(sqlexec.DeployOpts{
+		HostInstanceID: dep.HostInstanceID,
+		ListenPort:     dep.ListenPort,
+		RemoteDir:      dep.RemoteDir,
+		Escalate:       escalate,
+		Operator:       middleware.Username(c),
+		Name:           row.Name,
+		EnvCodes:       row.EnvCodes,
+		Secret:         h.Secret,
+	}))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
@@ -282,28 +274,41 @@ func (h *SQLExecutorHandler) loadExecutorDeploy(id string) (*store.SQLExecutor, 
 	return row, dep, err
 }
 
+func (h *SQLExecutorHandler) sqlSSHDeployOpts(base sqlexec.DeployOpts) sqlexec.DeployOpts {
+	if h != nil && h.Cfg != nil {
+		base.SSHIdentityFile = h.Cfg.Terminal.SSHIdentityFile
+		base.SSHUser = h.Cfg.Terminal.SSHUser
+		base.SSHInsecure = h.Cfg.Terminal.SSHInsecureHostKey
+		base.ResolveIdentity = h.Cfg.Terminal.ResolveSSHIdentity
+	}
+	return base
+}
+
+func (h *SQLExecutorHandler) sqlSSHStopOpts(hostID, remoteDir string, listenPort int, escalate string) sqlexec.StopOpts {
+	opts := sqlexec.StopOpts{
+		HostInstanceID: hostID,
+		RemoteDir:      remoteDir,
+		ListenPort:     listenPort,
+		Escalate:       escalate,
+	}
+	if h != nil && h.Cfg != nil {
+		opts.SSHIdentityFile = h.Cfg.Terminal.SSHIdentityFile
+		opts.SSHUser = h.Cfg.Terminal.SSHUser
+		opts.SSHInsecure = h.Cfg.Terminal.SSHInsecureHostKey
+		opts.ResolveIdentity = h.Cfg.Terminal.ResolveSSHIdentity
+	}
+	return opts
+}
+
 func (h *SQLExecutorHandler) stopDeployed(dep *store.BackupAgentDeploy) error {
 	if h.Cfg == nil {
 		return fmt.Errorf("未配置 SSH，无法停止远端")
 	}
 	escalate := sqlexec.DeployPayloadEscalate(dep.Payload)
 	if escalate == "" {
-		escalate = sqlexec.DetectSystemdEscalate(h.Store, sqlexec.StopOpts{
-			HostInstanceID:  dep.HostInstanceID,
-			SSHIdentityFile: h.Cfg.Terminal.SSHIdentityFile,
-			SSHUser:         h.Cfg.Terminal.SSHUser,
-			SSHInsecure:     h.Cfg.Terminal.SSHInsecureHostKey,
-		})
+		escalate = sqlexec.DetectSystemdEscalate(h.Store, h.sqlSSHStopOpts(dep.HostInstanceID, "", 0, ""))
 	}
-	return sqlexec.StopRemote(h.Store, sqlexec.StopOpts{
-		HostInstanceID:  dep.HostInstanceID,
-		RemoteDir:       dep.RemoteDir,
-		ListenPort:      dep.ListenPort,
-		Escalate:        escalate,
-		SSHIdentityFile: h.Cfg.Terminal.SSHIdentityFile,
-		SSHUser:         h.Cfg.Terminal.SSHUser,
-		SSHInsecure:     h.Cfg.Terminal.SSHInsecureHostKey,
-	})
+	return sqlexec.StopRemote(h.Store, h.sqlSSHStopOpts(dep.HostInstanceID, dep.RemoteDir, dep.ListenPort, escalate))
 }
 
 func (h *SQLExecutorHandler) Probe(c *gin.Context) {
@@ -393,19 +398,16 @@ func (h *SQLExecutorHandler) Deploy(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "未配置 SSH，无法下发"})
 		return
 	}
-	id, err := sqlexec.StartDeploy(h.Store, sqlexec.DeployOpts{
-		HostInstanceID:  body.HostInstanceID,
-		ListenPort:      body.ListenPort,
-		RemoteDir:       body.RemoteDir,
-		Escalate:        body.Escalate,
-		Operator:        middleware.Username(c),
-		Name:            name,
-		EnvCodes:        codes,
-		Secret:          h.Secret,
-		SSHIdentityFile: h.Cfg.Terminal.SSHIdentityFile,
-		SSHUser:         h.Cfg.Terminal.SSHUser,
-		SSHInsecure:     h.Cfg.Terminal.SSHInsecureHostKey,
-	})
+	id, err := sqlexec.StartDeploy(h.Store, h.sqlSSHDeployOpts(sqlexec.DeployOpts{
+		HostInstanceID: body.HostInstanceID,
+		ListenPort:     body.ListenPort,
+		RemoteDir:      body.RemoteDir,
+		Escalate:       body.Escalate,
+		Operator:       middleware.Username(c),
+		Name:           name,
+		EnvCodes:       codes,
+		Secret:         h.Secret,
+	}))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return

@@ -1,0 +1,430 @@
+package handler
+
+import (
+	"encoding/json"
+	"fmt"
+	"html"
+	"io"
+	"log"
+	"net"
+	"net/http"
+	"net/url"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/gin-gonic/gin"
+
+	"auto-dba/internal/middleware"
+	"auto-dba/internal/secret"
+	"auto-dba/internal/store"
+)
+
+const (
+	nacosSessionTTL   = 20 * time.Minute
+	nacosProxyTimeout = 30 * time.Second
+	nacosProxyPrefix  = "/api/v1/nacos-proxy/"
+	nacosBodyLimit    = 32 << 20
+)
+
+type nacosCachedSession struct {
+	AccessToken string
+	Username    string
+	GlobalAdmin bool
+	Origin      string // scheme://host:port
+	ConsolePath string // e.g. /next
+	At          time.Time
+}
+
+var (
+	nacosSessions sync.Map
+	nacosHTTP     = &http.Client{
+		Timeout: nacosProxyTimeout,
+		Transport: &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
+			DialContext: (&net.Dialer{
+				Timeout:   10 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			MaxIdleConns:          64,
+			MaxIdleConnsPerHost:   16,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+			ForceAttemptHTTP2:     true,
+		},
+	}
+)
+
+func normalizeNacosConsoleURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	raw = strings.TrimRight(raw, "/")
+	return raw
+}
+
+func nacosProxyEnvPrefix(env string) string {
+	return nacosProxyPrefix + url.PathEscape(strings.TrimSpace(env))
+}
+
+// nacosSplitConsoleURL 从登记的控制台 URL 拆出 origin 与 console path（如 /next）。
+func nacosSplitConsoleURL(consoleURL string) (origin, consolePath string, err error) {
+	u, err := url.Parse(normalizeNacosConsoleURL(consoleURL))
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "", "", fmt.Errorf("控制台地址无效")
+	}
+	origin = u.Scheme + "://" + u.Host
+	path := strings.TrimSuffix(u.Path, "/")
+	if path == "" || path == "/" {
+		consolePath = "/next"
+	} else {
+		consolePath = path
+	}
+	return origin, consolePath, nil
+}
+
+func nacosLogin(origin, username, password string) (accessToken string, globalAdmin bool, err error) {
+	form := url.Values{}
+	form.Set("username", username)
+	form.Set("password", password)
+	candidates := []string{
+		origin + "/v3/auth/user/login",
+		origin + "/v1/auth/login",
+	}
+	var lastErr error
+	for _, loginURL := range candidates {
+		req, e := http.NewRequest(http.MethodPost, loginURL, strings.NewReader(form.Encode()))
+		if e != nil {
+			lastErr = e
+			continue
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		resp, e := nacosHTTP.Do(req)
+		if e != nil {
+			lastErr = e
+			continue
+		}
+		raw, e := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		resp.Body.Close()
+		if e != nil {
+			lastErr = e
+			continue
+		}
+		var parsed struct {
+			AccessToken string `json:"accessToken"`
+			Token       string `json:"token"`
+			GlobalAdmin bool   `json:"globalAdmin"`
+			Message     string `json:"message"`
+			Msg         string `json:"msg"`
+			Error       string `json:"error"`
+		}
+		if json.Unmarshal(raw, &parsed) != nil {
+			lastErr = fmt.Errorf("Nacos 登录返回非 JSON（%s）", loginURL)
+			continue
+		}
+		tok := strings.TrimSpace(parsed.AccessToken)
+		if tok == "" {
+			tok = strings.TrimSpace(parsed.Token)
+		}
+		if tok != "" && resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			return tok, parsed.GlobalAdmin, nil
+		}
+		msg := firstNonEmpty(parsed.Message, parsed.Msg, parsed.Error, strings.TrimSpace(string(raw)))
+		if msg == "" {
+			msg = fmt.Sprintf("HTTP %d", resp.StatusCode)
+		}
+		lastErr = fmt.Errorf("%s", msg)
+		// 404/500 static resource → try next path；403 user not found 也是有效响应，可停止
+		if resp.StatusCode == 403 || strings.Contains(strings.ToLower(msg), "user not found") ||
+			strings.Contains(strings.ToLower(msg), "password") {
+			break
+		}
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("Nacos 登录失败")
+	}
+	return "", false, lastErr
+}
+
+func (h *NacosAdminHandler) loadPlainCredential(env, tenantID string) (*store.NacosAdmin, string, error) {
+	it, err := h.Store.GetNacosAdminByEnvInTenant(env, tenantID)
+	if err != nil {
+		return nil, "", err
+	}
+	if it == nil {
+		return nil, "", fmt.Errorf("该环境未配置 Nacos 控制台")
+	}
+	plain, err := secret.Decrypt(h.Secret, it.PasswordEnc)
+	if err != nil {
+		return nil, "", fmt.Errorf("解密失败")
+	}
+	return it, plain, nil
+}
+
+func (h *NacosAdminHandler) ensureNacosSession(env, tenantID string) (*nacosCachedSession, *store.NacosAdmin, error) {
+	it, plain, err := h.loadPlainCredential(env, tenantID)
+	if err != nil {
+		return nil, nil, err
+	}
+	origin, consolePath, err := nacosSplitConsoleURL(it.ConsoleURL)
+	if err != nil {
+		return nil, it, err
+	}
+	envKey := strings.TrimSpace(tenantID) + "|" + strings.TrimSpace(it.Environment)
+	if envKey == "|" {
+		envKey = strings.TrimSpace(tenantID) + "|" + strings.TrimSpace(env)
+	}
+	if cached, ok := nacosSessions.Load(envKey); ok {
+		s := cached.(*nacosCachedSession)
+		if s.AccessToken != "" && s.Origin == origin && time.Since(s.At) < nacosSessionTTL {
+			return s, it, nil
+		}
+	}
+	tok, admin, err := nacosLogin(origin, it.Username, plain)
+	if err != nil {
+		return nil, it, fmt.Errorf("Nacos 登录失败: %w", err)
+	}
+	next := &nacosCachedSession{
+		AccessToken: tok,
+		Username:    it.Username,
+		GlobalAdmin: admin,
+		Origin:      origin,
+		ConsolePath: consolePath,
+		At:          time.Now(),
+	}
+	nacosSessions.Store(envKey, next)
+	return next, it, nil
+}
+
+// Warm pre-establishes Nacos session so iframe bootstrap skips cold login.
+func (h *NacosAdminHandler) Warm(c *gin.Context) {
+	env := strings.TrimSpace(c.Query("env"))
+	if env == "" {
+		env = strings.TrimSpace(c.Query("environment"))
+	}
+	if env == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "请指定 env"})
+		return
+	}
+	start := time.Now()
+	_, _, err := h.ensureNacosSession(env, middleware.TenantID(c))
+	elapsed := time.Since(start).Milliseconds()
+	if err != nil {
+		log.Printf("nacos_warm env=%s err=%v elapsed_ms=%d", env, err, elapsed)
+		c.JSON(http.StatusBadGateway, gin.H{"message": err.Error(), "elapsed_ms": elapsed})
+		return
+	}
+	log.Printf("nacos_warm env=%s ok elapsed_ms=%d", env, elapsed)
+	c.JSON(http.StatusOK, gin.H{"ok": true, "elapsed_ms": elapsed})
+}
+
+// ConsoleBootstrap returns HTML that seeds token into localStorage and redirects into same-origin proxy.
+func (h *NacosAdminHandler) ConsoleBootstrap(c *gin.Context) {
+	start := time.Now()
+	env := strings.TrimSpace(c.Param("env"))
+	if env == "" {
+		c.Header("Content-Type", "text/html; charset=utf-8")
+		c.String(http.StatusOK, `<!DOCTYPE html><html><body style="font-family:sans-serif;padding:24px;color:#c00">缺少环境参数</body></html>`)
+		return
+	}
+	sess, it, err := h.ensureNacosSession(env, middleware.TenantID(c))
+	if err != nil {
+		fallback := ""
+		if it != nil {
+			fallback = normalizeNacosConsoleURL(it.ConsoleURL)
+		}
+		log.Printf("nacos_console env=%s login_err=%v total_ms=%d", env, err, time.Since(start).Milliseconds())
+		c.Header("Content-Type", "text/html; charset=utf-8")
+		c.String(http.StatusOK, `<!DOCTYPE html><html><body style="font-family:sans-serif;padding:24px">
+<p style="color:#c00">无法代登 Nacos：%s</p>
+%s
+</body></html>`, html.EscapeString(err.Error()), nacosFallbackLinks(fallback))
+		return
+	}
+	state, _ := json.Marshal(map[string]any{
+		"accessToken": sess.AccessToken,
+		"username":    sess.Username,
+		"globalAdmin": sess.GlobalAdmin,
+	})
+	proxyHome := nacosProxyEnvPrefix(env) + sess.ConsolePath + "/#/configurationManagement"
+	openURL := ""
+	if it != nil {
+		openURL = normalizeNacosConsoleURL(it.ConsoleURL) + "/#/configurationManagement"
+	}
+	log.Printf("nacos_console env=%s total_ms=%d", env, time.Since(start).Milliseconds())
+	c.Header("Content-Type", "text/html; charset=utf-8")
+	c.Header("Cache-Control", "no-store")
+	c.String(http.StatusOK, `<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>Nacos Console</title></head>
+<body style="font-family:sans-serif;padding:24px;color:#666">
+正在打开 Nacos 控制台…
+<script>
+(function () {
+  try { localStorage.setItem('token', JSON.stringify(%s)); } catch (e) {}
+  var next = %q;
+  var fallback = %q;
+  try {
+    window.location.replace(next);
+  } catch (e) {
+    if (fallback) window.open(fallback, '_blank');
+  }
+})();
+</script>
+%s
+</body></html>`, string(state), proxyHome, openURL, nacosFallbackLinks(openURL))
+}
+
+func nacosFallbackLinks(consoleURL string) string {
+	if strings.TrimSpace(consoleURL) == "" {
+		return `<p>请先到配置中心「Nacos 配置」补全控制台地址与账号。</p>`
+	}
+	u := html.EscapeString(consoleURL)
+	return fmt.Sprintf(`<p><a href="%s" target="_blank" rel="noreferrer">新窗口打开控制台</a></p>`, u)
+}
+
+func shouldRewriteNacosBody(ctype, pathname string) bool {
+	if strings.Contains(ctype, "text/html") || strings.Contains(ctype, "text/css") ||
+		strings.Contains(ctype, "javascript") || strings.Contains(ctype, "application/json") {
+		return true
+	}
+	return strings.HasSuffix(pathname, ".js") || strings.HasSuffix(pathname, ".css") ||
+		strings.HasSuffix(pathname, ".html") || strings.HasSuffix(pathname, ".json") ||
+		strings.HasSuffix(pathname, ".map")
+}
+
+const nacosEmbedChrome = `<meta http-equiv="Content-Security-Policy" content="frame-ancestors *">
+<style id="auto-dba-nacos-embed">
+html, body { width:100% !important; height:100% !important; margin:0 !important; overflow:auto !important; }
+</style>`
+
+func rewriteNacosBody(raw []byte, ctype, origin, proxyBase string) ([]byte, bool) {
+	isHTML := strings.Contains(ctype, "text/html")
+	text := string(raw)
+	changed := false
+	if origin != "" && strings.Contains(text, origin) {
+		text = strings.ReplaceAll(text, origin, proxyBase)
+		changed = true
+	}
+	if isHTML {
+		for {
+			low := strings.ToLower(text)
+			i := strings.Index(low, `http-equiv="content-security-policy"`)
+			if i < 0 {
+				i = strings.Index(low, `http-equiv='content-security-policy'`)
+			}
+			if i < 0 {
+				break
+			}
+			start := strings.LastIndex(text[:i], "<")
+			end := strings.Index(text[i:], ">")
+			if start < 0 || end < 0 {
+				break
+			}
+			text = text[:start] + text[i+end+1:]
+			changed = true
+		}
+		if !strings.Contains(text, "auto-dba-nacos-embed") {
+			if strings.Contains(text, "</head>") {
+				text = strings.Replace(text, "</head>", nacosEmbedChrome+"</head>", 1)
+			} else {
+				text = insertAfterHeadOpen(text, nacosEmbedChrome)
+			}
+			changed = true
+		}
+	}
+	if !changed {
+		return raw, false
+	}
+	return []byte(text), true
+}
+
+func copyNacosResponseHeaders(dst http.Header, src http.Header) {
+	for k, vs := range src {
+		lk := strings.ToLower(k)
+		if lk == "content-length" || lk == "transfer-encoding" || lk == "x-frame-options" || lk == "content-security-policy" {
+			continue
+		}
+		dst.Del(k)
+		for _, v := range vs {
+			dst.Add(k, v)
+		}
+	}
+}
+
+// Proxy reverse-proxies Nacos console UI/API under same origin with accessToken headers.
+func (h *NacosAdminHandler) Proxy(c *gin.Context) {
+	start := time.Now()
+	env := strings.TrimSpace(c.Param("env"))
+	sess, _, err := h.ensureNacosSession(env, middleware.TenantID(c))
+	if err != nil {
+		c.Header("Content-Type", "text/html; charset=utf-8")
+		c.String(http.StatusBadGateway, `<!DOCTYPE html><html><body style="font-family:sans-serif;padding:24px;color:#c00">%s</body></html>`, html.EscapeString(err.Error()))
+		return
+	}
+	rest := c.Param("filepath")
+	if rest == "" {
+		rest = sess.ConsolePath + "/"
+	}
+	if !strings.HasPrefix(rest, "/") {
+		rest = "/" + rest
+	}
+	target := sess.Origin + rest
+	if q := c.Request.URL.RawQuery; q != "" {
+		target += "?" + q
+	}
+
+	var bodyBytes []byte
+	if c.Request.Body != nil && c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead {
+		bodyBytes, _ = io.ReadAll(io.LimitReader(c.Request.Body, nacosBodyLimit))
+	}
+
+	var rdr io.Reader
+	if bodyBytes != nil {
+		rdr = strings.NewReader(string(bodyBytes))
+	}
+	req, err := http.NewRequestWithContext(c.Request.Context(), c.Request.Method, target, rdr)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"message": "Nacos 代理失败: " + err.Error()})
+		return
+	}
+	if ct := c.GetHeader("Content-Type"); ct != "" {
+		req.Header.Set("Content-Type", ct)
+	}
+	if acc := c.GetHeader("Accept"); acc != "" {
+		req.Header.Set("Accept", acc)
+	}
+	req.Header.Set("Authorization", "Bearer "+sess.AccessToken)
+	req.Header.Set("accessToken", sess.AccessToken)
+
+	upStart := time.Now()
+	resp, err := nacosHTTP.Do(req)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"message": "Nacos 代理失败: " + err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+
+	ctype := resp.Header.Get("Content-Type")
+	proxyBase := nacosProxyEnvPrefix(env)
+	rewrite := shouldRewriteNacosBody(ctype, rest)
+	upMs := time.Since(upStart).Milliseconds()
+
+	if !rewrite {
+		copyNacosResponseHeaders(c.Writer.Header(), resp.Header)
+		c.Status(resp.StatusCode)
+		n, _ := io.Copy(c.Writer, resp.Body)
+		log.Printf("nacos_proxy env=%s path=%s status=%d stream_bytes=%d up_ms=%d total_ms=%d",
+			env, rest, resp.StatusCode, n, upMs, time.Since(start).Milliseconds())
+		return
+	}
+
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, nacosBodyLimit))
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"message": "Nacos 代理读取失败: " + err.Error()})
+		return
+	}
+	rewritten, did := rewriteNacosBody(raw, ctype, sess.Origin, proxyBase)
+	copyNacosResponseHeaders(c.Writer.Header(), resp.Header)
+	c.Data(resp.StatusCode, ctype, rewritten)
+	log.Printf("nacos_proxy env=%s path=%s status=%d bytes=%d rewrite=%v up_ms=%d total_ms=%d",
+		env, rest, resp.StatusCode, len(rewritten), did, upMs, time.Since(start).Milliseconds())
+}

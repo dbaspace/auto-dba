@@ -190,6 +190,16 @@ type ExternalConfig struct {
 	StarRocksFEURL      string `yaml:"starrocks_fe_url"`
 }
 
+// SSHKeyProfile 按环境绑定的 SSH 私钥档案（Nacos terminal.ssh_key_profiles）。
+type SSHKeyProfile struct {
+	Name            string   `yaml:"name"`
+	EnvCodes        []string `yaml:"env_codes"`
+	SSHPrivateKey   string   `yaml:"ssh_private_key,omitempty"`
+	SSHIdentityFile string   `yaml:"ssh_identity_file,omitempty"` // 本地路径或物化后路径
+	// Fingerprint 物化后 PEM 的 SHA-256 hex（不入 YAML）
+	Fingerprint string `yaml:"-"`
+}
+
 // TerminalConfig WebTTY / SSH 终端（迁入 neptune-terminal 精简核心）
 type TerminalConfig struct {
 	Enabled         bool   `yaml:"enabled"`
@@ -203,8 +213,32 @@ type TerminalConfig struct {
 	ScriptsDir         string `yaml:"scripts_dir"`
 	MaxLifetimeSec     int    `yaml:"max_lifetime_sec"`
 	StaticDir          string `yaml:"static_dir"`
+	// SSHKeyProfiles 按实例 idc（环境 code）选用的私钥档案；未命中回退全局钥
+	SSHKeyProfiles []SSHKeyProfile `yaml:"ssh_key_profiles,omitempty"`
 	// SSHKeyFingerprint 物化后 PEM 的 SHA-256 hex（不入 YAML）；供热更 Diff 感知仅改密钥
 	SSHKeyFingerprint string `yaml:"-"`
+}
+
+// ResolveSSHIdentity 按环境 code（实例 idc）返回 SSH 私钥路径；未命中档案则回退全局 ssh_identity_file。
+func (t *TerminalConfig) ResolveSSHIdentity(envCode string) string {
+	if t == nil {
+		return ""
+	}
+	code := strings.ToLower(strings.TrimSpace(envCode))
+	if code != "" {
+		for i := range t.SSHKeyProfiles {
+			p := &t.SSHKeyProfiles[i]
+			for _, c := range p.EnvCodes {
+				if strings.ToLower(strings.TrimSpace(c)) == code {
+					if f := strings.TrimSpace(p.SSHIdentityFile); f != "" {
+						return f
+					}
+					break
+				}
+			}
+		}
+	}
+	return strings.TrimSpace(t.SSHIdentityFile)
 }
 
 func Load(path string) (*Config, error) {
@@ -239,6 +273,9 @@ func Load(path string) (*Config, error) {
 	}
 	applyDefaults(cfg, path)
 	if err := materializeSSHPrivateKey(cfg, path); err != nil {
+		return nil, err
+	}
+	if err := materializeSSHKeyProfiles(cfg, path); err != nil {
 		return nil, err
 	}
 	BindLive(cfg)

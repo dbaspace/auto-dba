@@ -50,7 +50,7 @@ func (s *Service) Heal(ctx context.Context) error {
 	return nil
 }
 
-func (s *Service) healOne(ctx context.Context, inst *store.Instance, pol store.CloudPolicy, cp cloud.Policy, a store.Alert) {
+func (s *Service) healOne(_ context.Context, inst *store.Instance, pol store.CloudPolicy, cp cloud.Policy, a store.Alert) {
 	row, _ := s.DB.GetCloudPostgresByCloudID(inst.CloudVendor, inst.CloudInstanceID)
 	beforeCPU, beforeMem, beforeDisk := 0, 0, 0
 	if row != nil {
@@ -99,16 +99,5 @@ func (s *Service) healOne(ctx context.Context, inst *store.Instance, pol store.C
 		SQLContent: p.JSON(), Description: "告警触发自愈: " + a.Title, Status: store.StatusPending,
 		Submitter: "system", AssignedTo: s.approver(inst.ID),
 	}
-	if err := s.DB.CreateIssue(issue); err != nil {
-		return
-	}
-	if cp.Mode != "auto" {
-		return
-	}
-	if err := s.AttachApproval(issue, "system", "系统按自愈策略自动通过", pol.ID, a.ID); err != nil {
-		return
-	}
-	issue.Status = store.StatusApproved
-	_ = s.DB.UpdateIssueStatus(issue.ID, store.StatusApproved, "")
-	_ = s.Execute(ctx, issue)
+	_ = s.DB.CreateIssue(issue)
 }

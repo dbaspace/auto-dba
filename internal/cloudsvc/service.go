@@ -146,44 +146,94 @@ func (s *Service) SyncAllEngines(ctx context.Context, onlyEngine string) (*SyncR
 	res := &SyncResult{}
 	for i := range accounts {
 		acc := &accounts[i]
-		supported := false
-		for _, eng := range engines {
-			if cloud.Supported(acc.Vendor, eng) {
-				supported = true
-				break
-			}
-		}
-		if !supported {
-			continue
-		}
-		// 无只读密钥：整账号跳过（不按引擎重复报错），健康态仍按引擎记 no_key
-		if _, _, kerr := s.key(acc.ID, cloud.RoleReadonly); errors.Is(kerr, cloud.ErrNoKey) {
-			res.Skipped = append(res.Skipped, acc.Name+" 缺少只读密钥")
-			for _, eng := range engines {
-				if cloud.Supported(acc.Vendor, eng) {
-					s.noteSync(acc, eng, "inventory", "", cloud.ErrNoKey)
-				}
+		picked := enginesForAccount(acc, engines, true)
+		if len(picked) == 0 {
+			if len(acc.SyncEngines) == 0 {
+				res.Skipped = append(res.Skipped, acc.Name+" 未勾选定时同步资源")
 			}
 			continue
 		}
-		for _, eng := range engines {
-			if !cloud.Supported(acc.Vendor, eng) {
-				continue
-			}
-			err := s.SyncAccountEngine(ctx, acc, eng)
-			if err == nil {
-				res.Synced++
-				continue
-			}
-			if errors.Is(err, cloud.ErrNoKey) {
-				// Cred 竞态缺失时仍跳过，不阻断其它账号
-				res.Skipped = append(res.Skipped, acc.Name+" 缺少只读密钥")
-				continue
-			}
-			res.Errors = append(res.Errors, acc.Name+"/"+eng+": "+err.Error())
-		}
+		s.syncPicked(ctx, acc, picked, res)
 	}
 	return res, finalizeSyncResult(res)
+}
+
+// SyncAccounts 手动同步指定账号。不受 sync_engines 限制，只跑传入的引擎。
+func (s *Service) SyncAccounts(ctx context.Context, engine string, accountIDs []string) (*SyncResult, error) {
+	if strings.TrimSpace(engine) == "" {
+		engine = cloud.EnginePostgres
+	}
+	res := &SyncResult{}
+	seen := map[string]bool{}
+	for _, id := range accountIDs {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		acc, err := s.DB.GetCloudAccount(id)
+		if err != nil {
+			return res, err
+		}
+		if acc == nil {
+			res.Skipped = append(res.Skipped, id+" 不存在")
+			continue
+		}
+		if !acc.Enabled {
+			res.Skipped = append(res.Skipped, acc.Name+" 已停用")
+			continue
+		}
+		if !cloud.Supported(acc.Vendor, engine) {
+			res.Skipped = append(res.Skipped, acc.Name+" 不支持该资源")
+			continue
+		}
+		s.syncPicked(ctx, acc, []string{engine}, res)
+	}
+	return res, finalizeSyncResult(res)
+}
+
+func enginesForAccount(acc *store.CloudAccount, want []string, honorSchedule bool) []string {
+	allow := map[string]bool{}
+	if honorSchedule {
+		if len(acc.SyncEngines) == 0 {
+			return nil
+		}
+		for _, e := range acc.SyncEngines {
+			allow[e] = true
+		}
+	}
+	var out []string
+	for _, eng := range want {
+		if honorSchedule && !allow[eng] {
+			continue
+		}
+		if cloud.Supported(acc.Vendor, eng) {
+			out = append(out, eng)
+		}
+	}
+	return out
+}
+
+func (s *Service) syncPicked(ctx context.Context, acc *store.CloudAccount, engines []string, res *SyncResult) {
+	if _, _, kerr := s.key(acc.ID, cloud.RoleReadonly); errors.Is(kerr, cloud.ErrNoKey) {
+		res.Skipped = append(res.Skipped, acc.Name+" 缺少只读密钥")
+		for _, eng := range engines {
+			s.noteSync(acc, eng, "inventory", "", cloud.ErrNoKey)
+		}
+		return
+	}
+	for _, eng := range engines {
+		err := s.SyncAccountEngine(ctx, acc, eng)
+		if err == nil {
+			res.Synced++
+			continue
+		}
+		if errors.Is(err, cloud.ErrNoKey) {
+			res.Skipped = append(res.Skipped, acc.Name+" 缺少只读密钥")
+			continue
+		}
+		res.Errors = append(res.Errors, acc.Name+"/"+eng+": "+err.Error())
+	}
 }
 
 func (s *Service) SyncAccount(ctx context.Context, account *store.CloudAccount) error {
@@ -299,11 +349,16 @@ func (s *Service) AssignAccount(resourceID, accountID, username string) (*store.
 		}
 	}
 	for _, sib := range siblings {
+		if sib.InstanceID != "" {
+			instanceID = sib.InstanceID
+		}
+	}
+	if instanceID != "" {
+		return nil, fmt.Errorf("已关联平台实例，请提交改绑工单")
+	}
+	for _, sib := range siblings {
 		if sib.ID == keepID {
 			continue
-		}
-		if sib.InstanceID != "" && instanceID == "" {
-			instanceID = sib.InstanceID
 		}
 		_ = s.DB.DeleteCloudResource(sib.ID)
 	}
@@ -315,22 +370,13 @@ func (s *Service) AssignAccount(resourceID, accountID, username string) (*store.
 	if keep.TenantID == "" {
 		keep.TenantID = acc.TenantID
 	}
-	if instanceID != "" {
-		keep.InstanceID = instanceID
-	}
+	keep.InstanceID = ""
+	keep.Reconcile = cloud.ReconcileCloudOnly
 	s.bindPlatform(keep, keep)
-	matches, _ := s.DB.InstancesByCloudID(keep.TenantID, keep.Vendor, keep.CloudID)
-	if len(matches) == 1 {
-		_ = s.DB.SetInstanceCloudAccount(matches[0].ID, keep.AccountID)
-		keep.InstanceID = matches[0].ID
-		keep.Reconcile = cloud.ReconcileLinked
-	} else if keep.Reconcile == cloud.ReconcileConflict || keep.Reconcile == "" {
-		if keep.InstanceID != "" {
-			_ = s.DB.SetInstanceCloudAccount(keep.InstanceID, keep.AccountID)
-			keep.Reconcile = cloud.ReconcileLinked
-		} else {
-			keep.Reconcile = cloud.ReconcileCloudOnly
-		}
+	if keep.InstanceID != "" {
+		// 同步对账可能匹配到已有平台实例；改清单账号不得回写平台绑定
+		keep.InstanceID = ""
+		keep.Reconcile = cloud.ReconcileCloudOnly
 	}
 	if err := s.DB.UpdateCloudResourceOwnership(keep.ID, keep.AccountID, keep.InstanceID, keep.Reconcile); err != nil {
 		return nil, err
@@ -368,7 +414,7 @@ func (s *Service) bindPlatform(row *store.CloudInstance, prev *store.CloudInstan
 	}
 	switch cloud.DecideBind(accountOf(matches), row.AccountID, len(matches)) {
 	case cloud.BindFill:
-		_ = s.DB.SetInstanceCloudAccount(matches[0].ID, row.AccountID)
+		// 只标记对账，不把云账号写进平台实例；登记/改绑须工单。
 		row.InstanceID = matches[0].ID
 		row.Reconcile = cloud.ReconcileLinked
 	case cloud.BindKeep:

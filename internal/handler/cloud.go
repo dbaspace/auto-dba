@@ -114,6 +114,7 @@ func (h *CloudHandler) UpdateAccount(c *gin.Context) {
 		Regions           []string `json:"regions"`
 		PlatformRegionIDs []string `json:"platform_region_ids"`
 		EnvIDs            []string `json:"env_ids"`
+		SyncEngines       []string `json:"sync_engines"`
 		Enabled           *bool    `json:"enabled"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -129,6 +130,9 @@ func (h *CloudHandler) UpdateAccount(c *gin.Context) {
 	}
 	if req.EnvIDs != nil {
 		acc.EnvIDs = req.EnvIDs
+	}
+	if req.SyncEngines != nil {
+		acc.SyncEngines = req.SyncEngines
 	}
 	if req.Enabled != nil {
 		acc.Enabled = *req.Enabled
@@ -239,14 +243,25 @@ func (h *CloudHandler) AssignAccount(c *gin.Context) {
 
 func (h *CloudHandler) SyncPostgres(c *gin.Context) {
 	engine := c.Query("engine")
+	var body struct {
+		Engine     string   `json:"engine"`
+		AccountIDs []string `json:"account_ids"`
+	}
+	_ = c.ShouldBindJSON(&body)
 	if engine == "" {
-		var body struct {
-			Engine string `json:"engine"`
-		}
-		_ = c.ShouldBindJSON(&body)
 		engine = body.Engine
 	}
-	res, err := h.Svc.SyncAllEngines(c.Request.Context(), engine)
+	ids := body.AccountIDs
+	if q := strings.TrimSpace(c.Query("account_ids")); q != "" {
+		ids = append(ids, strings.Split(q, ",")...)
+	}
+	var res *cloudsvc.SyncResult
+	var err error
+	if len(ids) > 0 {
+		res, err = h.Svc.SyncAccounts(c.Request.Context(), engine, ids)
+	} else {
+		res, err = h.Svc.SyncAllEngines(c.Request.Context(), engine)
+	}
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error(), "result": res})
 		return

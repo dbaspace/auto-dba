@@ -103,6 +103,9 @@ func MergeRemoteYAML(configPath, remoteContent string) (*Config, error) {
 	if err := materializeSSHPrivateKey(next, configPath); err != nil {
 		return nil, err
 	}
+	if err := materializeSSHKeyProfiles(next, configPath); err != nil {
+		return nil, err
+	}
 	return next, nil
 }
 
@@ -136,7 +139,7 @@ func DiffConfig(old, next *Config) ReloadDiff {
 	d.Flashback = old.Flashback != next.Flashback
 	d.Backup = old.Backup != next.Backup
 	d.External = old.External != next.External
-	d.Terminal = old.Terminal != next.Terminal
+	d.Terminal = !reflect.DeepEqual(old.Terminal, next.Terminal)
 	d.Services = old.Services != next.Services
 	d.Copilot = old.Copilot != next.Copilot
 	d.Notify = !reflect.DeepEqual(old.Notify, next.Notify)
@@ -155,7 +158,8 @@ func DiffConfig(old, next *Config) ReloadDiff {
 		old.Terminal.SSHHostKeyPolicy != next.Terminal.SSHHostKeyPolicy ||
 		old.Terminal.SSHInsecureHostKey != next.Terminal.SSHInsecureHostKey ||
 		old.Terminal.SSHKnownHostsFile != next.Terminal.SSHKnownHostsFile ||
-		old.Terminal.SSHKeyFingerprint != next.Terminal.SSHKeyFingerprint
+		old.Terminal.SSHKeyFingerprint != next.Terminal.SSHKeyFingerprint ||
+		!sshKeyProfilesFingerprintEqual(old.Terminal.SSHKeyProfiles, next.Terminal.SSHKeyProfiles)
 	d.ListenAddr = old.HTTP.Host != next.HTTP.Host || old.HTTP.Port != next.HTTP.Port
 	d.OldListen = fmt.Sprintf("%s:%d", old.HTTP.Host, old.HTTP.Port)
 	d.NewListen = fmt.Sprintf("%s:%d", next.HTTP.Host, next.HTTP.Port)

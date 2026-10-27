@@ -56,6 +56,7 @@ type Deps struct {
 	MonitorTag         *handler.MonitorLabelTagHandler
 	FeAdmin            *handler.FeAdminHandler
 	DsAdmin            *handler.DsAdminHandler
+	NacosAdmin         *handler.NacosAdminHandler
 	OSSSettings        *handler.OSSSettingsHandler
 	OSSUpload          *handler.OSSUploadHandler
 	StarRocksWeb       *handler.StarRocksWebHandler
@@ -1199,6 +1200,18 @@ func Init(e *gin.Engine, d Deps) {
 		ds.DELETE("/:id", d.DsAdmin.Delete)
 		secured.GET("/ds-console/:env", d.DsAdmin.ConsoleBootstrap)
 		secured.Any("/ds-proxy/:env/*filepath", d.DsAdmin.Proxy)
+	}
+	if d.NacosAdmin != nil {
+		na := secured.Group("/nacosadmin")
+		na.GET("", d.NacosAdmin.List)
+		na.POST("", d.NacosAdmin.Create)
+		na.GET("/credential", d.NacosAdmin.Credential)
+		na.GET("/warm", d.NacosAdmin.Warm)
+		na.GET("/:id", d.NacosAdmin.Get)
+		na.PUT("/:id", d.NacosAdmin.Update)
+		na.DELETE("/:id", d.NacosAdmin.Delete)
+		secured.GET("/nacos-console/:env", d.NacosAdmin.ConsoleBootstrap)
+		secured.Any("/nacos-proxy/:env/*filepath", d.NacosAdmin.Proxy)
 	}
 	if d.OSSSettings != nil {
 		oss := secured.Group("/oss-settings")

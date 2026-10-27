@@ -768,6 +768,21 @@ func (d *DB) ensureMonitorRegistryTables() error {
 	if err != nil {
 		return err
 	}
+	_, err = d.db.Exec(`CREATE TABLE IF NOT EXISTS tbl_nacos_admin (
+		id TEXT PRIMARY KEY,
+		environment TEXT NOT NULL DEFAULT '',
+		console_url TEXT NOT NULL DEFAULT '',
+		username TEXT NOT NULL DEFAULT '',
+		password_enc TEXT NOT NULL DEFAULT '',
+		created_by TEXT NOT NULL DEFAULT '',
+		updated_by TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL DEFAULT '',
+		updated_at TEXT NOT NULL DEFAULT '',
+		UNIQUE (environment)
+	)`)
+	if err != nil {
+		return err
+	}
 	_, err = d.db.Exec(`CREATE TABLE IF NOT EXISTS tbl_monitor_label_tags (
 		id TEXT PRIMARY KEY,
 		key TEXT NOT NULL UNIQUE,

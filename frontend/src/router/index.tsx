@@ -24,6 +24,7 @@ import RedisOrder from '../views/ops/RedisOrder'
 import SlotList from '../views/ops/SlotList'
 import Multilang from '../views/ops/Multilang'
 import DolphinOps from '../views/ops/DolphinOps'
+import NacosOps from '../views/ops/NacosOps'
 import SrNodes from '../views/ops/SrNodes'
 import Sessions from '../views/ops/Sessions'
 import SqlInsight from '../views/ops/SqlInsight'
@@ -62,6 +63,7 @@ import Connectors from '../views/config/Connectors'
 import MonitorTargets from '../views/config/MonitorTargets'
 import FeAdmin from '../views/config/FeAdmin'
 import DsAdmin from '../views/config/DsAdmin'
+import NacosAdmin from '../views/config/NacosAdmin'
 import ScheduledJobs from '../views/config/ScheduledJobs'
 import AuthConfig from '../views/config/AuthConfig'
 import ReviewRules from '../views/config/ReviewRules'
@@ -239,6 +241,7 @@ const router = createHashRouter([
       { path: 'database/search/serviceOperations/process', element: <Navigate to="/ops/sessions" replace /> },
       { path: 'ops/multilang', element: <Multilang /> },
       { path: 'ops/dolphin', element: <DolphinOps /> },
+      { path: 'ops/nacos', element: <NacosOps /> },
       { path: 'ops/sr', element: <SrNodes /> },
       { path: 'ops/cluster-deploy', element: <ClusterDeployHub /> },
       { path: 'ops/cluster-deploy/:engine', element: <ClusterDeployEngine /> },
@@ -273,6 +276,7 @@ const router = createHashRouter([
       { path: 'config/monitor-targets', element: <MonitorTargets /> },
       { path: 'config/fe-admin', element: <FeAdmin /> },
       { path: 'config/ds-admin', element: <DsAdmin /> },
+      { path: 'config/nacos-admin', element: <NacosAdmin /> },
       { path: 'config/scheduled-jobs', element: <ScheduledJobs /> },
       { path: 'metadata/database/manage/connector', element: <Navigate to="/config/connectors" replace /> },
       { path: 'config/databases', element: <Databases /> },

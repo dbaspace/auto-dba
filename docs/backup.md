@@ -224,7 +224,7 @@ sequenceDiagram
 
 | 项 | 说明 |
 |----|------|
-| 前置 | 登记 **host** 实例；`terminal.ssh_identity_file`；`backup.agent_artifact`（一体/后端包已含制品；源码环境可 `bash deploy/backup-agent/build.sh`）；`remote_dir` 须对 SSH 用户可写（默认 `/home/sysadmin/auto-dba/platform-agent`，勿用无权限的 `/opt`） |
+| 前置 | 登记 **host** 实例；Nacos `terminal.ssh_private_key`（或按环境 `ssh_key_profiles`，匹配实例 idc）；`backup.agent_artifact`（一体/后端包已含制品；源码环境可 `bash deploy/backup-agent/build.sh`）；`remote_dir` 须对 SSH 用户可写（默认 `/home/sysadmin/auto-dba/platform-agent`，勿用无权限的 `/opt`） |
 | 实现 | `internal/sshx`（Go SSH/SFTP，容器无需 openssh-client）→ 上传二进制 / `start.sh` / unit → 启动 → healthz → 自动 Upsert Agent |
 | API | `GET/POST /platform/agents`（兼容 `/backup/agents`）、`?scope=backup|rdb|ha`；deploy/启停/status 同前缀 |
 | UI | **配置中心 → 平台 Agent**（`/config/agents`）：下发到主机 + 下发记录；备份设置页仅管存储 |

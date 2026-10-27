@@ -805,7 +805,7 @@ export default function PlatformAgent() {
             name="host_instance_id"
             label="目标主机"
             rules={[{ required: true, message: '请选择 host 类型实例' }]}
-            extra="需在「实例管理」中登记类型为 host 的机器，且平台 terminal.ssh_identity_file 可达。"
+            extra="需在「实例管理」中登记类型为 host 的机器；按主机环境（idc）选用 Nacos 中对应 SSH 密钥档案，未配置则用全局密钥。"
           >
             <Select
               showSearch

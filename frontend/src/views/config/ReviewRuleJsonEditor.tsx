@@ -193,7 +193,10 @@ export default function ReviewRuleJsonEditor({ name, value, saving = false, onCh
 
   if (name === 'DDLRequireUpdateTime') {
     const enabled = obj.enabled === undefined ? true : obj.enabled === true
-    const column = asStringList(obj.column).join(',')
+    // 字符串原样展示，避免每键 asStringList+join 吃掉末尾逗号导致无法输入多字段
+    const column = Array.isArray(obj.column)
+      ? asStringList(obj.column).join(',')
+      : String(obj.column ?? '')
     const types = asStringList(obj.allowed_types)
     return (
       <span className="rule-json">
@@ -208,7 +211,7 @@ export default function ReviewRuleJsonEditor({ name, value, saving = false, onCh
             style={{ width: 220 }}
             disabled={saving || !enabled}
             value={column}
-            placeholder="多个用逗号分隔"
+            placeholder="update_time,modify_time"
             onChange={(e) => patch({ column: e.target.value })}
           />
         </label>

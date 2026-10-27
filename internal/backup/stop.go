@@ -250,12 +250,13 @@ exit 0
 
 func (e *Engine) dialAgentHost(hostID string) (*sshx.Client, agentHostMeta, error) {
 	var meta agentHostMeta
-	if strings.TrimSpace(e.Cfg.SSHIdentityFile) == "" {
-		return nil, meta, fmt.Errorf("未配置 terminal.ssh_identity_file，无法 SSH")
-	}
 	inst, err := e.Store.GetInstance(hostID)
 	if err != nil || inst == nil {
 		return nil, meta, fmt.Errorf("绑定主机实例不存在: %s", hostID)
+	}
+	identity := e.sshIdentityForInstance(inst)
+	if identity == "" {
+		return nil, meta, fmt.Errorf("未配置 terminal.ssh_identity_file / ssh_key_profiles，无法 SSH")
 	}
 	host := strings.TrimSpace(inst.Host)
 	if host == "" {
@@ -278,7 +279,7 @@ func (e *Engine) dialAgentHost(hostID string) (*sshx.Client, agentHostMeta, erro
 	meta = agentHostMeta{Host: host, SSHUser: sshUser, SSHPort: sshPort}
 	client, err := sshx.Dial(host, sshPort, sshx.Config{
 		User:            sshUser,
-		IdentityFile:    e.Cfg.SSHIdentityFile,
+		IdentityFile:    identity,
 		Timeout:         30 * time.Second,
 		InsecureHostKey: e.Cfg.SSHInsecureHostKey,
 	})

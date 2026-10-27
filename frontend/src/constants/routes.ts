@@ -77,6 +77,7 @@ export const PAGE_ROUTES = [
   { path: '/ops/sessions', title: '会话管理' },
   { path: '/ops/multilang', title: '多语模版' },
   { path: '/ops/dolphin', title: '海豚管理' },
+  { path: '/ops/nacos', title: 'Nacos 管理' },
   { path: '/ops/sr', title: 'SR控制台' },
   { path: '/ops/cluster-deploy', title: '集群部署' },
   { path: '/ops/cluster-deploy/haproxy', title: 'HAProxy 部署' },
@@ -117,6 +118,7 @@ export const PAGE_ROUTES = [
   { path: '/config/monitor-targets', title: '监控目标注册' },
   { path: '/config/fe-admin', title: 'FE管理' },
   { path: '/config/ds-admin', title: '海豚配置' },
+  { path: '/config/nacos-admin', title: 'Nacos 配置' },
   { path: '/config/scheduled-jobs', title: '定时任务' },
   { path: '/config/databases', title: '已登记库' },
   { path: '/config/domains', title: '域名管理' },
@@ -176,7 +178,7 @@ export function pathAllowed(path: string, allowed: string[]): boolean {
   if (path === '/config/accounts' || path.includes('/manage/account')) return true
   if (path === '/config/review-rules' || path.includes('/manage/goinception')) return true
   if (path === '/config/connectors' || path.startsWith('/metadata/database/manage/connector')) return true
-  if (path === '/config/monitor-targets' || path === '/config/fe-admin' || path === '/config/ds-admin') return true
+  if (path === '/config/monitor-targets' || path === '/config/fe-admin' || path === '/config/ds-admin' || path === '/config/nacos-admin') return true
   if (path.startsWith('/ops/archive') || path.startsWith('/metadata/database/search/archiverManager')) return true
   if (path.startsWith('/ops/backup')) return true
   if (path.startsWith('/k8s/')) return true

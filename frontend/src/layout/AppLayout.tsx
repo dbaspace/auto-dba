@@ -103,7 +103,9 @@ export default function AppLayout() {
   const tabs = useAppSelector((s) => s.tabs.tabs)
   const activeKey = useAppSelector((s) => s.tabs.activeKey)
   const activeTab = useMemo(() => tabs.find((t) => t.key === activeKey), [tabs, activeKey])
-  const hideUserWatermark = (activeTab?.path || location.pathname) === '/ops/dolphin'
+  const hideUserWatermark =
+    (activeTab?.path || location.pathname) === '/ops/dolphin' ||
+    (activeTab?.path || location.pathname) === '/ops/nacos'
 
   useIdleLogout(user?.login_idle_timeout_min as number | undefined)
 

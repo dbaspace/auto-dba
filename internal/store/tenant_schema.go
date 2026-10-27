@@ -109,10 +109,21 @@ func (d *DB) ensureTenantScopedUniques() error {
 	}{
 		{"tbl_oss_settings", "tbl_oss_settings_environment_key", "UNIQUE (environment)", "uq_oss_settings_tenant_env", "tenant_id, environment"},
 		{"tbl_ds_admin", "tbl_ds_admin_environment_key", "UNIQUE (environment)", "uq_ds_admin_tenant_env", "tenant_id, environment"},
+		{"tbl_nacos_admin", "tbl_nacos_admin_environment_key", "UNIQUE (environment)", "uq_nacos_admin_tenant_env", "tenant_id, environment"},
 		{"tbl_fe_admin", "tbl_fe_admin_environment_domain_username_key", "UNIQUE (environment, domain, username)", "uq_fe_admin_tenant_env_domain_user", "tenant_id, environment, domain, username"},
 		{"tbl_cmdb_tag_defs", "tbl_cmdb_tag_defs_key_key", "UNIQUE (key)", "uq_cmdb_tag_defs_tenant_key", "tenant_id, key"},
 	}
 	for _, it := range items {
+		var n int
+		if err := d.db.QueryRow(`
+			SELECT COUNT(1) FROM information_schema.tables
+			WHERE table_schema = 'public' AND table_name = $1
+		`, it.table).Scan(&n); err != nil {
+			return err
+		}
+		if n == 0 {
+			continue
+		}
 		if it.oldName != "" {
 			_, _ = d.db.Exec(`ALTER TABLE ` + it.table + ` DROP CONSTRAINT IF EXISTS ` + it.oldName)
 			_, _ = d.db.Exec(`DROP INDEX IF EXISTS ` + it.oldName)
@@ -205,6 +216,7 @@ var tenantScopedTables = []string{
 	"tbl_oss_settings",
 	"tbl_fe_admin",
 	"tbl_ds_admin",
+	"tbl_nacos_admin",
 	"tbl_kafka_orders",
 	"tbl_connectors",
 	"tbl_migration_tasks",

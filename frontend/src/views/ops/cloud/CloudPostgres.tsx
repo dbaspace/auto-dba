@@ -12,6 +12,8 @@ const actions = [
   { value: 'restart', label: '重启' },
   { value: 'switchover', label: '主备切换' },
   { value: 'modify_param', label: '修改参数' },
+  { value: 'register_platform', label: '同步到平台资源' },
+  { value: 'rebind_account', label: '改绑云账号' },
 ]
 
 const reconcileLabel: Record<string, string> = {
@@ -83,6 +85,9 @@ export default function CloudPostgres({ engine = 'postgres' }: { engine?: string
   const [accounts, setAccounts] = useState<any[]>([])
   const [params, setParams] = useState<any[]>([])
   const [assigning, setAssigning] = useState<string>('')
+  const [syncOpen, setSyncOpen] = useState(false)
+  const [syncIds, setSyncIds] = useState<string[]>([])
+  const [syncing, setSyncing] = useState(false)
   const [form] = Form.useForm()
   const action = Form.useWatch('action', form)
   const beforeDisk = Number(Form.useWatch('before_disk_gb', form) || 0)
@@ -106,8 +111,65 @@ export default function CloudPostgres({ engine = 'postgres' }: { engine?: string
     void loadAccounts().catch(() => {})
   }, [reconcile, engine])
 
+  function reportSync(data: any) {
+    const r = data?.result
+    const tips: string[] = []
+    if (r?.skipped?.length) tips.push(`跳过：${r.skipped.join('；')}`)
+    if (r?.errors?.length) tips.push(`失败：${r.errors.join('；')}`)
+    if (tips.length) message.warning(`已同步 ${r?.synced || 0} 个账号。${tips.join('。')}`)
+    else message.success('已同步')
+  }
+
+  async function runSync(accountIds: string[]) {
+    setSyncing(true)
+    try {
+      const { data } = await api.post('/cloud/postgres/sync', { engine, account_ids: accountIds })
+      reportSync(data)
+      setSyncOpen(false)
+      await load()
+    } catch (e: any) {
+      message.error(e?.response?.data?.message || '同步失败')
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  function clickSync() {
+    const ready = accounts.filter((a) => a.has_readonly)
+    if (ready.length === 0) {
+      message.warning('没有已登记只读密钥的云账号，请到配置中心 · 云账号登记后再同步')
+      return
+    }
+    if (ready.length === 1) {
+      void runSync([ready[0].id])
+      return
+    }
+    setSyncIds([])
+    setSyncOpen(true)
+  }
+
   async function assignAccount(row: any, accountId: string) {
     if (!accountId || accountId === row.account_id) return
+    if (row.instance_id) {
+      setAssigning(row.id)
+      try {
+        await api.post('/cloud/postgres/tickets', {
+          action: 'rebind_account',
+          account_id: accountId,
+          cloud_instance_id: row.cloud_instance_id,
+          vendor: row.vendor || 'tencent',
+          engine,
+          region: row.region,
+          name: row.name,
+        })
+        message.success('已提交改绑工单，审批通过后才会更新平台实例')
+      } catch (e: any) {
+        message.error(e?.response?.data?.message || '提交失败')
+      } finally {
+        setAssigning('')
+      }
+      return
+    }
     setAssigning(row.id)
     try {
       await api.put(`/cloud/postgres/resources/${row.id}/account`, { account_id: accountId })
@@ -192,18 +254,7 @@ export default function CloudPostgres({ engine = 'postgres' }: { engine?: string
     <div style={{ padding: 16 }}>
       <Space style={{ marginBottom: 12 }}>
         <h2 style={{ margin: 0 }}>{title}</h2>
-        <Button onClick={() => api.post('/cloud/postgres/sync', { engine }).then(({ data }) => {
-          const r = data?.result
-          const tips: string[] = []
-          if (r?.skipped?.length) tips.push(`跳过：${r.skipped.join('；')}`)
-          if (r?.errors?.length) tips.push(`失败：${r.errors.join('；')}`)
-          if (tips.length) {
-            message.warning(`已同步 ${r?.synced || 0} 个账号。${tips.join('。')}`)
-          } else {
-            message.success('已同步')
-          }
-          void load()
-        }).catch((e) => message.error(e?.response?.data?.message || '同步失败'))}>立即同步</Button>
+        <Button loading={syncing} onClick={clickSync}>立即同步</Button>
         <Auth urn={Perm.cloud.submit}>
           {(caps.tencent?.create !== false) && <Button type="primary" onClick={() => openAction(null, 'create')}>资源申请</Button>}
         </Auth>
@@ -266,12 +317,30 @@ export default function CloudPostgres({ engine = 'postgres' }: { engine?: string
                   {allow(row, 'restart') && <Button size="small" disabled={row.reconcile === 'conflict'} onClick={() => openAction(row, 'restart')}>重启</Button>}
                   {allow(row, 'switchover') && <Button size="small" disabled={row.reconcile === 'conflict'} onClick={() => openAction(row, 'switchover')}>切换</Button>}
                   {allow(row, 'parameters') && <Button size="small" disabled={row.reconcile === 'conflict'} onClick={() => openAction(row, 'modify_param')}>参数</Button>}
+                  {!row.instance_id && <Button size="small" disabled={row.reconcile === 'conflict'} onClick={() => openAction(row, 'register_platform')}>同步到平台</Button>}
                 </Space>
               </Auth>
             ),
           },
         ]}
       />
+      <Modal
+        title="选择要同步的云账号"
+        open={syncOpen}
+        confirmLoading={syncing}
+        okButtonProps={{ disabled: syncIds.length === 0 }}
+        onCancel={() => setSyncOpen(false)}
+        onOk={() => void runSync(syncIds)}
+      >
+        <Select
+          mode="multiple"
+          style={{ width: '100%' }}
+          placeholder="至少选择一个已登记只读密钥的账号"
+          value={syncIds}
+          onChange={setSyncIds}
+          options={accounts.filter((a) => a.has_readonly).map((a) => ({ value: a.id, label: a.name }))}
+        />
+      </Modal>
       <Modal title="提交云变更工单" open={open} onCancel={() => setOpen(false)} onOk={() => form.submit()} width={720}>
         <Form form={form} layout="vertical" onFinish={async (v) => {
           if (v.action === 'scale_disk' && Number(v.disk_gb) <= Number(v.before_disk_gb || 0)) {
@@ -279,7 +348,7 @@ export default function CloudPostgres({ engine = 'postgres' }: { engine?: string
             return
           }
           await api.post('/cloud/postgres/tickets', { ...v, params: v.param_name ? [{ name: v.param_name, value: v.param_value }] : undefined })
-          message.success('已提交，请到工单列表审批')
+          message.success('已提交工单，审批通过后才会执行')
           setOpen(false)
         }}>
           <Form.Item name="action" label="动作"><Select options={actions} disabled /></Form.Item>

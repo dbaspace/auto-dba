@@ -22,10 +22,28 @@ type Config struct {
 	SSHUser            string
 	SSHIdentityFile    string
 	SSHInsecureHostKey bool
-	DNSDSN             string
-	DNSNodeUser        string
-	DNSNodePassword    string
-	DNSNodeDB          string
+	// ResolveIdentity 按实例 idc 解析私钥路径；为空则回退 SSHIdentityFile
+	ResolveIdentity func(envCode string) string
+	DNSDSN          string
+	DNSNodeUser     string
+	DNSNodePassword string
+	DNSNodeDB       string
+}
+
+func (e *Engine) sshIdentityForInstance(inst *store.Instance) string {
+	if e == nil {
+		return ""
+	}
+	env := ""
+	if inst != nil {
+		env = inst.IDC
+	}
+	if e.Cfg.ResolveIdentity != nil {
+		if p := strings.TrimSpace(e.Cfg.ResolveIdentity(env)); p != "" {
+			return p
+		}
+	}
+	return strings.TrimSpace(e.Cfg.SSHIdentityFile)
 }
 
 // Engine 通用 DB 集群部署编排（对齐 StarRocks 变更单模式）。

@@ -72,8 +72,8 @@ func (e *Engine) StartDeploy(opts DeployOpts) (string, error) {
 		return "", fmt.Errorf("平台 Agent 制品不存在: %s（请先构建 deploy/backup-agent）", artifact)
 	}
 	e.Cfg.AgentArtifact = artifact
-	if strings.TrimSpace(e.Cfg.SSHIdentityFile) == "" {
-		return "", fmt.Errorf("未配置 terminal.ssh_identity_file，无法 SSH 下发")
+	if e.sshIdentityForInstance(inst) == "" {
+		return "", fmt.Errorf("未配置 terminal.ssh_identity_file / ssh_key_profiles，无法 SSH 下发")
 	}
 	groups := NormalizeGroups(opts.EnabledGroups)
 	if len(groups) == 0 {
@@ -135,8 +135,9 @@ func (e *Engine) PreflightHost(ctx context.Context, opts DeployOpts) (*Capabilit
 	if !store.IsHostInstanceType(inst.DBType) {
 		return nil, fmt.Errorf("仅支持 host 类型实例")
 	}
-	if strings.TrimSpace(e.Cfg.SSHIdentityFile) == "" {
-		return nil, fmt.Errorf("未配置 terminal.ssh_identity_file")
+	identity := e.sshIdentityForInstance(inst)
+	if identity == "" {
+		return nil, fmt.Errorf("未配置 terminal.ssh_identity_file / ssh_key_profiles")
 	}
 	host := strings.TrimSpace(inst.Host)
 	if host == "" {
@@ -175,7 +176,7 @@ func (e *Engine) PreflightHost(ctx context.Context, opts DeployOpts) (*Capabilit
 		}
 	}
 	return RunPreflight(ctx, PreflightOpts{
-		Host: host, Port: sshPort, User: sshUser, IdentityFile: e.Cfg.SSHIdentityFile,
+		Host: host, Port: sshPort, User: sshUser, IdentityFile: identity,
 		RemoteDir: remoteDir, Workdir: workdir, EnabledGroups: groups, BackupEngines: engines,
 		Escalate: opts.Escalate, InsecureHostKey: e.Cfg.SSHInsecureHostKey,
 	})
@@ -232,6 +233,11 @@ func (e *Engine) runDeploy(deployID, workdir string, groups, backupEngines []str
 	if sshPort <= 0 {
 		sshPort = 22
 	}
+	identity := e.sshIdentityForInstance(inst)
+	if identity == "" {
+		fail("未配置 terminal.ssh_identity_file / ssh_key_profiles，无法 SSH 下发")
+		return
+	}
 	groups = NormalizeGroups(groups)
 	if len(groups) == 0 {
 		groups = DefaultEnabledGroups()
@@ -257,7 +263,7 @@ func (e *Engine) runDeploy(deployID, workdir string, groups, backupEngines []str
 	// 预检（按勾选能力组）
 	logf("预检目标机工具依赖 …")
 	preRep, preErr := RunPreflight(ctx, PreflightOpts{
-		Host: host, Port: sshPort, User: sshUser, IdentityFile: e.Cfg.SSHIdentityFile,
+		Host: host, Port: sshPort, User: sshUser, IdentityFile: identity,
 		RemoteDir: dep.RemoteDir, Workdir: workdir, EnabledGroups: groups, BackupEngines: backupEngines,
 		Escalate: escalate, InsecureHostKey: e.Cfg.SSHInsecureHostKey,
 	})
@@ -273,7 +279,7 @@ func (e *Engine) runDeploy(deployID, workdir string, groups, backupEngines []str
 
 	client, err := sshx.Dial(host, sshPort, sshx.Config{
 		User:            sshUser,
-		IdentityFile:    e.Cfg.SSHIdentityFile,
+		IdentityFile:    identity,
 		Timeout:         30 * time.Second,
 		InsecureHostKey: e.Cfg.SSHInsecureHostKey,
 	})

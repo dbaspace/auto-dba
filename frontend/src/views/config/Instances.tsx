@@ -1048,7 +1048,7 @@ export default function Instances() {
                 placeholder={hostType ? '默认 sysadmin' : ''}
                 onChange={(e) => setForm((f) => ({ ...f, username: e.target.value }))}
               />
-              {hostType && <div className="type-hint">登录目标机的系统用户；私钥使用平台全局 terminal 配置</div>}
+              {hostType && <div className="type-hint">登录目标机的系统用户；按主机环境（idc）选用 Nacos 对应 SSH 密钥档案，未配置则用全局密钥</div>}
             </div>
           </div>
           {hostType && (

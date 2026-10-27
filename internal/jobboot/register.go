@@ -278,7 +278,7 @@ func RegisterPlatformJobs(r *jobreg.Registry, d Deps) {
 
 	r.Register(jobreg.JobDesc{
 		Key: "cloud.pg.sync", Name: "云资源同步(PG/MySQL/Redis/主机)", Group: "cloud",
-		Description:  "按已启用云账号及其地域同步 PG/MySQL/Redis/主机清单；无只读密钥的账号自动跳过",
+		Description:  "按云账号勾选的引擎与地域同步清单；未勾选或无只读密钥的账号跳过",
 		ScheduleKind: jobreg.ScheduleInterval, DefaultSpec: "5m",
 		Mutable: true, Triggerable: true, Pauseable: true, RiskLevel: jobreg.RiskLow,
 		MisfirePolicy: jobreg.MisfireSkip,

@@ -210,6 +210,81 @@ func TestMaterializeAndDiffFingerprint(t *testing.T) {
 	}
 }
 
+func TestSSHKeyProfilesMaterializeAndResolve(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config", "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfgPath, []byte("app:\n  jwt_secret: x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	globalPEM, _ := testRSAMaterial(t)
+	profPEM, _ := testRSAMaterial(t)
+	sharedPEM, _ := testRSAMaterial(t)
+
+	cfg := &Config{}
+	cfg.Terminal.SSHPrivateKey = globalPEM
+	cfg.Terminal.SSHKeyProfiles = []SSHKeyProfile{
+		{Name: "pobeice", EnvCodes: []string{"pobeice"}, SSHPrivateKey: profPEM},
+		{Name: "cn-shared", EnvCodes: []string{"beijing", "test"}, SSHPrivateKey: sharedPEM},
+	}
+	if err := materializeSSHPrivateKey(cfg, cfgPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := materializeSSHKeyProfiles(cfg, cfgPath); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(cfg.Terminal.SSHKeyProfiles[0].SSHIdentityFile, ".runtime_pobeice") {
+		t.Fatalf("profile path=%q", cfg.Terminal.SSHKeyProfiles[0].SSHIdentityFile)
+	}
+	if cfg.Terminal.SSHKeyProfiles[0].SSHPrivateKey != "" || cfg.Terminal.SSHKeyProfiles[0].Fingerprint == "" {
+		t.Fatal("profile key should be cleared and fingerprinted")
+	}
+	if got := cfg.Terminal.ResolveSSHIdentity("PoBeice"); got != cfg.Terminal.SSHKeyProfiles[0].SSHIdentityFile {
+		t.Fatalf("pobeice resolve=%q", got)
+	}
+	if got := cfg.Terminal.ResolveSSHIdentity("beijing"); got != cfg.Terminal.SSHKeyProfiles[1].SSHIdentityFile {
+		t.Fatalf("beijing resolve=%q", got)
+	}
+	if got := cfg.Terminal.ResolveSSHIdentity("unknown"); got != cfg.Terminal.SSHIdentityFile {
+		t.Fatalf("fallback resolve=%q want %q", got, cfg.Terminal.SSHIdentityFile)
+	}
+
+	dup := &Config{}
+	dup.Terminal.SSHKeyProfiles = []SSHKeyProfile{
+		{Name: "a", EnvCodes: []string{"x"}, SSHPrivateKey: globalPEM},
+		{Name: "b", EnvCodes: []string{"X"}, SSHPrivateKey: profPEM},
+	}
+	if err := materializeSSHKeyProfiles(dup, cfgPath); err == nil {
+		t.Fatal("expected duplicate env rejection")
+	}
+
+	next := &Config{}
+	next.Terminal.SSHPrivateKey = globalPEM
+	next.Terminal.SSHKeyProfiles = []SSHKeyProfile{
+		{Name: "pobeice", EnvCodes: []string{"pobeice"}, SSHPrivateKey: profPEM},
+		{Name: "cn-shared", EnvCodes: []string{"beijing", "test"}, SSHPrivateKey: sharedPEM},
+	}
+	_ = materializeSSHPrivateKey(next, cfgPath)
+	_ = materializeSSHKeyProfiles(next, cfgPath)
+	if DiffConfig(cfg, next).SSHKey {
+		t.Fatal("same profiles should not SSHKey-diff")
+	}
+	next2 := &Config{}
+	next2.Terminal.SSHPrivateKey = globalPEM
+	altPEM, _ := testRSAMaterial(t)
+	next2.Terminal.SSHKeyProfiles = []SSHKeyProfile{
+		{Name: "pobeice", EnvCodes: []string{"pobeice"}, SSHPrivateKey: altPEM},
+		{Name: "cn-shared", EnvCodes: []string{"beijing", "test"}, SSHPrivateKey: sharedPEM},
+	}
+	_ = materializeSSHPrivateKey(next2, cfgPath)
+	_ = materializeSSHKeyProfiles(next2, cfgPath)
+	if !DiffConfig(cfg, next2).SSHKey {
+		t.Fatal("changed profile key should SSHKey-diff")
+	}
+}
+
 func TestMergeRemoteYAML_UnindentedKeyHint(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.yaml")

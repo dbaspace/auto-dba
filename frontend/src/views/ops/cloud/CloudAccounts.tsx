@@ -51,7 +51,7 @@ export default function CloudAccounts() {
   function openCreate() {
     setEditRow(null)
     form.resetFields()
-    form.setFieldsValue({ enabled: true, platform_region_ids: [], env_ids: [] })
+    form.setFieldsValue({ enabled: true, platform_region_ids: [], env_ids: [], sync_engines: [] })
     setCreating(true)
   }
 
@@ -64,6 +64,7 @@ export default function CloudAccounts() {
       regions: (row.regions || []).join(', '),
       platform_region_ids: row.platform_region_ids || [],
       env_ids: row.env_ids || [],
+      sync_engines: row.sync_engines || [],
       enabled: row.enabled !== false,
     })
   }
@@ -134,6 +135,7 @@ export default function CloudAccounts() {
             regions,
             platform_region_ids: v.platform_region_ids || [],
             env_ids: v.env_ids || [],
+            sync_engines: v.sync_engines || [],
             enabled: v.enabled !== false,
             vendor: v.vendor,
           }
@@ -173,6 +175,23 @@ export default function CloudAccounts() {
               allowClear
               placeholder="选择本平台区域"
               options={platformRegions.map((r) => ({ value: r.id, label: r.name || r.code || r.id }))}
+            />
+          </Form.Item>
+          <Form.Item
+            name="sync_engines"
+            label="定时同步资源"
+            extra="定时任务只同步勾选的引擎。不勾选则该账号不参与定时同步。页面上的「立即同步」不受此项限制。"
+          >
+            <Select
+              mode="multiple"
+              allowClear
+              placeholder="选择要定时同步的资源"
+              options={[
+                { value: 'postgres', label: 'PostgreSQL' },
+                { value: 'mysql', label: 'MySQL' },
+                { value: 'redis', label: 'Redis' },
+                { value: 'host', label: '主机' },
+              ]}
             />
           </Form.Item>
           <Form.Item

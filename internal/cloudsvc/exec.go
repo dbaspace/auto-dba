@@ -51,6 +51,9 @@ func (s *Service) Submit(ctx context.Context, p cloud.Payload, submitter, tenant
 	if p.Action == cloud.ActionCreate && !reader.Caps().Create {
 		return nil, fmt.Errorf("%w：资源申请", cloud.ErrUnsupported)
 	}
+	if (p.Action == cloud.ActionRegister || p.Action == cloud.ActionRebind) && strings.TrimSpace(p.CloudID) == "" {
+		return nil, fmt.Errorf("缺少云实例")
+	}
 	if p.Action == cloud.ActionRestart && !reader.Caps().Restart {
 		return nil, fmt.Errorf("%w：重启", cloud.ErrUnsupported)
 	}
@@ -171,6 +174,12 @@ func (s *Service) Execute(ctx context.Context, it *store.Issue) error {
 	if p.TaskID != "" {
 		return s.poll(ctx, it, p, acc, reader)
 	}
+	if p.Action == cloud.ActionRegister || p.Action == cloud.ActionRebind {
+		if err := s.applyPlatformBind(p, acc); err != nil {
+			return s.fail(it, err)
+		}
+		return s.DB.UpdateIssueExec(it.ID, store.StatusExecuted, ticketexec.ToJSON(&ticketexec.Result{Success: true, Message: "已写入平台资源"}))
+	}
 	writer, err := cloud.GetWriter(p.Vendor, p.Engine)
 	if err != nil {
 		return s.fail(it, err)
@@ -249,10 +258,7 @@ func (s *Service) poll(ctx context.Context, it *store.Issue, p cloud.Payload, ac
 				eng = cloud.EnginePostgres
 			}
 			_ = s.SyncAccountEngine(context.Background(), acc, eng)
-			if p.Action == cloud.ActionCreate {
-				s.registerCreated(acc, p)
-			}
-			return s.DB.UpdateIssueExec(it.ID, store.StatusExecuted, ticketexec.ToJSON(&ticketexec.Result{Success: true, Message: "云上任务完成 " + p.TaskID}))
+			return s.DB.UpdateIssueExec(it.ID, store.StatusExecuted, ticketexec.ToJSON(&ticketexec.Result{Success: true, Message: "云上任务完成 " + p.TaskID + "；登记平台实例请另提工单"}))
 		}
 		if task.Status == "failed" {
 			return s.fail(it, fmt.Errorf("云上任务失败: %s", task.Detail))
@@ -268,15 +274,43 @@ func (s *Service) poll(ctx context.Context, it *store.Issue, p cloud.Payload, ac
 	}
 }
 
-func (s *Service) registerCreated(acc *store.CloudAccount, p cloud.Payload) {
-	if p.CloudID == "" {
-		return
-	}
+// applyPlatformBind 仅在工单已审批后调用：登记平台实例或改绑云账号。
+func (s *Service) applyPlatformBind(p cloud.Payload, acc *store.CloudAccount) error {
 	eng := p.Engine
 	if eng == "" {
 		eng = cloud.EnginePostgres
 	}
-	row, _ := s.DB.GetCloudResourceByCloudID(acc.Vendor, eng, p.CloudID)
+	row, err := s.DB.GetCloudResourceByCloudID(acc.Vendor, eng, p.CloudID)
+	if err != nil {
+		return err
+	}
+	if row == nil {
+		return fmt.Errorf("云资源不存在，请先同步清单")
+	}
+	if p.Action == cloud.ActionRebind {
+		row.AccountID = acc.ID
+		if row.InstanceID == "" {
+			matches, _ := s.DB.InstancesByCloudID(row.TenantID, row.Vendor, row.CloudID)
+			if len(matches) == 1 {
+				row.InstanceID = matches[0].ID
+			}
+		}
+		if row.InstanceID == "" {
+			return fmt.Errorf("尚未登记平台实例")
+		}
+		if err := s.DB.SetInstanceCloudAccount(row.InstanceID, acc.ID); err != nil {
+			return err
+		}
+		row.Reconcile = cloud.ReconcileLinked
+		return s.DB.UpdateCloudResourceOwnership(row.ID, row.AccountID, row.InstanceID, row.Reconcile)
+	}
+	if row.InstanceID != "" {
+		if err := s.DB.SetInstanceCloudAccount(row.InstanceID, acc.ID); err != nil {
+			return err
+		}
+		row.Reconcile = cloud.ReconcileLinked
+		return s.DB.UpdateCloudResourceOwnership(row.ID, acc.ID, row.InstanceID, row.Reconcile)
+	}
 	host, port := netFromExtras(row)
 	dbType := eng
 	if eng == cloud.EngineHost {
@@ -288,45 +322,31 @@ func (s *Service) registerCreated(acc *store.CloudAccount, p cloud.Payload) {
 			port = 3306
 		case cloud.EngineRedis:
 			port = 6379
+		case cloud.EngineHost:
+			port = 22
 		default:
 			port = 5432
 		}
 	}
-	region, name := p.Region, p.Name
-	if row != nil {
-		if region == "" {
-			region = row.Region
-		}
-		if name == "" {
-			name = row.Name
-		}
-	}
+	name := row.Name
 	if name == "" {
 		name = p.CloudID
 	}
-	if row != nil && row.InstanceID != "" {
-		if it, _ := s.DB.GetInstance(row.InstanceID); it != nil && strings.TrimSpace(it.Host) == "" && host != "" {
-			it.Host = host
-			if it.Port == 0 {
-				it.Port = port
-			}
-			_ = s.DB.UpdateInstance(it)
-		}
-		return
+	region := row.Region
+	if region == "" {
+		region = p.Region
 	}
 	inst := &store.Instance{
 		TenantID: acc.TenantID, Name: name, DBType: dbType, Host: host, Port: port,
-		Username: p.AdminUser, Password: p.PasswordEnc,
 		CloudVendor: acc.Vendor, CloudInstanceID: p.CloudID, CloudRegion: region, CloudAccountID: acc.ID,
 	}
 	if err := s.DB.CreateInstance(inst); err != nil {
-		return
+		return err
 	}
-	if row != nil {
-		row.InstanceID = inst.ID
-		row.Reconcile = cloud.ReconcileLinked
-		_ = s.DB.UpsertCloudInstance(row)
-	}
+	row.InstanceID = inst.ID
+	row.AccountID = acc.ID
+	row.Reconcile = cloud.ReconcileLinked
+	return s.DB.UpdateCloudResourceOwnership(row.ID, row.AccountID, row.InstanceID, row.Reconcile)
 }
 
 func netFromExtras(row *store.CloudInstance) (string, int) {

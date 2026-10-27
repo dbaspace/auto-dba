@@ -17,6 +17,7 @@ import RedisOrder from '../views/ops/RedisOrder'
 import SlotList from '../views/ops/SlotList'
 import Multilang from '../views/ops/Multilang'
 import DolphinOps from '../views/ops/DolphinOps'
+import NacosOps from '../views/ops/NacosOps'
 import SrNodes from '../views/ops/SrNodes'
 import ClusterDeployHub from '../views/ops/ClusterDeployHub'
 import ClusterDeployEngine from '../views/ops/ClusterDeployEngine'
@@ -59,6 +60,7 @@ import Connectors from '../views/config/Connectors'
 import MonitorTargets from '../views/config/MonitorTargets'
 import FeAdmin from '../views/config/FeAdmin'
 import DsAdmin from '../views/config/DsAdmin'
+import NacosAdmin from '../views/config/NacosAdmin'
 import ScheduledJobs from '../views/config/ScheduledJobs'
 import AuthConfig from '../views/config/AuthConfig'
 import ReviewRules from '../views/config/ReviewRules'
@@ -268,6 +270,7 @@ export function TabPagePanel({ pathname, search }: { pathname: string; search?: 
       <Route path="/database/search/serviceOperations/process" element={<Navigate to="/ops/sessions" replace />} />
       <Route path="/ops/multilang" element={<Multilang />} />
       <Route path="/ops/dolphin" element={<DolphinOps />} />
+      <Route path="/ops/nacos" element={<NacosOps />} />
       <Route path="/ops/sr" element={<SrNodes />} />
       <Route path="/ops/cluster-deploy" element={<ClusterDeployHub />} />
       <Route path="/ops/cluster-deploy/:engine" element={<ClusterDeployEngine />} />
@@ -302,6 +305,7 @@ export function TabPagePanel({ pathname, search }: { pathname: string; search?: 
       <Route path="/config/monitor-targets" element={<MonitorTargets />} />
       <Route path="/config/fe-admin" element={<FeAdmin />} />
       <Route path="/config/ds-admin" element={<DsAdmin />} />
+      <Route path="/config/nacos-admin" element={<NacosAdmin />} />
       <Route path="/config/scheduled-jobs" element={<ScheduledJobs />} />
       <Route path="/metadata/database/manage/connector" element={<Navigate to="/config/connectors" replace />} />
       <Route path="/config/databases" element={<Databases />} />

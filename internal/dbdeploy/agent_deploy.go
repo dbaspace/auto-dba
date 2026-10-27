@@ -76,8 +76,8 @@ func (e *Engine) StartAgentDeploy(opts DeployOpts) (string, error) {
 		return "", fmt.Errorf("DB Agent 制品不存在: %s（请先构建 deploy/db-agent）", artifact)
 	}
 	e.Cfg.AgentArtifact = artifact
-	if strings.TrimSpace(e.Cfg.SSHIdentityFile) == "" {
-		return "", fmt.Errorf("未配置 terminal.ssh_identity_file，无法 SSH 下发")
+	if e.sshIdentityForInstance(inst) == "" {
+		return "", fmt.Errorf("未配置 terminal.ssh_identity_file / ssh_key_profiles，无法 SSH 下发")
 	}
 	port := opts.ListenPort
 	if port <= 0 {
@@ -160,6 +160,11 @@ func (e *Engine) runAgentDeploy(deployID, escalate string) {
 	if sshPort <= 0 {
 		sshPort = 22
 	}
+	identity := e.sshIdentityForInstance(inst)
+	if identity == "" {
+		fail("未配置 terminal.ssh_identity_file / ssh_key_profiles，无法 SSH 下发")
+		return
+	}
 
 	authUser := "agent"
 	authPass := randomToken(16)
@@ -179,7 +184,7 @@ func (e *Engine) runAgentDeploy(deployID, escalate string) {
 
 	client, err := sshx.Dial(host, sshPort, sshx.Config{
 		User:            sshUser,
-		IdentityFile:    e.Cfg.SSHIdentityFile,
+		IdentityFile:    identity,
 		Timeout:         30 * time.Second,
 		InsecureHostKey: e.Cfg.SSHInsecureHostKey,
 	})

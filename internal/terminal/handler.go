@@ -99,7 +99,7 @@ func (h *Handler) Open(c *gin.Context) {
 	if sshPort <= 0 {
 		sshPort = 22
 	}
-	token, _, err := h.createSession(middleware.Username(c), middleware.TenantID(c), inst.ID, host, sshUser, sshPort, req.Envs)
+	token, _, err := h.createSession(middleware.Username(c), middleware.TenantID(c), inst.ID, host, sshUser, sshPort, inst.IDC, req.Envs)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": err.Error()})
 		return
@@ -157,7 +157,7 @@ func (h *Handler) OpenInstance(c *gin.Context) {
 	if sshPort <= 0 {
 		sshPort = 22
 	}
-	token, sessID, err := h.createSession(middleware.Username(c), middleware.TenantID(c), inst.ID, host, sshUser, sshPort, map[string]string{
+	token, sessID, err := h.createSession(middleware.Username(c), middleware.TenantID(c), inst.ID, host, sshUser, sshPort, inst.IDC, map[string]string{
 		"SERVICENAME": strings.TrimSpace(inst.Name),
 		"USERNAME":    middleware.Username(c),
 	})
@@ -181,15 +181,18 @@ func (h *Handler) OpenInstance(c *gin.Context) {
 	})
 }
 
-func (h *Handler) createSession(user, tenantID, instanceID, host, sshUser string, sshPort int, envs map[string]string) (token, sessID string, err error) {
+func (h *Handler) createSession(user, tenantID, instanceID, host, sshUser string, sshPort int, envCode string, envs map[string]string) (token, sessID string, err error) {
 	tc := h.Cfg.Terminal
 	script := filepath.Join(tc.ScriptsDir, "node-terminal.sh")
 	if _, err := os.Stat(script); err != nil {
 		return "", "", fmt.Errorf("终端脚本不存在: %s", script)
 	}
-	key := tc.SSHIdentityFile
+	key := tc.ResolveSSHIdentity(envCode)
+	if key == "" {
+		return "", "", fmt.Errorf("未配置 terminal.ssh_identity_file / ssh_key_profiles")
+	}
 	if _, err := os.Stat(key); err != nil {
-		return "", "", fmt.Errorf("SSH 私钥不存在: %s（请在 config.terminal.ssh_identity_file 配置）", key)
+		return "", "", fmt.Errorf("SSH 私钥不存在: %s（请在 Nacos terminal.ssh_private_key / ssh_key_profiles 配置）", key)
 	}
 	if strings.TrimSpace(sshUser) == "" {
 		sshUser = tc.SSHUser

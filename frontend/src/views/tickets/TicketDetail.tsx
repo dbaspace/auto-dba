@@ -273,7 +273,6 @@ export default function TicketDetail() {
       const port = Number(inst?.port || 0)
       return [
         { key: 'reason', label: '原因', value: it.description || '-' },
-        { key: 'created', label: '申请时间', value: fmtTime(it.created_at) },
         { key: 'env', label: '环境', value: dbEnv || '-' },
         { key: 'db_type', label: '数据库类型', kind: 'type-tag', value: dbType || '-' },
         {
@@ -283,14 +282,14 @@ export default function TicketDetail() {
           value: { domain, name, host, port },
         },
         { key: 'db', label: '数据库', kind: 'db-tag', value: it.db_name || '-' },
-        { key: 'approver', label: '指定审批人', value: it.assigned_to || '-' },
+        { key: 'sql', label: '执行SQL', kind: 'sql', value: it.sql_content || '' },
         {
           key: 'schedule',
           label: 'SQL执行时间',
           kind: 'schedule',
           value: it.scheduled_at ? `定时 ${fmtTime(it.scheduled_at)}` : '审批完立即执行',
         },
-        { key: 'sql', label: '执行SQL', kind: 'sql', span: 2, value: it.sql_content || '' },
+        { key: 'created', label: '申请时间', value: fmtTime(it.created_at) },
       ]
     }
     const isResourceApply = it.issue_type === 'resource_apply'
@@ -1444,11 +1443,7 @@ export default function TicketDetail() {
 
           <section className="review-main">
             <div className="sec-title">申请信息</div>
-            <Descriptions
-              column={item?.issue_type === 'dml' ? { xs: 1, sm: 1, xl: 2 } : 1}
-              bordered
-              className="apply-desc"
-            >
+            <Descriptions column={1} bordered className="apply-desc">
               {applyFields.map((f) => (
                 <Descriptions.Item key={f.key} label={f.label} span={f.span}>
                   {f.kind === 'type-tag' ? (
