@@ -27,13 +27,13 @@ KeePlus（进程 `auto-dba`）支持多种打包方式。**构建在有 Node 18+
 
 一体包与后端包解压后工作目录须为**包根**（存在 `deploy/node-agent/bin/node-agent`、`deploy/sql-agent/bin/sql-agent` 等），集群部署和 SQL 执行器 SSH 下发无需再本机构建。
 
-可选环境变量：`GOOS` `GOARCH`（默认 `linux`/`amd64`）、`STAMP`（默认时间戳；发版用 `STAMP=v1.12.47`）、`IMAGE_TAG`、`SKIP_PNPM_INSTALL=1`（已有 `node_modules` 时）。
+可选环境变量：`GOOS` `GOARCH`（默认 `linux`/`amd64`）、`STAMP`（默认时间戳；发版用 `STAMP=v1.12.48`）、`IMAGE_TAG`、`SKIP_PNPM_INSTALL=1`（已有 `node_modules` 时）。
 
 ```bash
-STAMP=v1.12.47 ./scripts/pack_release.sh all
-STAMP=v1.12.47 ./scripts/pack_release.sh backend
-STAMP=v1.12.47 ./scripts/pack_release.sh frontend
-IMAGE_TAG=auto-dba:v1.12.47 ./scripts/pack_release.sh docker
+STAMP=v1.12.48 ./scripts/pack_release.sh all
+STAMP=v1.12.48 ./scripts/pack_release.sh backend
+STAMP=v1.12.48 ./scripts/pack_release.sh frontend
+IMAGE_TAG=auto-dba:v1.12.48 ./scripts/pack_release.sh docker
 ```
 
 ## 发布到 GitHub Release（固定流程）
@@ -46,13 +46,13 @@ IMAGE_TAG=auto-dba:v1.12.47 ./scripts/pack_release.sh docker
 # 已 push 的提交 + 写好 docs/changelog-vX.Y.Z.md 后：
 
 # 推荐：打包 + 打 tag + 创建 Release（一体包）
-PACK=1 ./scripts/publish_github_release.sh v1.12.47
+PACK=1 ./scripts/publish_github_release.sh v1.12.48
 
-# 已有 dist/*-v1.12.47.tgz 时只发版
-./scripts/publish_github_release.sh v1.12.47
+# 已有 dist/*-v1.12.48.tgz 时只发版
+./scripts/publish_github_release.sh v1.12.48
 
 # 发版前顺带删若干旧 Release（不删受仓库 Rules 保护的 tag）
-DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12.47
+DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12.48
 ```
 
 前提：本机能 `git push origin HEAD`；已安装 `gh`。若 Keychain 无凭据，先手动 push 一次或导出 `GH_TOKEN=...`。
@@ -61,7 +61,8 @@ DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12
 
 | 版本 | 要点 |
 |------|------|
-| [v1.12.47](changelog-v1.12.47.md) | **当前推荐**。Nacos 控制台代登；按环境 SSH 密钥档案；云资源与 Agent 下发增强 |
+| [v1.12.48](changelog-v1.12.48.md) | **当前推荐**。已有库幂等补齐 Nacos 表与侧栏菜单 |
+| [v1.12.47](changelog-v1.12.47.md) | Nacos 控制台代登；按环境 SSH 密钥档案；云资源与 Agent 下发增强 |
 | [v1.12.46](changelog-v1.12.46.md) | 修复 PostgreSQL DML 占死连接导致不落库；执行器可停远端与重新下发 |
 | [v1.12.45](changelog-v1.12.45.md) | 客户端访问授权与云资源；工单远程进度细化；安装包仍带 sql-agent |
 | [v1.12.44](changelog-v1.12.44.md) | 下发 SQL 执行器直接使用包内 sql-agent，不再在生产机编译 |

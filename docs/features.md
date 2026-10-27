@@ -206,7 +206,7 @@ Client Secret（及 LDAP Bind 密码）用字段加密密钥落库（优先 `app
 |------|------|------|
 | 多语模版 | `/ops/multilang` | 多语言模版任务的创建与列表 |
 | 海豚管理 | `/ops/dolphin` | 按环境代登 DolphinScheduler，同源 iframe 嵌入控制台 |
-| Nacos 管理 | `/ops/nacos` | 按环境代登 Nacos 控制台（配置中心「Nacos 配置」录入地址与账号），同源 iframe 嵌入；默认打开配置管理 |
+| Nacos 管理 | `/ops/nacos` | 按环境代登 Nacos 控制台（配置中心「Nacos 配置」录入地址与账号），同源 iframe 嵌入；默认打开配置管理。已有库启动时会幂等补齐表与菜单 |
 | SR 控制台 | `/ops/sr` | **仅**检查 StarRocks FE 管理端是否可达并打开控制台 |
 | 集群部署 | `/ops/cluster-deploy` | Hub 由 EngineRegistry 驱动：DB/OLAP 自建装机与登记；**接入层代理** HAProxy/Nginx/LVS（发行版包 + **Keepalived VIP**，VIP 占用校验）。StarRocks 的 FE/BE 软件根和 BE 数据目录未在集群或节点填写时，用全局参数 `sr_fe_software_base`、`sr_be_software_base`、`sr_be_data_root`；BE 软件根不回退到 FE。详见 [db-cluster.md](db-cluster.md)、[proxy.md](proxy.md)、[sr-cluster.md](sr-cluster.md)。 |
 | 主机终端 | `/ops/terminal` | 对类型为主机的实例打开 Web SSH。密钥布局、登记与排障见 [主机终端](terminal.md)。 |

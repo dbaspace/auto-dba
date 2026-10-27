@@ -697,6 +697,23 @@ func (d *DB) ensureOSSSettingsTable() error {
 	return err
 }
 
+// ensureNacosAdminTable 平台运维 Nacos 控制台代登凭据（幂等，供 migrateFast skip 路径调用）。
+func (d *DB) ensureNacosAdminTable() error {
+	_, err := d.db.Exec(`CREATE TABLE IF NOT EXISTS tbl_nacos_admin (
+		id TEXT PRIMARY KEY,
+		environment TEXT NOT NULL DEFAULT '',
+		console_url TEXT NOT NULL DEFAULT '',
+		username TEXT NOT NULL DEFAULT '',
+		password_enc TEXT NOT NULL DEFAULT '',
+		created_by TEXT NOT NULL DEFAULT '',
+		updated_by TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL DEFAULT '',
+		updated_at TEXT NOT NULL DEFAULT '',
+		UNIQUE (environment)
+	)`)
+	return err
+}
+
 func (d *DB) ensureMonitorRegistryTables() error {
 	_, err := d.db.Exec(`CREATE TABLE IF NOT EXISTS tbl_monitor_job (
 		id TEXT PRIMARY KEY,
@@ -768,19 +785,7 @@ func (d *DB) ensureMonitorRegistryTables() error {
 	if err != nil {
 		return err
 	}
-	_, err = d.db.Exec(`CREATE TABLE IF NOT EXISTS tbl_nacos_admin (
-		id TEXT PRIMARY KEY,
-		environment TEXT NOT NULL DEFAULT '',
-		console_url TEXT NOT NULL DEFAULT '',
-		username TEXT NOT NULL DEFAULT '',
-		password_enc TEXT NOT NULL DEFAULT '',
-		created_by TEXT NOT NULL DEFAULT '',
-		updated_by TEXT NOT NULL DEFAULT '',
-		created_at TEXT NOT NULL DEFAULT '',
-		updated_at TEXT NOT NULL DEFAULT '',
-		UNIQUE (environment)
-	)`)
-	if err != nil {
+	if err := d.ensureNacosAdminTable(); err != nil {
 		return err
 	}
 	_, err = d.db.Exec(`CREATE TABLE IF NOT EXISTS tbl_monitor_label_tags (

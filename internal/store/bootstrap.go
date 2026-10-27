@@ -102,6 +102,10 @@ func (d *DB) migrateFast() error {
 			if err := d.ensureJobRegTables(); err != nil {
 				return err
 			}
+			// Nacos 控制台凭据表须在 skip 路径幂等补齐
+			if err := d.ensureNacosAdminTable(); err != nil {
+				return err
+			}
 			log.Printf("migrate: skip (schema_version=%s) in %s", SchemaVersion, time.Since(t0).Round(time.Millisecond))
 			return nil
 		}
@@ -171,6 +175,14 @@ func (d *DB) seedFast() error {
 				return err
 			}
 			if err := d.ensureSqlInsightActionMenus(now); err != nil {
+				return err
+			}
+			// Nacos 配置 / Nacos 管理菜单须在 skip 路径幂等补齐，否则已有库看不到侧栏入口。
+			// 先 Ensure 叶子（含 Nacos），再 ensure 配置中心分组把监控运维叶子统一挂到 m-cfg-obs。
+			if err := d.ensureMonitorOpsMenus(now); err != nil {
+				return err
+			}
+			if err := d.ensureConfigCenterGroups(now); err != nil {
 				return err
 			}
 			if err := d.SyncDefaultTenantMemberships(); err != nil {

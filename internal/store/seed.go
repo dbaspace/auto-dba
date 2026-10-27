@@ -1689,10 +1689,12 @@ func (d *DB) ensureConnectorMenu(now string) error {
 
 func (d *DB) ensureMonitorOpsMenus(now string) error {
 	items := []seedMenu{
-		{"m-cfg-monitor", "m-cfg", "监控目标注册", "/config/monitor-targets", "um.sidebar.config-monitor-targets", "查看监控目标注册", "monitor", 70},
-		{"m-cfg-fe-admin", "m-cfg", "FE管理", "/config/fe-admin", "um.sidebar.config-fe-admin", "查看 FE 管理", "coin", 71},
-		{"m-cfg-ds-admin", "m-cfg", "海豚配置", "/config/ds-admin", "um.sidebar.config-ds-admin", "查看海豚配置", "histogram", 72},
-		{"m-cfg-nacos-admin", "m-cfg", "Nacos 配置", "/config/nacos-admin", "um.sidebar.config-nacos-admin", "查看 Nacos 配置", "setting", 73},
+		// 配置中心叶子统一挂 m-cfg-obs；ensureConfigCenterGroups 会再校正 sort。
+		// 勿挂 m-cfg，否则 EnsureMenu 会覆盖分组归属，Nacos 与海豚/FE 分裂到不同 Flyout 分区。
+		{"m-cfg-monitor", "m-cfg-obs", "监控目标注册", "/config/monitor-targets", "um.sidebar.config-monitor-targets", "查看监控目标注册", "monitor", 1},
+		{"m-cfg-fe-admin", "m-cfg-obs", "FE管理", "/config/fe-admin", "um.sidebar.config-fe-admin", "查看 FE 管理", "coin", 2},
+		{"m-cfg-ds-admin", "m-cfg-obs", "海豚配置", "/config/ds-admin", "um.sidebar.config-ds-admin", "查看海豚配置", "histogram", 3},
+		{"m-cfg-nacos-admin", "m-cfg-obs", "Nacos 配置", "/config/nacos-admin", "um.sidebar.config-nacos-admin", "查看 Nacos 配置", "setting", 4},
 		{"m-plat-nacos", "m-plat", "Nacos 管理", "/ops/nacos", "um.sidebar.ops-nacos", "查看 Nacos 管理", "setting", 53},
 	}
 	for _, it := range items {
