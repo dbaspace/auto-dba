@@ -89,7 +89,7 @@ func Run(cfg *config.Config, configPath string) {
 	}
 
 	engine := gin.New()
-	engine.Use(gin.Recovery(), gin.Logger())
+	engine.Use(gin.Recovery(), accessLogger())
 	cryptoLive := cfg.FieldCrypto()
 	fieldCrypto := cryptoLive
 	// 审计：失败与遗留明文必记；成功密文解密默认不刷屏（采集路径很频繁）

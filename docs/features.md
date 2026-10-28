@@ -209,7 +209,7 @@ Client Secret（及 LDAP Bind 密码）用字段加密密钥落库（优先 `app
 | Nacos 管理 | `/ops/nacos` | 按环境代登 Nacos 控制台（配置中心「Nacos 配置」录入地址与账号），同源 iframe 嵌入；默认打开配置管理。已有库启动时会幂等补齐表与菜单 |
 | SR 控制台 | `/ops/sr` | **仅**检查 StarRocks FE 管理端是否可达并打开控制台 |
 | 集群部署 | `/ops/cluster-deploy` | Hub 由 EngineRegistry 驱动：DB/OLAP 自建装机与登记；**接入层代理** HAProxy/Nginx/LVS（发行版包 + **Keepalived VIP**，VIP 占用校验）。StarRocks 的 FE/BE 软件根和 BE 数据目录未在集群或节点填写时，用全局参数 `sr_fe_software_base`、`sr_be_software_base`、`sr_be_data_root`；BE 软件根不回退到 FE。详见 [db-cluster.md](db-cluster.md)、[proxy.md](proxy.md)、[sr-cluster.md](sr-cluster.md)。 |
-| 主机终端 | `/ops/terminal` | 对类型为主机的实例打开 Web SSH。密钥布局、登记与排障见 [主机终端](terminal.md)。 |
+| 主机终端 | `/ops/terminal` | 对类型为主机的实例打开 Web SSH。会话首次连不上时提示重开且不重连刷屏。密钥布局、登记与排障见 [主机终端](terminal.md)。 |
 | 高可用服务维护 | `/ops/ha` | MySQL/PG/Redis HA：观测、维护、计划/强制切换；MHA/Orchestrator/ProxySQL；PostgreSQL·pg_autofailover / Patroni / repmgr（代装、Keeper 启停、VIP 钩子）。详见 [高可用服务维护](ha.md)。 |
 
 海豚与 SR 控制台未配置外部地址时，页面只提示未配置，不提供入口。高可用未配置匹配控制器时不自动 failover。**集群部署**负责新建/登记后的扩缩/升级编排，**不是**高可用切换；各引擎工作台布局不同，见 `docs/sr-cluster.md` / `docs/db-cluster.md` / `docs/redis-cluster.md`。
@@ -287,7 +287,7 @@ DBA 域配置管理门面：统一目录（含 SR/部署/代理/账号/CDC）、
 | 页面 | 路径 | 说明 |
 |------|------|------|
 | 实例管理 | `/config/instances?db_type=…` | 登记 PostgreSQL、MySQL 族、Kafka、Redis、主机等连接；按类型各开 Tab；列表支持列排序与底部分页；域名/标签列表折叠；域名可多行粘贴并去重；可见范围（全局/私有）；审计下「指定租户」（可选目标）。**主机** Tab 支持「从监控同步」：扫描「监控目标注册」全部 endpoints，按规范化 IP/主机名去重后登记为 `db_type=host`。按标签 `idc` / `env` / `environment` 或采集器名匹配环境并带上绑定区域；新建写入区域、环境和标签，已有主机只补空项。SSH 默认 `sysadmin:22`、私有可见（当前用户），名称/审批人等不足项事后编辑补充 |
-| 已登记库 | `/config/databases` | 登记业务库、审批人与可见范围；列表可按**环境 / 域名 / 库名**筛选；域名按库自身绑定展示；tags 约定 `alias=`（查询树短名，兼容 `label=`）、`idc=`、`domain=`；审计下可单条或**批量指定归属租户**（不迁实例）；可**批量追加 / 撤销审核人**（撤销为差集，可撤空，含划拨残留孤儿名；某库无该人则跳过）、批量设置可访问用户；可批量删除已登记库，不删实例 |
+| 已登记库 | `/config/databases` | 登记业务库、审批人与可见范围；列表可按**环境 / 域名 / 库名**筛选，底部分页可改每页条数；域名按库自身绑定展示；tags 约定 `alias=`（查询树短名，兼容 `label=`）、`idc=`、`domain=`；审计下可单条或**批量指定归属租户**（不迁实例）；可**批量追加 / 撤销审核人**（撤销为差集，可撤空，含划拨残留孤儿名；某库无该人则跳过）、批量设置可访问用户；可批量删除已登记库，不删实例 |
 | 域名管理 | `/config/domains` | 全引擎统一域名资源；按类型一键同步（`UNIQUE(domain,db_type)` 隔离）；新域名默认归属默认租户；审计下单条/批量指定租户；可授权跨租只读；可单条或批量删除（同步从实例域名列表去掉，不删实例）。支持按环境、租户 Select 与域名/实例/环境关键字过滤。工单（DDL/DML/建库/权限申请/Redis/Kafka）与 Redis/Kafka 查询的地址按**本租户可见域名**列出；仅划拨域名即可查询父实例 |
 | 账号管理 | `/config/accounts` | 登记供权限申请和执行使用的数据库账号（随库租户） |
 | 审核规则 | `/config/review-rules` | DDL / DML 的 SQL 审核规则，以及 Redis 命令规则。含多语句分号校验 `SQLRequireSemicolon`；PostgreSQL 时间字段等多值规则见 [review-rules.md](review-rules.md) |

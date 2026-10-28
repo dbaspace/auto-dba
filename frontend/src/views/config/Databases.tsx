@@ -185,7 +185,7 @@ export default function Databases() {
   const [usedTags, setUsedTags] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
   const [page, setPage] = useState(1)
-  const pageSize = 10
+  const [pageSize, setPageSize] = useState(10)
   const [tenants, setTenants] = useState<{ id: string; name?: string; code?: string }[]>([])
   const [assignRows, setAssignRows] = useState<DatabaseRow[]>([])
   const [assignTid, setAssignTid] = useState('')
@@ -1250,8 +1250,12 @@ export default function Databases() {
           current={page}
           pageSize={pageSize}
           total={filteredRows.length}
-          showSizeChanger={false}
-          onChange={(p) => setPage(p)}
+          showSizeChanger
+          pageSizeOptions={['10', '20', '50', '100']}
+          onChange={(p, ps) => {
+            setPage(p)
+            if (ps && ps !== pageSize) setPageSize(ps)
+          }}
         />
       </div>
 

@@ -64,7 +64,7 @@ func RunDbMonitor(cfg *config.Config, configPath string) {
 	}
 
 	engine := gin.New()
-	engine.Use(gin.Recovery(), gin.Logger())
+	engine.Use(gin.Recovery(), accessLogger())
 	engine.Use(cors.New(cors.Config{
 		AllowOriginFunc: func(origin string) bool {
 			return strings.HasPrefix(origin, "http://localhost:") ||

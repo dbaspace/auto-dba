@@ -85,7 +85,7 @@ terminal:
 | `scripts_dir` | 含 `node-terminal.sh`：实际执行 `ssh -tt -i <key> user@host` |
 | `max_lifetime_sec` | JWT / 会话生命周期 |
 
-WebSocket 由服务端约每 20 秒发协议层 Ping；SSH 带 `ServerAliveInterval=30`。前面若有 Nginx，须给 `/api/v1/terminal/ws` 配 `Upgrade`/`Connection`，`proxy_read_timeout` 建议 ≥ 120 秒（见 `deploy/nginx.conf.example`）。命令执行中关页会确认提示；浏览器无法禁止切标签，切走后标题会标「命令执行中」。
+WebSocket 由服务端约每 20 秒发协议层 Ping；SSH 带 `ServerAliveInterval=30`。前面若有 Nginx，须给 `/api/v1/terminal/ws` 配 `Upgrade`/`Connection`，`proxy_read_timeout` 建议 ≥ 120 秒（见 `deploy/nginx.conf.example`）。命令执行中关页会确认提示；浏览器无法禁止切标签，切走后标题会标「命令执行中」。若 `/terminal/ws` **首次未能 OPEN**（会话失效等），页面提示「请重新从平台打开」，且同一地址不再发起重连，避免刷屏；访问日志对失败握手按客户端 IP 限频，并脱敏 query 中的 `token`。
 
 **Agent / 集群 SSH 下发**（sql-agent、platform-agent、node-agent、db-agent）与 Web 终端共用同一套选钥：按主机实例 `idc` 命中 `ssh_key_profiles`，否则回退全局钥。
 
