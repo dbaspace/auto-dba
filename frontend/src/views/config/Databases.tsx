@@ -194,7 +194,7 @@ export default function Databases() {
   const { hasUrn } = usePermission()
   const canEdit = hasUrn(Perm.databases.edit)
   const canDelete = hasUrn(Perm.databases.delete)
-  const [batchMode, setBatchMode] = useState<'approvers' | 'access' | null>(null)
+  const [batchMode, setBatchMode] = useState<'approvers' | 'access' | 'revoke-approvers' | null>(null)
   const [batchRows, setBatchRows] = useState<DatabaseRow[]>([])
   const [batchUsers, setBatchUsers] = useState<string[]>([])
   const [batchOptions, setBatchOptions] = useState<string[]>([])
@@ -635,7 +635,7 @@ export default function Databases() {
     return lists.every((l) => key(l) === first) ? [...lists[0]] : []
   }
 
-  async function openBatch(mode: 'approvers' | 'access') {
+  async function openBatch(mode: 'approvers' | 'access' | 'revoke-approvers') {
     const list = resolveSelectedRows()
     if (!list?.length) return
     const ids = list.map((r) => String(r.id))
@@ -654,6 +654,29 @@ export default function Databases() {
         message.warning(`仅可对私有库批量设置可访问用户，所选含全局库：${globals.map((r) => r.db_name).join('、')}`)
         return
       }
+    }
+    if (mode === 'revoke-approvers') {
+      const union: string[] = []
+      const seen = new Set<string>()
+      for (const r of list) {
+        for (const raw of r.approvers || []) {
+          const n = String(raw || '').trim()
+          if (!n) continue
+          const key = n.toLowerCase()
+          if (seen.has(key)) continue
+          seen.add(key)
+          union.push(n)
+        }
+      }
+      if (!union.length) {
+        message.info('所选库均无库级审核人可撤销')
+        return
+      }
+      setBatchOptions(union)
+      setBatchUsers([])
+      setBatchRows(list)
+      setBatchMode(mode)
+      return
     }
     const tid = [...tids][0]
     let names: string[] = []
@@ -693,15 +716,35 @@ export default function Databases() {
     if (batchSaving) return
     if (!batchMode || !batchRows.length) return
     const mode = batchMode
-    const { kept: users, dropped: localDropped } = filterNamesByMembers(batchUsers, batchOptions)
-    if (localDropped.length) {
-      message.warning(`已忽略非本租户成员：${localDropped.join('、')}`)
-    }
-    if (mode === 'access' && !users.length) {
-      const noRole = batchRows.filter((r) => !(r.role_ids || []).length)
-      if (noRole.length) {
-        message.warning(`私有库须至少保留一个可访问用户或角色：${noRole.map((r) => r.db_name).join('、')}`)
+    const revoke = mode === 'revoke-approvers'
+    let users: string[]
+    if (revoke) {
+      const seen = new Set<string>()
+      users = []
+      for (const raw of batchUsers) {
+        const n = String(raw || '').trim()
+        if (!n) continue
+        const key = n.toLowerCase()
+        if (seen.has(key)) continue
+        seen.add(key)
+        users.push(n)
+      }
+      if (!users.length) {
+        message.warning('请选择要撤销的审核人')
         return
+      }
+    } else {
+      const filtered = filterNamesByMembers(batchUsers, batchOptions)
+      users = filtered.kept
+      if (filtered.dropped.length) {
+        message.warning(`已忽略非本租户成员：${filtered.dropped.join('、')}`)
+      }
+      if (mode === 'access' && !users.length) {
+        const noRole = batchRows.filter((r) => !(r.role_ids || []).length)
+        if (noRole.length) {
+          message.warning(`私有库须至少保留一个可访问用户或角色：${noRole.map((r) => r.db_name).join('、')}`)
+          return
+        }
       }
     }
     const ids = [...new Set(batchRows.map((r) => String(r.id || '')).filter(Boolean))]
@@ -709,11 +752,17 @@ export default function Databases() {
       message.warning(`勾选 ${batchRows.length}，将提交唯一 id ${ids.length}，数量不一致已中止`)
       return
     }
-    const url = mode === 'approvers' ? '/databases/batch-approvers' : '/databases/batch-access-users'
-    const body = mode === 'approvers' ? { ids, approvers: users } : { ids, access_users: users }
-    const label = mode === 'approvers' ? '审核人' : '可访问用户'
-    const verb = mode === 'approvers' ? '追加' : '设置'
-    const appendLower = new Set(users.map((u) => u.toLowerCase()))
+    const url =
+      mode === 'approvers'
+        ? '/databases/batch-approvers'
+        : mode === 'revoke-approvers'
+          ? '/databases/batch-remove-approvers'
+          : '/databases/batch-access-users'
+    const body =
+      mode === 'access' ? { ids, access_users: users } : { ids, approvers: users }
+    const label = mode === 'access' ? '可访问用户' : '审核人'
+    const verb = mode === 'approvers' ? '追加' : mode === 'revoke-approvers' ? '撤销' : '设置'
+    const appendLower = mode === 'approvers' ? new Set(users.map((u) => u.toLowerCase())) : new Set<string>()
     setBatchSaving(true)
     try {
       const { data } = await api.post(url, body)
@@ -727,7 +776,7 @@ export default function Databases() {
       const updated: { id?: string; db_name?: string; approvers?: string[] }[] = Array.isArray(data.updated)
         ? data.updated
         : []
-      if (mode === 'approvers' && updated.length) {
+      if ((mode === 'approvers' || revoke) && updated.length) {
         const byID = new Map(updated.filter((u) => u.id).map((u) => [String(u.id), u.approvers || []]))
         setRows((prev) =>
           prev.map((r) => {
@@ -766,6 +815,12 @@ export default function Databases() {
             </div>
           ),
         })
+      }
+      if (revoke) {
+        const cleared = updated.filter((u) => Array.isArray(u.approvers) && u.approvers.length === 0).length
+        if (cleared > 0) {
+          message.info(`${cleared} 个库审核人已清空`)
+        }
       }
       if (mode === 'approvers' && appendLower.size) {
         const missLabels: string[] = []
@@ -958,6 +1013,9 @@ export default function Databases() {
             <>
               <Button disabled={!selectedKeys.length} onClick={() => openBatch('approvers')}>
                 批量设置审核人{selectedKeys.length ? `（${selectedKeys.length}）` : ''}
+              </Button>
+              <Button disabled={!selectedKeys.length} onClick={() => openBatch('revoke-approvers')}>
+                批量撤销审核人{selectedKeys.length ? `（${selectedKeys.length}）` : ''}
               </Button>
               <Button disabled={!selectedKeys.length} onClick={() => openBatch('access')}>
                 批量设置可访问用户{selectedKeys.length ? `（${selectedKeys.length}）` : ''}
@@ -1239,7 +1297,13 @@ export default function Databases() {
       </Modal>
       <Modal
         open={!!batchMode}
-        title={`${batchMode === 'approvers' ? '批量设置审核人' : '批量设置可访问用户'}（勾选 ${selectedKeys.length} / 将提交 ${batchRows.length}）`}
+        title={`${
+          batchMode === 'approvers'
+            ? '批量设置审核人'
+            : batchMode === 'revoke-approvers'
+              ? '批量撤销审核人'
+              : '批量设置可访问用户'
+        }（勾选 ${selectedKeys.length} / 将提交 ${batchRows.length}）`}
         okText="保存"
         confirmLoading={batchSaving}
         onCancel={closeBatch}
@@ -1251,6 +1315,11 @@ export default function Databases() {
             <>
               将所选审核人<strong>追加</strong>到各库现有名单（并集）；已不在本租户的会自动去掉；不会删除仍有效的审核人。
               留空表示不追加新人（仍会清理各库上的非本租户成员）。候选人仅限该租户成员。
+            </>
+          ) : batchMode === 'revoke-approvers' ? (
+            <>
+              从各库名单中<strong>移除</strong>所选用户；某库没有该人则跳过该库；可全部撤空（工单将回退实例审批人）。
+              选项为勾选库审核人并集，含非本租户成员（划拨残留）以便清干净。
             </>
           ) : (
             <>
@@ -1271,7 +1340,13 @@ export default function Databases() {
         <Select
           mode="multiple"
           style={{ width: '100%' }}
-          placeholder={batchMode === 'approvers' ? '选择要追加的审核人' : '选择可访问用户'}
+          placeholder={
+            batchMode === 'approvers'
+              ? '选择要追加的审核人'
+              : batchMode === 'revoke-approvers'
+                ? '选择要撤销的审核人'
+                : '选择可访问用户'
+          }
           value={batchUsers}
           onChange={(v) => setBatchUsers(v)}
           options={batchOptions.map((u) => ({ value: u, label: u }))}

@@ -126,6 +126,35 @@ func mergeDatabaseApproversWithSet(existing, submitted []string, members map[str
 	return merged, dropped, keptAdd
 }
 
+// subtractApprovers 从现有名单减去待撤销用户（大小写不敏感）；不要求对方为本租户成员。
+// merged 可为 empty；removed 为实际删掉的规范名；missing 为请求撤销但不在该库上的人。
+func subtractApprovers(existing, remove []string) (merged, removed, missing []string) {
+	removeSet := map[string]struct{}{}
+	for _, n := range uniqueTrimmedNames(remove) {
+		removeSet[strings.ToLower(n)] = struct{}{}
+	}
+	hit := map[string]struct{}{}
+	for _, n := range uniqueTrimmedNames(existing) {
+		key := strings.ToLower(n)
+		if _, ok := removeSet[key]; ok {
+			removed = append(removed, n)
+			hit[key] = struct{}{}
+			continue
+		}
+		merged = append(merged, n)
+	}
+	if merged == nil {
+		merged = []string{}
+	}
+	for _, n := range uniqueTrimmedNames(remove) {
+		key := strings.ToLower(n)
+		if _, ok := hit[key]; !ok {
+			missing = append(missing, n)
+		}
+	}
+	return merged, removed, missing
+}
+
 // approversContainAll 判断 have 是否包含 need 中全部用户名（大小写不敏感）。
 func approversContainAll(have, need []string) bool {
 	set := map[string]struct{}{}

@@ -67,6 +67,37 @@ func TestFilterNamesByMemberSetCanonical(t *testing.T) {
 	}
 }
 
+func TestSubtractApprovers(t *testing.T) {
+	merged, removed, missing := subtractApprovers(
+		[]string{"daiyong", "Admin", "orphan"},
+		[]string{"ADMIN", "nobody"},
+	)
+	if len(merged) != 2 || merged[0] != "daiyong" || merged[1] != "orphan" {
+		t.Fatalf("merged=%v", merged)
+	}
+	if len(removed) != 1 || removed[0] != "Admin" {
+		t.Fatalf("removed=%v", removed)
+	}
+	if len(missing) != 1 || missing[0] != "nobody" {
+		t.Fatalf("missing=%v", missing)
+	}
+
+	merged, removed, missing = subtractApprovers([]string{"a", "b"}, []string{"A", "B"})
+	if len(merged) != 0 || len(removed) != 2 || len(missing) != 0 {
+		t.Fatalf("full clear merged=%v removed=%v missing=%v", merged, removed, missing)
+	}
+
+	merged, removed, missing = subtractApprovers([]string{"a"}, []string{"x"})
+	if len(merged) != 1 || merged[0] != "a" || len(removed) != 0 || len(missing) != 1 {
+		t.Fatalf("noop merged=%v removed=%v missing=%v", merged, removed, missing)
+	}
+
+	merged, removed, missing = subtractApprovers([]string{"a", "b"}, []string{"B", "c"})
+	if len(merged) != 1 || merged[0] != "a" || len(removed) != 1 || removed[0] != "b" || len(missing) != 1 {
+		t.Fatalf("partial merged=%v removed=%v missing=%v", merged, removed, missing)
+	}
+}
+
 func TestWriteApproversRetryLogic(t *testing.T) {
 	// 模拟：前两次写失败、第三次成功 → 最终 ok（与 BatchApprovers 最多 3 次一致）。
 	attempts := 0

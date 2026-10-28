@@ -1831,6 +1831,106 @@ func (h *DatabaseHandler) BatchApprovers(c *gin.Context) {
 	})
 }
 
+// BatchRemoveApprovers POST /databases/batch-remove-approvers — 从所选库名单减去审核人；不在该库上则 skip；可撤空。
+func (h *DatabaseHandler) BatchRemoveApprovers(c *gin.Context) {
+	var req batchDBACLReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "参数无效"})
+		return
+	}
+	remove := uniqueTrimmedNames(req.Approvers)
+	if len(remove) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "请选择要撤销的审核人"})
+		return
+	}
+	list, tid, ok := h.loadBatchDatabases(c, req.IDs)
+	if !ok {
+		return
+	}
+	requested := len(list)
+	okCount := 0
+	retried := 0
+	failed := make([]batchDBFail, 0)
+	skipped := make([]batchDBFail, 0)
+	updated := make([]batchApproverUpdated, 0, len(list))
+	user := c.GetString(middleware.CtxUsername)
+	start := time.Now()
+	for i := range list {
+		before := list[i]
+		it := list[i]
+		rowStart := time.Now()
+		var lastErr error
+		var finalApprovers []string
+		var lastRemoved []string
+		didRetry := false
+		for attempt := 0; attempt < 3; attempt++ {
+			if attempt > 0 {
+				didRetry = true
+				if attempt-1 < len(batchApproverRetryBackoff) {
+					time.Sleep(batchApproverRetryBackoff[attempt-1])
+				}
+				fresh, getErr := h.Store.GetDatabase(it.ID)
+				if getErr != nil {
+					lastErr = getErr
+					break
+				}
+				if fresh == nil {
+					lastErr = fmt.Errorf("库不存在")
+					break
+				}
+				it = *fresh
+			}
+			merged, removed, _ := subtractApprovers(it.Approvers, remove)
+			lastRemoved = removed
+			if len(removed) == 0 {
+				finalApprovers = uniqueTrimmedNames(it.Approvers)
+				if finalApprovers == nil {
+					finalApprovers = []string{}
+				}
+				lastErr = nil
+				break
+			}
+			finalApprovers, lastErr = h.writeDatabaseApproversVerified(it.ID, merged, nil)
+			if lastErr == nil {
+				log.Printf("batch_remove_approvers id=%s db=%s tid=%s attempt=%d ok removed=%v approvers=%v elapsed_ms=%d",
+					it.ID, it.DBName, tid, attempt+1, removed, finalApprovers, time.Since(rowStart).Milliseconds())
+				break
+			}
+			log.Printf("batch_remove_approvers id=%s db=%s tid=%s attempt=%d err=%v elapsed_ms=%d",
+				it.ID, it.DBName, tid, attempt+1, lastErr, time.Since(rowStart).Milliseconds())
+		}
+		if didRetry {
+			retried++
+		}
+		if lastErr != nil {
+			failed = append(failed, batchDBFail{ID: it.ID, DBName: it.DBName, Message: lastErr.Error()})
+			continue
+		}
+		after := before
+		after.Approvers = finalApprovers
+		updated = append(updated, batchApproverUpdated{ID: it.ID, DBName: it.DBName, Approvers: finalApprovers})
+		_ = h.Store.AppendCmdbAudit(user, "update", "database", it.ID, "api", before, after)
+		if len(lastRemoved) == 0 {
+			skipped = append(skipped, batchDBFail{ID: it.ID, DBName: it.DBName, Message: "所选审核人未出现在该库"})
+			continue
+		}
+		okCount++
+	}
+	log.Printf("batch_remove_approvers tenant=%s requested=%d ok=%d fail=%d skipped=%d retried=%d elapsed_ms=%d",
+		tid, requested, okCount, len(failed), len(skipped), retried, time.Since(start).Milliseconds())
+	c.JSON(http.StatusOK, gin.H{
+		"requested":    requested,
+		"ok_count":     okCount,
+		"fail_count":   len(failed),
+		"skip_count":   len(skipped),
+		"failed":       failed,
+		"skipped":      skipped,
+		"updated":      updated,
+		"retried":      retried,
+		"resolved_tid": tid,
+	})
+}
+
 // BatchAccessUsers POST /databases/batch-access-users — 覆盖所选私有库的可访问用户（须为同一租户成员）。
 func (h *DatabaseHandler) BatchAccessUsers(c *gin.Context) {
 	var req batchDBACLReq

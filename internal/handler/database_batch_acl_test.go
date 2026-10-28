@@ -317,3 +317,87 @@ func TestDatabaseBatchApproversAuditingDefaultTenant(t *testing.T) {
 		}
 	}
 }
+
+func TestDatabaseBatchRemoveApprovers(t *testing.T) {
+	db := batchACLTestStore(t)
+	h := &DatabaseHandler{Store: db}
+	gin.SetMode(gin.TestMode)
+
+	admin, err := db.GetUserByUsername("admin")
+	if err != nil || admin == nil {
+		t.Skip("admin user missing")
+	}
+
+	inst := &store.Instance{Name: "brm-" + uuid.NewString()[:8], DBType: "mysql", Host: "127.0.0.1", Port: 3306, TenantID: store.DefaultTenantID}
+	if err := db.CreateInstance(inst); err != nil {
+		t.Fatal(err)
+	}
+	sfx := uuid.NewString()[:6]
+	mk := func(name string, aps []string) *store.Database {
+		it := &store.Database{
+			InstanceID: inst.ID, DBName: name, Visibility: "global",
+			TenantID: store.DefaultTenantID, Approvers: aps,
+		}
+		if err := db.CreateDatabase(it); err != nil {
+			t.Fatal(err)
+		}
+		return it
+	}
+	hasBoth := mk("brm_both_"+sfx, []string{"admin", "orphan_user"})
+	hasOne := mk("brm_one_"+sfx, []string{"admin"})
+	hasNone := mk("brm_none_"+sfx, []string{"other_guy"})
+	t.Cleanup(func() {
+		_ = db.DeleteDatabase(hasBoth.ID)
+		_ = db.DeleteDatabase(hasOne.ID)
+		_ = db.DeleteDatabase(hasNone.ID)
+		_ = db.DeleteInstance(inst.ID)
+	})
+
+	call := func(body map[string]any) (int, map[string]any) {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		raw, _ := json.Marshal(body)
+		c.Request = httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(raw))
+		c.Request.Header.Set("Content-Type", "application/json")
+		c.Set(middleware.CtxUsername, "admin")
+		c.Set(middleware.CtxUserID, admin.ID)
+		c.Set(middleware.CtxRole, "admin")
+		c.Set(middleware.CtxTenantID, store.DefaultTenantID)
+		h.BatchRemoveApprovers(c)
+		var out map[string]any
+		_ = json.Unmarshal(w.Body.Bytes(), &out)
+		return w.Code, out
+	}
+
+	if code, out := call(map[string]any{"ids": []string{hasBoth.ID}, "approvers": []string{}}); code != http.StatusBadRequest {
+		t.Fatalf("empty remove: code=%d out=%v", code, out)
+	}
+
+	code, out := call(map[string]any{
+		"ids":       []string{hasBoth.ID, hasOne.ID, hasNone.ID},
+		"approvers": []string{"ADMIN", "orphan_user"},
+	})
+	if code != http.StatusOK {
+		t.Fatalf("remove: code=%d out=%v", code, out)
+	}
+	if out["ok_count"].(float64) != 2 {
+		t.Fatalf("ok_count=%v out=%v", out["ok_count"], out)
+	}
+	if out["skip_count"].(float64) != 1 {
+		t.Fatalf("skip_count=%v out=%v", out["skip_count"], out)
+	}
+	if got, _ := db.GetDatabase(hasBoth.ID); got == nil || len(got.Approvers) != 0 {
+		t.Fatalf("hasBoth should be empty: %v", got)
+	}
+	if got, _ := db.GetDatabase(hasOne.ID); got == nil || len(got.Approvers) != 0 {
+		t.Fatalf("hasOne should be empty: %v", got)
+	}
+	if got, _ := db.GetDatabase(hasNone.ID); got == nil || len(got.Approvers) != 1 || got.Approvers[0] != "other_guy" {
+		t.Fatalf("hasNone unchanged: %v", got)
+	}
+
+	code, out = call(map[string]any{"ids": []string{hasNone.ID}, "approvers": []string{"admin"}})
+	if code != http.StatusOK || out["ok_count"].(float64) != 0 || out["skip_count"].(float64) != 1 {
+		t.Fatalf("noop remove: code=%d out=%v", code, out)
+	}
+}
