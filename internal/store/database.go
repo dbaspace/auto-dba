@@ -253,6 +253,30 @@ func (d *DB) UpdateDatabase(it *Database) error {
 	return err
 }
 
+// UpdateDatabaseApprovers 仅更新审核人列，避免批量路径全行覆盖其它字段。
+func (d *DB) UpdateDatabaseApprovers(id string, approvers []string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return errors.New("database id required")
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	approvers = uniqueTrimmed(approvers)
+	if approvers == nil {
+		approvers = []string{}
+	}
+	_, err := d.Exec(
+		`UPDATE tbl_databases SET approvers=?, updated_at=? WHERE id=?`,
+		encodeJSON(approvers), now, id,
+	)
+	if err != nil {
+		return err
+	}
+	if it, getErr := d.GetDatabase(id); getErr == nil && it != nil {
+		d.MaybeSnapshotDatabase(it, "")
+	}
+	return nil
+}
+
 func (d *DB) DeleteDatabaseInTenant(id, tenantID string) error {
 	it, err := d.GetDatabaseInTenant(id, tenantID)
 	if err != nil {

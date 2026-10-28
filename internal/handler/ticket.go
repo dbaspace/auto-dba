@@ -154,18 +154,26 @@ func submitInstanceIDs(req ticketSubmitReq) []string {
 
 // reviewerCoversInstances 多实例 DDL：审核人须出现在至少一个已配置审核人的数据源名单中（并集）。
 // 全部数据源都未配置审核人时不拦。
-func (h *TicketHandler) reviewerCoversInstances(reviewer, dbName string, ids []string) string {
+// needRollback 用于读取 shard_db / shard_db_prefix，按实例解析真实登记库名后再取审核人。
+func (h *TicketHandler) reviewerCoversInstances(reviewer, dbName string, ids []string, needRollback string) string {
 	reviewer = strings.TrimSpace(reviewer)
 	if reviewer == "" || h == nil {
 		return ""
 	}
+	shardDB := ddlShardDBEnabled(needRollback)
+	shardPrefix := ddlShardDBPrefix(needRollback)
 	lists := make([][]string, 0, len(ids))
 	for _, id := range ids {
 		id = strings.TrimSpace(id)
 		if id == "" {
 			continue
 		}
-		lists = append(lists, h.resolveApprovers(id, dbName))
+		lookupDB := strings.TrimSpace(dbName)
+		if h.Store != nil {
+			records, _ := h.Store.ListDatabases(id, "")
+			lookupDB = resolveDbNameForApprover(id, dbName, records, shardDB, shardPrefix)
+		}
+		lists = append(lists, h.resolveApprovers(id, lookupDB))
 	}
 	return reviewerAllowedByUnion(reviewer, lists)
 }
@@ -610,7 +618,7 @@ func (h *TicketHandler) Submit(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
-	if msg := h.reviewerCoversInstances(reviewer, req.DBName, submitInstanceIDs(req)); msg != "" {
+	if msg := h.reviewerCoversInstances(reviewer, req.DBName, submitInstanceIDs(req), req.NeedRollback); msg != "" {
 		c.JSON(http.StatusBadRequest, gin.H{"message": msg})
 		return
 	}

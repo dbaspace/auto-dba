@@ -84,6 +84,70 @@ func mergeDatabaseApprovers(db *store.DB, tenantID string, existing, submitted [
 	return merged, dropped, nil
 }
 
+// loadTenantMemberUsernameSet 一次加载租户活跃成员（小写用户名 → 规范用户名），供批量 merge 复用。
+func loadTenantMemberUsernameSet(db *store.DB, tenantID string) (map[string]string, error) {
+	names, err := listTenantMemberUsernames(db, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(names))
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		key := strings.ToLower(name)
+		if _, ok := out[key]; !ok {
+			out[key] = name
+		}
+	}
+	return out, nil
+}
+
+// filterNamesByMemberSet 按成员集合过滤；kept 使用集合内的规范用户名。
+func filterNamesByMemberSet(names []string, members map[string]string) (kept, dropped []string) {
+	for _, name := range uniqueTrimmedNames(names) {
+		canon, ok := members[strings.ToLower(name)]
+		if !ok {
+			dropped = append(dropped, name)
+			continue
+		}
+		kept = append(kept, canon)
+	}
+	return kept, dropped
+}
+
+// mergeDatabaseApproversWithSet 用预加载成员集做追加合并，避免每库重复查库。
+func mergeDatabaseApproversWithSet(existing, submitted []string, members map[string]string) (merged, dropped, keptAdd []string) {
+	keptExist, dropExist := filterNamesByMemberSet(existing, members)
+	keptAdd, dropAdd := filterNamesByMemberSet(submitted, members)
+	dropped = uniqueTrimmedNames(append(dropExist, dropAdd...))
+	merged = uniqueTrimmedNames(append(keptExist, keptAdd...))
+	return merged, dropped, keptAdd
+}
+
+// approversContainAll 判断 have 是否包含 need 中全部用户名（大小写不敏感）。
+func approversContainAll(have, need []string) bool {
+	set := map[string]struct{}{}
+	for _, n := range have {
+		n = strings.TrimSpace(n)
+		if n == "" {
+			continue
+		}
+		set[strings.ToLower(n)] = struct{}{}
+	}
+	for _, n := range need {
+		n = strings.TrimSpace(n)
+		if n == "" {
+			continue
+		}
+		if _, ok := set[strings.ToLower(n)]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
 // validateResourceACL 校验可见性 ACL 与审批人：用户须为资源租户成员；角色 ID 须存在。
 func validateResourceACL(db *store.DB, tenantID, visibility string, accessUsers, roleIDs, approvers []string) error {
 	tenantID = strings.TrimSpace(tenantID)

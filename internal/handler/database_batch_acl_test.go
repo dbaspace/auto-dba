@@ -119,16 +119,39 @@ func TestDatabaseBatchACL(t *testing.T) {
 		return w.Code, out
 	}
 
-	// 审核人：同租户追加成功
+	// 审核人：同租户追加成功；两库名单一致；只改 approvers；返回 requested/updated
 	code, out := call(h.BatchApprovers, map[string]any{"ids": []string{privA.ID, glob.ID}, "approvers": []string{"admin"}}, false)
 	if code != http.StatusOK || out["ok_count"].(float64) != 2 {
 		t.Fatalf("approvers ok: code=%d out=%v", code, out)
+	}
+	if reqN, _ := out["requested"].(float64); reqN != 2 {
+		t.Fatalf("requested=%v out=%v", out["requested"], out)
+	}
+	updated, _ := out["updated"].([]any)
+	if len(updated) != 2 {
+		t.Fatalf("updated len=%d out=%v", len(updated), out)
+	}
+	for _, u := range updated {
+		m, _ := u.(map[string]any)
+		aps, _ := m["approvers"].([]any)
+		if len(aps) != 1 || aps[0] != "admin" {
+			t.Fatalf("updated row approvers=%v", m)
+		}
 	}
 	if got, _ := db.GetDatabase(glob.ID); got == nil || len(got.Approvers) != 1 || got.Approvers[0] != "admin" || got.Visibility != "global" {
 		t.Fatalf("glob approvers=%v", got)
 	}
 	if got, _ := db.GetDatabase(privA.ID); got == nil || len(got.AccessUsers) != 1 || got.Visibility != "private" {
 		t.Fatalf("privA other fields changed: %v", got)
+	}
+	// 再追加同一批：两库最终名单仍一致且含 admin
+	if code, out = call(h.BatchApprovers, map[string]any{"ids": []string{privA.ID, glob.ID}, "approvers": []string{"admin"}}, false); code != http.StatusOK || out["ok_count"].(float64) != 2 {
+		t.Fatalf("approvers idempotent: code=%d out=%v", code, out)
+	}
+	a, _ := db.GetDatabase(privA.ID)
+	g, _ := db.GetDatabase(glob.ID)
+	if a == nil || g == nil || len(a.Approvers) != 1 || len(g.Approvers) != 1 || a.Approvers[0] != "admin" || g.Approvers[0] != "admin" {
+		t.Fatalf("batch append inconsistent a=%v g=%v", a, g)
 	}
 
 	// 审核人：非租户成员忽略，不整批失败；已有合法名单保留

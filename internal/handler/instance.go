@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"sort"
@@ -1714,7 +1715,32 @@ func (h *DatabaseHandler) saveBatch(c *gin.Context, list []store.Database, apply
 	c.JSON(http.StatusOK, gin.H{"ok_count": okCount, "fail_count": len(failed), "failed": failed})
 }
 
+type batchApproverUpdated struct {
+	ID        string   `json:"id"`
+	DBName    string   `json:"db_name"`
+	Approvers []string `json:"approvers"`
+}
+
+// writeDatabaseApproversVerified 仅写 approvers 并回读核对 mustContain 均在结果中。
+func (h *DatabaseHandler) writeDatabaseApproversVerified(id string, merged, mustContain []string) ([]string, error) {
+	if err := h.Store.UpdateDatabaseApprovers(id, merged); err != nil {
+		return nil, err
+	}
+	got, err := h.Store.GetDatabase(id)
+	if err != nil {
+		return nil, err
+	}
+	if got == nil {
+		return nil, fmt.Errorf("写后回读为空")
+	}
+	if !approversContainAll(got.Approvers, mustContain) {
+		return nil, fmt.Errorf("写后回读未包含期望审核人")
+	}
+	return got.Approvers, nil
+}
+
 // BatchApprovers POST /databases/batch-approvers — 向所选库追加审核人（并集）；非本租户成员自动丢掉，不整批失败。
+// 一次加载成员集、只更新 approvers、写后回读；单条失败再试一次。
 func (h *DatabaseHandler) BatchApprovers(c *gin.Context) {
 	var req batchDBACLReq
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -1725,40 +1751,80 @@ func (h *DatabaseHandler) BatchApprovers(c *gin.Context) {
 	if !ok {
 		return
 	}
+	members, err := loadTenantMemberUsernameSet(h.Store, tid)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
 	add := uniqueTrimmedNames(req.Approvers)
+	requested := len(list)
 	okCount := 0
+	retried := 0
 	failed := make([]batchDBFail, 0)
+	updated := make([]batchApproverUpdated, 0, len(list))
 	droppedSet := map[string]struct{}{}
 	user := c.GetString(middleware.CtxUsername)
+	start := time.Now()
 	for i := range list {
 		before := list[i]
 		it := list[i]
-		merged, dropped, err := mergeDatabaseApprovers(h.Store, tid, it.Approvers, add)
-		if err != nil {
-			failed = append(failed, batchDBFail{ID: it.ID, DBName: it.DBName, Message: err.Error()})
+		rowStart := time.Now()
+		var lastErr error
+		var finalApprovers []string
+		didRetry := false
+		for attempt := 0; attempt < 2; attempt++ {
+			if attempt > 0 {
+				didRetry = true
+				fresh, getErr := h.Store.GetDatabase(it.ID)
+				if getErr != nil {
+					lastErr = getErr
+					break
+				}
+				if fresh == nil {
+					lastErr = fmt.Errorf("库不存在")
+					break
+				}
+				it = *fresh
+			}
+			merged, dropped, keptAdd := mergeDatabaseApproversWithSet(it.Approvers, add, members)
+			for _, name := range dropped {
+				droppedSet[name] = struct{}{}
+			}
+			finalApprovers, lastErr = h.writeDatabaseApproversVerified(it.ID, merged, keptAdd)
+			if lastErr == nil {
+				break
+			}
+			log.Printf("batch_approvers id=%s db=%s attempt=%d err=%v elapsed_ms=%d",
+				it.ID, it.DBName, attempt+1, lastErr, time.Since(rowStart).Milliseconds())
+		}
+		if didRetry {
+			retried++
+		}
+		if lastErr != nil {
+			failed = append(failed, batchDBFail{ID: it.ID, DBName: it.DBName, Message: lastErr.Error()})
 			continue
 		}
-		for _, name := range dropped {
-			droppedSet[name] = struct{}{}
-		}
-		it.Approvers = merged
-		if err := h.Store.UpdateDatabase(&it); err != nil {
-			failed = append(failed, batchDBFail{ID: it.ID, DBName: it.DBName, Message: err.Error()})
-			continue
-		}
+		after := before
+		after.Approvers = finalApprovers
 		okCount++
-		_ = h.Store.AppendCmdbAudit(user, "update", "database", it.ID, "api", before, it)
+		updated = append(updated, batchApproverUpdated{ID: it.ID, DBName: it.DBName, Approvers: finalApprovers})
+		_ = h.Store.AppendCmdbAudit(user, "update", "database", it.ID, "api", before, after)
 	}
 	dropped := make([]string, 0, len(droppedSet))
 	for name := range droppedSet {
 		dropped = append(dropped, name)
 	}
 	sort.Strings(dropped)
+	log.Printf("batch_approvers tenant=%s requested=%d ok=%d fail=%d retried=%d elapsed_ms=%d",
+		tid, requested, okCount, len(failed), retried, time.Since(start).Milliseconds())
 	c.JSON(http.StatusOK, gin.H{
+		"requested":  requested,
 		"ok_count":   okCount,
 		"fail_count": len(failed),
 		"failed":     failed,
 		"dropped":    dropped,
+		"updated":    updated,
+		"retried":    retried,
 	})
 }
 

@@ -539,11 +539,15 @@ export default function Databases() {
     }
   }
 
-  /** 按勾选 key 从全量 rows 解析；跨页勾选依赖 preserveSelectedRowKeys。 */
+  /** 按勾选 key 从全量 rows 解析；跨页勾选依赖 preserveSelectedRowKeys。仅认 id。 */
   function resolveSelectedRows(keys: React.Key[] = selectedKeys): DatabaseRow[] | null {
     const want = [...new Set(keys.map(String).filter(Boolean))]
     if (!want.length) {
       message.warning('请先勾选库')
+      return null
+    }
+    if (want.length !== keys.filter(Boolean).length) {
+      message.warning(`勾选 key 有重复（${keys.filter(Boolean).length}→${want.length}），请取消后重新勾选`)
       return null
     }
     const byID = new Map(rows.filter((r) => r.id).map((r) => [String(r.id), r]))
@@ -551,11 +555,15 @@ export default function Databases() {
     const missing: string[] = []
     for (const id of want) {
       const row = byID.get(id)
-      if (row) list.push(row)
+      if (row?.id) list.push(row)
       else missing.push(id)
     }
     if (missing.length) {
       message.warning(`有 ${missing.length} 条勾选已不在当前列表，请重新勾选后再操作`)
+      return null
+    }
+    if (list.length !== want.length) {
+      message.warning(`勾选 ${want.length} 条，可提交仅 ${list.length} 条，请重新勾选`)
       return null
     }
     return list
@@ -625,6 +633,11 @@ export default function Databases() {
   async function openBatch(mode: 'approvers' | 'access') {
     const list = resolveSelectedRows()
     if (!list?.length) return
+    const ids = list.map((r) => String(r.id))
+    if (ids.length !== selectedKeys.length || new Set(ids).size !== ids.length) {
+      message.warning(`勾选 ${selectedKeys.length}，可提交唯一 id ${new Set(ids).size}，请重新勾选`)
+      return
+    }
     const tids = new Set(list.map(rowTenantId))
     if (tids.size > 1) {
       message.warning('请选择同一租户下的库')
@@ -672,31 +685,53 @@ export default function Databases() {
   }
 
   async function confirmBatch() {
+    if (batchSaving) return
     if (!batchMode || !batchRows.length) return
+    const mode = batchMode
     const { kept: users, dropped: localDropped } = filterNamesByMembers(batchUsers, batchOptions)
     if (localDropped.length) {
       message.warning(`已忽略非本租户成员：${localDropped.join('、')}`)
     }
-    if (batchMode === 'access' && !users.length) {
+    if (mode === 'access' && !users.length) {
       const noRole = batchRows.filter((r) => !(r.role_ids || []).length)
       if (noRole.length) {
         message.warning(`私有库须至少保留一个可访问用户或角色：${noRole.map((r) => r.db_name).join('、')}`)
         return
       }
     }
-    const ids = batchRows.map((r) => r.id!).filter(Boolean)
-    const url = batchMode === 'approvers' ? '/databases/batch-approvers' : '/databases/batch-access-users'
-    const body = batchMode === 'approvers' ? { ids, approvers: users } : { ids, access_users: users }
-    const label = batchMode === 'approvers' ? '审核人' : '可访问用户'
+    const ids = [...new Set(batchRows.map((r) => String(r.id || '')).filter(Boolean))]
+    if (ids.length !== batchRows.length) {
+      message.warning(`勾选 ${batchRows.length}，将提交唯一 id ${ids.length}，数量不一致已中止`)
+      return
+    }
+    const url = mode === 'approvers' ? '/databases/batch-approvers' : '/databases/batch-access-users'
+    const body = mode === 'approvers' ? { ids, approvers: users } : { ids, access_users: users }
+    const label = mode === 'approvers' ? '审核人' : '可访问用户'
+    const verb = mode === 'approvers' ? '追加' : '设置'
+    const appendLower = new Set(users.map((u) => u.toLowerCase()))
     setBatchSaving(true)
     try {
       const { data } = await api.post(url, body)
       const okCount = Number(data.ok_count || 0)
       const failCount = Number(data.fail_count || 0)
+      const requested = Number(data.requested || ids.length)
       const failed: { id?: string; db_name?: string; message?: string }[] = data.failed || []
       const dropped: string[] = Array.isArray(data.dropped) ? data.dropped.map(String) : []
+      const updated: { id?: string; db_name?: string; approvers?: string[] }[] = Array.isArray(data.updated)
+        ? data.updated
+        : []
+      if (mode === 'approvers' && updated.length) {
+        const byID = new Map(updated.filter((u) => u.id).map((u) => [String(u.id), u.approvers || []]))
+        setRows((prev) =>
+          prev.map((r) => {
+            if (!r.id || !byID.has(r.id)) return r
+            return { ...r, approvers: byID.get(r.id) || [] }
+          }),
+        )
+      }
       const selected = ids.length
-      const verb = batchMode === 'approvers' ? '追加' : '设置'
+      const failIDs = new Set(failed.map((f) => String(f.id || '')).filter(Boolean))
+      const keepKeys = new Set<string>([...failIDs])
       if (failCount === 0 && okCount === selected) {
         message.success(
           `已为 ${okCount} 个库${verb}${label}` +
@@ -704,7 +739,7 @@ export default function Databases() {
         )
       } else {
         Modal.warning({
-          title: `${verb}${label}完成：勾选 ${selected}，成功 ${okCount}，失败 ${failCount}`,
+          title: `${verb}${label}完成：勾选 ${selected}，请求 ${requested}，成功 ${okCount}，失败 ${failCount}`,
           content: (
             <div>
               {dropped.length ? <p style={{ marginBottom: 8 }}>已忽略非本租户成员：{dropped.join('、')}</p> : null}
@@ -719,10 +754,46 @@ export default function Databases() {
           ),
         })
       }
+      if (mode === 'approvers' && appendLower.size) {
+        const missLabels: string[] = []
+        for (const id of ids) {
+          if (failIDs.has(id)) continue
+          const fromUpdated = updated.find((u) => String(u.id) === id)
+          if (!fromUpdated?.approvers) {
+            missLabels.push(id)
+            keepKeys.add(id)
+            continue
+          }
+          const have = new Set(fromUpdated.approvers.map((a) => String(a).toLowerCase()))
+          let ok = true
+          for (const name of appendLower) {
+            if (!have.has(name)) {
+              ok = false
+              break
+            }
+          }
+          if (!ok) {
+            missLabels.push(fromUpdated.db_name || id)
+            keepKeys.add(id)
+          }
+        }
+        if (missLabels.length) {
+          Modal.warning({
+            title: `写后复核：${missLabels.length} 个库未包含本次追加的审核人`,
+            content: (
+              <ul style={{ margin: 0, paddingLeft: 18, maxHeight: 240, overflow: 'auto' }}>
+                {missLabels.map((m) => (
+                  <li key={m}>{m}</li>
+                ))}
+              </ul>
+            ),
+          })
+        }
+      }
+      setSelectedKeys(keepKeys.size ? [...keepKeys] : [])
       setBatchMode(null)
       setBatchRows([])
       setBatchUsers([])
-      setSelectedKeys([])
       await load()
     } finally {
       setBatchSaving(false)
@@ -980,7 +1051,7 @@ export default function Databases() {
       )}
       <div className="ops-table">
         <ResponsiveTable
-          rowKey={(r) => r.id || r.db_name || ''}
+          rowKey={(r) => r.id || ''}
           dataSource={pagedRows}
           loading={initLoading}
           bordered
@@ -1155,7 +1226,7 @@ export default function Databases() {
       </Modal>
       <Modal
         open={!!batchMode}
-        title={`${batchMode === 'approvers' ? '批量设置审核人' : '批量设置可访问用户'}（${batchRows.length}）`}
+        title={`${batchMode === 'approvers' ? '批量设置审核人' : '批量设置可访问用户'}（勾选 ${selectedKeys.length} / 将提交 ${batchRows.length}）`}
         okText="保存"
         confirmLoading={batchSaving}
         onCancel={closeBatch}
@@ -1178,6 +1249,9 @@ export default function Databases() {
           {batchRows.map((r) => (
             <li key={r.id}>
               {r.db_name}（{instanceName(r.instance_id, r.instance_name)}）
+              {r.id ? (
+                <span style={{ color: '#888', marginLeft: 6 }}>{String(r.id).slice(0, 8)}</span>
+              ) : null}
             </li>
           ))}
         </ul>
