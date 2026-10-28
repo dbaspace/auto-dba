@@ -172,6 +172,7 @@ export default function Databases() {
   const [dbNameQ, setDbNameQ] = useState('')
   const [domainFilter, setDomainFilter] = useState('')
   const [envFilter, setEnvFilter] = useState('')
+  const [tenantFilter, setTenantFilter] = useState('')
   const [envCatalog, setEnvCatalog] = useState<{ code: string; name: string }[]>([])
   const [visible, setVisible] = useState(false)
   const [form, setForm] = useState<DatabaseRow>({})
@@ -302,6 +303,25 @@ export default function Databases() {
       .map((value) => ({ value, label: value }))
   }, [rows, instances])
 
+  const tenantFilterOptions = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const t of tenants) {
+      const id = String(t.id || '').trim()
+      if (!id) continue
+      const base = String(t.name || t.code || id).trim() || id
+      map.set(id, id === currentTenantId ? `${base}（当前）` : base)
+    }
+    for (const r of rows) {
+      const id = String(r.tenant_id || '').trim()
+      if (!id || map.has(id)) continue
+      const base = String(r.tenant_name || id).trim() || id
+      map.set(id, id === currentTenantId ? `${base}（当前）` : base)
+    }
+    return [...map.entries()]
+      .sort((a, b) => a[1].localeCompare(b[1], 'zh-CN'))
+      .map(([value, label]) => ({ value, label }))
+  }, [tenants, rows, currentTenantId])
+
   const filteredRows = useMemo(() => {
     const q = dbNameQ.trim().toLowerCase()
     const dom = domainFilter.trim().toLowerCase()
@@ -313,6 +333,9 @@ export default function Databases() {
       if (envFilter) {
         if (resolveRowEnv(r, inst) !== envFilter) return false
       }
+      if (tenantFilter) {
+        if (String(r.tenant_id || '').trim() !== tenantFilter) return false
+      }
       if (dom) {
         const domains = resolveRowDomains(r, inst)
         if (!domains.some((d) => d.toLowerCase() === dom || d.toLowerCase().includes(dom))) return false
@@ -320,7 +343,7 @@ export default function Databases() {
       return true
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, activeType, dbNameQ, domainFilter, envFilter, instances, knownTypes])
+  }, [rows, activeType, dbNameQ, domainFilter, envFilter, tenantFilter, instances, knownTypes])
 
   const pagedRows = useMemo(() => {
     const start = (page - 1) * pageSize
@@ -330,7 +353,7 @@ export default function Databases() {
   useEffect(() => {
     setPage(1)
     setSelectedKeys([])
-  }, [activeType, dbNameQ, domainFilter, envFilter])
+  }, [activeType, dbNameQ, domainFilter, envFilter, tenantFilter])
 
   useEffect(() => {
     const maxPage = Math.max(1, Math.ceil(filteredRows.length / pageSize) || 1)
@@ -380,9 +403,38 @@ export default function Databases() {
     applyRows(dbRes.data.data || [])
   }
 
-  async function load() {
+  async function load(): Promise<DatabaseRow[]> {
     const { data } = await api.get('/databases')
-    applyRows(data.data || [])
+    const list: DatabaseRow[] = data.data || []
+    applyRows(list)
+    return list
+  }
+
+  /** 展开逗号粘连的脏审核人名，便于写后复核。 */
+  function expandApproverNames(names: string[] | undefined): string[] {
+    const out: string[] = []
+    const seen = new Set<string>()
+    for (const raw of names || []) {
+      const parts = String(raw || '')
+        .split(/[,，]/)
+        .map((s) => s.trim())
+        .filter(Boolean)
+      for (const n of parts.length ? parts : []) {
+        const key = n.toLowerCase()
+        if (seen.has(key)) continue
+        seen.add(key)
+        out.push(n)
+      }
+    }
+    return out
+  }
+
+  function rowHasAnyApprover(row: DatabaseRow | undefined, targets: Set<string>): boolean {
+    if (!row || !targets.size) return false
+    for (const n of expandApproverNames(row.approvers)) {
+      if (targets.has(n.toLowerCase())) return true
+    }
+    return false
   }
 
   function applyRows(list: DatabaseRow[]) {
@@ -758,111 +810,224 @@ export default function Databases() {
         : mode === 'revoke-approvers'
           ? '/databases/batch-remove-approvers'
           : '/databases/batch-access-users'
-    const body =
-      mode === 'access' ? { ids, access_users: users } : { ids, approvers: users }
     const label = mode === 'access' ? '可访问用户' : '审核人'
     const verb = mode === 'approvers' ? '追加' : mode === 'revoke-approvers' ? '撤销' : '设置'
     const appendLower = mode === 'approvers' ? new Set(users.map((u) => u.toLowerCase())) : new Set<string>()
+    const revokeLower = revoke ? new Set(users.map((u) => u.toLowerCase())) : new Set<string>()
+    const batchTimeout = 120000
+
+    type BatchACLPayload = {
+      ok_count?: number
+      fail_count?: number
+      skip_count?: number
+      requested?: number
+      failed?: { id?: string; db_name?: string; message?: string }[]
+      skipped?: { id?: string; db_name?: string; message?: string }[]
+      dropped?: string[]
+      updated?: { id?: string; db_name?: string; approvers?: string[] }[]
+    }
+
+    async function postBatch(postIDs: string[]): Promise<{ data: BatchACLPayload | null; timedOut: boolean }> {
+      const body =
+        mode === 'access' ? { ids: postIDs, access_users: users } : { ids: postIDs, approvers: users }
+      try {
+        // silent：超时走复核文案，避免全局 interceptor 再弹一层 error
+        const { data } = await api.post(url, body, { timeout: batchTimeout, silent: true })
+        return { data: data as BatchACLPayload, timedOut: false }
+      } catch (err: any) {
+        const timedOut =
+          err?.code === 'ECONNABORTED' || /timeout/i.test(String(err?.message || ''))
+        if (timedOut) {
+          message.warning(`${verb}${label}请求超时，可能部分已写入，正在复核…`)
+          return { data: null, timedOut: true }
+        }
+        const msg = err?.response?.data?.message || err?.message || '请求失败'
+        message.error(msg)
+        throw err
+      }
+    }
+
+    function applyUpdated(updated: { id?: string; db_name?: string; approvers?: string[] }[]) {
+      if (!(mode === 'approvers' || revoke) || !updated.length) return
+      const byID = new Map(updated.filter((u) => u.id).map((u) => [String(u.id), u.approvers || []]))
+      setRows((prev) =>
+        prev.map((r) => {
+          if (!r.id || !byID.has(r.id)) return r
+          return { ...r, approvers: byID.get(r.id) || [] }
+        }),
+      )
+    }
+
     setBatchSaving(true)
     try {
-      const { data } = await api.post(url, body)
-      const okCount = Number(data.ok_count || 0)
-      const failCount = Number(data.fail_count || 0)
-      const skipCount = Number(data.skip_count || 0)
-      const requested = Number(data.requested || ids.length)
-      const failed: { id?: string; db_name?: string; message?: string }[] = data.failed || []
-      const skippedRows: { id?: string; db_name?: string; message?: string }[] = data.skipped || []
-      const dropped: string[] = Array.isArray(data.dropped) ? data.dropped.map(String) : []
-      const updated: { id?: string; db_name?: string; approvers?: string[] }[] = Array.isArray(data.updated)
-        ? data.updated
+      const first = await postBatch(ids)
+      let data = first.data
+      if (data?.updated) applyUpdated(data.updated)
+
+      let okCount = Number(data?.ok_count || 0)
+      let failCount = Number(data?.fail_count || 0)
+      let skipCount = Number(data?.skip_count || 0)
+      let requested = Number(data?.requested || ids.length)
+      let failed: { id?: string; db_name?: string; message?: string }[] = data?.failed || []
+      let skippedRows: { id?: string; db_name?: string; message?: string }[] = data?.skipped || []
+      const dropped: string[] = Array.isArray(data?.dropped) ? data!.dropped!.map(String) : []
+      let updated: { id?: string; db_name?: string; approvers?: string[] }[] = Array.isArray(data?.updated)
+        ? data!.updated!
         : []
-      if ((mode === 'approvers' || revoke) && updated.length) {
-        const byID = new Map(updated.filter((u) => u.id).map((u) => [String(u.id), u.approvers || []]))
-        setRows((prev) =>
-          prev.map((r) => {
-            if (!r.id || !byID.has(r.id)) return r
-            return { ...r, approvers: byID.get(r.id) || [] }
-          }),
-        )
-      }
+
       const selected = ids.length
       const failIDs = new Set(failed.map((f) => String(f.id || '')).filter(Boolean))
       const skipIDs = new Set(skippedRows.map((f) => String(f.id || '')).filter(Boolean))
       const keepKeys = new Set<string>([...failIDs, ...skipIDs])
-      if (failCount === 0 && skipCount === 0 && okCount === selected) {
-        message.success(
-          `已为 ${okCount} 个库${verb}${label}` +
-            (dropped.length ? `（已忽略非成员：${dropped.join('、')}）` : ''),
-        )
-      } else {
-        Modal.warning({
-          title: `${verb}${label}完成：勾选 ${selected}，请求 ${requested}，成功 ${okCount}，失败 ${failCount}，跳过 ${skipCount}`,
-          content: (
-            <div>
-              {dropped.length ? <p style={{ marginBottom: 8 }}>已忽略非本租户成员：{dropped.join('、')}</p> : null}
-              <ul style={{ margin: 0, paddingLeft: 18, maxHeight: 240, overflow: 'auto' }}>
-                {failed.map((f) => (
-                  <li key={`f-${f.id || f.db_name}`}>
-                    {f.db_name || f.id}：{f.message || '失败'}
-                  </li>
-                ))}
-                {skippedRows.map((f) => (
-                  <li key={`s-${f.id || f.db_name}`}>
-                    {f.db_name || f.id}：{f.message || '跳过'}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ),
-        })
-      }
-      if (revoke) {
+
+      const latest = await load()
+      const byLatest = new Map(latest.filter((r) => r.id).map((r) => [String(r.id), r]))
+
+      if (revoke && revokeLower.size) {
+        let leftoverIDs = ids.filter((id) => rowHasAnyApprover(byLatest.get(id), revokeLower))
+        if (leftoverIDs.length) {
+          message.info(`写后复核：${leftoverIDs.length} 个库仍含待撤销审核人，正在自动重试…`)
+          const retry = await postBatch(leftoverIDs)
+          if (retry.data) {
+            data = retry.data
+            if (retry.data.updated) applyUpdated(retry.data.updated)
+            okCount += Number(retry.data.ok_count || 0)
+            failCount = Number(retry.data.fail_count || 0)
+            skipCount = Number(retry.data.skip_count || 0)
+            requested = selected
+            failed = [...failed, ...(retry.data.failed || [])]
+            skippedRows = retry.data.skipped || []
+            updated = [...updated, ...(retry.data.updated || [])]
+            for (const f of retry.data.failed || []) {
+              const id = String(f.id || '')
+              if (id) keepKeys.add(id)
+            }
+          }
+          const afterRetry = await load()
+          const byAfter = new Map(afterRetry.filter((r) => r.id).map((r) => [String(r.id), r]))
+          leftoverIDs = ids.filter((id) => rowHasAnyApprover(byAfter.get(id), revokeLower))
+          if (leftoverIDs.length) {
+            for (const id of leftoverIDs) keepKeys.add(id)
+            Modal.warning({
+              title: `写后复核：仍有 ${leftoverIDs.length} 个库未撤干净`,
+              content: (
+                <ul style={{ margin: 0, paddingLeft: 18, maxHeight: 240, overflow: 'auto' }}>
+                  {leftoverIDs.map((id) => {
+                    const row = byAfter.get(id)
+                    return (
+                      <li key={id}>
+                        {row?.db_name || id}：{(row?.approvers || []).join(',') || '—'}
+                      </li>
+                    )
+                  })}
+                </ul>
+              ),
+            })
+          } else {
+            message.success(
+              first.timedOut
+                ? `复核通过：${selected} 个库已${verb}${label}`
+                : `已为 ${selected} 个库${verb}${label}`,
+            )
+          }
+        } else if (!first.timedOut && failCount === 0 && skipCount === 0 && okCount === selected) {
+          message.success(
+            `已为 ${okCount} 个库${verb}${label}` +
+              (dropped.length ? `（已忽略非成员：${dropped.join('、')}）` : ''),
+          )
+        } else if (!first.timedOut) {
+          Modal.warning({
+            title: `${verb}${label}完成：勾选 ${selected}，请求 ${requested}，成功 ${okCount}，失败 ${failCount}，跳过 ${skipCount}`,
+            content: (
+              <div>
+                {dropped.length ? <p style={{ marginBottom: 8 }}>已忽略非本租户成员：{dropped.join('、')}</p> : null}
+                <ul style={{ margin: 0, paddingLeft: 18, maxHeight: 240, overflow: 'auto' }}>
+                  {failed.map((f) => (
+                    <li key={`f-${f.id || f.db_name}`}>
+                      {f.db_name || f.id}：{f.message || '失败'}
+                    </li>
+                  ))}
+                  {skippedRows.map((f) => (
+                    <li key={`s-${f.id || f.db_name}`}>
+                      {f.db_name || f.id}：{f.message || '跳过'}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ),
+          })
+        } else {
+          message.success(`复核通过：${selected} 个库已${verb}${label}`)
+        }
         const cleared = updated.filter((u) => Array.isArray(u.approvers) && u.approvers.length === 0).length
         if (cleared > 0) {
           message.info(`${cleared} 个库审核人已清空`)
         }
-      }
-      if (mode === 'approvers' && appendLower.size) {
-        const missLabels: string[] = []
-        for (const id of ids) {
-          if (failIDs.has(id)) continue
-          const fromUpdated = updated.find((u) => String(u.id) === id)
-          if (!fromUpdated?.approvers) {
-            missLabels.push(id)
-            keepKeys.add(id)
-            continue
-          }
-          const have = new Set(fromUpdated.approvers.map((a) => String(a).toLowerCase()))
-          let ok = true
-          for (const name of appendLower) {
-            if (!have.has(name)) {
-              ok = false
-              break
-            }
-          }
-          if (!ok) {
-            missLabels.push(fromUpdated.db_name || id)
-            keepKeys.add(id)
-          }
-        }
-        if (missLabels.length) {
+      } else if (!first.timedOut) {
+        if (failCount === 0 && skipCount === 0 && okCount === selected) {
+          message.success(
+            `已为 ${okCount} 个库${verb}${label}` +
+              (dropped.length ? `（已忽略非成员：${dropped.join('、')}）` : ''),
+          )
+        } else {
           Modal.warning({
-            title: `写后复核：${missLabels.length} 个库未包含本次追加的审核人`,
+            title: `${verb}${label}完成：勾选 ${selected}，请求 ${requested}，成功 ${okCount}，失败 ${failCount}，跳过 ${skipCount}`,
             content: (
-              <ul style={{ margin: 0, paddingLeft: 18, maxHeight: 240, overflow: 'auto' }}>
-                {missLabels.map((m) => (
-                  <li key={m}>{m}</li>
-                ))}
-              </ul>
+              <div>
+                {dropped.length ? <p style={{ marginBottom: 8 }}>已忽略非本租户成员：{dropped.join('、')}</p> : null}
+                <ul style={{ margin: 0, paddingLeft: 18, maxHeight: 240, overflow: 'auto' }}>
+                  {failed.map((f) => (
+                    <li key={`f-${f.id || f.db_name}`}>
+                      {f.db_name || f.id}：{f.message || '失败'}
+                    </li>
+                  ))}
+                  {skippedRows.map((f) => (
+                    <li key={`s-${f.id || f.db_name}`}>
+                      {f.db_name || f.id}：{f.message || '跳过'}
+                    </li>
+                  ))}
+                </ul>
+              </div>
             ),
           })
         }
+        if (mode === 'approvers' && appendLower.size) {
+          const missLabels: string[] = []
+          for (const id of ids) {
+            if (failIDs.has(id)) continue
+            const row = byLatest.get(id)
+            const have = new Set(expandApproverNames(row?.approvers).map((a) => a.toLowerCase()))
+            let ok = true
+            for (const name of appendLower) {
+              if (!have.has(name)) {
+                ok = false
+                break
+              }
+            }
+            if (!ok) {
+              missLabels.push(row?.db_name || id)
+              keepKeys.add(id)
+            }
+          }
+          if (missLabels.length) {
+            Modal.warning({
+              title: `写后复核：${missLabels.length} 个库未包含本次追加的审核人`,
+              content: (
+                <ul style={{ margin: 0, paddingLeft: 18, maxHeight: 240, overflow: 'auto' }}>
+                  {missLabels.map((m) => (
+                    <li key={m}>{m}</li>
+                  ))}
+                </ul>
+              ),
+            })
+          }
+        }
       }
+
       setSelectedKeys(keepKeys.size ? [...keepKeys] : [])
       setBatchMode(null)
       setBatchRows([])
       setBatchUsers([])
-      await load()
     } finally {
       setBatchSaving(false)
     }
@@ -962,6 +1127,21 @@ export default function Databases() {
             value={envFilter || undefined}
             onChange={(v) => setEnvFilter(v || '')}
             options={envFilterOptions}
+          />
+        </div>
+        <div className="filter-item filter-item-fixed">
+          <span className="label">租户：</span>
+          <Select
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            placeholder="全部租户"
+            style={{ width: 180 }}
+            popupMatchSelectWidth={false}
+            dropdownStyle={{ minWidth: 180, maxWidth: 280 }}
+            value={tenantFilter || undefined}
+            onChange={(v) => setTenantFilter(v || '')}
+            options={tenantFilterOptions}
           />
         </div>
         <div className="filter-item filter-item-fixed">

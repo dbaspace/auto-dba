@@ -3,10 +3,12 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -399,5 +401,69 @@ func TestDatabaseBatchRemoveApprovers(t *testing.T) {
 	code, out = call(map[string]any{"ids": []string{hasNone.ID}, "approvers": []string{"admin"}})
 	if code != http.StatusOK || out["ok_count"].(float64) != 0 || out["skip_count"].(float64) != 1 {
 		t.Fatalf("noop remove: code=%d out=%v", code, out)
+	}
+}
+
+// TestDatabaseBatchRemoveApproversConcurrent 多库并发撤销：全部去掉目标用户，含逗号粘连脏数据。
+func TestDatabaseBatchRemoveApproversConcurrent(t *testing.T) {
+	db := batchACLTestStore(t)
+	h := &DatabaseHandler{Store: db}
+	gin.SetMode(gin.TestMode)
+
+	admin, err := db.GetUserByUsername("admin")
+	if err != nil || admin == nil {
+		t.Skip("admin user missing")
+	}
+
+	inst := &store.Instance{Name: "brmc-" + uuid.NewString()[:8], DBType: "mysql", Host: "127.0.0.1", Port: 3306, TenantID: store.DefaultTenantID}
+	if err := db.CreateInstance(inst); err != nil {
+		t.Fatal(err)
+	}
+	sfx := uuid.NewString()[:6]
+	ids := make([]string, 0, 24)
+	t.Cleanup(func() {
+		for _, id := range ids {
+			_ = db.DeleteDatabase(id)
+		}
+		_ = db.DeleteInstance(inst.ID)
+	})
+	for i := 0; i < 20; i++ {
+		aps := []string{"daiyong", "gaoxiang"}
+		if i%5 == 0 {
+			aps = []string{"daiyong, gaoxiang"}
+		}
+		it := &store.Database{
+			InstanceID: inst.ID, DBName: fmt.Sprintf("brmc_%s_%d", sfx, i), Visibility: "global",
+			TenantID: store.DefaultTenantID, Approvers: aps,
+		}
+		if err := db.CreateDatabase(it); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, it.ID)
+	}
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	raw, _ := json.Marshal(map[string]any{"ids": ids, "approvers": []string{"gaoxiang"}})
+	c.Request = httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(raw))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set(middleware.CtxUsername, "admin")
+	c.Set(middleware.CtxUserID, admin.ID)
+	c.Set(middleware.CtxRole, "admin")
+	c.Set(middleware.CtxTenantID, store.DefaultTenantID)
+	h.BatchRemoveApprovers(c)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code=%d body=%s", w.Code, w.Body.String())
+	}
+	var out map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &out)
+	if out["ok_count"].(float64) != float64(len(ids)) {
+		t.Fatalf("ok_count=%v out=%v", out["ok_count"], out)
+	}
+	for _, id := range ids {
+		got, _ := db.GetDatabase(id)
+		if got == nil || len(got.Approvers) != 1 || !strings.EqualFold(got.Approvers[0], "daiyong") {
+			t.Fatalf("id=%s approvers=%v", id, got)
+		}
 	}
 }

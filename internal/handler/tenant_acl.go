@@ -29,6 +29,29 @@ func uniqueTrimmedNames(names []string) []string {
 	return out
 }
 
+// expandCommaJoinedNames 拆开历史脏数据里「两人粘成一个 token」的写法（如 "daiyong, gaoxiang"）。
+func expandCommaJoinedNames(names []string) []string {
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		n = strings.TrimSpace(n)
+		if n == "" {
+			continue
+		}
+		if strings.ContainsAny(n, ",，") {
+			n = strings.ReplaceAll(n, "，", ",")
+			for _, p := range strings.Split(n, ",") {
+				p = strings.TrimSpace(p)
+				if p != "" {
+					out = append(out, p)
+				}
+			}
+			continue
+		}
+		out = append(out, n)
+	}
+	return uniqueTrimmedNames(out)
+}
+
 // requireTenantMemberUsernames 要求每个用户名均为该租户活跃成员。
 func requireTenantMemberUsernames(db *store.DB, tenantID string, names []string) error {
 	_, dropped, err := keepTenantMemberUsernames(db, tenantID, names)
@@ -127,14 +150,16 @@ func mergeDatabaseApproversWithSet(existing, submitted []string, members map[str
 }
 
 // subtractApprovers 从现有名单减去待撤销用户（大小写不敏感）；不要求对方为本租户成员。
-// merged 可为 empty；removed 为实际删掉的规范名；missing 为请求撤销但不在该库上的人。
+// 会先拆开逗号粘连的脏 token。merged 可为 empty；removed 为实际删掉的规范名；missing 为请求撤销但不在该库上的人。
 func subtractApprovers(existing, remove []string) (merged, removed, missing []string) {
+	existing = expandCommaJoinedNames(existing)
+	remove = expandCommaJoinedNames(remove)
 	removeSet := map[string]struct{}{}
-	for _, n := range uniqueTrimmedNames(remove) {
+	for _, n := range remove {
 		removeSet[strings.ToLower(n)] = struct{}{}
 	}
 	hit := map[string]struct{}{}
-	for _, n := range uniqueTrimmedNames(existing) {
+	for _, n := range existing {
 		key := strings.ToLower(n)
 		if _, ok := removeSet[key]; ok {
 			removed = append(removed, n)
@@ -146,7 +171,7 @@ func subtractApprovers(existing, remove []string) (merged, removed, missing []st
 	if merged == nil {
 		merged = []string{}
 	}
-	for _, n := range uniqueTrimmedNames(remove) {
+	for _, n := range remove {
 		key := strings.ToLower(n)
 		if _, ok := hit[key]; !ok {
 			missing = append(missing, n)

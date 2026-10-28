@@ -1,6 +1,9 @@
 package handler
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestMergeDatabaseApproversLogicViaKeep(t *testing.T) {
 	exist := uniqueTrimmedNames([]string{"daiyong", "admin"})
@@ -95,6 +98,16 @@ func TestSubtractApprovers(t *testing.T) {
 	merged, removed, missing = subtractApprovers([]string{"a", "b"}, []string{"B", "c"})
 	if len(merged) != 1 || merged[0] != "a" || len(removed) != 1 || removed[0] != "b" || len(missing) != 1 {
 		t.Fatalf("partial merged=%v removed=%v missing=%v", merged, removed, missing)
+	}
+
+	// 脏数据：两人粘成一个 token
+	merged, removed, missing = subtractApprovers([]string{"daiyong, gaoxiang"}, []string{"gaoxiang"})
+	if len(merged) != 1 || merged[0] != "daiyong" || len(removed) != 1 || !strings.EqualFold(removed[0], "gaoxiang") || len(missing) != 0 {
+		t.Fatalf("comma-joined merged=%v removed=%v missing=%v", merged, removed, missing)
+	}
+	merged, removed, missing = subtractApprovers([]string{"daiyong，gaoxiang"}, []string{"GAOXIANG"})
+	if len(merged) != 1 || merged[0] != "daiyong" || len(removed) != 1 || len(missing) != 0 {
+		t.Fatalf("cn-comma merged=%v removed=%v missing=%v", merged, removed, missing)
 	}
 }
 

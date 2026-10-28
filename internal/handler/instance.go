@@ -9,9 +9,12 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"golang.org/x/sync/errgroup"
 
 	"auto-dba/internal/dbprobe"
 	kquery "auto-dba/internal/kafka"
@@ -21,6 +24,8 @@ import (
 	"auto-dba/internal/secret"
 	"auto-dba/internal/store"
 )
+
+const batchApproverConcurrency = 8
 
 type InstanceHandler struct {
 	Store  *store.DB
@@ -1727,7 +1732,7 @@ func (h *DatabaseHandler) writeDatabaseApproversVerified(id string, merged, must
 var batchApproverRetryBackoff = []time.Duration{20 * time.Millisecond, 50 * time.Millisecond}
 
 // BatchApprovers POST /databases/batch-approvers — 向所选库追加审核人（并集）；非本租户成员自动丢掉，不整批失败。
-// 一次加载成员集、只更新 approvers、写后回读；单条失败最多再试 2 次（共 3 次）。
+// 一次加载成员集、只更新 approvers、写后回读；单条失败最多再试 2 次（共 3 次）；有限并发。
 func (h *DatabaseHandler) BatchApprovers(c *gin.Context) {
 	var req batchDBACLReq
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -1745,71 +1750,83 @@ func (h *DatabaseHandler) BatchApprovers(c *gin.Context) {
 	}
 	add := uniqueTrimmedNames(req.Approvers)
 	requested := len(list)
-	okCount := 0
-	retried := 0
+	var okCount, retried int64
+	var mu sync.Mutex
 	failed := make([]batchDBFail, 0)
 	skipped := make([]batchDBFail, 0)
 	updated := make([]batchApproverUpdated, 0, len(list))
 	droppedSet := map[string]struct{}{}
 	user := c.GetString(middleware.CtxUsername)
 	start := time.Now()
+
+	g, _ := errgroup.WithContext(c.Request.Context())
+	g.SetLimit(batchApproverConcurrency)
 	for i := range list {
 		before := list[i]
-		it := list[i]
-		rowStart := time.Now()
-		var lastErr error
-		var finalApprovers []string
-		var lastKeptAdd []string
-		didRetry := false
-		for attempt := 0; attempt < 3; attempt++ {
-			if attempt > 0 {
-				didRetry = true
-				if attempt-1 < len(batchApproverRetryBackoff) {
-					time.Sleep(batchApproverRetryBackoff[attempt-1])
+		g.Go(func() error {
+			it := before
+			rowStart := time.Now()
+			var lastErr error
+			var finalApprovers []string
+			var lastKeptAdd []string
+			didRetry := false
+			var localDropped []string
+			for attempt := 0; attempt < 3; attempt++ {
+				if attempt > 0 {
+					didRetry = true
+					if attempt-1 < len(batchApproverRetryBackoff) {
+						time.Sleep(batchApproverRetryBackoff[attempt-1])
+					}
+					fresh, getErr := h.Store.GetDatabase(it.ID)
+					if getErr != nil {
+						lastErr = getErr
+						break
+					}
+					if fresh == nil {
+						lastErr = fmt.Errorf("库不存在")
+						break
+					}
+					it = *fresh
 				}
-				fresh, getErr := h.Store.GetDatabase(it.ID)
-				if getErr != nil {
-					lastErr = getErr
+				merged, dropped, keptAdd := mergeDatabaseApproversWithSet(it.Approvers, add, members)
+				lastKeptAdd = keptAdd
+				localDropped = dropped
+				finalApprovers, lastErr = h.writeDatabaseApproversVerified(it.ID, merged, keptAdd)
+				if lastErr == nil {
+					log.Printf("batch_approvers id=%s db=%s tid=%s attempt=%d ok kept_add=%v approvers=%v elapsed_ms=%d",
+						it.ID, it.DBName, tid, attempt+1, keptAdd, finalApprovers, time.Since(rowStart).Milliseconds())
 					break
 				}
-				if fresh == nil {
-					lastErr = fmt.Errorf("库不存在")
-					break
-				}
-				it = *fresh
+				log.Printf("batch_approvers id=%s db=%s tid=%s attempt=%d err=%v elapsed_ms=%d",
+					it.ID, it.DBName, tid, attempt+1, lastErr, time.Since(rowStart).Milliseconds())
 			}
-			merged, dropped, keptAdd := mergeDatabaseApproversWithSet(it.Approvers, add, members)
-			lastKeptAdd = keptAdd
-			for _, name := range dropped {
+			mu.Lock()
+			for _, name := range localDropped {
 				droppedSet[name] = struct{}{}
 			}
-			// 即使无可追加成员，仍写入以清理现有非法审核人；mustContain 为空时回读只校验写通。
-			finalApprovers, lastErr = h.writeDatabaseApproversVerified(it.ID, merged, keptAdd)
-			if lastErr == nil {
-				log.Printf("batch_approvers id=%s db=%s tid=%s attempt=%d ok kept_add=%v approvers=%v elapsed_ms=%d",
-					it.ID, it.DBName, tid, attempt+1, keptAdd, finalApprovers, time.Since(rowStart).Milliseconds())
-				break
+			if didRetry {
+				atomic.AddInt64(&retried, 1)
 			}
-			log.Printf("batch_approvers id=%s db=%s tid=%s attempt=%d err=%v elapsed_ms=%d",
-				it.ID, it.DBName, tid, attempt+1, lastErr, time.Since(rowStart).Milliseconds())
-		}
-		if didRetry {
-			retried++
-		}
-		if lastErr != nil {
-			failed = append(failed, batchDBFail{ID: it.ID, DBName: it.DBName, Message: lastErr.Error()})
-			continue
-		}
-		after := before
-		after.Approvers = finalApprovers
-		updated = append(updated, batchApproverUpdated{ID: it.ID, DBName: it.DBName, Approvers: finalApprovers})
-		_ = h.Store.AppendCmdbAudit(user, "update", "database", it.ID, "api", before, after)
-		if len(add) > 0 && len(lastKeptAdd) == 0 {
-			skipped = append(skipped, batchDBFail{ID: it.ID, DBName: it.DBName, Message: "无可追加的本租户成员"})
-			continue
-		}
-		okCount++
+			if lastErr != nil {
+				failed = append(failed, batchDBFail{ID: it.ID, DBName: it.DBName, Message: lastErr.Error()})
+				mu.Unlock()
+				return nil
+			}
+			after := before
+			after.Approvers = finalApprovers
+			updated = append(updated, batchApproverUpdated{ID: it.ID, DBName: it.DBName, Approvers: finalApprovers})
+			if len(add) > 0 && len(lastKeptAdd) == 0 {
+				skipped = append(skipped, batchDBFail{ID: it.ID, DBName: it.DBName, Message: "无可追加的本租户成员"})
+			} else {
+				atomic.AddInt64(&okCount, 1)
+			}
+			mu.Unlock()
+			_ = h.Store.AppendCmdbAudit(user, "update", "database", it.ID, "api", before, after)
+			return nil
+		})
 	}
+	_ = g.Wait()
+
 	dropped := make([]string, 0, len(droppedSet))
 	for name := range droppedSet {
 		dropped = append(dropped, name)
@@ -1838,7 +1855,7 @@ func (h *DatabaseHandler) BatchRemoveApprovers(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "参数无效"})
 		return
 	}
-	remove := uniqueTrimmedNames(req.Approvers)
+	remove := expandCommaJoinedNames(req.Approvers)
 	if len(remove) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "请选择要撤销的审核人"})
 		return
@@ -1848,74 +1865,85 @@ func (h *DatabaseHandler) BatchRemoveApprovers(c *gin.Context) {
 		return
 	}
 	requested := len(list)
-	okCount := 0
-	retried := 0
+	var okCount, retried int64
+	var mu sync.Mutex
 	failed := make([]batchDBFail, 0)
 	skipped := make([]batchDBFail, 0)
 	updated := make([]batchApproverUpdated, 0, len(list))
 	user := c.GetString(middleware.CtxUsername)
 	start := time.Now()
+
+	g, _ := errgroup.WithContext(c.Request.Context())
+	g.SetLimit(batchApproverConcurrency)
 	for i := range list {
 		before := list[i]
-		it := list[i]
-		rowStart := time.Now()
-		var lastErr error
-		var finalApprovers []string
-		var lastRemoved []string
-		didRetry := false
-		for attempt := 0; attempt < 3; attempt++ {
-			if attempt > 0 {
-				didRetry = true
-				if attempt-1 < len(batchApproverRetryBackoff) {
-					time.Sleep(batchApproverRetryBackoff[attempt-1])
+		g.Go(func() error {
+			it := before
+			rowStart := time.Now()
+			var lastErr error
+			var finalApprovers []string
+			var lastRemoved []string
+			didRetry := false
+			for attempt := 0; attempt < 3; attempt++ {
+				if attempt > 0 {
+					didRetry = true
+					if attempt-1 < len(batchApproverRetryBackoff) {
+						time.Sleep(batchApproverRetryBackoff[attempt-1])
+					}
+					fresh, getErr := h.Store.GetDatabase(it.ID)
+					if getErr != nil {
+						lastErr = getErr
+						break
+					}
+					if fresh == nil {
+						lastErr = fmt.Errorf("库不存在")
+						break
+					}
+					it = *fresh
 				}
-				fresh, getErr := h.Store.GetDatabase(it.ID)
-				if getErr != nil {
-					lastErr = getErr
+				merged, removed, _ := subtractApprovers(it.Approvers, remove)
+				lastRemoved = removed
+				if len(removed) == 0 {
+					finalApprovers = expandCommaJoinedNames(it.Approvers)
+					if finalApprovers == nil {
+						finalApprovers = []string{}
+					}
+					lastErr = nil
 					break
 				}
-				if fresh == nil {
-					lastErr = fmt.Errorf("库不存在")
+				finalApprovers, lastErr = h.writeDatabaseApproversVerified(it.ID, merged, nil)
+				if lastErr == nil {
+					log.Printf("batch_remove_approvers id=%s db=%s tid=%s attempt=%d ok removed=%v approvers=%v elapsed_ms=%d",
+						it.ID, it.DBName, tid, attempt+1, removed, finalApprovers, time.Since(rowStart).Milliseconds())
 					break
 				}
-				it = *fresh
+				log.Printf("batch_remove_approvers id=%s db=%s tid=%s attempt=%d err=%v elapsed_ms=%d",
+					it.ID, it.DBName, tid, attempt+1, lastErr, time.Since(rowStart).Milliseconds())
 			}
-			merged, removed, _ := subtractApprovers(it.Approvers, remove)
-			lastRemoved = removed
-			if len(removed) == 0 {
-				finalApprovers = uniqueTrimmedNames(it.Approvers)
-				if finalApprovers == nil {
-					finalApprovers = []string{}
-				}
-				lastErr = nil
-				break
+			mu.Lock()
+			if didRetry {
+				atomic.AddInt64(&retried, 1)
 			}
-			finalApprovers, lastErr = h.writeDatabaseApproversVerified(it.ID, merged, nil)
-			if lastErr == nil {
-				log.Printf("batch_remove_approvers id=%s db=%s tid=%s attempt=%d ok removed=%v approvers=%v elapsed_ms=%d",
-					it.ID, it.DBName, tid, attempt+1, removed, finalApprovers, time.Since(rowStart).Milliseconds())
-				break
+			if lastErr != nil {
+				failed = append(failed, batchDBFail{ID: it.ID, DBName: it.DBName, Message: lastErr.Error()})
+				mu.Unlock()
+				return nil
 			}
-			log.Printf("batch_remove_approvers id=%s db=%s tid=%s attempt=%d err=%v elapsed_ms=%d",
-				it.ID, it.DBName, tid, attempt+1, lastErr, time.Since(rowStart).Milliseconds())
-		}
-		if didRetry {
-			retried++
-		}
-		if lastErr != nil {
-			failed = append(failed, batchDBFail{ID: it.ID, DBName: it.DBName, Message: lastErr.Error()})
-			continue
-		}
-		after := before
-		after.Approvers = finalApprovers
-		updated = append(updated, batchApproverUpdated{ID: it.ID, DBName: it.DBName, Approvers: finalApprovers})
-		_ = h.Store.AppendCmdbAudit(user, "update", "database", it.ID, "api", before, after)
-		if len(lastRemoved) == 0 {
-			skipped = append(skipped, batchDBFail{ID: it.ID, DBName: it.DBName, Message: "所选审核人未出现在该库"})
-			continue
-		}
-		okCount++
+			after := before
+			after.Approvers = finalApprovers
+			updated = append(updated, batchApproverUpdated{ID: it.ID, DBName: it.DBName, Approvers: finalApprovers})
+			if len(lastRemoved) == 0 {
+				skipped = append(skipped, batchDBFail{ID: it.ID, DBName: it.DBName, Message: "所选审核人未出现在该库"})
+			} else {
+				atomic.AddInt64(&okCount, 1)
+			}
+			mu.Unlock()
+			_ = h.Store.AppendCmdbAudit(user, "update", "database", it.ID, "api", before, after)
+			return nil
+		})
 	}
+	_ = g.Wait()
+
 	log.Printf("batch_remove_approvers tenant=%s requested=%d ok=%d fail=%d skipped=%d retried=%d elapsed_ms=%d",
 		tid, requested, okCount, len(failed), len(skipped), retried, time.Since(start).Milliseconds())
 	c.JSON(http.StatusOK, gin.H{
