@@ -39,10 +39,20 @@ func (d *DB) AssignDatabaseTenant(id, toTenantID string) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 	now := time.Now().UTC().Format(time.RFC3339)
-	// 库已属目标租户时仍同步账号，补齐上次漏更的账号归属。
-	if strings.TrimSpace(dbRow.TenantID) != toTenantID {
-		if _, err := tx.Exec(d.rewrite(`UPDATE tbl_databases SET tenant_id=?, updated_at=? WHERE id=?`),
-			toTenantID, now, dbRow.ID); err != nil {
+	approvers, err := d.filterActiveTenantUsernames(toTenantID, dbRow.Approvers)
+	if err != nil {
+		return err
+	}
+	accessUsers, err := d.filterActiveTenantUsernames(toTenantID, dbRow.AccessUsers)
+	if err != nil {
+		return err
+	}
+	aclChanged := !stringSliceEqualFold(approvers, dbRow.Approvers) || !stringSliceEqualFold(accessUsers, dbRow.AccessUsers)
+	tenantChanged := strings.TrimSpace(dbRow.TenantID) != toTenantID
+	// 库已属目标租户时仍同步账号，并清理非目标租户成员的审核人/可访问用户。
+	if tenantChanged || aclChanged {
+		if _, err := tx.Exec(d.rewrite(`UPDATE tbl_databases SET tenant_id=?, approvers=?, access_users=?, updated_at=? WHERE id=?`),
+			toTenantID, encodeJSON(approvers), encodeJSON(accessUsers), now, dbRow.ID); err != nil {
 			return err
 		}
 	}
@@ -51,6 +61,64 @@ func (d *DB) AssignDatabaseTenant(id, toTenantID string) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+func (d *DB) filterActiveTenantUsernames(tenantID string, names []string) ([]string, error) {
+	out := make([]string, 0, len(names))
+	seen := map[string]struct{}{}
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		key := strings.ToLower(name)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		u, err := d.GetUserByUsername(name)
+		if err != nil {
+			return nil, err
+		}
+		if u == nil {
+			continue
+		}
+		ok, err := d.IsActiveTenantMember(tenantID, u.ID)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, name)
+	}
+	return out, nil
+}
+
+func stringSliceEqualFold(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	norm := func(in []string) map[string]struct{} {
+		m := map[string]struct{}{}
+		for _, s := range in {
+			s = strings.ToLower(strings.TrimSpace(s))
+			if s != "" {
+				m[s] = struct{}{}
+			}
+		}
+		return m
+	}
+	ma, mb := norm(a), norm(b)
+	if len(ma) != len(mb) {
+		return false
+	}
+	for k := range ma {
+		if _, ok := mb[k]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func pickSameAddressInstance(src *Instance, hits []Instance) (*Instance, error) {

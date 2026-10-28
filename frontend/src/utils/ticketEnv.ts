@@ -91,3 +91,68 @@ export function unionApproverNames(lists: string[][]): string[] {
   }
   return [...display.values()]
 }
+
+export type DbRecordForApprover = {
+  instance_id?: string
+  db_name?: string
+  approvers?: string[] | string
+}
+
+function hasApprovers(d: DbRecordForApprover): boolean {
+  const a = d.approvers
+  if (Array.isArray(a)) return a.some((x) => String(x || '').trim())
+  return String(a || '').trim().length > 0
+}
+
+/** db_marketing_064 / db_marketing_0 → db_marketing_ ，便于分库族匹配 */
+export function dbNameFamilyPrefix(dbName: string): string {
+  const s = String(dbName || '').trim()
+  if (!s) return ''
+  const m = s.match(/^(.*_)[^_]+$/)
+  return m ? m[1] : s
+}
+
+/**
+ * 为某实例解析用于拉取库级审核人的库名。
+ * 1) 同实例上库名与表单逻辑库一致；
+ * 2) 分库时按 shard 前缀 / 库名族前缀匹配该实例登记库（优先有审批人的）；
+ * 3) 否则返回空串，后端回退实例审批人。
+ */
+export function resolveDbNameForApprover(
+  instanceId: string,
+  formDbName: string,
+  dbRecords: DbRecordForApprover[],
+  opts?: { shardDb?: boolean; shardDbPrefix?: string },
+): string {
+  const iid = String(instanceId || '').trim()
+  const want = String(formDbName || '').trim()
+  if (!iid) return want
+
+  const onInst = (dbRecords || []).filter(
+    (d) => String(d.instance_id || '').trim() === iid && String(d.db_name || '').trim(),
+  )
+
+  if (want) {
+    const exact = onInst.find((d) => String(d.db_name || '').trim() === want)
+    if (exact) return want
+  }
+
+  if (opts?.shardDb) {
+    const prefix = String(opts.shardDbPrefix || '').trim()
+    const prefixes = [prefix, dbNameFamilyPrefix(prefix), dbNameFamilyPrefix(want)]
+      .map((p) => p.trim())
+      .filter(Boolean)
+    const seen = new Set<string>()
+    for (const p of prefixes) {
+      const key = p.toLowerCase()
+      if (seen.has(key)) continue
+      seen.add(key)
+      const matches = onInst.filter((d) => String(d.db_name || '').trim().toLowerCase().startsWith(key))
+      const withAppr = matches.find((d) => hasApprovers(d))
+      if (withAppr) return String(withAppr.db_name || '').trim()
+      if (matches[0]) return String(matches[0].db_name || '').trim()
+    }
+  }
+
+  return ''
+}

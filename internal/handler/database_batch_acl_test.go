@@ -119,7 +119,7 @@ func TestDatabaseBatchACL(t *testing.T) {
 		return w.Code, out
 	}
 
-	// 审核人：同租户覆盖成功
+	// 审核人：同租户追加成功
 	code, out := call(h.BatchApprovers, map[string]any{"ids": []string{privA.ID, glob.ID}, "approvers": []string{"admin"}}, false)
 	if code != http.StatusOK || out["ok_count"].(float64) != 2 {
 		t.Fatalf("approvers ok: code=%d out=%v", code, out)
@@ -131,17 +131,26 @@ func TestDatabaseBatchACL(t *testing.T) {
 		t.Fatalf("privA other fields changed: %v", got)
 	}
 
-	// 审核人：非租户成员拒绝
-	if code, out = call(h.BatchApprovers, map[string]any{"ids": []string{privA.ID}, "approvers": []string{outsider.Username}}, false); code != http.StatusBadRequest {
-		t.Fatalf("outsider approver: code=%d out=%v", code, out)
+	// 审核人：非租户成员忽略，不整批失败；已有合法名单保留
+	if _, err := db.Exec(`UPDATE tbl_databases SET approvers=? WHERE id=?`, `["admin"]`, glob.ID); err != nil {
+		t.Fatal(err)
+	}
+	if code, out = call(h.BatchApprovers, map[string]any{"ids": []string{glob.ID}, "approvers": []string{outsider.Username}}, false); code != http.StatusOK {
+		t.Fatalf("outsider approver should soft-drop: code=%d out=%v", code, out)
+	}
+	if got, _ := db.GetDatabase(glob.ID); got == nil || len(got.Approvers) != 1 || got.Approvers[0] != "admin" {
+		t.Fatalf("should keep existing member approver: %v", got)
+	}
+	if dropped, _ := out["dropped"].([]any); len(dropped) == 0 {
+		t.Fatalf("expected dropped outsider, out=%v", out)
 	}
 
-	// 审核人：空名单清空库级
+	// 审核人：空名单不追加，保留已有合法成员
 	if code, out = call(h.BatchApprovers, map[string]any{"ids": []string{glob.ID}, "approvers": []string{}}, false); code != http.StatusOK {
-		t.Fatalf("clear approvers: code=%d out=%v", code, out)
+		t.Fatalf("empty append: code=%d out=%v", code, out)
 	}
-	if got, _ := db.GetDatabase(glob.ID); got == nil || len(got.Approvers) != 0 {
-		t.Fatalf("approvers not cleared: %v", got)
+	if got, _ := db.GetDatabase(glob.ID); got == nil || len(got.Approvers) != 1 || got.Approvers[0] != "admin" {
+		t.Fatalf("empty append should keep members: %v", got)
 	}
 
 	// 可访问用户：含全局库拒绝

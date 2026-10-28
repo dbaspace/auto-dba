@@ -31,28 +31,57 @@ func uniqueTrimmedNames(names []string) []string {
 
 // requireTenantMemberUsernames 要求每个用户名均为该租户活跃成员。
 func requireTenantMemberUsernames(db *store.DB, tenantID string, names []string) error {
+	_, dropped, err := keepTenantMemberUsernames(db, tenantID, names)
+	if err != nil {
+		return err
+	}
+	if len(dropped) == 0 {
+		return nil
+	}
+	return fmt.Errorf("用户 %s 不是该租户的活跃成员", dropped[0])
+}
+
+// keepTenantMemberUsernames 保留租户活跃成员，其余放入 dropped（用户不存在也算 dropped）。
+func keepTenantMemberUsernames(db *store.DB, tenantID string, names []string) (kept, dropped []string, err error) {
 	tenantID = strings.TrimSpace(tenantID)
 	if tenantID == "" {
-		return fmt.Errorf("缺少租户上下文")
+		return nil, nil, fmt.Errorf("缺少租户上下文")
 	}
-	names = uniqueTrimmedNames(names)
-	for _, name := range names {
-		u, err := db.GetUserByUsername(name)
-		if err != nil {
-			return err
+	for _, name := range uniqueTrimmedNames(names) {
+		u, e := db.GetUserByUsername(name)
+		if e != nil {
+			return nil, nil, e
 		}
 		if u == nil {
-			return fmt.Errorf("用户 %s 不存在或不属于该租户", name)
+			dropped = append(dropped, name)
+			continue
 		}
-		ok, err := db.IsActiveTenantMember(tenantID, u.ID)
-		if err != nil {
-			return err
+		ok, e := db.IsActiveTenantMember(tenantID, u.ID)
+		if e != nil {
+			return nil, nil, e
 		}
 		if !ok {
-			return fmt.Errorf("用户 %s 不是该租户的活跃成员", name)
+			dropped = append(dropped, name)
+			continue
 		}
+		kept = append(kept, name)
 	}
-	return nil
+	return kept, dropped, nil
+}
+
+// mergeDatabaseApprovers 追加审核人：保留现有合法成员 ∪ 本次合法成员；非成员进 dropped。
+func mergeDatabaseApprovers(db *store.DB, tenantID string, existing, submitted []string) (merged, dropped []string, err error) {
+	keptExist, dropExist, err := keepTenantMemberUsernames(db, tenantID, existing)
+	if err != nil {
+		return nil, nil, err
+	}
+	keptAdd, dropAdd, err := keepTenantMemberUsernames(db, tenantID, submitted)
+	if err != nil {
+		return nil, nil, err
+	}
+	dropped = uniqueTrimmedNames(append(dropExist, dropAdd...))
+	merged = uniqueTrimmedNames(append(keptExist, keptAdd...))
+	return merged, dropped, nil
 }
 
 // validateResourceACL 校验可见性 ACL 与审批人：用户须为资源租户成员；角色 ID 须存在。

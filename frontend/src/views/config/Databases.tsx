@@ -9,6 +9,7 @@ import { Perm, usePermission } from '../../hooks/usePermission'
 import DbTypeIcon from '../../components/DbTypeIcon'
 import { useAppSelector } from '../../store'
 import { splitTypeTabsByDataCount } from '../../utils/typeTabs'
+import { filterNamesByMembers } from '../../utils/tenantMembers'
 import './Databases.css'
 
 interface TypeOption {
@@ -83,6 +84,7 @@ function defaultApprovers(inst?: InstanceRow): string[] {
   const fromInst = (inst?.approvers || []).map((s) => String(s).trim()).filter(Boolean)
   return fromInst.length ? fromInst : ['admin']
 }
+
 
 /** 从 tags 的 idc= 解析环境；无则回退实例 idc */
 function resolveRowEnv(row: DatabaseRow, inst?: InstanceRow): string {
@@ -434,14 +436,30 @@ export default function Databases() {
     setForm((f) => ({ ...f, db_names: (f.db_names || []).filter((n) => !remove.has(n)) }))
   }
 
-  function open(row?: DatabaseRow) {
+  async function open(row?: DatabaseRow) {
     setDbSearch('')
     if (row) {
+      const inst = instances.find((i) => i.id === row.instance_id)
+      const tid = row.tenant_id || inst?.tenant_id || currentTenantId
+      let members: string[] = []
+      try {
+        const { data } = await api.get('/tenant-acl-options', aclParams(tid))
+        applyAclOptions(data.data || {})
+        members = ((data.data || {}).users || []).map((u: any) => u.username || u.name).filter(Boolean)
+      } catch {
+        members = []
+      }
+      const ap = filterNamesByMembers(row.approvers, members)
+      const au = filterNamesByMembers(row.access_users, members)
+      const dropped = [...new Set([...ap.dropped, ...au.dropped])]
+      if (dropped.length) {
+        message.warning(`已忽略非本租户成员：${dropped.join('、')}（保存后从名单去掉；设置其它人会追加到现有合法审核人）`)
+      }
       setForm({
         ...emptyMeta(),
         ...row,
-        approvers: [...(row.approvers || [])],
-        access_users: [...(row.access_users || [])],
+        approvers: ap.kept,
+        access_users: au.kept,
         role_ids: [...(row.role_ids || [])],
         tags: [...(row.tags || [])],
         domains: [...(row.domains || [])],
@@ -449,8 +467,6 @@ export default function Databases() {
       })
       setLiveDbs([])
       setLiveHint('')
-      const inst = instances.find((i) => i.id === row.instance_id)
-      void loadAclOptions(row.tenant_id || inst?.tenant_id || currentTenantId)
     } else {
       setForm({
         instance_id: '',
@@ -465,7 +481,7 @@ export default function Databases() {
   }
 
   function payloadMeta() {
-    const approvers = (form.approvers || []).map((s) => String(s).trim()).filter(Boolean)
+    const { kept: approvers } = filterNamesByMembers(form.approvers, userOptions)
     const visibility = form.visibility === 'private' ? 'private' : 'global'
     const tags = (form.tags || []).map((s) => String(s).trim()).filter(Boolean)
     const domains = (form.domains || []).map((s) => String(s).trim()).filter(Boolean)
@@ -622,14 +638,28 @@ export default function Databases() {
       }
     }
     const tid = [...tids][0]
+    let names: string[] = []
     try {
       const { data } = await api.get('/tenant-acl-options', { params: tid ? { tenant_id: tid } : {} })
-      const names = ((data.data || {}).users || []).map((u: any) => u.username || u.name).filter(Boolean)
+      names = ((data.data || {}).users || []).map((u: any) => u.username || u.name).filter(Boolean)
       setBatchOptions([...new Set(names as string[])])
     } catch {
       return
     }
-    setBatchUsers(sameList(list.map((r) => (mode === 'approvers' ? r.approvers : r.access_users) || [])))
+    if (mode === 'approvers') {
+      const orphan = new Set<string>()
+      for (const r of list) {
+        for (const n of filterNamesByMembers(r.approvers, names).dropped) orphan.add(n)
+      }
+      if (orphan.size) {
+        message.warning(`已忽略非本租户成员：${[...orphan].join('、')}（批量追加不会提交这些人）`)
+      }
+      // 追加语义：选择器表示要追加的人，不预填现有名单
+      setBatchUsers([])
+    } else {
+      const same = sameList(list.map((r) => r.access_users || []))
+      setBatchUsers(filterNamesByMembers(same, names).kept)
+    }
     setBatchRows(list)
     setBatchMode(mode)
   }
@@ -643,7 +673,10 @@ export default function Databases() {
 
   async function confirmBatch() {
     if (!batchMode || !batchRows.length) return
-    const users = batchUsers.map((s) => String(s).trim()).filter(Boolean)
+    const { kept: users, dropped: localDropped } = filterNamesByMembers(batchUsers, batchOptions)
+    if (localDropped.length) {
+      message.warning(`已忽略非本租户成员：${localDropped.join('、')}`)
+    }
     if (batchMode === 'access' && !users.length) {
       const noRole = batchRows.filter((r) => !(r.role_ids || []).length)
       if (noRole.length) {
@@ -661,19 +694,28 @@ export default function Databases() {
       const okCount = Number(data.ok_count || 0)
       const failCount = Number(data.fail_count || 0)
       const failed: { id?: string; db_name?: string; message?: string }[] = data.failed || []
-      if (failCount === 0) {
-        message.success(`已为 ${okCount} 个库设置${label}`)
+      const dropped: string[] = Array.isArray(data.dropped) ? data.dropped.map(String) : []
+      const selected = ids.length
+      const verb = batchMode === 'approvers' ? '追加' : '设置'
+      if (failCount === 0 && okCount === selected) {
+        message.success(
+          `已为 ${okCount} 个库${verb}${label}` +
+            (dropped.length ? `（已忽略非成员：${dropped.join('、')}）` : ''),
+        )
       } else {
         Modal.warning({
-          title: `设置${label}完成：成功 ${okCount}，失败 ${failCount}`,
+          title: `${verb}${label}完成：勾选 ${selected}，成功 ${okCount}，失败 ${failCount}`,
           content: (
-            <ul style={{ margin: 0, paddingLeft: 18, maxHeight: 240, overflow: 'auto' }}>
-              {failed.map((f) => (
-                <li key={f.id || f.db_name}>
-                  {f.db_name || f.id}：{f.message || '失败'}
-                </li>
-              ))}
-            </ul>
+            <div>
+              {dropped.length ? <p style={{ marginBottom: 8 }}>已忽略非本租户成员：{dropped.join('、')}</p> : null}
+              <ul style={{ margin: 0, paddingLeft: 18, maxHeight: 240, overflow: 'auto' }}>
+                {failed.map((f) => (
+                  <li key={f.id || f.db_name}>
+                    {f.db_name || f.id}：{f.message || '失败'}
+                  </li>
+                ))}
+              </ul>
+            </div>
           ),
         })
       }
@@ -1121,8 +1163,16 @@ export default function Databases() {
         destroyOnClose
       >
         <p style={{ marginBottom: 8 }}>
-          以下库的{batchMode === 'approvers' ? '审核人' : '可访问用户'}将被<strong>覆盖</strong>为所选名单，候选人仅限该租户成员。
-          {batchMode === 'approvers' ? '留空则清空库级审核人，工单回退使用实例审核人。' : '库的可见范围与绑定角色不变。'}
+          {batchMode === 'approvers' ? (
+            <>
+              将所选审核人<strong>追加</strong>到各库现有名单（并集）；已不在本租户的会自动去掉；不会删除仍有效的审核人。
+              留空表示不追加新人（仍会清理各库上的非本租户成员）。候选人仅限该租户成员。
+            </>
+          ) : (
+            <>
+              以下库的可访问用户将被<strong>覆盖</strong>为所选名单，候选人仅限该租户成员。库的可见范围与绑定角色不变。
+            </>
+          )}
         </p>
         <ul style={{ margin: '0 0 12px', paddingLeft: 18, maxHeight: 160, overflow: 'auto' }}>
           {batchRows.map((r) => (
@@ -1134,7 +1184,7 @@ export default function Databases() {
         <Select
           mode="multiple"
           style={{ width: '100%' }}
-          placeholder={batchMode === 'approvers' ? '选择审核人' : '选择可访问用户'}
+          placeholder={batchMode === 'approvers' ? '选择要追加的审核人' : '选择可访问用户'}
           value={batchUsers}
           onChange={(v) => setBatchUsers(v)}
           options={batchOptions.map((u) => ({ value: u, label: u }))}

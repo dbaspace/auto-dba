@@ -34,6 +34,7 @@ import {
 } from '../../utils/instanceSource'
 import {
   filterAccessDomainsByGroup,
+  resolveDbNameForApprover,
   unionApproverNames,
   loadTicketEnvGroups,
   resolveTicketEnvValue,
@@ -304,13 +305,14 @@ export default function DdlOrder() {
   async function onDatabaseChange(v: string) {
     patchForm({ db_name: v, assigned_to: '' })
     resetCheck()
-    await loadApprovers(formRef.current.data_source_ids, v)
+    // dbRecords 已在选数据源时加载；显式传入避免闭包陈旧
+    await loadApprovers(formRef.current.data_source_ids, v, dbRecords)
   }
 
   async function loadDatabases(keys: string[]) {
     if (!keys.length) {
       setDbRecords([])
-      return
+      return [] as any[]
     }
     setDbLoading(true)
     try {
@@ -333,15 +335,17 @@ export default function DdlOrder() {
         patchForm({ db_name: '', assigned_to: '' })
         setApprovers([])
       }
+      return records
     } catch (e: any) {
       setDbRecords([])
       message.error(e.response?.data?.message || '加载逻辑库失败')
+      return [] as any[]
     } finally {
       setDbLoading(false)
     }
   }
 
-  async function loadApprovers(keys: string[], dbNameRaw: string) {
+  async function loadApprovers(keys: string[], dbNameRaw: string, recordsOverride?: any[]) {
     const dbName = String(dbNameRaw || '').trim()
     const instIds = [
       ...new Set(
@@ -355,12 +359,20 @@ export default function DdlOrder() {
       setApproverHint('')
       return
     }
+    const f = formRef.current
+    const shardOpts = {
+      shardDb: Boolean(f.shard_db),
+      shardDbPrefix: String(f.shard_db_prefix || '').trim(),
+    }
+    const records = recordsOverride ?? dbRecords
     setReviewerLoading(true)
     try {
       const lists = await Promise.all(
         instIds.map(async (id) => {
+          // 分库多实例：各实例用本机登记库名查审核人，避免共用逻辑库名导致回退成实例 admin
+          const lookupDb = resolveDbNameForApprover(id, dbName, records, shardOpts)
           const { data } = await api.get('/tickets/target-approvers', {
-            params: { instance_id: id, db_name: dbName },
+            params: { instance_id: id, db_name: lookupDb },
           })
           return (data.data || []).map((a: any) => a.name || a).filter(Boolean) as string[]
         }),
@@ -687,8 +699,8 @@ export default function DdlOrder() {
       if (nextKeys.length !== (cur.data_source_ids || []).length) {
         patchForm({ data_source_ids: nextKeys })
       }
-      await loadDatabases(nextKeys)
-      await loadApprovers(nextKeys, formRef.current.db_name)
+      const records = await loadDatabases(nextKeys)
+      await loadApprovers(nextKeys, formRef.current.db_name, records)
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -822,9 +834,14 @@ export default function DdlOrder() {
                   <div className="batch-row">
                     <Checkbox
                       checked={form.shard_db}
-                      onChange={(e) =>
-                        patchForm({ shard_db: e.target.checked, ...(e.target.checked ? {} : { shard_db_prefix: '' }) })
-                      }
+                      onChange={(e) => {
+                        const checked = e.target.checked
+                        patchForm({ shard_db: checked, ...(checked ? {} : { shard_db_prefix: '' }) })
+                        // patchForm 同步写 formRef；下一拍再用最新 shard 标志拉审核人
+                        queueMicrotask(() => {
+                          void loadApprovers(formRef.current.data_source_ids, formRef.current.db_name)
+                        })
+                      }}
                     >
                       分库
                     </Checkbox>
@@ -863,7 +880,12 @@ export default function DdlOrder() {
                       allowClear
                       placeholder="库名前缀匹配如 db_pay_0"
                       value={form.shard_db_prefix}
-                      onChange={(e) => patchForm({ shard_db_prefix: e.target.value })}
+                      onChange={(e) => {
+                        patchForm({ shard_db_prefix: e.target.value })
+                        queueMicrotask(() => {
+                          void loadApprovers(formRef.current.data_source_ids, formRef.current.db_name)
+                        })
+                      }}
                     />
                   </Form.Item>
                 )}
@@ -910,14 +932,6 @@ export default function DdlOrder() {
                 onChange={(v) => patchForm({ assigned_to: v || '' })}
                 options={approvers.map((a) => ({ value: a, label: a }))}
               />
-              {approverHint ? (
-                <div
-                  className="form-extra"
-                  style={{ whiteSpace: 'pre-wrap', color: submitBlockedByApprover ? '#cf1322' : '#666' }}
-                >
-                  {approverHint}
-                </div>
-              ) : null}
             </Form.Item>
 
             <Form.Item label="描述" name="description" rules={[{ required: true, message: '请输入描述' }]}>

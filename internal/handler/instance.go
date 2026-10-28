@@ -1616,6 +1616,12 @@ func (h *DatabaseHandler) Update(c *gin.Context) {
 	if aclTid == "" {
 		aclTid = middleware.TenantID(c)
 	}
+	merged, dropped, err := mergeDatabaseApprovers(h.Store, aclTid, exist.Approvers, it.Approvers)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	it.Approvers = merged
 	if err := validateResourceACL(h.Store, aclTid, it.Visibility, it.AccessUsers, it.RoleIDs, it.Approvers); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
@@ -1625,7 +1631,7 @@ func (h *DatabaseHandler) Update(c *gin.Context) {
 		return
 	}
 	_ = h.Store.AppendCmdbAudit(c.GetString(middleware.CtxUsername), "update", "database", it.ID, "api", exist, it)
-	c.JSON(http.StatusOK, gin.H{"data": it})
+	c.JSON(http.StatusOK, gin.H{"data": it, "dropped_approvers": dropped})
 }
 
 type batchDBACLReq struct {
@@ -1708,7 +1714,7 @@ func (h *DatabaseHandler) saveBatch(c *gin.Context, list []store.Database, apply
 	c.JSON(http.StatusOK, gin.H{"ok_count": okCount, "fail_count": len(failed), "failed": failed})
 }
 
-// BatchApprovers POST /databases/batch-approvers — 覆盖所选库的审核人（须为同一租户成员）。
+// BatchApprovers POST /databases/batch-approvers — 向所选库追加审核人（并集）；非本租户成员自动丢掉，不整批失败。
 func (h *DatabaseHandler) BatchApprovers(c *gin.Context) {
 	var req batchDBACLReq
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -1719,14 +1725,40 @@ func (h *DatabaseHandler) BatchApprovers(c *gin.Context) {
 	if !ok {
 		return
 	}
-	approvers := uniqueTrimmedNames(req.Approvers)
-	if err := requireTenantMemberUsernames(h.Store, tid, approvers); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
-		return
+	add := uniqueTrimmedNames(req.Approvers)
+	okCount := 0
+	failed := make([]batchDBFail, 0)
+	droppedSet := map[string]struct{}{}
+	user := c.GetString(middleware.CtxUsername)
+	for i := range list {
+		before := list[i]
+		it := list[i]
+		merged, dropped, err := mergeDatabaseApprovers(h.Store, tid, it.Approvers, add)
+		if err != nil {
+			failed = append(failed, batchDBFail{ID: it.ID, DBName: it.DBName, Message: err.Error()})
+			continue
+		}
+		for _, name := range dropped {
+			droppedSet[name] = struct{}{}
+		}
+		it.Approvers = merged
+		if err := h.Store.UpdateDatabase(&it); err != nil {
+			failed = append(failed, batchDBFail{ID: it.ID, DBName: it.DBName, Message: err.Error()})
+			continue
+		}
+		okCount++
+		_ = h.Store.AppendCmdbAudit(user, "update", "database", it.ID, "api", before, it)
 	}
-	h.saveBatch(c, list, func(it *store.Database) string {
-		it.Approvers = approvers
-		return ""
+	dropped := make([]string, 0, len(droppedSet))
+	for name := range droppedSet {
+		dropped = append(dropped, name)
+	}
+	sort.Strings(dropped)
+	c.JSON(http.StatusOK, gin.H{
+		"ok_count":   okCount,
+		"fail_count": len(failed),
+		"failed":     failed,
+		"dropped":    dropped,
 	})
 }
 
