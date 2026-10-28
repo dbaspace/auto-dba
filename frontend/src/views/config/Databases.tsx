@@ -523,9 +523,32 @@ export default function Databases() {
     }
   }
 
-  function openAssign(rows: DatabaseRow[]) {
-    const list = rows.filter((r) => r.id)
+  /** 按勾选 key 从全量 rows 解析；跨页勾选依赖 preserveSelectedRowKeys。 */
+  function resolveSelectedRows(keys: React.Key[] = selectedKeys): DatabaseRow[] | null {
+    const want = [...new Set(keys.map(String).filter(Boolean))]
+    if (!want.length) {
+      message.warning('请先勾选库')
+      return null
+    }
+    const byID = new Map(rows.filter((r) => r.id).map((r) => [String(r.id), r]))
+    const list: DatabaseRow[] = []
+    const missing: string[] = []
+    for (const id of want) {
+      const row = byID.get(id)
+      if (row) list.push(row)
+      else missing.push(id)
+    }
+    if (missing.length) {
+      message.warning(`有 ${missing.length} 条勾选已不在当前列表，请重新勾选后再操作`)
+      return null
+    }
+    return list
+  }
+
+  function openAssign(rows?: DatabaseRow[]) {
+    const list = (rows || resolveSelectedRows() || []).filter((r) => r.id)
     if (!list.length) {
+      if (!rows) return
       message.warning('请先勾选库')
       return
     }
@@ -584,12 +607,8 @@ export default function Databases() {
   }
 
   async function openBatch(mode: 'approvers' | 'access') {
-    const set = new Set(selectedKeys.map(String))
-    const list = filteredRows.filter((r) => r.id && set.has(r.id))
-    if (!list.length) {
-      message.warning('请先勾选库')
-      return
-    }
+    const list = resolveSelectedRows()
+    if (!list?.length) return
     const tids = new Set(list.map(rowTenantId))
     if (tids.size > 1) {
       message.warning('请选择同一租户下的库')
@@ -681,12 +700,8 @@ export default function Databases() {
   }
 
   function removeSelected() {
-    const set = new Set(selectedKeys.map(String))
-    const next = filteredRows.filter((r) => r.id && set.has(r.id))
-    if (!next.length) {
-      message.warning('请先勾选库')
-      return
-    }
+    const next = resolveSelectedRows()
+    if (!next?.length) return
     Modal.confirm({
       title: `删除 ${next.length} 个登记库`,
       okText: '删除',
@@ -803,13 +818,7 @@ export default function Databases() {
           </Button>
           {impersonating ? (
             <Auth urn={Perm.tenants.impersonate}>
-              <Button
-                disabled={!selectedKeys.length}
-                onClick={() => {
-                  const set = new Set(selectedKeys.map(String))
-                  openAssign(filteredRows.filter((r) => r.id && set.has(r.id)))
-                }}
-              >
+              <Button disabled={!selectedKeys.length} onClick={() => openAssign()}>
                 批量指定租户{selectedKeys.length ? `（${selectedKeys.length}）` : ''}
               </Button>
             </Auth>
@@ -940,6 +949,7 @@ export default function Databases() {
             impersonating || canEdit || canDelete
               ? {
                   selectedRowKeys: selectedKeys,
+                  preserveSelectedRowKeys: true,
                   onChange: (keys) => setSelectedKeys(keys),
                   getCheckboxProps: (row: DatabaseRow) => ({ disabled: !row.id }),
                 }

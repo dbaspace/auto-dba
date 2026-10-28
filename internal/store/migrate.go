@@ -698,9 +698,11 @@ func (d *DB) ensureOSSSettingsTable() error {
 }
 
 // ensureNacosAdminTable 平台运维 Nacos 控制台代登凭据（幂等，供 migrateFast skip 路径调用）。
+// 须含 tenant_id：skip 路径会跑 ensureTenantScopedUniques(tenant_id, environment)，缺列会直接启动失败。
 func (d *DB) ensureNacosAdminTable() error {
 	_, err := d.db.Exec(`CREATE TABLE IF NOT EXISTS tbl_nacos_admin (
 		id TEXT PRIMARY KEY,
+		tenant_id TEXT NOT NULL DEFAULT '` + DefaultTenantID + `',
 		environment TEXT NOT NULL DEFAULT '',
 		console_url TEXT NOT NULL DEFAULT '',
 		username TEXT NOT NULL DEFAULT '',
@@ -708,10 +710,13 @@ func (d *DB) ensureNacosAdminTable() error {
 		created_by TEXT NOT NULL DEFAULT '',
 		updated_by TEXT NOT NULL DEFAULT '',
 		created_at TEXT NOT NULL DEFAULT '',
-		updated_at TEXT NOT NULL DEFAULT '',
-		UNIQUE (environment)
+		updated_at TEXT NOT NULL DEFAULT ''
 	)`)
-	return err
+	if err != nil {
+		return err
+	}
+	// 旧版 skip 路径曾建出无 tenant_id 的表，这里幂等补列。
+	return d.ensureColumnIfMissing("tbl_nacos_admin", "tenant_id", "TEXT NOT NULL DEFAULT '"+DefaultTenantID+"'")
 }
 
 func (d *DB) ensureMonitorRegistryTables() error {

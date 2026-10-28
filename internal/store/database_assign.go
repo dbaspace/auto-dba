@@ -26,9 +26,6 @@ func (d *DB) AssignDatabaseTenant(id, toTenantID string) error {
 	if dbRow == nil {
 		return fmt.Errorf("登记库不存在")
 	}
-	if strings.TrimSpace(dbRow.TenantID) == toTenantID {
-		return nil
-	}
 	src, err := d.GetInstance(dbRow.InstanceID)
 	if err != nil {
 		return err
@@ -42,9 +39,12 @@ func (d *DB) AssignDatabaseTenant(id, toTenantID string) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 	now := time.Now().UTC().Format(time.RFC3339)
-	if _, err := tx.Exec(d.rewrite(`UPDATE tbl_databases SET tenant_id=?, updated_at=? WHERE id=?`),
-		toTenantID, now, dbRow.ID); err != nil {
-		return err
+	// 库已属目标租户时仍同步账号，补齐上次漏更的账号归属。
+	if strings.TrimSpace(dbRow.TenantID) != toTenantID {
+		if _, err := tx.Exec(d.rewrite(`UPDATE tbl_databases SET tenant_id=?, updated_at=? WHERE id=?`),
+			toTenantID, now, dbRow.ID); err != nil {
+			return err
+		}
 	}
 	if _, err := tx.Exec(d.rewrite(`UPDATE tbl_db_accounts SET tenant_id=?, updated_at=? WHERE database_id=? OR (instance_id=? AND db_name=?)`),
 		toTenantID, now, dbRow.ID, dbRow.InstanceID, dbRow.DBName); err != nil {

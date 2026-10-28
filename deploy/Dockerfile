@@ -40,6 +40,7 @@ COPY --from=frontend /src/frontend/dist /app/frontend/dist
 # 主机 Web 终端：默认 scripts_dir / static_dir 相对 /app
 COPY scripts/terminal /app/scripts/terminal
 COPY assets/terminal /app/assets/terminal
+COPY assets/nacos-console /app/assets/nacos-console
 COPY --from=backend /src/deploy/node-agent/bin/node-agent /app/deploy/node-agent/bin/node-agent
 COPY --from=backend /src/deploy/db-agent/bin/db-agent /app/deploy/db-agent/bin/db-agent
 COPY --from=backend /src/deploy/backup-agent/bin/platform-agent /app/deploy/backup-agent/bin/platform-agent

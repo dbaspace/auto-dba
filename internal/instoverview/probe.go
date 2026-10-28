@@ -38,7 +38,17 @@ type Sample struct {
 	DataKnown        bool    `json:"data_known,omitempty"`
 	StorageRate      float64 `json:"storage_rate,omitempty"`
 	StorageRateKnown bool    `json:"storage_rate_known,omitempty"`
-	CollectedAt      string  `json:"collected_at,omitempty"`
+	// CpuRate / CpuSeries：Redis CPU（Prometheus 近 5 分钟）；Rate 为序列末点百分比。
+	CpuRate     float64    `json:"cpu_rate,omitempty"`
+	CpuKnown    bool       `json:"cpu_known,omitempty"`
+	CpuSeries   []CpuPoint `json:"cpu_series,omitempty"`
+	CollectedAt string     `json:"collected_at,omitempty"`
+}
+
+// CpuPoint 是迷你曲线上的一点；V 为单核占用百分比。
+type CpuPoint struct {
+	T int64   `json:"t"`
+	V float64 `json:"v"`
 }
 
 // Classify 把连库失败分成连不上、认证失败、超时、权限不足。

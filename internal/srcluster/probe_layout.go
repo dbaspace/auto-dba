@@ -19,6 +19,7 @@ type LayoutProbeResult struct {
 	BeSoftwareBase string   `json:"be_software_base,omitempty"`
 	BeDataRoot     string   `json:"be_data_root,omitempty"` // 完整 storage_root_path
 	FeInternalLog  string   `json:"fe_internal_log_dir,omitempty"`
+	FeMetaDir      string   `json:"fe_meta_dir,omitempty"`
 	BeMinidumpDir  string   `json:"be_sys_minidump_dir,omitempty"`
 	BeStorageRoot  string   `json:"be_storage_root_path,omitempty"`
 	SampleFEHost   string   `json:"sample_fe_host,omitempty"`
@@ -32,24 +33,76 @@ var (
 	reVarzStorage  = regexp.MustCompile(`(?m)^storage_root_path=(.+)$`)
 )
 
-// InferFeSoftwareBaseFromInternalLog 从 internal_log_dir（…/fe/log）推断 FE software_base。
-func InferFeSoftwareBaseFromInternalLog(internalLogDir string) string {
-	p := strings.TrimSpace(internalLogDir)
+// InferFeSoftwareBaseFromPath 从含 /fe/ 的路径（meta、log 等）推断 FE software_base。
+func InferFeSoftwareBaseFromPath(p string) string {
+	p = strings.TrimSpace(p)
 	p = strings.TrimRight(p, "/")
 	if p == "" {
 		return ""
 	}
-	// …/fe/log → …/fe → …
-	if strings.HasSuffix(strings.ToLower(p), "/log") {
-		p = strings.TrimSuffix(p, "/log")
-		p = strings.TrimSuffix(p, "/LOG")
-		p = strings.TrimRight(p, "/")
+	lower := strings.ToLower(p)
+	if idx := strings.LastIndex(lower, "/fe/"); idx >= 0 {
+		return strings.TrimRight(p[:idx], "/")
 	}
-	if strings.HasSuffix(strings.ToLower(p), "/fe") {
-		p = p[:len(p)-len("/fe")]
-		p = strings.TrimRight(p, "/")
+	if strings.HasSuffix(lower, "/fe") {
+		return strings.TrimRight(p[:len(p)-len("/fe")], "/")
 	}
 	return p
+}
+
+// InferFeSoftwareBaseFromInternalLog 从 internal_log_dir（…/fe/log）推断 FE software_base。
+func InferFeSoftwareBaseFromInternalLog(internalLogDir string) string {
+	return InferFeSoftwareBaseFromPath(internalLogDir)
+}
+
+func softwareBasePathDepth(p string) int {
+	p = strings.Trim(strings.TrimSpace(p), "/")
+	if p == "" {
+		return 0
+	}
+	n := 0
+	for _, s := range strings.Split(p, "/") {
+		if s != "" {
+			n++
+		}
+	}
+	return n
+}
+
+// pickDeeperSoftwareBase 在多个推断结果中取路径更深的非空值。
+func pickDeeperSoftwareBase(a, b string) string {
+	a = strings.TrimRight(strings.TrimSpace(a), "/")
+	b = strings.TrimRight(strings.TrimSpace(b), "/")
+	if a == "" {
+		return b
+	}
+	if b == "" {
+		return a
+	}
+	da, db := softwareBasePathDepth(a), softwareBasePathDepth(b)
+	if db > da {
+		return b
+	}
+	if da > db {
+		return a
+	}
+	if len(b) > len(a) {
+		return b
+	}
+	return a
+}
+
+// alignFeSoftwareBaseWithBE 若 FE 根是 BE 根的严格前缀（探测过浅），则对齐到 BE。
+func alignFeSoftwareBaseWithBE(fe, be string) (aligned string, did bool) {
+	fe = strings.TrimRight(strings.TrimSpace(fe), "/")
+	be = strings.TrimRight(strings.TrimSpace(be), "/")
+	if fe == "" || be == "" || fe == be {
+		return fe, false
+	}
+	if strings.HasPrefix(be, fe+"/") {
+		return be, true
+	}
+	return fe, false
 }
 
 // InferBeSoftwareBaseFromMinidump 从 sys_minidump_dir（…/be 或 …/be/…）推断 BE software_base。
@@ -110,12 +163,29 @@ func (e *Engine) ProbeLayout(ctx context.Context, feHost, user, pass string, que
 
 	out := &LayoutProbeResult{SampleFEHost: feHost}
 
+	var fromLog, fromMeta string
 	internalLog, err := queryFrontendConfigValue(cctx, db, "internal_log_dir")
 	if err != nil {
 		out.Warnings = append(out.Warnings, "读取 FE internal_log_dir 失败: "+err.Error())
 	} else {
 		out.FeInternalLog = internalLog
-		out.FeSoftwareBase = InferFeSoftwareBaseFromInternalLog(internalLog)
+		fromLog = InferFeSoftwareBaseFromPath(internalLog)
+	}
+	metaDir, err := queryFrontendConfigValue(cctx, db, "meta_dir")
+	if err != nil {
+		out.Warnings = append(out.Warnings, "读取 FE meta_dir 失败: "+err.Error())
+	} else {
+		out.FeMetaDir = metaDir
+		fromMeta = InferFeSoftwareBaseFromPath(metaDir)
+	}
+	out.FeSoftwareBase = pickDeeperSoftwareBase(fromLog, fromMeta)
+	if fromLog != "" && fromMeta != "" {
+		a := strings.TrimRight(fromLog, "/")
+		b := strings.TrimRight(fromMeta, "/")
+		if a != b {
+			out.Warnings = append(out.Warnings, fmt.Sprintf(
+				"FE internal_log_dir 与 meta_dir 推断不一致：%s vs %s，已取更深路径 %s", a, b, out.FeSoftwareBase))
+		}
 	}
 
 	beRows, err := queryProcRowsDB(cctx, db, "/backends", false)
@@ -155,6 +225,12 @@ func (e *Engine) ProbeLayout(ctx context.Context, feHost, user, pass string, que
 	out.BeStorageRoot = storage
 	out.BeSoftwareBase = InferBeSoftwareBaseFromMinidump(minidump)
 	out.BeDataRoot = storage
+
+	if aligned, did := alignFeSoftwareBaseWithBE(out.FeSoftwareBase, out.BeSoftwareBase); did {
+		out.Warnings = append(out.Warnings, fmt.Sprintf(
+			"FE 探测过浅（%s），已与 BE 对齐为 %s", out.FeSoftwareBase, aligned))
+		out.FeSoftwareBase = aligned
+	}
 
 	// 多 BE 路径不一致时提示
 	for i := range beRows {

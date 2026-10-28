@@ -18,8 +18,9 @@ import (
 	"auto-dba/internal/store"
 )
 
-const DefaultExportLimit = 5000
-const MaxExportLimit = 20000
+// DefaultExportLimit / MaxExportLimit：导出扫描上限回退与展示用硬顶（代码常量，非全局参数）。
+const DefaultExportLimit = 500000
+const MaxExportLimit = 1000000
 
 type readOnlyKey struct{}
 
@@ -137,8 +138,8 @@ func clampExportLimit(n int) int {
 	if n <= 0 {
 		return DefaultExportLimit
 	}
-	if n > MaxExportLimit {
-		return MaxExportLimit
+	if n > exportLimitSanityMax {
+		return exportLimitSanityMax
 	}
 	return n
 }
@@ -232,8 +233,8 @@ func ExecExport(ctx context.Context, inst *store.Instance, password, dbName, raw
 	if err := isReadOnlyQuery(inst.DBType, rawSQL); err != nil {
 		return nil, err
 	}
-	// Postgres：会话级超时，避免慢查询拖死导出（HTTP 侧另有 context 超时）
-	return runQuery(ctx, inst, password, dbName, rawSQL, clampExportLimit(limit), 55*time.Second)
+	// Postgres：会话级超时；大导出由 HTTP context（约 10m）主导，此处给足余量
+	return runQuery(ctx, inst, password, dbName, rawSQL, clampExportLimit(limit), 9*time.Minute)
 }
 
 func runQuery(ctx context.Context, inst *store.Instance, password, dbName, rawSQL string, limit int, stmtTimeout time.Duration) (*QueryResult, error) {

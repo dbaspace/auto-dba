@@ -124,6 +124,10 @@ func (d *DB) ensureTenantScopedUniques() error {
 		if n == 0 {
 			continue
 		}
+		// 索引依赖 tenant_id；表若由 skip 路径先建出，这里先补列再建索引。
+		if err := d.ensureColumnIfMissing(it.table, "tenant_id", "TEXT NOT NULL DEFAULT '"+DefaultTenantID+"'"); err != nil {
+			return fmt.Errorf("%s.tenant_id: %w", it.table, err)
+		}
 		if it.oldName != "" {
 			_, _ = d.db.Exec(`ALTER TABLE ` + it.table + ` DROP CONSTRAINT IF EXISTS ` + it.oldName)
 			_, _ = d.db.Exec(`DROP INDEX IF EXISTS ` + it.oldName)

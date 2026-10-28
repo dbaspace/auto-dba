@@ -65,6 +65,10 @@ func (d *DB) migrateFast() error {
 			return err
 		}
 		if cur == SchemaVersion {
+			// Nacos 表须先于租户唯一索引补齐（含 tenant_id），否则 skip 路径会报 column tenant_id does not exist。
+			if err := d.ensureNacosAdminTable(); err != nil {
+				return err
+			}
 			// 轻量幂等：租户内唯一约束 / AIOps 案例列 / Copilot title / 工单 domain 不依赖升版本，避免 skip 路径漏跑。
 			if err := d.ensureTenantScopedUniques(); err != nil {
 				return err
@@ -100,10 +104,6 @@ func (d *DB) migrateFast() error {
 				return err
 			}
 			if err := d.ensureJobRegTables(); err != nil {
-				return err
-			}
-			// Nacos 控制台凭据表须在 skip 路径幂等补齐
-			if err := d.ensureNacosAdminTable(); err != nil {
 				return err
 			}
 			log.Printf("migrate: skip (schema_version=%s) in %s", SchemaVersion, time.Since(t0).Round(time.Millisecond))

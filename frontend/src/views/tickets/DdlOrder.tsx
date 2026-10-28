@@ -34,7 +34,7 @@ import {
 } from '../../utils/instanceSource'
 import {
   filterAccessDomainsByGroup,
-  intersectApproverNames,
+  unionApproverNames,
   loadTicketEnvGroups,
   resolveTicketEnvValue,
   type TicketEnvGroup,
@@ -241,15 +241,16 @@ export default function DdlOrder() {
 
   const checkHasError = checkRows.some((r) => String(r.error_level || '').toUpperCase() === 'ERROR')
   const fingerprintMatches = lastCheckFp != null && lastCheckFp === checkFp
-  const submitAllowed = fingerprintMatches && !checkHasError && !approverHint
+  const submitBlockedByApprover = Boolean(approverHint) && approvers.length === 0
+  const submitAllowed = fingerprintMatches && !checkHasError && !submitBlockedByApprover
 
   const submitDisabledReason = useMemo(() => {
-    if (approverHint) return '所选数据源的审核人不一致，无法提交'
+    if (submitBlockedByApprover) return '所选数据源没有可用审核人，无法提交'
     if (lastCheckFp == null) return '请先点击「SQL检测」'
     if (!fingerprintMatches) return 'SQL 或表单与上次检测不一致，请重新检测后再提交'
     if (checkHasError) return 'SQL 检测存在错误，请修复后再提交'
     return ''
-  }, [approverHint, lastCheckFp, fingerprintMatches, checkHasError])
+  }, [submitBlockedByApprover, lastCheckFp, fingerprintMatches, checkHasError])
 
   const dsPlaceholder = !form.env
     ? '请先选择环境'
@@ -364,15 +365,28 @@ export default function DdlOrder() {
           return (data.data || []).map((a: any) => a.name || a).filter(Boolean) as string[]
         }),
       )
-      const out = intersectApproverNames(lists)
+      const out = unionApproverNames(lists)
       setApprovers(out)
-      if (instIds.length > 1 && out.length === 0) {
+      if (instIds.length > 1) {
         const lines = instIds.map((id, i) => {
           const dom = keys.map((k) => parseSourceKey(k)).find((p) => p?.instance_id === id)?.domain || id
           const names = lists[i].length ? lists[i].join('、') : '未配置审核人'
           return `${dom}：${names}`
         })
-        setApproverHint('所选数据源的审核人不一致，没有人能同时审核全部数据源。\n' + lines.join('\n'))
+        const same =
+          lists.length > 0 &&
+          lists.every((l) => {
+            const a = [...l].map((s) => s.trim().toLowerCase()).filter(Boolean).sort().join('\0')
+            const b = [...lists[0]].map((s) => s.trim().toLowerCase()).filter(Boolean).sort().join('\0')
+            return a === b
+          })
+        if (out.length === 0) {
+          setApproverHint('所选数据源没有可用审核人。\n' + lines.join('\n'))
+        } else if (!same) {
+          setApproverHint('以下为各数据源审核人（可选并集中任意一人）：\n' + lines.join('\n'))
+        } else {
+          setApproverHint('')
+        }
       } else {
         setApproverHint('')
       }
@@ -551,8 +565,8 @@ export default function DdlOrder() {
       message.error('请填写 SQL')
       return
     }
-    if (approverHint) {
-      message.warning('所选数据源的审核人不一致，无法提交')
+    if (submitBlockedByApprover) {
+      message.warning('所选数据源没有可用审核人，无法提交')
       return
     }
     if (!submitAllowed) {
@@ -897,7 +911,10 @@ export default function DdlOrder() {
                 options={approvers.map((a) => ({ value: a, label: a }))}
               />
               {approverHint ? (
-                <div className="form-extra" style={{ whiteSpace: 'pre-wrap', color: '#cf1322' }}>
+                <div
+                  className="form-extra"
+                  style={{ whiteSpace: 'pre-wrap', color: submitBlockedByApprover ? '#cf1322' : '#666' }}
+                >
                   {approverHint}
                 </div>
               ) : null}

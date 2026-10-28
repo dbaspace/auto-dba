@@ -78,18 +78,16 @@ export function envCodeForSource(rows: AccessDomainRow[], instanceId: string, do
   return String(hit?.env_code || '').trim()
 }
 
-export function intersectApproverNames(lists: string[][]): string[] {
-  if (!lists.length) return []
+/** 多实例 DDL：各数据源审核人并集（大小写不敏感去重，保留首次写法）。 */
+export function unionApproverNames(lists: string[][]): string[] {
   const norm = (s: string) => s.trim().toLowerCase()
-  let acc = new Set(lists[0].map(norm).filter(Boolean))
   const display = new Map<string, string>()
-  for (const n of lists[0]) {
-    const k = norm(n)
-    if (k && !display.has(k)) display.set(k, n.trim())
+  for (const list of lists) {
+    for (const n of list || []) {
+      const k = norm(n)
+      if (!k || display.has(k)) continue
+      display.set(k, n.trim())
+    }
   }
-  for (const list of lists.slice(1)) {
-    const next = new Set(list.map(norm).filter(Boolean))
-    acc = new Set([...acc].filter((x) => next.has(x)))
-  }
-  return [...acc].map((k) => display.get(k) || k)
+  return [...display.values()]
 }

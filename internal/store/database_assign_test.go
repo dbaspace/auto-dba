@@ -157,3 +157,58 @@ func TestAssignDatabaseTenantSiblingStays(t *testing.T) {
 		t.Fatalf("sibling should stay, tenant=%v", s2)
 	}
 }
+
+func TestAssignDatabaseTenantResyncsAccountsWhenAlreadyAssigned(t *testing.T) {
+	dsn := os.Getenv("AUTO_DBA_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set AUTO_DBA_TEST_DSN to run")
+	}
+	d, err := Open("postgres", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Close() })
+	if err := d.ensureTenancy(); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	other := &Tenant{
+		Code: "db-resync-" + uuid.NewString()[:8], Name: "库划拨补账号", Status: TenantStatusActive, Plan: "standard",
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := d.CreateTenant(other); err != nil {
+		t.Fatal(err)
+	}
+	suf := uuid.NewString()[:8]
+	inst := &Instance{
+		TenantID: DefaultTenantID, Name: "resync-" + suf, DomainName: "resync-" + suf + ".local", Port: 5432,
+		DBType: "postgres", Host: "resync-" + suf + ".local", Username: "u", Password: "p", IDC: "default",
+	}
+	if err := d.CreateInstance(inst); err != nil {
+		t.Fatal(err)
+	}
+	row := &Database{TenantID: other.ID, InstanceID: inst.ID, DBName: "resync_" + suf}
+	if err := d.CreateDatabase(row); err != nil {
+		t.Fatal(err)
+	}
+	acc := &DBAccount{
+		TenantID: DefaultTenantID, InstanceID: inst.ID, DatabaseID: row.ID, DBName: row.DBName,
+		DBType: "postgres", Username: "u_" + suf, Password: "p",
+	}
+	if err := d.CreateAccount(acc); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = d.Exec(`DELETE FROM tbl_db_accounts WHERE id=?`, acc.ID)
+		_, _ = d.Exec(`DELETE FROM tbl_databases WHERE id=?`, row.ID)
+		_, _ = d.Exec(`DELETE FROM tbl_instances WHERE id=?`, inst.ID)
+		_, _ = d.Exec(`DELETE FROM tbl_tenants WHERE id=?`, other.ID)
+	})
+	if err := d.AssignDatabaseTenant(row.ID, other.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err := d.GetAccount(acc.ID)
+	if err != nil || got == nil || got.TenantID != other.ID {
+		t.Fatalf("account should resync to target tenant, got=%+v err=%v", got, err)
+	}
+}

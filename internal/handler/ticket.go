@@ -19,6 +19,7 @@ import (
 	"auto-dba/internal/cdc"
 	"auto-dba/internal/cloudsvc"
 	"auto-dba/internal/dbmig"
+	"auto-dba/internal/dbprobe"
 	"auto-dba/internal/flashback"
 	"auto-dba/internal/goinception"
 	"auto-dba/internal/middleware"
@@ -151,30 +152,44 @@ func submitInstanceIDs(req ticketSubmitReq) []string {
 	return []string{id}
 }
 
-// reviewerCoversInstances 所选审核人必须在每一条已配置审核人的数据源名单里。
+// reviewerCoversInstances 多实例 DDL：审核人须出现在至少一个已配置审核人的数据源名单中（并集）。
+// 全部数据源都未配置审核人时不拦。
 func (h *TicketHandler) reviewerCoversInstances(reviewer, dbName string, ids []string) string {
 	reviewer = strings.TrimSpace(reviewer)
 	if reviewer == "" || h == nil {
 		return ""
 	}
+	lists := make([][]string, 0, len(ids))
 	for _, id := range ids {
 		id = strings.TrimSpace(id)
 		if id == "" {
 			continue
 		}
-		list := h.resolveApprovers(id, dbName)
-		if len(list) == 0 || usernameInList(reviewer, list) {
+		lists = append(lists, h.resolveApprovers(id, dbName))
+	}
+	return reviewerAllowedByUnion(reviewer, lists)
+}
+
+// reviewerAllowedByUnion 审核人命中任一非空名单即通过；全部为空则放行。
+func reviewerAllowedByUnion(reviewer string, lists [][]string) string {
+	reviewer = strings.TrimSpace(reviewer)
+	if reviewer == "" {
+		return ""
+	}
+	configured := 0
+	for _, list := range lists {
+		if len(list) == 0 {
 			continue
 		}
-		label := id
-		if h.Store != nil {
-			if inst, _ := h.Store.GetInstance(id); inst != nil && strings.TrimSpace(inst.Name) != "" {
-				label = strings.TrimSpace(inst.Name)
-			}
+		configured++
+		if usernameInList(reviewer, list) {
+			return ""
 		}
-		return "审核人须同时在全部数据源的库/实例审核人中（" + label + " 不包含该审核人）"
 	}
-	return ""
+	if configured == 0 {
+		return ""
+	}
+	return "审核人不在任一数据源的库/实例审核人名单中"
 }
 
 func (h *TicketHandler) resolveApprovers(instanceID, dbName string) []string {
@@ -701,6 +716,9 @@ func (h *TicketHandler) Submit(c *gin.Context) {
 func (h *TicketHandler) prepareDQLSubmit(c *gin.Context, req *ticketSubmitReq) error {
 	if strings.TrimSpace(req.SQLContent) == "" {
 		return errors.New("SQL语句不能为空")
+	}
+	if _, err := dbprobe.RequireExportSQLLimit(req.SQLContent); err != nil {
+		return err
 	}
 	dba := strings.TrimSpace(req.DBAAssigned)
 	sec := strings.TrimSpace(req.SecAssigned)

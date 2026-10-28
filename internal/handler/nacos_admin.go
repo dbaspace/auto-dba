@@ -13,6 +13,8 @@ import (
 type NacosAdminHandler struct {
 	Store  *store.DB
 	Secret string
+	// StaticDir 本地 Nacos 控制台静态根（默认 assets/nacos-console）；设为 "-" 关闭本地优先。
+	StaticDir string
 }
 
 func (h *NacosAdminHandler) List(c *gin.Context) {

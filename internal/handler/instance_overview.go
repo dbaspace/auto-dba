@@ -126,6 +126,7 @@ func (h *OverviewHandler) runCollect(tid string, targets []overviewRow) {
 	}
 	wg.Wait()
 	h.attachStorageRates(tid, targets)
+	h.attachRedisCPU(tid, targets)
 	h.mu.Lock()
 	if job := h.jobs[tid]; job != nil {
 		job.Status = "done"
@@ -301,6 +302,92 @@ func (h *OverviewHandler) attachStorageRates(tid string, targets []overviewRow) 
 		}
 		s.StorageRate = m.rate
 		s.StorageRateKnown = true
+		h.cache[tid][m.id] = s
+	}
+}
+
+const redisCPURangeExpr = `sum by (instance) (rate(redis_cpu_user_seconds_total[5m]) + rate(redis_cpu_sys_seconds_total[5m]))`
+
+func (h *OverviewHandler) attachRedisCPU(tid string, targets []overviewRow) {
+	var ids []string
+	for _, row := range targets {
+		if store.NormalizeDBType(row.DBType) == "redis" {
+			ids = append(ids, row.ID)
+		}
+	}
+	if len(ids) == 0 || h.Store == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+	cli, err := h.promClient()
+	if err != nil || cli == nil {
+		return
+	}
+	end := time.Now()
+	start := end.Add(-5 * time.Minute)
+	samples, err := cli.QueryRange(ctx, redisCPURangeExpr, start, end, 15*time.Second)
+	if err != nil {
+		log.Printf("instance overview redis cpu: %v", err)
+		return
+	}
+	var hits []instoverview.CPUSeriesHit
+	for _, sm := range samples {
+		instLabel := strings.TrimSpace(sm.Metric["instance"])
+		if instLabel == "" {
+			continue
+		}
+		raw := promclient.SampleToPoints(sm)
+		if len(raw) == 0 {
+			continue
+		}
+		pts := make([]instoverview.CpuPoint, 0, len(raw))
+		for _, p := range raw {
+			pts = append(pts, instoverview.CpuPoint{T: p.T, V: p.V * 100})
+		}
+		hits = append(hits, instoverview.CPUSeriesHit{Instance: instLabel, Points: pts})
+	}
+	if len(hits) == 0 {
+		return
+	}
+	type matched struct {
+		id     string
+		points []instoverview.CpuPoint
+	}
+	var found []matched
+	for _, id := range ids {
+		inst, err := h.Store.GetInstance(id)
+		if err != nil || inst == nil {
+			continue
+		}
+		domains := append([]string{}, inst.Domains...)
+		if dn := strings.TrimSpace(inst.DomainName); dn != "" {
+			domains = append(domains, dn)
+		}
+		pts, ok := instoverview.PickRedisCPU(inst.Host, inst.Port, domains, hits)
+		if !ok {
+			continue
+		}
+		found = append(found, matched{id: id, points: pts})
+	}
+	if len(found) == 0 {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.cache == nil || h.cache[tid] == nil {
+		return
+	}
+	for _, m := range found {
+		s, ok := h.cache[tid][m.id]
+		if !ok {
+			continue
+		}
+		s.CpuSeries = m.points
+		s.CpuKnown = true
+		if n := len(m.points); n > 0 {
+			s.CpuRate = m.points[n-1].V
+		}
 		h.cache[tid][m.id] = s
 	}
 }

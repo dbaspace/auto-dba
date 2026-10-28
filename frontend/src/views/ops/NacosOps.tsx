@@ -12,9 +12,8 @@ interface NacosRow {
 }
 
 function embedConsoleURL(env: string) {
-  const token = localStorage.getItem('token') || ''
-  const q = token ? `?access_token=${encodeURIComponent(token)}` : ''
-  return `/api/v1/nacos-console/${encodeURIComponent(env)}${q}`
+  // 鉴权走 Cookie（seedAuthCookie）；勿把 JWT 拼进 URL，避免续期导致 iframe remount 反复 bootstrap。
+  return `/api/v1/nacos-console/${encodeURIComponent(env)}`
 }
 
 function seedAuthCookie() {
@@ -60,8 +59,9 @@ export default function NacosOps() {
     }
     let cancelled = false
     seedAuthCookie()
+    // 与代登并行挂 iframe：静态走本地资源，不必等 warm 完成才出壳
+    setReadyEnv(env)
     setWarming(true)
-    setReadyEnv(undefined)
     ;(async () => {
       try {
         await api.get('/nacosadmin/warm', { params: { env, environment: env } })
@@ -72,7 +72,6 @@ export default function NacosOps() {
       } finally {
         if (!cancelled) {
           setWarming(false)
-          setReadyEnv(env)
         }
       }
     })()
@@ -119,21 +118,28 @@ export default function NacosOps() {
           </Space>
         </div>
         <div className="nacos-ops-frame-wrap">
-          {loading || warming || !iframeSrc ? (
+          {loading || !iframeSrc ? (
             <div className="nacos-ops-empty">
-              <Spin tip={warming ? '正在代登…' : '加载中…'}>
+              <Spin tip="加载中…">
                 <div style={{ padding: 48 }} />
               </Spin>
             </div>
           ) : (
-            <iframe
-              key={iframeSrc}
-              src={iframeSrc}
-              className="embed nacos-ops-iframe"
-              title="nacos-console"
-              allow="clipboard-read; clipboard-write"
-              sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads allow-modals"
-            />
+            <>
+              {warming ? (
+                <div className="nacos-ops-warm-hint" aria-live="polite">
+                  正在代登…
+                </div>
+              ) : null}
+              <iframe
+                key={readyEnv}
+                src={iframeSrc}
+                className="embed nacos-ops-iframe"
+                title="nacos-console"
+                allow="clipboard-read; clipboard-write"
+                sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads allow-modals"
+              />
+            </>
           )}
         </div>
       </div>

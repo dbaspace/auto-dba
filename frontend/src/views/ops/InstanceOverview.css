@@ -158,6 +158,39 @@ html[data-color-mode='dark'] .app-tab-panel > .instance-overview.ops-page {
   font-variant-numeric: tabular-nums;
 }
 
+.ov-cpu {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ov-cpu-chart {
+  flex: 1 1 auto;
+  min-width: 72px;
+  max-width: 110px;
+  height: 36px;
+}
+
+.ov-cpu-num {
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.ov-cpu-ok .ov-cpu-num {
+  color: #389e0d;
+}
+
+.ov-cpu-warn .ov-cpu-num {
+  color: #d48806;
+}
+
+.ov-cpu-danger .ov-cpu-num {
+  color: #cf1322;
+}
+
 .instance-overview .ant-table-tbody > tr > td.ov-cell-ok {
   background: #f6ffed;
 }

@@ -62,6 +62,31 @@ func TestEnsureQueryLimit(t *testing.T) {
 	}
 }
 
+func TestRequireExportSQLLimit(t *testing.T) {
+	if _, err := RequireExportSQLLimit("select * from t"); err == nil {
+		t.Fatal("expected reject without LIMIT")
+	}
+	n, err := RequireExportSQLLimit("select * from t LIMIT 280000")
+	if err != nil || n != 280000 {
+		t.Fatalf("got n=%d err=%v", n, err)
+	}
+	n, err = RequireExportSQLLimit("select * from t limit 50;")
+	if err != nil || n != 50 {
+		t.Fatalf("trailing semi n=%d err=%v", n, err)
+	}
+	n, err = RequireExportSQLLimit("select * from t LIMIT 2000000")
+	if err != nil || n != exportLimitSanityMax {
+		t.Fatalf("clamp n=%d err=%v", n, err)
+	}
+}
+
+func TestEnsureExportLimit(t *testing.T) {
+	got := EnsureExportLimit("SELECT * FROM t LIMIT 100", 500000, 500000)
+	if got.AppliedLimit != 100 || !strings.Contains(got.SQL, "limit 100") {
+		t.Fatalf("keep user limit: %+v", got)
+	}
+}
+
 func TestSplitReadOnlyStatements(t *testing.T) {
 	parts, err := SplitReadOnlyStatements("SELECT 1; SELECT 2", 3)
 	if err != nil || len(parts) != 2 {

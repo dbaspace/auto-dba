@@ -89,16 +89,22 @@ func (h *TicketHandler) Export(c *gin.Context) {
 		return
 	}
 
-	limit := dbprobe.DefaultExportLimit
-	if extra := parseDQLExtra(it.NeedRollback); extra != nil && extra.RowCount > 0 {
-		limit = extra.RowCount + 100
+	// 必须带 LIMIT；row_count 仅审批参考，不决定导出行数。
+	limit, err := dbprobe.RequireExportSQLLimit(it.SQLContent)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Minute)
 	defer cancel()
 	res, err := dbprobe.ExecExport(ctx, inst, password, rec.DBName, it.SQLContent, limit)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
+	}
+	if res != nil {
+		res.AppliedLimit = limit
+		res.Limit = dbprobe.MaxExportLimit
 	}
 
 	body, ext, ctype := encodeExport(res, format, exportTableName(it.SQLContent), strings.ToLower(inst.DBType))

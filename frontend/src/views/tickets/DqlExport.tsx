@@ -13,6 +13,9 @@ import './DqlExport.css'
 const SENSITIVE =
   /phone|mobile|email|mail|id_card|idcard|身份证|手机|邮箱|password|passwd|secret|token|card_no|bank|身份证号/i
 
+/** 导出 SQL 无 LIMIT 时自动追加的默认行数（前端常量，非全局参数） */
+const DQL_AUTO_LIMIT = 500000
+
 const DEFAULT_DB_TYPES = [
   { value: 'mysql', label: 'MySQL' },
   { value: 'postgres', label: 'PostgreSQL' },
@@ -67,6 +70,17 @@ function parseLimitFromSQL(sql: string): number | null {
   return last
 }
 
+/** 无 LIMIT 时在末尾自动补充；已有 LIMIT 则原样返回 */
+export function ensureSqlHasLimit(sql: string, autoN = DQL_AUTO_LIMIT): string {
+  if (parseLimitFromSQL(sql) != null) return sql
+  const raw = String(sql || '')
+  const s = raw.trimEnd()
+  if (!s.trim()) return raw
+  const semi = /;\s*$/.test(s)
+  const body = semi ? s.replace(/;\s*$/, '').trimEnd() : s
+  return `${body}\nLIMIT ${autoN}${semi ? ';' : ''}`
+}
+
 export default function DqlExport() {
   const navigate = useNavigate()
   const location = useLocation()
@@ -102,6 +116,22 @@ export default function DqlExport() {
   rowCountRef.current = rowCount
 
   const needStrictApproval = !!(form.need_sensitive_data || rowCount > 500)
+
+  // 动态监听：停顿后若无 LIMIT 则自动补全（失焦/提交仍会再兜底）
+  useEffect(() => {
+    const sql = String(form.sql_content || '')
+    if (!sql.trim() || parseLimitFromSQL(sql) != null) return
+    const t = window.setTimeout(() => {
+      const cur = String(antdForm.getFieldValue('sql_content') || formRef.current.sql_content || '')
+      if (!cur.trim() || parseLimitFromSQL(cur) != null) return
+      const ensured = ensureSqlHasLimit(cur)
+      if (ensured !== cur) {
+        antdForm.setFieldsValue({ sql_content: ensured })
+        setForm((f) => ({ ...f, sql_content: ensured }))
+      }
+    }, 800)
+    return () => window.clearTimeout(t)
+  }, [form.sql_content, antdForm])
 
   function patchForm(patch: Partial<ReturnType<typeof emptyForm>>) {
     setForm((f) => {
@@ -284,19 +314,29 @@ export default function DqlExport() {
   }
 
   async function submit() {
+    const curSQL = String(antdForm.getFieldValue('sql_content') ?? formRef.current.sql_content ?? '')
+    const withLimit = ensureSqlHasLimit(curSQL)
+    if (withLimit !== curSQL) {
+      antdForm.setFieldsValue({ sql_content: withLimit })
+      patchForm({ sql_content: withLimit })
+    }
     try {
       await antdForm.validateFields()
     } catch {
       return
     }
-    const f = formRef.current
+    const f = { ...formRef.current, sql_content: withLimit }
     if (!f.sql_content.trim()) {
       message.error('SQL语句不能为空')
       return
     }
+    if (parseLimitFromSQL(withLimit) == null) {
+      message.error('导出 SQL 必须包含 LIMIT，禁止提交')
+      return
+    }
     const hasDBA = !!f.dba_assigned_to
     const hasSec = !!f.security_assigned_to
-    const strict = !!(f.need_sensitive_data || rowCount > 500)
+    const strict = !!(f.need_sensitive_data || (parseLimitFromSQL(withLimit) ?? rowCount) > 500)
     if (strict) {
       if (hasDBA !== hasSec || !hasDBA) {
         message.error('请同步设置 DBA审批人 和 安全审批人')
@@ -310,13 +350,13 @@ export default function DqlExport() {
         instance_id: f.instance_id,
         database_id: f.database_id,
         db_name: f.db_name,
-        sql_content: f.sql_content,
+        sql_content: withLimit,
         description: f.description,
         assigned_to: f.assigned_to,
         need_sensitive_data: f.need_sensitive_data,
         dba_assigned_to: strict ? f.dba_assigned_to : '',
         security_assigned_to: strict ? f.security_assigned_to : '',
-        row_count: rowCount,
+        row_count: parseLimitFromSQL(withLimit) ?? rowCount,
       })
       message.success('工单创建成功 ' + (data.data?.ticket_no || ''))
       clearOnSubmitSuccess()
@@ -500,11 +540,35 @@ export default function DqlExport() {
             name="sql_content"
             required
             className="dql-sql-item"
-            rules={[{ required: true, message: 'SQL语句不能为空' }]}
+            rules={[
+              { required: true, message: 'SQL语句不能为空' },
+              {
+                validator: async (_, v) => {
+                  if (parseLimitFromSQL(String(v || '')) == null) {
+                    return Promise.reject(new Error('导出 SQL 必须包含 LIMIT'))
+                  }
+                },
+              },
+            ]}
           >
-            <Input.TextArea placeholder="SELECT ... " className="dql-sql-editor" rows={12} />
+            <Input.TextArea
+              placeholder={`SELECT ... LIMIT ${DQL_AUTO_LIMIT}`}
+              className="dql-sql-editor"
+              rows={12}
+              onBlur={() => {
+                const cur = String(antdForm.getFieldValue('sql_content') || '')
+                const ensured = ensureSqlHasLimit(cur)
+                if (ensured !== cur) {
+                  antdForm.setFieldsValue({ sql_content: ensured })
+                  patchForm({ sql_content: ensured })
+                  void antdForm.validateFields(['sql_content']).catch(() => undefined)
+                }
+              }}
+            />
           </Form.Item>
-          <p className="dql-sql-hint">编辑框内填写导出查询 SQL；提交前请确认语句只读。</p>
+          <p className="dql-sql-hint">
+            编辑框内填写只读导出 SQL。必须包含 LIMIT：失焦或提交时若未写将自动补充 LIMIT {DQL_AUTO_LIMIT}（可改数字）；无 LIMIT 禁止提交。预估行数仅作审批参考。
+          </p>
         </main>
       </Form>
     </div>

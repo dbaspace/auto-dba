@@ -437,6 +437,24 @@ pnpm --dir frontend dev
 # AUTO_DBA_DEV_ENDPOINTS_JSON='{"api_target":"http://127.0.0.1:8804","vite_host":"127.0.0.1","vite_port":5174}' pnpm --dir frontend dev
 ```
 
+## 运维嵌入：本地控制台静态资源
+
+平台「Nacos 管理」经 `nacos-proxy` 嵌入控制台。为加快首屏，**JS/CSS/图片**优先从仓库目录提供；**HTML 入口与业务 API**仍代理到登记的 `console_url`。
+
+| 路径 | 说明 |
+|------|------|
+| `assets/nacos-console/next/...` | 与远程 `/next/js|css|img` 镜像 |
+| `assets/nacos-console/VERSION` | 同步来源与文件计数 |
+| `scripts/sync-nacos-console-assets.sh` | 从远程 console 拉取/更新静态包 |
+
+```bash
+CONSOLE_URL=http://10.100.113.151:8080/next ./scripts/sync-nacos-console-assets.sh
+```
+
+后端默认读取 `assets/nacos-console`（相对进程 cwd）。`NacosAdminHandler.StaticDir` 可覆盖；设为 `-` 关闭本地优先（全部回源）。命中本地时响应头 `X-Nacos-Static: local`，日志含 `local_bytes=`。
+
+升级远程控制台大版本后请重新跑同步脚本，避免 chunk 文件名不一致导致回源。
+
 ## 启动
 
 ```bash

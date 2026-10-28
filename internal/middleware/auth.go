@@ -97,6 +97,62 @@ func ResignSessionToken(secret string, src *Claims, ttl time.Duration) (string, 
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, c).SignedString([]byte(secret))
 }
 
+// stripBearer 去掉 Authorization 前缀。
+func stripBearer(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if strings.HasPrefix(strings.ToLower(raw), "bearer ") {
+		return strings.TrimSpace(raw[7:])
+	}
+	return raw
+}
+
+// looksLikeJWT 粗判 JWT 外形（payload 以 eyJ 开头）。注意：Nacos accessToken 也可能是 eyJ…，不能单靠外形区分平台会话。
+func looksLikeJWT(raw string) bool {
+	return strings.HasPrefix(stripBearer(raw), "eyJ")
+}
+
+// isEmbedProxyPath 同源嵌入控制台代理：Authorization 常为第三方 JWT/token，平台会话在 Cookie。
+func isEmbedProxyPath(path string) bool {
+	return strings.HasPrefix(path, "/api/v1/nacos-proxy/") ||
+		strings.HasPrefix(path, "/api/v1/ds-proxy/") ||
+		strings.HasPrefix(path, "/api/v1/nacos-console/") ||
+		strings.HasPrefix(path, "/api/v1/ds-console/")
+}
+
+// pickAuthCredential 选取平台鉴权凭据。
+// nacos-proxy / ds-proxy：优先 Cookie（平台 JWT），因 Authorization 常为 Nacos/海豚签发的 eyJ token。
+// 普通 API：优先像 JWT 的 Authorization，再 Cookie / query。
+func pickAuthCredential(path, authHeader, cookie, query string) string {
+	h := stripBearer(authHeader)
+	ck := strings.TrimSpace(cookie)
+	q := strings.TrimSpace(query)
+	if isEmbedProxyPath(path) {
+		if ck != "" {
+			return ck
+		}
+		if q != "" {
+			return q
+		}
+		return h
+	}
+	if h != "" && looksLikeJWT(h) {
+		return h
+	}
+	if ck != "" && looksLikeJWT(ck) {
+		return ck
+	}
+	if q != "" && looksLikeJWT(q) {
+		return q
+	}
+	if h != "" {
+		return h
+	}
+	if ck != "" {
+		return ck
+	}
+	return q
+}
+
 // Auth 使用 config.CurrentJWT()（atomic，热更安全）；secret 参数保留兼容，优先 CurrentJWT。
 // sessions 可为 nil：不启用 Redis 会话校验（默认，不影响现网）。
 func Auth(secret *string, db *store.DB, sessions SessionGate, skipPrefixes ...string) gin.HandlerFunc {
@@ -108,19 +164,11 @@ func Auth(secret *string, db *store.DB, sessions SessionGate, skipPrefixes ...st
 				return
 			}
 		}
-		raw := c.GetHeader("Authorization")
-		if raw == "" {
-			if ck, err := c.Cookie("token"); err == nil {
-				raw = ck
-			}
+		cookie := ""
+		if ck, err := c.Cookie("token"); err == nil {
+			cookie = ck
 		}
-		if raw == "" {
-			raw = c.Query("access_token")
-		}
-		raw = strings.TrimSpace(raw)
-		if strings.HasPrefix(strings.ToLower(raw), "bearer ") {
-			raw = strings.TrimSpace(raw[7:])
-		}
+		raw := pickAuthCredential(path, c.GetHeader("Authorization"), cookie, c.Query("access_token"))
 		if raw == "" {
 			c.JSON(http.StatusUnauthorized, gin.H{"message": "unauthorized", "diagnostic_message": "authorization key is empty"})
 			c.Abort()

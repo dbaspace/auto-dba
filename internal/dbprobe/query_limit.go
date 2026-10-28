@@ -23,6 +23,8 @@ type EnsureQueryLimitResult struct {
 	DefaultLimit int
 }
 
+const exportLimitSanityMax = 1000000
+
 // EnsureQueryLimit 对 SELECT/WITH 注入或钳制 limit（统一小写关键字）。
 // SHOW/EXPLAIN/DESC 不改写，AppliedLimit 仍返回 maxN 供扫描上限使用。
 func EnsureQueryLimit(raw string, defaultN, maxN int) EnsureQueryLimitResult {
@@ -32,8 +34,56 @@ func EnsureQueryLimit(raw string, defaultN, maxN int) EnsureQueryLimitResult {
 	if maxN <= 0 {
 		maxN = MaxQueryLimit
 	}
-	if maxN > 100000 {
-		maxN = 100000
+	return ensureSelectLimit(raw, defaultN, maxN, 100000)
+}
+
+// EnsureExportLimit 同 EnsureQueryLimit，供 DQL 导出；硬顶可达 100 万。
+func EnsureExportLimit(raw string, defaultN, maxN int) EnsureQueryLimitResult {
+	if defaultN <= 0 {
+		defaultN = DefaultExportLimit
+	}
+	if maxN <= 0 {
+		maxN = MaxExportLimit
+	}
+	return ensureSelectLimit(raw, defaultN, maxN, exportLimitSanityMax)
+}
+
+// ParseSQLTailLimit 解析语句尾部 LIMIT n（LIMIT a,b 取 b）；无则 ok=false。
+func ParseSQLTailLimit(raw string) (n int, ok bool) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return 0, false
+	}
+	body := strings.TrimSpace(strings.TrimSuffix(s, ";"))
+	m := reTailLimitNum.FindStringSubmatch(body)
+	if m == nil {
+		return 0, false
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil || n <= 0 {
+		return 0, false
+	}
+	return n, true
+}
+
+// RequireExportSQLLimit 导出 SQL 必须自带 LIMIT；返回钳制后的扫描上限（代码硬顶 100 万）。
+func RequireExportSQLLimit(raw string) (limit int, err error) {
+	n, ok := ParseSQLTailLimit(raw)
+	if !ok {
+		return 0, fmt.Errorf("导出 SQL 必须包含 LIMIT")
+	}
+	if n > exportLimitSanityMax {
+		n = exportLimitSanityMax
+	}
+	return n, nil
+}
+
+func ensureSelectLimit(raw string, defaultN, maxN, sanityMax int) EnsureQueryLimitResult {
+	if sanityMax <= 0 {
+		sanityMax = 100000
+	}
+	if maxN > sanityMax {
+		maxN = sanityMax
 	}
 	if defaultN > maxN {
 		defaultN = maxN

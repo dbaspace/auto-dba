@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Input, Progress, Select, Space, Table, Tag, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
+import type { EChartsCoreOption } from 'echarts'
 import { useNavigate } from 'react-router-dom'
 import api from '../../api/request'
+import ChartBox from '../dashboard/ChartBox'
 import { groupInstanceTypes, parseInstanceTypes, type InstanceTypeOption } from '../../utils/instanceTypes'
 import './InstanceOverview.css'
+
+type CpuPoint = { t?: number; v?: number }
 
 type Sample = {
   reachable?: boolean
@@ -28,6 +32,9 @@ type Sample = {
   data_known?: boolean
   storage_rate?: number
   storage_rate_known?: boolean
+  cpu_rate?: number
+  cpu_known?: boolean
+  cpu_series?: CpuPoint[]
   collected_at?: string
 }
 
@@ -129,6 +136,61 @@ function RateCell({ pct, extra }: { pct: number | null; extra?: string }) {
   )
 }
 
+function cpuSparkOption(series?: CpuPoint[]): EChartsCoreOption | null {
+  const pts = (series || []).filter((p) => p.t != null && p.v != null && Number.isFinite(p.v))
+  if (!pts.length) return null
+  const xs = pts.map((p) => (p.t as number) * 1000)
+  const ys = pts.map((p) => Math.round((p.v as number) * 10) / 10)
+  const last = ys[ys.length - 1] ?? 0
+  const color = last >= 80 ? '#cf1322' : last >= 60 ? '#d48806' : '#389e0d'
+  return {
+    animation: false,
+    grid: { left: 2, right: 2, top: 4, bottom: 2 },
+    xAxis: { type: 'time', show: false },
+    yAxis: { type: 'value', show: false, min: 0, max: Math.max(100, ...ys) },
+    tooltip: {
+      trigger: 'axis',
+      appendToBody: true,
+      formatter: (params: unknown) => {
+        const arr = Array.isArray(params) ? params : [params]
+        const p = arr[0] as { value?: [number, number] }
+        const pair = p?.value
+        if (!pair || pair.length < 2) return ''
+        const d = new Date(pair[0])
+        const hh = String(d.getHours()).padStart(2, '0')
+        const mm = String(d.getMinutes()).padStart(2, '0')
+        const ss = String(d.getSeconds()).padStart(2, '0')
+        return `${hh}:${mm}:${ss}<br/>CPU ${pair[1]}%`
+      },
+    },
+    series: [
+      {
+        type: 'line',
+        data: xs.map((t, i) => [t, ys[i]]),
+        showSymbol: false,
+        smooth: true,
+        lineStyle: { width: 1.5, color },
+        areaStyle: { color, opacity: 0.18 },
+      },
+    ],
+  }
+}
+
+function CpuSparkCell({ sample }: { sample?: Sample }) {
+  const option = useMemo(() => cpuSparkOption(sample?.cpu_series), [sample?.cpu_series])
+  if (!sample?.cpu_known || !option) return <span className="ov-muted">—</span>
+  const last = sample.cpu_rate
+  const lv = last != null && Number.isFinite(last) ? rateLevel(last) : 'ok'
+  return (
+    <div className={`ov-cpu ov-cpu-${lv}`}>
+      <div className="ov-cpu-chart">
+        <ChartBox option={option} height="36px" />
+      </div>
+      <span className="ov-cpu-num">{last != null && Number.isFinite(last) ? `${Math.round(last)}%` : ''}</span>
+    </div>
+  )
+}
+
 function lagText(s?: Sample) {
   if (!s || s.role !== 'replica') return '—'
   const parts: string[] = []
@@ -153,6 +215,7 @@ function anomalyTags(row: Row) {
   if (s.conn_max && s.conn_used != null && s.conn_used / s.conn_max >= 0.8) tags.push('连接偏高')
   if (s.mem_max && s.mem_used != null && s.mem_used / s.mem_max >= 0.8) tags.push('内存偏高')
   if (s.storage_rate_known && (s.storage_rate || 0) >= 80) tags.push('存储偏高')
+  if (s.cpu_known && (s.cpu_rate || 0) >= 80) tags.push('CPU偏高')
   if ((s.lag_known && (s.lag_bytes || 0) >= LAG_BYTES) || (s.lag_sec_known && (s.lag_seconds || 0) >= 10)) {
     tags.push('复制延迟')
   }
@@ -370,6 +433,15 @@ export default function InstanceOverview() {
         render: (_, row) => <RateCell pct={usagePct(row.sample?.mem_used, row.sample?.mem_max)} />,
       },
       {
+        title: 'CPU',
+        width: 160,
+        onCell: (row) => {
+          const pct = row.sample?.cpu_known ? row.sample.cpu_rate ?? 0 : null
+          return { className: pct == null ? '' : `ov-cell ov-cell-${rateLevel(pct)}` }
+        },
+        render: (_, row) => <CpuSparkCell sample={row.sample} />,
+      },
+      {
         title: '命中率',
         width: 90,
         render: (_, row) => (row.sample?.hit_known ? `${Math.round((row.sample.hit_rate || 0) * 1000) / 10}%` : '—'),
@@ -419,7 +491,23 @@ export default function InstanceOverview() {
   )
 
   const exportCsv = () => {
-    const header = ['实例名', '地址', '环境', '类型', '版本', '角色', '状态', '连接', '已用存储', '存储使用率', '大约总量', '内存大小GB', '使用率', '从库延迟']
+    const header = [
+      '实例名',
+      '地址',
+      '环境',
+      '类型',
+      '版本',
+      '角色',
+      '状态',
+      '连接',
+      '已用存储',
+      '存储使用率',
+      '大约总量',
+      '内存大小GB',
+      '使用率',
+      'CPU',
+      '从库延迟',
+    ]
     const lines = [header.join(',')]
     for (const row of sorted) {
       const tags = anomalyTags(row)
@@ -441,6 +529,7 @@ export default function InstanceOverview() {
             const pct = usagePct(row.sample?.mem_used, row.sample?.mem_max)
             return pct == null ? '' : `${Math.round(pct)}%`
           })(),
+          row.sample?.cpu_known && row.sample.cpu_rate != null ? `${Math.round(row.sample.cpu_rate)}%` : '',
           lagText(row.sample),
         ]
           .map((v) => csvCell(String(v)))
@@ -546,7 +635,11 @@ export default function InstanceOverview() {
         {running
           ? '正在采样，汇总和表格会随结果更新，完成后才是本轮最终数字'
           : `数字是当前一次采样，不是监控图里的区间平均。超过约 5 分钟会变淡。低于 60% 为绿色，60% 起为黄色，80% 起为红色。${
-              engine === 'postgres' ? ' 已用存储是各库文件合计。使用率是云监控最近值。大约总量 = 已用存储 / 使用率。' : ''
+              engine === 'postgres'
+                ? ' 已用存储是各库文件合计。使用率是云监控最近值。大约总量 = 已用存储 / 使用率。'
+                : engine === 'redis'
+                  ? ' Redis CPU 为近 5 分钟 Prometheus 曲线（redis_exporter），旁注为末点占用。'
+                  : ''
             }`}
       </div>
       <div className="instance-overview-table">
@@ -556,7 +649,7 @@ export default function InstanceOverview() {
           loading={loading && !running}
           dataSource={sorted}
           columns={columns}
-          scroll={{ x: 1400 }}
+          scroll={{ x: 1560 }}
           pagination={{ defaultPageSize: 20, showSizeChanger: true, pageSizeOptions: ['20', '50', '100'], showTotal: (n) => `共 ${n} 条` }}
           rowClassName={(row) => (stale(row.sample) ? 'instance-overview-stale' : '')}
         />

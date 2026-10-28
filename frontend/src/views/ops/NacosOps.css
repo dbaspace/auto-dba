@@ -61,6 +61,19 @@
   justify-content: center;
 }
 
+.nacos-ops-warm-hint {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  z-index: 2;
+  padding: 2px 8px;
+  font-size: 12px;
+  color: #666;
+  background: rgba(255, 255, 255, 0.9);
+  border-radius: 4px;
+  pointer-events: none;
+}
+
 .app-tab-panel:has(.nacos-ops-page) {
   padding: 0 !important;
   overflow: hidden;

@@ -999,6 +999,11 @@ export default function CommonQuery() {
       okText: '发起导出数据工单',
       cancelText: '取消',
       onOk: () => {
+        // row_count 仅审批参考：取 SQL 中 LIMIT，勿用查询预览行数（常被 query_default_limit=1000 截断）
+        const limMatch = String(tab.sql || '').match(/\blimit\s+(\d+)(?:\s*,\s*(\d+))?/i)
+        const sqlLimit = limMatch
+          ? Number(limMatch[2] != null ? limMatch[2] : limMatch[1])
+          : 0
         sessionStorage.setItem(DQL_DRAFT_KEY, JSON.stringify({
           database_id: tab.dbId,
           instance_id: tab.instanceId,
@@ -1006,7 +1011,7 @@ export default function CommonQuery() {
           env: tab.env,
           db_type: tab.dbType,
           sql: tab.sql,
-          row_count: tab.result?.rows?.length || 0,
+          row_count: Number.isFinite(sqlLimit) && sqlLimit > 0 ? sqlLimit : 0,
           columns: tab.result?.columns || [],
         }))
         navigate('/ops/dql')

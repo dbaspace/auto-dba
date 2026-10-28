@@ -12,6 +12,59 @@ func TestInferFeSoftwareBaseFromInternalLog(t *testing.T) {
 	}
 }
 
+func TestInferFeSoftwareBaseFromPath(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"/home/dorisdb_base/fe/meta", "/home/dorisdb_base"},
+		{"/home/dorisdb_base/fe/log", "/home/dorisdb_base"},
+		{"/home/dorisdb_base/fe", "/home/dorisdb_base"},
+		{"/home/log", "/home/log"},
+		{"/home/fe/log", "/home"},
+		{"", ""},
+	}
+	for _, tc := range cases {
+		if got := InferFeSoftwareBaseFromPath(tc.in); got != tc.want {
+			t.Fatalf("InferFeSoftwareBaseFromPath(%q)=%q want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestPickDeeperSoftwareBase(t *testing.T) {
+	if got := pickDeeperSoftwareBase("/home", "/home/dorisdb_base"); got != "/home/dorisdb_base" {
+		t.Fatalf("got %q", got)
+	}
+	if got := pickDeeperSoftwareBase("/home/dorisdb_base", "/home"); got != "/home/dorisdb_base" {
+		t.Fatalf("got %q", got)
+	}
+	if got := pickDeeperSoftwareBase("", "/home/dorisdb_base"); got != "/home/dorisdb_base" {
+		t.Fatalf("empty a got %q", got)
+	}
+	if got := pickDeeperSoftwareBase("/home/dorisdb_base", ""); got != "/home/dorisdb_base" {
+		t.Fatalf("empty b got %q", got)
+	}
+}
+
+func TestAlignFeSoftwareBaseWithBE(t *testing.T) {
+	got, did := alignFeSoftwareBaseWithBE("/home", "/home/dorisdb_base")
+	if !did || got != "/home/dorisdb_base" {
+		t.Fatalf("got=%q did=%v", got, did)
+	}
+	got, did = alignFeSoftwareBaseWithBE("/home/dorisdb_base", "/home/dorisdb_base")
+	if did || got != "/home/dorisdb_base" {
+		t.Fatalf("same got=%q did=%v", got, did)
+	}
+	got, did = alignFeSoftwareBaseWithBE("/opt/fe_root", "/opt/be_root")
+	if did || got != "/opt/fe_root" {
+		t.Fatalf("unrelated got=%q did=%v", got, did)
+	}
+	got, did = alignFeSoftwareBaseWithBE("/home/fe/log", "/home/dorisdb_base")
+	// Infer already stripped; this tests raw align only — /home/fe/log is not prefix of BE
+	if did {
+		t.Fatalf("unexpected align got=%q", got)
+	}
+}
+
 func TestInferBeSoftwareBaseFromMinidump(t *testing.T) {
 	got := InferBeSoftwareBaseFromMinidump("/data1/dorisdb_base/be")
 	if got != "/data1/dorisdb_base" {

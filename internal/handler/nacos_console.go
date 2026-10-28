@@ -9,6 +9,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +27,8 @@ const (
 	nacosProxyTimeout = 30 * time.Second
 	nacosProxyPrefix  = "/api/v1/nacos-proxy/"
 	nacosBodyLimit    = 32 << 20
+	// 默认本地 Nacos 控制台静态根（scripts/sync-nacos-console-assets.sh 输出目录）。
+	nacosDefaultStaticDir = "assets/nacos-console"
 )
 
 type nacosCachedSession struct {
@@ -253,13 +257,15 @@ func (h *NacosAdminHandler) ConsoleBootstrap(c *gin.Context) {
 	log.Printf("nacos_console env=%s total_ms=%d", env, time.Since(start).Milliseconds())
 	c.Header("Content-Type", "text/html; charset=utf-8")
 	c.Header("Cache-Control", "no-store")
+	setNacosEmbedFrameAncestors(c)
+	// 会话写入 nacos_embed_token，避免覆盖平台 SPA 的 localStorage.token（JWT）。
 	c.String(http.StatusOK, `<!DOCTYPE html>
-<html lang="zh-CN"><head><meta charset="utf-8"><title>Nacos Console</title></head>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>Nacos Console</title>`+nacosTokenStorageShim+`</head>
 <body style="font-family:sans-serif;padding:24px;color:#666">
 正在打开 Nacos 控制台…
 <script>
 (function () {
-  try { localStorage.setItem('token', JSON.stringify(%s)); } catch (e) {}
+  try { localStorage.setItem('nacos_embed_token', JSON.stringify(%s)); } catch (e) {}
   var next = %q;
   var fallback = %q;
   try {
@@ -281,20 +287,132 @@ func nacosFallbackLinks(consoleURL string) string {
 	return fmt.Sprintf(`<p><a href="%s" target="_blank" rel="noreferrer">新窗口打开控制台</a></p>`, u)
 }
 
+// shouldRewriteNacosBody 仅对需要改写的文本缓冲：HTML（注入 shim）与 JSON（可能含绝对 origin）。
+// JS/CSS 等大静态不 rewrite，走流式转发。
 func shouldRewriteNacosBody(ctype, pathname string) bool {
-	if strings.Contains(ctype, "text/html") || strings.Contains(ctype, "text/css") ||
-		strings.Contains(ctype, "javascript") || strings.Contains(ctype, "application/json") {
+	if strings.Contains(ctype, "text/html") || strings.HasSuffix(pathname, ".html") {
 		return true
 	}
-	return strings.HasSuffix(pathname, ".js") || strings.HasSuffix(pathname, ".css") ||
-		strings.HasSuffix(pathname, ".html") || strings.HasSuffix(pathname, ".json") ||
-		strings.HasSuffix(pathname, ".map")
+	if strings.Contains(ctype, "application/json") || strings.HasSuffix(pathname, ".json") {
+		return true
+	}
+	return false
 }
 
-const nacosEmbedChrome = `<meta http-equiv="Content-Security-Policy" content="frame-ancestors *">
-<style id="auto-dba-nacos-embed">
+func nacosStaticExt(pathname string) bool {
+	ext := strings.ToLower(filepath.Ext(pathname))
+	switch ext {
+	case ".js", ".css", ".map", ".woff", ".woff2", ".ttf", ".eot", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".webp":
+		return true
+	default:
+		return false
+	}
+}
+
+func (h *NacosAdminHandler) nacosConsoleStaticDir() string {
+	if h == nil {
+		return nacosDefaultStaticDir
+	}
+	s := strings.TrimSpace(h.StaticDir)
+	if s == "-" {
+		return "" // 显式关闭本地静态
+	}
+	if s != "" {
+		return s
+	}
+	return nacosDefaultStaticDir
+}
+
+// resolveNacosLocalStatic 将 proxy path（如 /next/js/main.js）映射到本地静态文件；防目录穿越。
+func resolveNacosLocalStatic(staticDir, rest string) (abs string, ok bool) {
+	staticDir = strings.TrimSpace(staticDir)
+	if staticDir == "" || !nacosStaticExt(rest) {
+		return "", false
+	}
+	rel := strings.TrimPrefix(rest, "/")
+	if rel == "" || strings.Contains(rel, "..") {
+		return "", false
+	}
+	root, err := filepath.Abs(staticDir)
+	if err != nil {
+		return "", false
+	}
+	candidate := filepath.Join(root, filepath.FromSlash(rel))
+	absCandidate, err := filepath.Abs(candidate)
+	if err != nil {
+		return "", false
+	}
+	relToRoot, err := filepath.Rel(root, absCandidate)
+	if err != nil || strings.HasPrefix(relToRoot, "..") || relToRoot == ".." {
+		return "", false
+	}
+	st, err := os.Stat(absCandidate)
+	if err != nil || st.IsDir() {
+		return "", false
+	}
+	return absCandidate, true
+}
+
+func (h *NacosAdminHandler) tryServeNacosLocalStatic(c *gin.Context, env, rest string, start time.Time) bool {
+	if c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead {
+		return false
+	}
+	abs, ok := resolveNacosLocalStatic(h.nacosConsoleStaticDir(), rest)
+	if !ok {
+		return false
+	}
+	f, err := os.Open(abs)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	c.Header("X-Nacos-Static", "local")
+	http.ServeContent(c.Writer, c.Request, filepath.Base(abs), st.ModTime(), f)
+	log.Printf("nacos_proxy env=%s path=%s status=%d local_bytes=%d total_ms=%d",
+		env, rest, c.Writer.Status(), st.Size(), time.Since(start).Milliseconds())
+	return true
+}
+
+// nacosEmbedChrome 仅注入样式；frame-ancestors 必须走 HTTP 头（meta 会被浏览器忽略并报错）。
+const nacosEmbedChrome = `<style id="auto-dba-nacos-embed">
 html, body { width:100% !important; height:100% !important; margin:0 !important; overflow:auto !important; }
 </style>`
+
+const nacosFrameAncestorsCSP = "frame-ancestors *"
+
+func setNacosEmbedFrameAncestors(c *gin.Context) {
+	c.Header("Content-Security-Policy", nacosFrameAncestorsCSP)
+}
+
+// nacosTokenStorageShim 把 iframe 内对 localStorage.token 的读写转到 nacos_embed_token，
+// 避免与平台 SPA 共用同源 localStorage 时覆盖 JWT。
+const nacosTokenStorageShim = `<script id="auto-dba-nacos-token-shim">
+(function () {
+  if (window.__autoDbaNacosTokenShim) return;
+  window.__autoDbaNacosTokenShim = true;
+  var NS = 'nacos_embed_token';
+  var proto = Storage.prototype;
+  var _get = proto.getItem;
+  var _set = proto.setItem;
+  var _remove = proto.removeItem;
+  proto.getItem = function (k) {
+    if (k === 'token' && this === localStorage) return _get.call(this, NS);
+    return _get.call(this, k);
+  };
+  proto.setItem = function (k, v) {
+    if (k === 'token' && this === localStorage) return _set.call(this, NS, v);
+    return _set.call(this, k, v);
+  };
+  proto.removeItem = function (k) {
+    if (k === 'token' && this === localStorage) return _remove.call(this, NS);
+    return _remove.call(this, k);
+  };
+})();
+</script>`
 
 func rewriteNacosBody(raw []byte, ctype, origin, proxyBase string) ([]byte, bool) {
 	isHTML := strings.Contains(ctype, "text/html")
@@ -322,11 +440,18 @@ func rewriteNacosBody(raw []byte, ctype, origin, proxyBase string) ([]byte, bool
 			text = text[:start] + text[i+end+1:]
 			changed = true
 		}
+		headBits := ""
+		if !strings.Contains(text, "auto-dba-nacos-token-shim") {
+			headBits += nacosTokenStorageShim
+		}
 		if !strings.Contains(text, "auto-dba-nacos-embed") {
+			headBits += nacosEmbedChrome
+		}
+		if headBits != "" {
 			if strings.Contains(text, "</head>") {
-				text = strings.Replace(text, "</head>", nacosEmbedChrome+"</head>", 1)
+				text = strings.Replace(text, "</head>", headBits+"</head>", 1)
 			} else {
-				text = insertAfterHeadOpen(text, nacosEmbedChrome)
+				text = insertAfterHeadOpen(text, headBits)
 			}
 			changed = true
 		}
@@ -351,21 +476,33 @@ func copyNacosResponseHeaders(dst http.Header, src http.Header) {
 }
 
 // Proxy reverse-proxies Nacos console UI/API under same origin with accessToken headers.
+// GET 静态资源优先从 assets/nacos-console 本地提供；HTML/API 仍走远程。
 func (h *NacosAdminHandler) Proxy(c *gin.Context) {
 	start := time.Now()
 	env := strings.TrimSpace(c.Param("env"))
+	rest := c.Param("filepath")
+	if rest != "" && !strings.HasPrefix(rest, "/") {
+		rest = "/" + rest
+	}
+	if rest != "" && h.tryServeNacosLocalStatic(c, env, rest, start) {
+		return
+	}
+
 	sess, _, err := h.ensureNacosSession(env, middleware.TenantID(c))
 	if err != nil {
 		c.Header("Content-Type", "text/html; charset=utf-8")
 		c.String(http.StatusBadGateway, `<!DOCTYPE html><html><body style="font-family:sans-serif;padding:24px;color:#c00">%s</body></html>`, html.EscapeString(err.Error()))
 		return
 	}
-	rest := c.Param("filepath")
 	if rest == "" {
 		rest = sess.ConsolePath + "/"
 	}
 	if !strings.HasPrefix(rest, "/") {
 		rest = "/" + rest
+	}
+	// 会话就绪后再试一次本地（rest 可能刚补上 ConsolePath；静态后缀才会命中）
+	if h.tryServeNacosLocalStatic(c, env, rest, start) {
+		return
 	}
 	target := sess.Origin + rest
 	if q := c.Request.URL.RawQuery; q != "" {
@@ -424,6 +561,9 @@ func (h *NacosAdminHandler) Proxy(c *gin.Context) {
 	}
 	rewritten, did := rewriteNacosBody(raw, ctype, sess.Origin, proxyBase)
 	copyNacosResponseHeaders(c.Writer.Header(), resp.Header)
+	if strings.Contains(ctype, "text/html") || strings.HasSuffix(rest, ".html") {
+		setNacosEmbedFrameAncestors(c)
+	}
 	c.Data(resp.StatusCode, ctype, rewritten)
 	log.Printf("nacos_proxy env=%s path=%s status=%d bytes=%d rewrite=%v up_ms=%d total_ms=%d",
 		env, rest, resp.StatusCode, len(rewritten), did, upMs, time.Since(start).Milliseconds())

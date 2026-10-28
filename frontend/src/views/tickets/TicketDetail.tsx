@@ -455,7 +455,11 @@ export default function TicketDetail() {
         label: '原文导出敏感字段',
         value: dqlExtra.need_sensitive_data ? '开启' : '关闭',
       })
-      fields.push({ key: 'rows', label: '预估行数', value: String(dqlExtra.row_count ?? '-') })
+      fields.push({
+        key: 'rows',
+        label: '预估行数（审批参考）',
+        value: String(dqlExtra.row_count ?? '-'),
+      })
       if (dqlExtra.dba_assigned_to)
         fields.push({ key: 'dba', label: 'DBA审批人', value: dqlExtra.dba_assigned_to })
       if (dqlExtra.security_assigned_to)
