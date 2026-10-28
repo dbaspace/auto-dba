@@ -68,18 +68,18 @@ func TestFilterNamesByMemberSetCanonical(t *testing.T) {
 }
 
 func TestWriteApproversRetryLogic(t *testing.T) {
-	// 模拟：首次写失败、第二次成功 → 最终 ok，并计一次 retry。
+	// 模拟：前两次写失败、第三次成功 → 最终 ok（与 BatchApprovers 最多 3 次一致）。
 	attempts := 0
 	write := func() error {
 		attempts++
-		if attempts == 1 {
+		if attempts < 3 {
 			return errRetryOnce
 		}
 		return nil
 	}
 	var lastErr error
 	retried := false
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt := 0; attempt < 3; attempt++ {
 		if attempt > 0 {
 			retried = true
 		}
@@ -88,7 +88,7 @@ func TestWriteApproversRetryLogic(t *testing.T) {
 			break
 		}
 	}
-	if lastErr != nil || !retried || attempts != 2 {
+	if lastErr != nil || !retried || attempts != 3 {
 		t.Fatalf("lastErr=%v retried=%v attempts=%d", lastErr, retried, attempts)
 	}
 }

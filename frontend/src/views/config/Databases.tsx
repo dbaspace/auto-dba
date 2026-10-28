@@ -620,7 +620,12 @@ export default function Databases() {
 
   function rowTenantId(row: DatabaseRow) {
     const inst = instances.find((i) => i.id === row.instance_id)
-    return String(row.tenant_id || inst?.tenant_id || currentTenantId || '')
+    const rowTid = String(row.tenant_id || '').trim()
+    const instTid = String(inst?.tenant_id || '').trim()
+    // 与后端 EffectiveDatabaseTenantID 对齐：行上为默认租户且实例非默认时，用实例租户
+    if (rowTid && rowTid !== 'tenant-default') return rowTid
+    if (instTid && instTid !== 'tenant-default') return instTid
+    return rowTid || instTid || String(currentTenantId || '')
   }
 
   function sameList(lists: string[][]) {
@@ -714,8 +719,10 @@ export default function Databases() {
       const { data } = await api.post(url, body)
       const okCount = Number(data.ok_count || 0)
       const failCount = Number(data.fail_count || 0)
+      const skipCount = Number(data.skip_count || 0)
       const requested = Number(data.requested || ids.length)
       const failed: { id?: string; db_name?: string; message?: string }[] = data.failed || []
+      const skippedRows: { id?: string; db_name?: string; message?: string }[] = data.skipped || []
       const dropped: string[] = Array.isArray(data.dropped) ? data.dropped.map(String) : []
       const updated: { id?: string; db_name?: string; approvers?: string[] }[] = Array.isArray(data.updated)
         ? data.updated
@@ -731,22 +738,28 @@ export default function Databases() {
       }
       const selected = ids.length
       const failIDs = new Set(failed.map((f) => String(f.id || '')).filter(Boolean))
-      const keepKeys = new Set<string>([...failIDs])
-      if (failCount === 0 && okCount === selected) {
+      const skipIDs = new Set(skippedRows.map((f) => String(f.id || '')).filter(Boolean))
+      const keepKeys = new Set<string>([...failIDs, ...skipIDs])
+      if (failCount === 0 && skipCount === 0 && okCount === selected) {
         message.success(
           `已为 ${okCount} 个库${verb}${label}` +
             (dropped.length ? `（已忽略非成员：${dropped.join('、')}）` : ''),
         )
       } else {
         Modal.warning({
-          title: `${verb}${label}完成：勾选 ${selected}，请求 ${requested}，成功 ${okCount}，失败 ${failCount}`,
+          title: `${verb}${label}完成：勾选 ${selected}，请求 ${requested}，成功 ${okCount}，失败 ${failCount}，跳过 ${skipCount}`,
           content: (
             <div>
               {dropped.length ? <p style={{ marginBottom: 8 }}>已忽略非本租户成员：{dropped.join('、')}</p> : null}
               <ul style={{ margin: 0, paddingLeft: 18, maxHeight: 240, overflow: 'auto' }}>
                 {failed.map((f) => (
-                  <li key={f.id || f.db_name}>
+                  <li key={`f-${f.id || f.db_name}`}>
                     {f.db_name || f.id}：{f.message || '失败'}
+                  </li>
+                ))}
+                {skippedRows.map((f) => (
+                  <li key={`s-${f.id || f.db_name}`}>
+                    {f.db_name || f.id}：{f.message || '跳过'}
                   </li>
                 ))}
               </ul>

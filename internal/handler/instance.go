@@ -1349,9 +1349,7 @@ func (h *DatabaseHandler) enrichDatabaseTenants(list []store.Database) {
 	for i := range list {
 		iid := list[i].InstanceID
 		inst := instCache[iid]
-		if list[i].TenantID == "" && inst != nil {
-			list[i].TenantID = inst.TenantID
-		}
+		list[i].TenantID = h.Store.EffectiveDatabaseTenantID(list[i].ID, iid, list[i].TenantID, "")
 		if inst != nil {
 			list[i].InstanceName = inst.Name
 		}
@@ -1610,13 +1608,7 @@ func (h *DatabaseHandler) Update(c *gin.Context) {
 		return
 	}
 	it.Domains = bound
-	aclTid := exist.TenantID
-	if aclTid == "" {
-		aclTid = inst.TenantID
-	}
-	if aclTid == "" {
-		aclTid = middleware.TenantID(c)
-	}
+	aclTid := h.Store.EffectiveDatabaseTenantID(exist.ID, exist.InstanceID, exist.TenantID, middleware.TenantID(c))
 	merged, dropped, err := mergeDatabaseApprovers(h.Store, aclTid, exist.Approvers, it.Approvers)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
@@ -1674,15 +1666,8 @@ func (h *DatabaseHandler) loadBatchDatabases(c *gin.Context, rawIDs []string) ([
 			c.JSON(http.StatusNotFound, gin.H{"message": "库未登记或无权限: " + id})
 			return nil, "", false
 		}
-		tid := strings.TrimSpace(it.TenantID)
-		if tid == "" {
-			if inst, _ := h.Store.GetInstance(it.InstanceID); inst != nil {
-				tid = strings.TrimSpace(inst.TenantID)
-			}
-		}
-		if tid == "" {
-			tid = middleware.TenantID(c)
-		}
+		tid := h.Store.EffectiveDatabaseTenantID(it.ID, it.InstanceID, it.TenantID, middleware.TenantID(c))
+		it.TenantID = tid
 		if tenant == "" {
 			tenant = tid
 		} else if tid != tenant {
@@ -1739,8 +1724,10 @@ func (h *DatabaseHandler) writeDatabaseApproversVerified(id string, merged, must
 	return got.Approvers, nil
 }
 
+var batchApproverRetryBackoff = []time.Duration{20 * time.Millisecond, 50 * time.Millisecond}
+
 // BatchApprovers POST /databases/batch-approvers — 向所选库追加审核人（并集）；非本租户成员自动丢掉，不整批失败。
-// 一次加载成员集、只更新 approvers、写后回读；单条失败再试一次。
+// 一次加载成员集、只更新 approvers、写后回读；单条失败最多再试 2 次（共 3 次）。
 func (h *DatabaseHandler) BatchApprovers(c *gin.Context) {
 	var req batchDBACLReq
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -1761,6 +1748,7 @@ func (h *DatabaseHandler) BatchApprovers(c *gin.Context) {
 	okCount := 0
 	retried := 0
 	failed := make([]batchDBFail, 0)
+	skipped := make([]batchDBFail, 0)
 	updated := make([]batchApproverUpdated, 0, len(list))
 	droppedSet := map[string]struct{}{}
 	user := c.GetString(middleware.CtxUsername)
@@ -1771,10 +1759,14 @@ func (h *DatabaseHandler) BatchApprovers(c *gin.Context) {
 		rowStart := time.Now()
 		var lastErr error
 		var finalApprovers []string
+		var lastKeptAdd []string
 		didRetry := false
-		for attempt := 0; attempt < 2; attempt++ {
+		for attempt := 0; attempt < 3; attempt++ {
 			if attempt > 0 {
 				didRetry = true
+				if attempt-1 < len(batchApproverRetryBackoff) {
+					time.Sleep(batchApproverRetryBackoff[attempt-1])
+				}
 				fresh, getErr := h.Store.GetDatabase(it.ID)
 				if getErr != nil {
 					lastErr = getErr
@@ -1787,15 +1779,19 @@ func (h *DatabaseHandler) BatchApprovers(c *gin.Context) {
 				it = *fresh
 			}
 			merged, dropped, keptAdd := mergeDatabaseApproversWithSet(it.Approvers, add, members)
+			lastKeptAdd = keptAdd
 			for _, name := range dropped {
 				droppedSet[name] = struct{}{}
 			}
+			// 即使无可追加成员，仍写入以清理现有非法审核人；mustContain 为空时回读只校验写通。
 			finalApprovers, lastErr = h.writeDatabaseApproversVerified(it.ID, merged, keptAdd)
 			if lastErr == nil {
+				log.Printf("batch_approvers id=%s db=%s tid=%s attempt=%d ok kept_add=%v approvers=%v elapsed_ms=%d",
+					it.ID, it.DBName, tid, attempt+1, keptAdd, finalApprovers, time.Since(rowStart).Milliseconds())
 				break
 			}
-			log.Printf("batch_approvers id=%s db=%s attempt=%d err=%v elapsed_ms=%d",
-				it.ID, it.DBName, attempt+1, lastErr, time.Since(rowStart).Milliseconds())
+			log.Printf("batch_approvers id=%s db=%s tid=%s attempt=%d err=%v elapsed_ms=%d",
+				it.ID, it.DBName, tid, attempt+1, lastErr, time.Since(rowStart).Milliseconds())
 		}
 		if didRetry {
 			retried++
@@ -1806,25 +1802,32 @@ func (h *DatabaseHandler) BatchApprovers(c *gin.Context) {
 		}
 		after := before
 		after.Approvers = finalApprovers
-		okCount++
 		updated = append(updated, batchApproverUpdated{ID: it.ID, DBName: it.DBName, Approvers: finalApprovers})
 		_ = h.Store.AppendCmdbAudit(user, "update", "database", it.ID, "api", before, after)
+		if len(add) > 0 && len(lastKeptAdd) == 0 {
+			skipped = append(skipped, batchDBFail{ID: it.ID, DBName: it.DBName, Message: "无可追加的本租户成员"})
+			continue
+		}
+		okCount++
 	}
 	dropped := make([]string, 0, len(droppedSet))
 	for name := range droppedSet {
 		dropped = append(dropped, name)
 	}
 	sort.Strings(dropped)
-	log.Printf("batch_approvers tenant=%s requested=%d ok=%d fail=%d retried=%d elapsed_ms=%d",
-		tid, requested, okCount, len(failed), retried, time.Since(start).Milliseconds())
+	log.Printf("batch_approvers tenant=%s requested=%d ok=%d fail=%d skipped=%d retried=%d elapsed_ms=%d",
+		tid, requested, okCount, len(failed), len(skipped), retried, time.Since(start).Milliseconds())
 	c.JSON(http.StatusOK, gin.H{
-		"requested":  requested,
-		"ok_count":   okCount,
-		"fail_count": len(failed),
-		"failed":     failed,
-		"dropped":    dropped,
-		"updated":    updated,
-		"retried":    retried,
+		"requested":    requested,
+		"ok_count":     okCount,
+		"fail_count":   len(failed),
+		"skip_count":   len(skipped),
+		"failed":       failed,
+		"skipped":      skipped,
+		"dropped":      dropped,
+		"updated":      updated,
+		"retried":      retried,
+		"resolved_tid": tid,
 	})
 }
 

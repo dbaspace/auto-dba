@@ -45,6 +45,7 @@ export default function AccessDomains() {
   const [rows, setRows] = useState<DomainRow[]>([])
   const [q, setQ] = useState('')
   const [envFilter, setEnvFilter] = useState('')
+  const [tenantFilter, setTenantFilter] = useState('')
   const [envCatalog, setEnvCatalog] = useState<{ code: string; name: string }[]>([])
   const [loading, setLoading] = useState(false)
   const [syncing, setSyncing] = useState(false)
@@ -95,6 +96,25 @@ export default function AccessDomains() {
       .map(([value, label]) => ({ value, label: label !== value ? `${label}（${value}）` : value }))
   }, [envCatalog, rows])
 
+  const tenantFilterOptions = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const t of tenants) {
+      const id = String(t.id || '').trim()
+      if (!id) continue
+      const base = String(t.name || t.code || id).trim() || id
+      map.set(id, id === currentTenantId ? `${base}（当前）` : base)
+    }
+    for (const r of rows) {
+      const id = String(r.tenant_id || '').trim()
+      if (!id || map.has(id)) continue
+      const base = String(r.tenant_name || id).trim() || id
+      map.set(id, id === currentTenantId ? `${base}（当前）` : base)
+    }
+    return [...map.entries()]
+      .sort((a, b) => a[1].localeCompare(b[1], 'zh-CN'))
+      .map(([value, label]) => ({ value, label }))
+  }, [tenants, rows, currentTenantId])
+
   const filteredRows = useMemo(() => {
     let list = rows
     if (activeType === OTHER) {
@@ -104,6 +124,9 @@ export default function AccessDomains() {
     }
     if (envFilter) {
       list = list.filter((r) => String(r.env_code || '').trim() === envFilter)
+    }
+    if (tenantFilter) {
+      list = list.filter((r) => String(r.tenant_id || '').trim() === tenantFilter)
     }
     const kw = q.trim().toLowerCase()
     if (kw) {
@@ -116,7 +139,7 @@ export default function AccessDomains() {
       )
     }
     return list
-  }, [rows, activeType, knownTypes, q, envFilter])
+  }, [rows, activeType, knownTypes, q, envFilter, tenantFilter])
 
   const pagedRows = useMemo(() => {
     const start = (page - 1) * pageSize
@@ -126,7 +149,7 @@ export default function AccessDomains() {
   useEffect(() => {
     setPage(1)
     setSelectedKeys([])
-  }, [activeType, q, envFilter])
+  }, [activeType, q, envFilter, tenantFilter])
 
   async function loadTypes() {
     const { data } = await api.get('/global-args')
@@ -368,6 +391,16 @@ export default function AccessDomains() {
           value={envFilter || undefined}
           onChange={(v) => setEnvFilter(v || '')}
           options={envFilterOptions}
+        />
+        <Select
+          allowClear
+          showSearch
+          optionFilterProp="label"
+          placeholder="全部租户"
+          style={{ width: 200 }}
+          value={tenantFilter || undefined}
+          onChange={(v) => setTenantFilter(v || '')}
+          options={tenantFilterOptions}
         />
         <Input
           value={q}

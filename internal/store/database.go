@@ -264,17 +264,39 @@ func (d *DB) UpdateDatabaseApprovers(id string, approvers []string) error {
 	if approvers == nil {
 		approvers = []string{}
 	}
-	_, err := d.Exec(
+	res, err := d.Exec(
 		`UPDATE tbl_databases SET approvers=?, updated_at=? WHERE id=?`,
 		encodeJSON(approvers), now, id,
 	)
 	if err != nil {
 		return err
 	}
+	if n, raErr := res.RowsAffected(); raErr == nil && n == 0 {
+		return errors.New("审核人未写入（影响行数为 0）")
+	}
 	if it, getErr := d.GetDatabase(id); getErr == nil && it != nil {
 		d.MaybeSnapshotDatabase(it, "")
 	}
 	return nil
+}
+
+// EffectiveDatabaseTenantID 解析库归属：原始列优先；列空则继承实例；再 fallback（如 JWT）。
+// 避免 scan 把空列填成 tenant-default 后，再也走不到实例继承。
+func (d *DB) EffectiveDatabaseTenantID(databaseID, instanceID, scannedTenantID, fallback string) string {
+	raw, err := d.lookupRowTenantID("tbl_databases", databaseID)
+	if err == nil && raw != "" {
+		return raw
+	}
+	if inst := d.inheritTenantFromInstance(instanceID); inst != "" {
+		return inst
+	}
+	if s := strings.TrimSpace(scannedTenantID); s != "" && s != DefaultTenantID {
+		return s
+	}
+	if s := strings.TrimSpace(scannedTenantID); s != "" {
+		return s
+	}
+	return strings.TrimSpace(fallback)
 }
 
 func (d *DB) DeleteDatabaseInTenant(id, tenantID string) error {
