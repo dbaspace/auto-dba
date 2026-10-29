@@ -88,6 +88,138 @@ func TestMergeApproverIntentAssignees(t *testing.T) {
 	}
 }
 
+func TestIsDBATenant(t *testing.T) {
+	if isDBATenant(store.DefaultTenantID, store.DefaultTenantCode) {
+		t.Fatal("default tenant must not count as dba source")
+	}
+	if !isDBATenant("", "dba") {
+		t.Fatal("dba code")
+	}
+	if !isDBATenant("any-id", "DBA") {
+		t.Fatal("DBA case")
+	}
+	if isDBATenant("tenant-supply", "supply") {
+		t.Fatal("business tenant should not be dba")
+	}
+}
+
+func TestMergeResourceApplyGrantAssignees(t *testing.T) {
+	got := mergeResourceApplyGrantAssignees(
+		[]string{"admin"},
+		"wl_a, admin",
+		[]string{"abc", "Admin", "dba_ops"},
+	)
+	// admin, wl_a, abc, dba_ops
+	if len(got) != 4 {
+		t.Fatalf("want 4, got %v", got)
+	}
+	if got[0] != "admin" || got[1] != "wl_a" || got[2] != "abc" || got[3] != "dba_ops" {
+		t.Fatalf("order: %v", got)
+	}
+}
+
+func TestPickAssigneeFromPool(t *testing.T) {
+	pool := []string{"admin", "abc", "wl_a"}
+	got, err := pickAssigneeFromPool(pool, "ABC", "empty", "miss")
+	if err != nil || got != "abc" {
+		t.Fatalf("prefer case-insensitive: got=%q err=%v", got, err)
+	}
+	got, err = pickAssigneeFromPool(pool, "", "empty", "miss")
+	if err != nil || got != "admin" {
+		t.Fatalf("default first: got=%q err=%v", got, err)
+	}
+	_, err = pickAssigneeFromPool(pool, "outsider", "empty", "miss")
+	if err == nil || !strings.Contains(err.Error(), "miss") {
+		t.Fatalf("want miss err, got %v", err)
+	}
+	_, err = pickAssigneeFromPool(nil, "", "empty", "miss")
+	if err == nil || !strings.Contains(err.Error(), "empty") {
+		t.Fatalf("want empty err, got %v", err)
+	}
+}
+
+func TestResolveAssignee_CrossTenantGrantPool(t *testing.T) {
+	db := resourceApplyTestStore(t)
+	h := &ResourceApplyHandler{Store: db}
+
+	pool, err := h.listResourceApplyGrantAssignees()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pool) == 0 {
+		t.Fatal("grant pool empty: need platform admin, whitelist, or dba tenant members")
+	}
+
+	// 申请人租户 ≠ 资源归属 → grant 分支
+	applicantTID := "tenant-applicant-not-owner"
+	ownerTID := "tenant-supply-chain-owner"
+	items := []ResourceApplyItem{{
+		ResourceType:  raTypeDatabase,
+		ResourceID:    "db-dummy",
+		OwnerTenantID: ownerTID,
+		Action:        raActionGrant,
+	}}
+
+	okName := pool[0]
+	got, err := h.resolveAssignee(applicantTID, items, okName)
+	if err != nil {
+		t.Fatalf("pool member should pass: %v", err)
+	}
+	if !strings.EqualFold(got, okName) {
+		t.Fatalf("got %q want %q", got, okName)
+	}
+
+	_, err = h.resolveAssignee(applicantTID, items, "not_in_grant_pool_zzz")
+	if err == nil || !strings.Contains(err.Error(), "平台管理员、超级审核白名单或 dba 租户里的用户") {
+		t.Fatalf("outsider want new grant err, got %v", err)
+	}
+	if strings.Contains(err.Error(), "资源归属租户成员") || strings.Contains(err.Error(), "默认租户成员") {
+		t.Fatalf("legacy wording must be gone: %v", err)
+	}
+
+	// 划拨与跨租共用统一审批人池
+	assignItems := []ResourceApplyItem{{
+		ResourceType:  raTypeDatabase,
+		ResourceID:    "db-assign",
+		OwnerTenantID: store.DefaultTenantID,
+		Action:        raActionAssign,
+	}}
+	got, err = h.resolveAssignee(applicantTID, assignItems, okName)
+	if err != nil {
+		t.Fatalf("assign pool member should pass: %v", err)
+	}
+	if !strings.EqualFold(got, okName) {
+		t.Fatalf("assign got %q want %q", got, okName)
+	}
+	_, err = h.resolveAssignee(applicantTID, assignItems, "not_in_grant_pool_zzz")
+	if err == nil || !strings.Contains(err.Error(), "平台管理员、超级审核白名单或 dba 租户里的用户") {
+		t.Fatalf("assign outsider: %v", err)
+	}
+
+	// 划拨+跨租混合
+	mixed := []ResourceApplyItem{
+		{
+			ResourceType:  raTypeDatabase,
+			ResourceID:    "db-assign",
+			OwnerTenantID: store.DefaultTenantID,
+			Action:        raActionAssign,
+		},
+		{
+			ResourceType:  raTypeDatabase,
+			ResourceID:    "db-grant",
+			OwnerTenantID: ownerTID,
+			Action:        raActionGrant,
+		},
+	}
+	got, err = h.resolveAssignee(applicantTID, mixed, okName)
+	if err != nil {
+		t.Fatalf("mixed pool member should pass: %v", err)
+	}
+	if !strings.EqualFold(got, okName) {
+		t.Fatalf("mixed got %q want %q", got, okName)
+	}
+}
+
 func resourceApplyTestStore(t *testing.T) *store.DB {
 	t.Helper()
 	dsn := os.Getenv("AUTO_DBA_TEST_DSN")

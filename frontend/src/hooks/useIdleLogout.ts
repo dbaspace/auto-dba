@@ -5,6 +5,7 @@ import { useAppDispatch } from '../store'
 import { clearAuth } from '../store/authSlice'
 import { resetTabs } from '../store/tabsSlice'
 import { beginLogout } from '../api/request'
+import { clearSystemNoticeDismissals } from '../utils/systemNoticeSession'
 
 const LAST_ACTIVITY_KEY = 'last_activity_at'
 const CHECK_MS = 15_000
@@ -50,6 +51,7 @@ export default function useIdleLogout(timeoutMin: number | undefined | null) {
       dispatch(clearAuth())
       dispatch(resetTabs({}))
       sessionStorage.removeItem('auto-dba-query-workspace')
+      clearSystemNoticeDismissals()
       message.warning('登录已超时，请重新登录')
       navigate('/login', { replace: true })
     }

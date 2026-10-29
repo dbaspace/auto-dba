@@ -140,7 +140,7 @@ func (h *AccessDomainHandler) AssignTenant(c *gin.Context) {
 // AssignTenantBatch POST /access-domains/assign-tenant — 批量指定域名归属租户。
 func (h *AccessDomainHandler) AssignTenantBatch(c *gin.Context) {
 	if !platformAdminAuditing(h.Store, c) {
-		c.JSON(http.StatusForbidden, gin.H{"message": "仅平台管理员在租户审计会话中可划拨资源"})
+		c.JSON(http.StatusForbidden, gin.H{"message": "仅平台管理员在租户模式下可划拨资源"})
 		return
 	}
 	var req struct {

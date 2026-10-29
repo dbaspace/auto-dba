@@ -244,9 +244,10 @@ func Run(cfg *config.Config, configPath string) {
 		Ldap:     &handler.LdapHandler{Store: db, Cfg: cfg},
 		Sso:      &handler.SsoHandler{Store: db, Cfg: cfg},
 		SMTP:     &handler.SMTPHandler{Store: db, Cfg: cfg},
-		Notify:   &handler.NotifyHandler{Store: db, Cfg: cfg},
-		Terminal: &terminal.Handler{Store: db, Cfg: cfg, Secret: fieldCrypto},
-		Static:   staticRoot,
+		Notify:       &handler.NotifyHandler{Store: db, Cfg: cfg},
+		SystemNotice: &handler.SystemNoticeHandler{Store: db},
+		Terminal:     &terminal.Handler{Store: db, Cfg: cfg, Secret: fieldCrypto},
+		Static:       staticRoot,
 	}
 
 	// 数据库监控：remote 代理到独立服务；embed 内嵌；off 关闭

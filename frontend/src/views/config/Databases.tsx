@@ -1245,7 +1245,7 @@ export default function Databases() {
           type="info"
           showIcon
           style={{ marginBottom: 12 }}
-          message={`审计中：可指定库的归属租户（单一归属）。实例地址可留在原租户；跨租户共用请用授权（只读），不要多租户共编同一行。`}
+          message={`租户模式：可指定库的归属租户（单一归属）。实例地址可留在原租户；跨租户共用请用授权（只读），不要多租户共编同一行。`}
         />
       ) : null}
       {initLoading ? null : (
@@ -1475,7 +1475,7 @@ export default function Databases() {
           onChange={(v) => setAssignTid(v)}
           options={tenants.map((t) => ({
             value: t.id,
-            label: `${t.name || t.code || t.id}${t.id === currentTenantId ? '（当前审计）' : ''}`,
+            label: `${t.name || t.code || t.id}${t.id === currentTenantId ? '（当前工作租户）' : ''}`,
           }))}
         />
       </Modal>

@@ -721,7 +721,7 @@ export default function Instances() {
       </div>
       {impersonating ? (
         <div className="type-hint" style={{ margin: '0 0 8px', color: 'var(--ant-color-text-secondary, #666)' }}>
-          审计中：列表含全平台实例。可用「指定租户」将实例（及下属已登记库/账号）划到目标租户；当前审计租户为「{currentTenantLabel}」。
+          租户模式：列表含全平台实例。可用「指定租户」将实例（及下属已登记库/账号）划到目标租户；当前工作租户为「{currentTenantLabel}」。
         </div>
       ) : null}
       <div className="ops-table">
@@ -1227,7 +1227,7 @@ export default function Instances() {
           onChange={(v) => setAssignTid(v)}
           options={tenants.map((t) => ({
             value: t.id,
-            label: `${t.name || t.code || t.id}${t.id === currentTenantId ? '（当前审计）' : ''}`,
+            label: `${t.name || t.code || t.id}${t.id === currentTenantId ? '（当前工作租户）' : ''}`,
           }))}
         />
       </Modal>

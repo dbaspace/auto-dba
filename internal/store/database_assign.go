@@ -60,6 +60,11 @@ func (d *DB) AssignDatabaseTenant(id, toTenantID string) error {
 		toTenantID, now, dbRow.ID, dbRow.InstanceID, dbRow.DBName); err != nil {
 		return err
 	}
+	if tenantChanged {
+		if _, err := d.migrateResourceGrantsOnAssignTx(tx, "database", dbRow.ID, toTenantID); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
 }
 

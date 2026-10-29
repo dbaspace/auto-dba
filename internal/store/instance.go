@@ -37,6 +37,20 @@ func IsHostInstanceType(dbType string) bool {
 	return t == "host" || t == "os" || t == "主机"
 }
 
+// IsLogicalDatabaseEngine 是否为可登记「逻辑库」的引擎（已登记库语义）。
+// 中间件/消息/缓存/主机等不在此列；按引擎能力正向判定，不做名称或端口特判。
+func IsLogicalDatabaseEngine(dbType string) bool {
+	switch strings.ToLower(strings.TrimSpace(dbType)) {
+	case "mysql", "tidb", "oceanbase",
+		"postgres", "postgresql", "pg", "cockroachdb",
+		"starrocks", "sr", "clickhouse",
+		"oracle", "sqlserver", "mongodb":
+		return true
+	default:
+		return false
+	}
+}
+
 func normalizeInstanceVisibility(it *Instance) {
 	if it == nil {
 		return
@@ -482,7 +496,18 @@ func (d *DB) assignInstanceTenantOnly(id, toTenantID string) error {
 }
 
 // reassignInstanceOwnedCatalogTx 只迁移仍归属 fromTid（或空）的库与对应账号，异租库不动；同条件迁移域名资源。
+// 并对实例及随迁库/域名上的跨租授权做 from 迁移（to=新归属则删除）。
 func (d *DB) reassignInstanceOwnedCatalogTx(tx *sql.Tx, instanceID, fromTid, toTid, now string) error {
+	dbIDs, err := d.queryIDsTx(tx, `SELECT id FROM tbl_databases WHERE instance_id=? AND (COALESCE(tenant_id,'')=? OR COALESCE(tenant_id,'')='')`,
+		instanceID, fromTid)
+	if err != nil {
+		return err
+	}
+	domainIDs, err := d.queryIDsTx(tx, `SELECT id FROM tbl_access_domains WHERE instance_id=? AND (COALESCE(tenant_id,'')=? OR COALESCE(tenant_id,'')='')`,
+		instanceID, fromTid)
+	if err != nil {
+		return err
+	}
 	if _, err := tx.Exec(d.rewrite(`UPDATE tbl_databases SET tenant_id=?, updated_at=? WHERE instance_id=? AND (COALESCE(tenant_id,'')=? OR COALESCE(tenant_id,'')='')`),
 		toTid, now, instanceID, fromTid); err != nil {
 		return err
@@ -491,15 +516,49 @@ func (d *DB) reassignInstanceOwnedCatalogTx(tx *sql.Tx, instanceID, fromTid, toT
 		toTid, now, instanceID, fromTid); err != nil {
 		return err
 	}
-	_, err := tx.Exec(d.rewrite(`UPDATE tbl_db_accounts SET tenant_id=?, updated_at=? WHERE instance_id=?
+	if _, err := tx.Exec(d.rewrite(`UPDATE tbl_db_accounts SET tenant_id=?, updated_at=? WHERE instance_id=?
 		AND (COALESCE(tenant_id,'')=? OR COALESCE(tenant_id,'')='')
 		AND (
 			COALESCE(database_id,'') IN (SELECT id FROM tbl_databases WHERE instance_id=? AND COALESCE(tenant_id,'')=?)
 			OR (COALESCE(database_id,'')='' AND db_name IN (SELECT db_name FROM tbl_databases WHERE instance_id=? AND COALESCE(tenant_id,'')=?))
 			OR NOT EXISTS (SELECT 1 FROM tbl_databases d WHERE d.instance_id=tbl_db_accounts.instance_id AND d.db_name=tbl_db_accounts.db_name)
 		)`),
-		toTid, now, instanceID, fromTid, instanceID, toTid, instanceID, toTid)
-	return err
+		toTid, now, instanceID, fromTid, instanceID, toTid, instanceID, toTid); err != nil {
+		return err
+	}
+	if _, err := d.migrateResourceGrantsOnAssignTx(tx, "instance", instanceID, toTid); err != nil {
+		return err
+	}
+	for _, id := range dbIDs {
+		if _, err := d.migrateResourceGrantsOnAssignTx(tx, "database", id, toTid); err != nil {
+			return err
+		}
+	}
+	for _, id := range domainIDs {
+		if _, err := d.migrateResourceGrantsOnAssignTx(tx, "domain", id, toTid); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (d *DB) queryIDsTx(tx *sql.Tx, q string, args ...any) ([]string, error) {
+	rows, err := tx.Query(d.rewrite(q), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(id) != "" {
+			out = append(out, id)
+		}
+	}
+	return out, rows.Err()
 }
 
 const tagSrClusterPrefix = "sr-cluster="

@@ -7,6 +7,7 @@ import { setUser } from '../store/authSlice'
 import { HOME_PATH, hydrateTabs } from '../store/tabsSlice'
 import loginBg from '../assets/login-bg.jpg'
 import BrandMark, { BrandWordmark } from '../components/BrandMark'
+import { clearSystemNoticeDismissals } from '../utils/systemNoticeSession'
 
 const MODE_LABEL: Record<string, string> = {
   platform: '平台',
@@ -197,6 +198,8 @@ export default function Login() {
     } catch {
       /* ignore */
     }
+    // 新登录会话：清掉「本会话已关通知」标记，保证 every_login 能再弹
+    clearSystemNoticeDismissals()
     localStorage.setItem('token', data.token)
     localStorage.setItem('user', JSON.stringify(data.user))
     localStorage.setItem('last_activity_at', String(Date.now()))

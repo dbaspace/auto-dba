@@ -79,6 +79,7 @@ type Deps struct {
 	Sso                *handler.SsoHandler
 	SMTP               *handler.SMTPHandler
 	Notify             *handler.NotifyHandler
+	SystemNotice       *handler.SystemNoticeHandler
 	DNS                *handler.DNSHandler
 	Terminal           *terminal.Handler
 	Static             string
@@ -174,6 +175,7 @@ func Init(e *gin.Engine, d Deps) {
 	if d.Tenant != nil {
 		secured.GET("/tenants/mine", d.Tenant.Mine)
 		secured.POST("/tenants/switch", d.Tenant.Switch)
+		secured.POST("/tenants/exit-impersonate", requireURN(store.URNTenantsImpersonate), d.Tenant.ExitImpersonate)
 		secured.GET("/tenants/plan-options", d.Tenant.PlanOptions)
 		secured.GET("/tenant-acl-options", d.Tenant.ACLOptions)
 		secured.GET("/tenants", requireURN(store.URNSidebarTenants), d.Tenant.List)
@@ -186,6 +188,8 @@ func Init(e *gin.Engine, d Deps) {
 		secured.GET("/tenants/:id/grants", requireURN(store.URNTenantsGrants), d.Tenant.ListGrants)
 		secured.GET("/tenants/:id/grant-resources", requireURN(store.URNTenantsGrants), d.Tenant.ListGrantResources)
 		secured.POST("/tenants/:id/grants", requireURN(store.URNTenantsGrants), d.Tenant.CreateGrant)
+		secured.POST("/tenants/:id/grants/batch", requireURN(store.URNTenantsGrants), d.Tenant.CreateGrantBatch)
+		secured.POST("/tenants/:id/grants/batch-delete", requireURN(store.URNTenantsGrants), d.Tenant.DeleteGrantBatch)
 		secured.DELETE("/tenants/:id/grants/:grantId", requireURN(store.URNTenantsGrants), d.Tenant.DeleteGrant)
 		secured.GET("/tenants/:id/audit-logs", requireURN(store.URNSidebarTenants), d.Tenant.AuditLogs)
 		secured.POST("/tenants/:id/impersonate", requireURN(store.URNTenantsImpersonate), d.Tenant.Impersonate)
@@ -222,6 +226,12 @@ func Init(e *gin.Engine, d Deps) {
 		secured.GET("/settings/notify", d.Notify.Get)
 		secured.PUT("/settings/notify", d.Notify.Update)
 		secured.POST("/settings/notify/test", d.Notify.Test)
+	}
+	if d.SystemNotice != nil {
+		secured.GET("/settings/system-notice", requireURN(store.URNSidebarSystemNotice), d.SystemNotice.GetSettings)
+		secured.PUT("/settings/system-notice", requireURN(store.URNSystemNoticeEdit), d.SystemNotice.UpdateSettings)
+		secured.GET("/system-notice/active", d.SystemNotice.Active)
+		secured.POST("/system-notice/ack", d.SystemNotice.Ack)
 	}
 
 	secured.GET("/menus/mine", d.RBAC.MineMenus)

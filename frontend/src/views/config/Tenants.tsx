@@ -14,7 +14,7 @@ import {
   message,
   type MenuProps,
 } from 'antd'
-import api from '../../api/request'
+import api, { abortAuthReissue, beginAuthReissue, finishAuthReissue, getAuthEpoch } from '../../api/request'
 import Auth from '../../components/Auth'
 import { Perm, usePermission } from '../../hooks/usePermission'
 import { useAppDispatch } from '../../store'
@@ -84,7 +84,9 @@ export default function Tenants() {
   const { hasUrn } = usePermission()
   const dispatch = useAppDispatch()
   const [list, setList] = useState<Tenant[]>([])
+  const [listQ, setListQ] = useState('')
   const [loading, setLoading] = useState(false)
+  const [grantSelectedKeys, setGrantSelectedKeys] = useState<React.Key[]>([])
   const [createOpen, setCreateOpen] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
   const [memberOpen, setMemberOpen] = useState(false)
@@ -117,6 +119,17 @@ export default function Tenants() {
         .map((t) => ({ value: t.id, label: `${t.name || t.code}（${t.code}）` })),
     [list, current?.id],
   )
+
+  const filteredList = useMemo(() => {
+    const kw = listQ.trim().toLowerCase()
+    if (!kw) return list
+    return list.filter((t) => {
+      const code = String(t.code || '').toLowerCase()
+      const name = String(t.name || '').toLowerCase()
+      const desc = String(t.description || '').toLowerCase()
+      return code.includes(kw) || name.includes(kw) || desc.includes(kw)
+    })
+  }, [list, listQ])
 
   const planLabel = (v?: string) => planOptions.find((p) => p.value === v)?.label || v || '-'
 
@@ -244,7 +257,13 @@ export default function Tenants() {
     setCurrent(t)
     setGrantOpen(true)
     setGrantLabelMap({})
-    grantForm.setFieldsValue({ resource_type: 'instance', resource_id: undefined, to_tenant_id: undefined, permission: 'read' })
+    setGrantSelectedKeys([])
+    grantForm.setFieldsValue({
+      resource_type: 'instance',
+      resource_ids: [],
+      to_tenant_id: undefined,
+      permission: 'read',
+    })
     const { data } = await api.get(`/tenants/${t.id}/grants`)
     const rows = data.data || []
     setGrants(rows)
@@ -255,20 +274,61 @@ export default function Tenants() {
   async function saveGrant() {
     if (!current) return
     const v = await grantForm.validateFields()
-    await api.post(`/tenants/${current.id}/grants`, v)
-    message.success('已授权')
+    const ids = (Array.isArray(v.resource_ids) ? v.resource_ids : []).map((x: string) => String(x || '').trim()).filter(Boolean)
+    if (!ids.length) {
+      message.warning('请选择资源')
+      return
+    }
     const typ = v.resource_type || 'instance'
-    grantForm.setFieldsValue({ resource_type: typ, resource_id: undefined, to_tenant_id: undefined, permission: 'read' })
-    const { data } = await api.get(`/tenants/${current.id}/grants`)
-    setGrants(data.data || [])
-    await loadGrantResources(current.id, typ)
+    try {
+      const { data } = await api.post(`/tenants/${current.id}/grants/batch`, {
+        resource_type: typ,
+        resource_ids: ids,
+        to_tenant_id: v.to_tenant_id,
+        permission: v.permission || 'read',
+      })
+      const created = Number(data.created || 0)
+      const skipped = Number(data.skipped || 0)
+      const failed = Array.isArray(data.failed) ? data.failed : []
+      if (failed.length) {
+        message.warning(`成功 ${created}，跳过 ${skipped}，失败 ${failed.length}`)
+      } else if (created === 0 && skipped > 0) {
+        message.info(`所选资源均已授权（跳过 ${skipped}）`)
+      } else {
+        message.success(`已授权 ${created} 项${skipped ? `，跳过已存在 ${skipped}` : ''}`)
+      }
+      grantForm.setFieldsValue({ resource_type: typ, resource_ids: [], to_tenant_id: undefined, permission: 'read' })
+      const listRes = await api.get(`/tenants/${current.id}/grants`)
+      setGrants(listRes.data.data || [])
+      await loadGrantResources(current.id, typ)
+      await warmGrantLabels(current.id, listRes.data.data || [])
+    } catch (e: any) {
+      message.error(e?.response?.data?.message || '批量授权失败')
+    }
   }
 
-  async function removeGrant(id: string) {
-    if (!current) return
-    await api.delete(`/tenants/${current.id}/grants/${id}`)
-    const { data } = await api.get(`/tenants/${current.id}/grants`)
-    setGrants(data.data || [])
+  async function revokeSelectedGrants() {
+    if (!current || !grantSelectedKeys.length) return
+    const ids = grantSelectedKeys.map(String)
+    Modal.confirm({
+      title: '撤销授权',
+      content: `确认撤销已选 ${ids.length} 条授权？`,
+      okText: '撤销',
+      okButtonProps: { danger: true },
+      async onOk() {
+        const { data } = await api.post(`/tenants/${current.id}/grants/batch-delete`, { ids })
+        const deleted = Number(data.deleted || 0)
+        const failed = Array.isArray(data.failed) ? data.failed : []
+        if (failed.length) {
+          message.warning(`已撤销 ${deleted}，失败 ${failed.length}`)
+        } else {
+          message.success(`已撤销 ${deleted} 条`)
+        }
+        setGrantSelectedKeys([])
+        const listRes = await api.get(`/tenants/${current.id}/grants`)
+        setGrants(listRes.data.data || [])
+      },
+    })
   }
 
   async function openAudit(t: Tenant) {
@@ -279,12 +339,23 @@ export default function Tenants() {
   }
 
   async function impersonate(t: Tenant) {
-    const { data } = await api.post(`/tenants/${t.id}/impersonate`)
-    localStorage.setItem('token', data.token)
-    localStorage.setItem('user', JSON.stringify(data.user))
-    message.success(`已进入租户审计：${t.name}`)
-    location.hash = '#/'
-    location.reload()
+    const epoch = beginAuthReissue()
+    try {
+      const { data } = await api.post(`/tenants/${t.id}/impersonate`)
+      if (epoch !== getAuthEpoch()) {
+        abortAuthReissue()
+        return
+      }
+      localStorage.setItem('token', data.token)
+      localStorage.setItem('user', JSON.stringify(data.user))
+      if (!finishAuthReissue(epoch)) return
+      message.success(`已进入租户模式：${t.name}（下次可直接用顶栏「进入租户模式」）`)
+      location.hash = '#/'
+      location.reload()
+    } catch (e: any) {
+      abortAuthReissue()
+      message.error(e?.response?.data?.message || '进入租户模式失败')
+    }
   }
 
   function currentSessionTenantId() {
@@ -313,13 +384,24 @@ export default function Tenants() {
         const next =
           tenants.find((t) => t.id === 'tenant-default' || t.code === 'default') || tenants[0]
         if (next?.id) {
-          const sw = await api.post('/tenants/switch', { tenant_id: next.id })
-          localStorage.setItem('token', sw.data.token)
-          localStorage.setItem('user', JSON.stringify(sw.data.user))
-          dispatch(setUser(sw.data.user))
-          message.success(`已切换到 ${sw.data.user?.current_tenant?.name || next.name}`)
-          location.hash = '#/'
-          location.reload()
+          const epoch = beginAuthReissue()
+          try {
+            const sw = await api.post('/tenants/switch', { tenant_id: next.id })
+            if (epoch !== getAuthEpoch()) {
+              abortAuthReissue()
+              return
+            }
+            localStorage.setItem('token', sw.data.token)
+            localStorage.setItem('user', JSON.stringify(sw.data.user))
+            if (!finishAuthReissue(epoch)) return
+            dispatch(setUser(sw.data.user))
+            message.success(`已切换到 ${sw.data.user?.current_tenant?.name || next.name}`)
+            location.hash = '#/'
+            location.reload()
+          } catch (e: any) {
+            abortAuthReissue()
+            throw e
+          }
           return
         }
         localStorage.removeItem('token')
@@ -383,7 +465,8 @@ export default function Tenants() {
     if (hasUrn(Perm.tenants.impersonate)) {
       items.push({
         key: 'impersonate',
-        label: '进入审计',
+        label: '进入租户模式',
+        title: '也可在顶栏点「进入租户模式」快捷进入',
         onClick: ({ domEvent }) => {
           domEvent.stopPropagation()
           impersonate(r)
@@ -407,18 +490,25 @@ export default function Tenants() {
 
   return (
     <div style={{ padding: 16, width: '100%', maxWidth: '100%', overflow: 'hidden' }}>
-      <Space style={{ marginBottom: 16 }}>
+      <Space style={{ marginBottom: 16 }} wrap>
         <Auth urn={Perm.tenants.create}>
           <Button type="primary" onClick={() => setCreateOpen(true)}>
             新建租户
           </Button>
         </Auth>
         <Button onClick={load}>刷新</Button>
+        <Input.Search
+          allowClear
+          placeholder="搜索编码/名称"
+          style={{ width: 240 }}
+          value={listQ}
+          onChange={(e) => setListQ(e.target.value)}
+        />
       </Space>
       <Table
         rowKey="id"
         loading={loading}
-        dataSource={list}
+        dataSource={filteredList}
         tableLayout="fixed"
         style={{ width: '100%' }}
         pagination={{ pageSize: 10, showSizeChanger: true }}
@@ -619,56 +709,110 @@ export default function Tenants() {
           setGrantOpen(false)
           setGrantResources([])
           setGrantLabelMap({})
+          setGrantSelectedKeys([])
         }}
         footer={null}
-        width={880}
+        width={1000}
         destroyOnClose
       >
         <p style={{ marginBottom: 12, color: '#6b7280', fontSize: 13 }}>
           从「{current?.name || '资源方租户'}」选出资源，授权给目标租户只读使用。下方表格为已创建的授权记录（不是资源目录）。
         </p>
-        <Form form={grantForm} layout="inline" style={{ marginBottom: 12, rowGap: 8 }} onFinish={saveGrant}>
-          <Form.Item name="resource_type" rules={[{ required: true }]} initialValue="instance">
+        <Form
+          form={grantForm}
+          layout="inline"
+          style={{
+            marginBottom: 12,
+            display: 'flex',
+            flexWrap: 'nowrap',
+            alignItems: 'center',
+            gap: 8,
+            overflowX: 'auto',
+          }}
+          onFinish={saveGrant}
+        >
+          <Form.Item name="resource_type" rules={[{ required: true }]} initialValue="instance" style={{ marginInlineEnd: 0 }}>
             <Select
-              style={{ width: 130 }}
+              style={{ width: 120 }}
               options={GRANT_TYPES}
               onChange={(typ) => {
-                grantForm.setFieldsValue({ resource_id: undefined })
+                grantForm.setFieldsValue({ resource_ids: [] })
                 if (current) void loadGrantResources(current.id, typ)
               }}
             />
           </Form.Item>
-          <Form.Item name="resource_id" rules={[{ required: true, message: '请选择资源' }]}>
+          <Form.Item
+            name="resource_ids"
+            rules={[{ required: true, type: 'array', min: 1, message: '请选择资源' }]}
+            style={{ marginInlineEnd: 0 }}
+          >
             <Select
+              mode="multiple"
               style={{ width: 280 }}
               showSearch
               optionFilterProp="label"
+              maxTagCount="responsive"
               loading={grantResLoading}
-              placeholder={grantResLoading ? '加载中…' : grantResources.length ? '选择资源' : '该类型下暂无资源'}
+              placeholder={grantResLoading ? '加载中…' : grantResources.length ? '选择资源（可多选）' : '该类型下暂无资源'}
               options={grantResources.map((r) => ({ value: r.id, label: r.label }))}
               notFoundContent={grantResLoading ? '加载中…' : '暂无可选资源'}
+              dropdownRender={(menu) => (
+                <>
+                  <div
+                    style={{
+                      padding: '4px 8px',
+                      display: 'flex',
+                      gap: 4,
+                      borderBottom: '1px solid #f0f0f0',
+                    }}
+                    onMouseDown={(e) => e.preventDefault()}
+                  >
+                    <Button
+                      type="link"
+                      size="small"
+                      disabled={!grantResources.length}
+                      onClick={() => grantForm.setFieldsValue({ resource_ids: grantResources.map((r) => r.id) })}
+                    >
+                      全选
+                    </Button>
+                    <Button type="link" size="small" onClick={() => grantForm.setFieldsValue({ resource_ids: [] })}>
+                      清空
+                    </Button>
+                  </div>
+                  {menu}
+                </>
+              )}
             />
           </Form.Item>
-          <Form.Item name="to_tenant_id" rules={[{ required: true, message: '请选择目标租户' }]}>
+          <Form.Item name="to_tenant_id" rules={[{ required: true, message: '请选择目标租户' }]} style={{ marginInlineEnd: 0 }}>
             <Select
-              style={{ width: 220 }}
+              style={{ width: 200 }}
               showSearch
               optionFilterProp="label"
               placeholder="目标租户"
               options={targetTenantOptions}
             />
           </Form.Item>
-          <Form.Item name="permission" initialValue="read">
-            <Select style={{ width: 100 }} options={[{ value: 'read', label: 'read' }]} />
+          <Form.Item name="permission" initialValue="read" style={{ marginInlineEnd: 0 }}>
+            <Select style={{ width: 90 }} options={[{ value: 'read', label: 'read' }]} />
           </Form.Item>
           <Button type="primary" htmlType="submit">
             授权
           </Button>
         </Form>
+        <div style={{ marginBottom: 8 }}>
+          <Button danger disabled={!grantSelectedKeys.length} onClick={() => void revokeSelectedGrants()}>
+            {grantSelectedKeys.length ? `撤销（${grantSelectedKeys.length}）` : '撤销'}
+          </Button>
+        </div>
         <Table
           rowKey="id"
           size="small"
           dataSource={grants}
+          rowSelection={{
+            selectedRowKeys: grantSelectedKeys,
+            onChange: (keys) => setGrantSelectedKeys(keys),
+          }}
           locale={{ emptyText: '暂无授权记录，请选择资源与目标租户后点击授权' }}
           columns={[
             {
@@ -693,15 +837,6 @@ export default function Tenants() {
               },
             },
             { title: '权限', dataIndex: 'permission', width: 80 },
-            {
-              title: '操作',
-              width: 80,
-              render: (_: unknown, g: { id: string }) => (
-                <Button type="link" danger onClick={() => removeGrant(g.id)}>
-                  撤销
-                </Button>
-              ),
-            },
           ]}
         />
       </Modal>

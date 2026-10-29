@@ -22,6 +22,7 @@ import { collectPaths, pathAllowed } from '../constants/routes'
 import UserAccountMenu from './UserAccountMenu'
 import TenantSwitcher from '../components/TenantSwitcher'
 import UserWatermark from '../components/UserWatermark'
+import SystemNoticeModal from '../components/SystemNoticeModal'
 import useIdleLogout from '../hooks/useIdleLogout'
 import NavFlyout from './NavFlyout'
 import AppearancePopover from './AppearancePopover'
@@ -371,6 +372,7 @@ export default function AppLayout() {
   return (
     <Layout style={{ height: '100%', width: '100%', overflow: 'hidden', position: 'relative' }}>
       {!hideUserWatermark && <UserWatermark />}
+      <SystemNoticeModal userId={user?.id ? String(user.id) : undefined} />
       <Sider
         width={SIDER_WIDTH}
         collapsedWidth={SIDER_COLLAPSED_WIDTH}

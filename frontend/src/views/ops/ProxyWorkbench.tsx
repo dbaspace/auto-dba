@@ -303,7 +303,7 @@ export default function ProxyWorkbench({ kind }: { kind: ProxyKind }) {
           type="info"
           showIcon
           style={{ marginBottom: 12 }}
-          message={`审计中：列表含全平台 ${KIND_LABEL[kind] || kind}。其它租户资源可划拨到「${currentTenantLabel}」，该租户成员即可运维。`}
+          message={`租户模式：列表含全平台 ${KIND_LABEL[kind] || kind}。其它租户资源可划拨到「${currentTenantLabel}」，该租户成员即可运维。`}
         />
       ) : null}
       <Space style={{ marginBottom: 12 }} wrap>

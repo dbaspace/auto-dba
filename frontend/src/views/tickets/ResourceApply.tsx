@@ -16,8 +16,18 @@ interface Candidate {
   display_name: string
   owner_tenant_id: string
   owner_tenant_name?: string
+  env_code?: string
+  env_name?: string
   suggested_action: 'acl' | 'grant' | 'assign' | 'approver'
   note?: string
+}
+
+type EnvOption = { id?: string; code: string; name: string }
+
+function envLabel(c: Pick<Candidate, 'env_code' | 'env_name'> | undefined | null): string {
+  const name = String(c?.env_name || '').trim()
+  const code = String(c?.env_code || '').trim()
+  return name || code || '-'
 }
 
 const ACTION_LABEL: Record<string, string> = {
@@ -58,6 +68,8 @@ export default function ResourceApply() {
   const [candidates, setCandidates] = useState<Candidate[]>([])
   const [candLoading, setCandLoading] = useState(false)
   const [searchQ, setSearchQ] = useState('')
+  const [envFilter, setEnvFilter] = useState<string | undefined>()
+  const [envOpts, setEnvOpts] = useState<EnvOption[]>([])
   const [approvers, setApprovers] = useState<string[]>([])
   const [approverLoading, setApproverLoading] = useState(false)
   const [targetUserOpts, setTargetUserOpts] = useState<string[]>([])
@@ -66,6 +78,24 @@ export default function ResourceApply() {
   const [antdForm] = Form.useForm()
 
   const isApproverIntent = form.intent === 'approver'
+
+  useEffect(() => {
+    api
+      .get('/environments')
+      .then(({ data }) => {
+        const list = (data.data || []) as EnvOption[]
+        setEnvOpts(
+          (Array.isArray(list) ? list : [])
+            .map((e) => ({
+              id: e.id,
+              code: String(e.code || '').trim(),
+              name: String(e.name || e.code || '').trim(),
+            }))
+            .filter((e) => e.code),
+        )
+      })
+      .catch(() => setEnvOpts([]))
+  }, [])
 
   function patchForm(patch: Partial<ReturnType<typeof emptyForm>>) {
     setForm((f) => ({ ...f, ...patch }))
@@ -116,11 +146,11 @@ export default function ResourceApply() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.category, form.intent])
 
-  async function loadCandidates(type: ResourceType, q: string, intent: ApplyIntent) {
+  async function loadCandidates(type: ResourceType, q: string, intent: ApplyIntent, env?: string) {
     setCandLoading(true)
     try {
       const { data } = await api.get('/resource-apply/candidates', {
-        params: { type, q: q || undefined, intent },
+        params: { type, q: q || undefined, intent, env: env || undefined },
       })
       setCandidates(data.data || [])
     } catch (e: any) {
@@ -132,9 +162,9 @@ export default function ResourceApply() {
   }
 
   useEffect(() => {
-    void loadCandidates(form.resource_type, searchQ, form.intent)
+    void loadCandidates(form.resource_type, searchQ, form.intent, envFilter)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form.resource_type, form.intent])
+  }, [form.resource_type, form.intent, envFilter])
 
   const hasAssign = !isApproverIntent && form.selected.some((s) => s.suggested_action === 'assign')
   const grantOwner =
@@ -212,6 +242,7 @@ export default function ResourceApply() {
     })
     antdForm.setFieldsValue({ assigned_to: undefined, target_users: [] })
     setSearchQ('')
+    setEnvFilter(undefined)
     setCandidates([])
   }
 
@@ -291,12 +322,12 @@ export default function ResourceApply() {
 
   const capabilityDesc = isApproverIntent
     ? '为所选库指定工单审核人：从本租户成员中多选用户，审批通过后写入该库审核人名单。本单审批人须为平台管理员或 issue_global_approver_whitelist。与引擎 GRANT 无关；私有库会对目标用户同步开通可见。'
-    : '用于申请本租户对已登记库、访问域名、主机及集群的可见与使用权限。审批通过后，系统按资源归属自动开通：本租户内纳入可访问名单，跨租户建立只读授权，默认租户资源则划拨至本租户。引擎账号 GRANT 请走「权限申请」；申请成为工单审核人请切换到「库审核人」。'
+    : '用于申请本租户对已登记库、访问域名、主机及集群的可见与使用权限。审批通过后，系统按资源归属自动开通：本租户内纳入可访问名单，跨租户建立只读授权，默认租户资源则划拨至本租户。划拨与跨租授权的工单审批人可为平台管理员、超级审核白名单或 dba 租户里的用户。引擎账号 GRANT 请走「权限申请」；申请成为工单审核人请切换到「库审核人」。'
 
-  const approverPlaceholder = hasAssign
-    ? '含划拨项：请选平台管理员'
-    : isApproverIntent
-      ? '请选平台管理员或超级审核白名单用户'
+  const approverPlaceholder = isApproverIntent
+    ? '请选平台管理员或超级审核白名单用户'
+    : hasAssign || grantOwner
+      ? '平台管理员 / 白名单 / dba 租户里的用户'
       : '选择审批人'
 
   return (
@@ -337,15 +368,29 @@ export default function ResourceApply() {
             options={resourceTypesForCategory.map((t) => ({ value: t, label: TYPE_LABEL[t] }))}
             disabled={isApproverIntent}
           />
+          <Select
+            allowClear
+            placeholder="全部环境"
+            style={{ width: 140 }}
+            value={envFilter}
+            onChange={(v) => setEnvFilter(v || undefined)}
+            options={envOpts.map((e) => ({
+              value: e.code,
+              label: e.name && e.name !== e.code ? `${e.name}（${e.code}）` : e.code,
+            }))}
+          />
           <Input.Search
             allowClear
-            placeholder={isApproverIntent ? '搜索本租户已登记库' : '搜索名称'}
+            placeholder={isApproverIntent ? '搜索本租户已登记库' : '搜索名称/环境'}
             value={searchQ}
             onChange={(e) => setSearchQ(e.target.value)}
-            onSearch={(v) => void loadCandidates(form.resource_type, v, form.intent)}
+            onSearch={(v) => void loadCandidates(form.resource_type, v, form.intent, envFilter)}
             style={{ maxWidth: 320 }}
           />
-          <Button onClick={() => void loadCandidates(form.resource_type, searchQ, form.intent)} loading={candLoading}>
+          <Button
+            onClick={() => void loadCandidates(form.resource_type, searchQ, form.intent, envFilter)}
+            loading={candLoading}
+          >
             刷新
           </Button>
         </div>
@@ -365,6 +410,12 @@ export default function ResourceApply() {
           columns={[
             { title: '名称', dataIndex: 'display_name' },
             { title: '类型', dataIndex: 'resource_type', width: 140, render: (v) => TYPE_LABEL[v] || v },
+            {
+              title: '环境',
+              key: 'env',
+              width: 120,
+              render: (_: unknown, r: Candidate) => envLabel(r),
+            },
             { title: '归属租户', dataIndex: 'owner_tenant_name', width: 140, render: (v, r) => v || r.owner_tenant_id },
             {
               title: '建议处置',
@@ -379,16 +430,20 @@ export default function ResourceApply() {
           <div className="ra-selected">
             <div className="ra-selected-title">已选 {form.selected.length} 项</div>
             <Space wrap size={[8, 8]}>
-              {form.selected.map((s) => (
-                <Tag
-                  key={`${s.resource_type}:${s.resource_id}`}
-                  closable
-                  onClose={() => toggleSelect(s, false)}
-                >
-                  {TYPE_LABEL[s.resource_type]} · {s.display_name}（
-                  {ACTION_LABEL[isApproverIntent ? 'approver' : s.suggested_action] || s.suggested_action}）
-                </Tag>
-              ))}
+              {form.selected.map((s) => {
+                const env = envLabel(s)
+                return (
+                  <Tag
+                    key={`${s.resource_type}:${s.resource_id}`}
+                    closable
+                    onClose={() => toggleSelect(s, false)}
+                  >
+                    {TYPE_LABEL[s.resource_type]} · {s.display_name}
+                    {env !== '-' ? ` · ${env}` : ''}（
+                    {ACTION_LABEL[isApproverIntent ? 'approver' : s.suggested_action] || s.suggested_action}）
+                  </Tag>
+                )
+              })}
             </Space>
           </div>
         )}
@@ -439,7 +494,7 @@ export default function ResourceApply() {
         <p className="hint">
           {isApproverIntent
             ? '库审核人写入所选库 approvers；审批人仅限平台管理员与超级审核白名单。私有库会对目标用户同步开通可见。'
-            : '审批通过后自动生效。手工 grant / 审计划拨 / DCL 权限申请仍可继续使用。'}
+            : '审批通过后自动生效。手工 grant / 租户模式划拨 / DCL 权限申请仍可继续使用。'}
         </p>
         <Space>
           <Button onClick={reset}>取消</Button>

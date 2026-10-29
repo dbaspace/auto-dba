@@ -243,12 +243,121 @@ func (h *TenantHandler) CreateGrant(c *gin.Context) {
 	}
 	g.FromTenantID = c.Param("id")
 	g.CreatedBy = middleware.Username(c)
+	existed, _ := h.Store.FindActiveTenantGrant(g.ToTenantID, g.ToUserID, g.ResourceType, g.ResourceID)
 	if err := h.Store.CreateTenantGrant(&g); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
-	_ = h.Store.AppendTenantAudit(g.FromTenantID, middleware.UserID(c), "grant.create", g.ResourceType+":"+g.ResourceID)
-	c.JSON(http.StatusOK, gin.H{"data": g})
+	if existed == nil {
+		_ = h.Store.AppendTenantAudit(g.FromTenantID, middleware.UserID(c), "grant.create", g.ResourceType+":"+g.ResourceID)
+	}
+	c.JSON(http.StatusOK, gin.H{"data": g, "skipped": existed != nil})
+}
+
+const maxBatchGrantIDs = 500
+
+type batchGrantReq struct {
+	ResourceType string   `json:"resource_type"`
+	ResourceIDs  []string `json:"resource_ids"`
+	ToTenantID   string   `json:"to_tenant_id"`
+	Permission   string   `json:"permission"`
+}
+
+type batchGrantFail struct {
+	ID      string `json:"id"`
+	Message string `json:"message"`
+}
+
+// CreateGrantBatch POST /tenants/:id/grants/batch — 批量跨租授权，已存在则跳过。
+func (h *TenantHandler) CreateGrantBatch(c *gin.Context) {
+	var req batchGrantReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "参数无效"})
+		return
+	}
+	fromID := strings.TrimSpace(c.Param("id"))
+	toID := strings.TrimSpace(req.ToTenantID)
+	typ := strings.TrimSpace(req.ResourceType)
+	if fromID == "" || typ == "" || toID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "from_tenant_id / resource_type / to_tenant_id 必填"})
+		return
+	}
+	if fromID == toID {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "目标租户不能与资源方相同"})
+		return
+	}
+	ids := uniqueTrimmedGrantIDs(req.ResourceIDs)
+	if len(ids) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "resource_ids 不能为空"})
+		return
+	}
+	if len(ids) > maxBatchGrantIDs {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "单次最多授权 500 个资源"})
+		return
+	}
+	perm := strings.ToLower(strings.TrimSpace(req.Permission))
+	if perm != "write" {
+		perm = "read"
+	}
+	createdBy := middleware.Username(c)
+	actorID := middleware.UserID(c)
+	var created []store.TenantGrant
+	var failed []batchGrantFail
+	skipped := 0
+	for _, rid := range ids {
+		ok, err := h.Store.HasResourceGrant(toID, "", typ, rid)
+		if err != nil {
+			failed = append(failed, batchGrantFail{ID: rid, Message: err.Error()})
+			continue
+		}
+		if ok {
+			skipped++
+			continue
+		}
+		g := store.TenantGrant{
+			FromTenantID: fromID,
+			ToTenantID:   toID,
+			ResourceType: typ,
+			ResourceID:   rid,
+			Permission:   perm,
+			CreatedBy:    createdBy,
+		}
+		if err := h.Store.CreateTenantGrant(&g); err != nil {
+			failed = append(failed, batchGrantFail{ID: rid, Message: err.Error()})
+			continue
+		}
+		_ = h.Store.AppendTenantAudit(fromID, actorID, "grant.create", typ+":"+rid)
+		created = append(created, g)
+	}
+	if created == nil {
+		created = []store.TenantGrant{}
+	}
+	if failed == nil {
+		failed = []batchGrantFail{}
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"created": len(created),
+		"skipped": skipped,
+		"failed":  failed,
+		"data":    created,
+	})
+}
+
+func uniqueTrimmedGrantIDs(ids []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
 }
 
 func (h *TenantHandler) DeleteGrant(c *gin.Context) {
@@ -258,6 +367,57 @@ func (h *TenantHandler) DeleteGrant(c *gin.Context) {
 	}
 	_ = h.Store.AppendTenantAudit(c.Param("id"), middleware.UserID(c), "grant.delete", c.Param("grantId"))
 	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+type batchDeleteGrantsReq struct {
+	IDs []string `json:"ids"`
+}
+
+// DeleteGrantBatch POST /tenants/:id/grants/batch-delete — 批量撤销授权（须属该资源方租户）。
+func (h *TenantHandler) DeleteGrantBatch(c *gin.Context) {
+	var req batchDeleteGrantsReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "参数无效"})
+		return
+	}
+	fromID := strings.TrimSpace(c.Param("id"))
+	ids := uniqueTrimmedGrantIDs(req.IDs)
+	if fromID == "" || len(ids) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "ids 不能为空"})
+		return
+	}
+	if len(ids) > maxBatchGrantIDs {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "单次最多撤销 500 条"})
+		return
+	}
+	actorID := middleware.UserID(c)
+	deleted := 0
+	var failed []batchGrantFail
+	for _, id := range ids {
+		g, err := h.Store.GetTenantGrant(id)
+		if err != nil {
+			failed = append(failed, batchGrantFail{ID: id, Message: err.Error()})
+			continue
+		}
+		if g == nil {
+			failed = append(failed, batchGrantFail{ID: id, Message: "记录不存在"})
+			continue
+		}
+		if g.FromTenantID != fromID {
+			failed = append(failed, batchGrantFail{ID: id, Message: "不属于当前资源方租户"})
+			continue
+		}
+		if err := h.Store.DeleteTenantGrant(id); err != nil {
+			failed = append(failed, batchGrantFail{ID: id, Message: err.Error()})
+			continue
+		}
+		_ = h.Store.AppendTenantAudit(fromID, actorID, "grant.delete", id)
+		deleted++
+	}
+	if failed == nil {
+		failed = []batchGrantFail{}
+	}
+	c.JSON(http.StatusOK, gin.H{"deleted": deleted, "failed": failed})
 }
 
 func (h *TenantHandler) AuditLogs(c *gin.Context) {
@@ -327,7 +487,7 @@ func (h *TenantHandler) Impersonate(c *gin.Context) {
 	tid := c.Param("id")
 	ok, err := h.Store.UserHasURN(middleware.UserID(c), store.URNTenantsImpersonate)
 	if err != nil || !ok {
-		c.JSON(http.StatusForbidden, gin.H{"message": "无租户审计进入权限"})
+		c.JSON(http.StatusForbidden, gin.H{"message": "无进入租户模式权限"})
 		return
 	}
 	t, err := h.Store.GetTenant(tid)
@@ -376,6 +536,98 @@ func (h *TenantHandler) Impersonate(c *gin.Context) {
 			"id": u.ID, "username": u.Username, "display_name": u.DisplayName,
 			"role": u.Role, "menus": menus, "impersonating": true,
 			"current_tenant": t, "tenants": active,
+		},
+	})
+}
+
+// ExitImpersonate POST /tenants/exit-impersonate — 结束租户模式，回到成员租户。
+// 若当前已不在租户模式（重复点击 / 前后端态不一致），幂等返回成员会话，避免误报错误。
+func (h *TenantHandler) ExitImpersonate(c *gin.Context) {
+	ok, err := h.Store.UserHasURN(middleware.UserID(c), store.URNTenantsImpersonate)
+	if err != nil || !ok {
+		c.JSON(http.StatusForbidden, gin.H{"message": "无租户模式权限"})
+		return
+	}
+	u, err := h.Store.GetUserByID(middleware.UserID(c))
+	if err != nil || u == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"message": "unauthorized"})
+		return
+	}
+	if !middleware.IsImpersonating(c) {
+		t, list, perr := h.Store.PickLoginTenant(u.ID, middleware.TenantID(c))
+		if perr != nil || t == nil {
+			t, list, perr = h.Store.PickLoginTenant(u.ID, "")
+		}
+		if perr != nil || t == nil {
+			c.JSON(http.StatusOK, gin.H{
+				"already_exited": true,
+				"user": gin.H{
+					"id": u.ID, "username": u.Username, "display_name": u.DisplayName,
+					"role": u.Role, "role_id": u.RoleID, "impersonating": false,
+					"tenants": list,
+				},
+			})
+			return
+		}
+		menus, _ := h.Store.MenusForUserInTenant(u.ID, t.ID, true)
+		perms, _ := h.Store.ListUserURNsInTenant(u.ID, t.ID)
+		plat, _ := h.Store.ListPlatformURNs(u.ID)
+		c.JSON(http.StatusOK, gin.H{
+			"already_exited": true,
+			"user": gin.H{
+				"id": u.ID, "username": u.Username, "display_name": u.DisplayName,
+				"role": u.Role, "role_id": u.RoleID, "menus": menus,
+				"permissions": perms, "platform_permissions": plat,
+				"impersonating": false, "current_tenant": t, "tenants": list,
+			},
+		})
+		return
+	}
+	fromTid := middleware.TenantID(c)
+	detail := fromTid
+	if from, _ := h.Store.GetTenant(fromTid); from != nil {
+		detail = from.Code
+		if detail == "" {
+			detail = from.Name
+		}
+	}
+	t, list, err := h.Store.PickLoginTenant(u.ID, "")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error(), "tenants": list})
+		return
+	}
+	if t == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "无可用成员租户，无法退出租户模式", "tenants": list})
+		return
+	}
+	ttl := time.Hour
+	if h.CfgTTL != nil {
+		ttl = h.CfgTTL()
+	}
+	secret := ""
+	if h.Secret != nil {
+		secret = h.Secret()
+	}
+	tok, jti, err := middleware.SignSessionToken(secret, u.ID, u.Username, u.Role, t.ID, t.Code, false, ttl)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	if err := h.bindSession(c, u, t.ID, jti, false, ttl); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "写入登录会话失败: " + err.Error()})
+		return
+	}
+	_ = h.Store.AppendTenantAudit(fromTid, u.ID, "tenant.impersonate.end", detail)
+	menus, _ := h.Store.MenusForUserInTenant(u.ID, t.ID, true)
+	perms, _ := h.Store.ListUserURNsInTenant(u.ID, t.ID)
+	plat, _ := h.Store.ListPlatformURNs(u.ID)
+	c.JSON(http.StatusOK, gin.H{
+		"token": tok,
+		"user": gin.H{
+			"id": u.ID, "username": u.Username, "display_name": u.DisplayName,
+			"role": u.Role, "role_id": u.RoleID, "menus": menus,
+			"permissions": perms, "platform_permissions": plat,
+			"impersonating": false, "current_tenant": t, "tenants": list,
 		},
 	})
 }

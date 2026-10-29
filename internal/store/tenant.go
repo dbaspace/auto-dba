@@ -592,6 +592,12 @@ func (d *DB) CreateTenantGrant(g *TenantGrant) error {
 	if g.Permission != "write" {
 		g.Permission = "read"
 	}
+	if existing, err := d.FindActiveTenantGrant(g.ToTenantID, g.ToUserID, g.ResourceType, g.ResourceID); err != nil {
+		return err
+	} else if existing != nil {
+		*g = *existing
+		return nil
+	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	if g.ID == "" {
 		g.ID = uuid.NewString()
@@ -604,6 +610,33 @@ func (d *DB) CreateTenantGrant(g *TenantGrant) error {
 	return err
 }
 
+// FindActiveTenantGrant 查找目标租户/用户上未过期的同资源授权（用于幂等）。
+func (d *DB) FindActiveTenantGrant(toTenantID, toUserID, resourceType, resourceID string) (*TenantGrant, error) {
+	toTenantID = strings.TrimSpace(toTenantID)
+	toUserID = strings.TrimSpace(toUserID)
+	resourceType = strings.TrimSpace(resourceType)
+	resourceID = strings.TrimSpace(resourceID)
+	if resourceType == "" || resourceID == "" || (toTenantID == "" && toUserID == "") {
+		return nil, nil
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	row := d.QueryRow(`SELECT id, from_tenant_id, COALESCE(to_tenant_id,''), COALESCE(to_user_id,''), resource_type, resource_id, permission, created_by, created_at, COALESCE(expires_at,'')
+		FROM tbl_tenant_grants
+		WHERE resource_type=? AND resource_id=?
+		  AND (to_tenant_id=? OR to_user_id=?)
+		  AND (expires_at IS NULL OR expires_at='' OR expires_at > ?)
+		ORDER BY created_at DESC LIMIT 1`,
+		resourceType, resourceID, toTenantID, toUserID, now)
+	var g TenantGrant
+	if err := row.Scan(&g.ID, &g.FromTenantID, &g.ToTenantID, &g.ToUserID, &g.ResourceType, &g.ResourceID, &g.Permission, &g.CreatedBy, &g.CreatedAt, &g.ExpiresAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &g, nil
+}
+
 func nullIfEmpty(s string) any {
 	if strings.TrimSpace(s) == "" {
 		return nil
@@ -614,6 +647,24 @@ func nullIfEmpty(s string) any {
 func (d *DB) DeleteTenantGrant(id string) error {
 	_, err := d.Exec(`DELETE FROM tbl_tenant_grants WHERE id=?`, strings.TrimSpace(id))
 	return err
+}
+
+// GetTenantGrant 按主键取授权记录。
+func (d *DB) GetTenantGrant(id string) (*TenantGrant, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil, nil
+	}
+	row := d.QueryRow(`SELECT id, from_tenant_id, COALESCE(to_tenant_id,''), COALESCE(to_user_id,''), resource_type, resource_id, permission, created_by, created_at, COALESCE(expires_at,'')
+		FROM tbl_tenant_grants WHERE id=?`, id)
+	var g TenantGrant
+	if err := row.Scan(&g.ID, &g.FromTenantID, &g.ToTenantID, &g.ToUserID, &g.ResourceType, &g.ResourceID, &g.Permission, &g.CreatedBy, &g.CreatedAt, &g.ExpiresAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &g, nil
 }
 
 func (d *DB) ListTenantGrantsFrom(tenantID string) ([]TenantGrant, error) {
@@ -661,17 +712,78 @@ func scanTenantGrants(rows *sql.Rows) ([]TenantGrant, error) {
 }
 
 // HasResourceGrant 当前租户/用户是否被授权访问某资源。
+// 仅当 grant.from_tenant_id 与资源当前归属一致时有效（划拨后未迁移的脏数据视为无效）。
 func (d *DB) HasResourceGrant(toTenantID, toUserID, resourceType, resourceID string) (bool, error) {
 	resourceType = strings.TrimSpace(resourceType)
 	resourceID = strings.TrimSpace(resourceID)
+	if resourceType == "" || resourceID == "" {
+		return false, nil
+	}
+	owner, err := d.resourceOwnerTenantID(resourceType, resourceID)
+	if err != nil {
+		return false, err
+	}
+	if strings.TrimSpace(owner) == "" {
+		return false, nil
+	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	var n int
-	err := d.QueryRow(`SELECT COUNT(1) FROM tbl_tenant_grants
+	rows, err := d.Query(`SELECT from_tenant_id FROM tbl_tenant_grants
 		WHERE resource_type=? AND resource_id=?
 		  AND (to_tenant_id=? OR to_user_id=?)
 		  AND (expires_at IS NULL OR expires_at='' OR expires_at > ?)`,
-		resourceType, resourceID, strings.TrimSpace(toTenantID), strings.TrimSpace(toUserID), now).Scan(&n)
-	return n > 0, err
+		resourceType, resourceID, strings.TrimSpace(toTenantID), strings.TrimSpace(toUserID), now)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var from string
+		if err := rows.Scan(&from); err != nil {
+			return false, err
+		}
+		if strings.TrimSpace(from) == strings.TrimSpace(owner) {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+// resourceOwnerTenantID 返回资源当前归属租户；资源不存在返回空。
+func (d *DB) resourceOwnerTenantID(resourceType, resourceID string) (string, error) {
+	switch strings.TrimSpace(resourceType) {
+	case "database":
+		it, err := d.GetDatabase(resourceID)
+		if err != nil || it == nil {
+			return "", err
+		}
+		return strings.TrimSpace(it.TenantID), nil
+	case "domain":
+		it, err := d.GetAccessDomain(resourceID)
+		if err != nil || it == nil {
+			return "", err
+		}
+		return strings.TrimSpace(it.TenantID), nil
+	case "instance":
+		it, err := d.GetInstance(resourceID)
+		if err != nil || it == nil {
+			return "", err
+		}
+		return strings.TrimSpace(it.TenantID), nil
+	case "sr_cluster":
+		it, err := d.GetSrCluster(resourceID)
+		if err != nil || it == nil {
+			return "", err
+		}
+		return strings.TrimSpace(it.TenantID), nil
+	case "db_deploy_cluster":
+		it, err := d.GetDbDeployCluster(resourceID)
+		if err != nil || it == nil {
+			return "", err
+		}
+		return strings.TrimSpace(it.TenantID), nil
+	default:
+		return "", nil
+	}
 }
 
 func (d *DB) AppendTenantAudit(tenantID, actorUserID, action, detail string) error {

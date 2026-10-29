@@ -88,7 +88,7 @@ func applyTenantName(names map[string]string, tenantID, tenantName *string) {
 // parseAssignTenantID 仅平台审计可划拨；body.tenant_id 空则用当前 JWT tid。
 func parseAssignTenantID(db *store.DB, c *gin.Context) (string, bool) {
 	if !platformAdminAuditing(db, c) {
-		c.JSON(http.StatusForbidden, gin.H{"message": "仅平台管理员在租户审计会话中可划拨资源"})
+		c.JSON(http.StatusForbidden, gin.H{"message": "仅平台管理员在租户模式下可划拨资源"})
 		return "", false
 	}
 	var req struct {

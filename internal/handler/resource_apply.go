@@ -77,8 +77,76 @@ type resourceApplyCandidate struct {
 	DisplayName     string `json:"display_name"`
 	OwnerTenantID   string `json:"owner_tenant_id"`
 	OwnerTenantName string `json:"owner_tenant_name"`
+	EnvCode         string `json:"env_code,omitempty"`
+	EnvName         string `json:"env_name,omitempty"`
 	SuggestedAction string `json:"suggested_action"`
 	Note            string `json:"note,omitempty"`
+}
+
+type resourceApplyEnvLabel struct {
+	Code string
+	Name string
+}
+
+func resourceApplyEnvMaps(db *store.DB) (byID map[string]store.Environment, byCode map[string]store.Environment) {
+	byID = map[string]store.Environment{}
+	byCode = map[string]store.Environment{}
+	if db == nil {
+		return byID, byCode
+	}
+	list, err := db.ListEnvironments()
+	if err != nil {
+		return byID, byCode
+	}
+	for _, e := range list {
+		if id := strings.TrimSpace(e.ID); id != "" {
+			byID[id] = e
+		}
+		if code := strings.TrimSpace(e.Code); code != "" {
+			byCode[strings.ToLower(code)] = e
+		}
+	}
+	return byID, byCode
+}
+
+func resourceApplyEnvFromCode(raw string, byID, byCode map[string]store.Environment) resourceApplyEnvLabel {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return resourceApplyEnvLabel{}
+	}
+	if e, ok := byID[raw]; ok {
+		code := strings.TrimSpace(e.Code)
+		if code == "" {
+			code = raw
+		}
+		name := strings.TrimSpace(e.Name)
+		if name == "" {
+			name = code
+		}
+		return resourceApplyEnvLabel{Code: code, Name: name}
+	}
+	if e, ok := byCode[strings.ToLower(raw)]; ok {
+		code := strings.TrimSpace(e.Code)
+		if code == "" {
+			code = raw
+		}
+		name := strings.TrimSpace(e.Name)
+		if name == "" {
+			name = code
+		}
+		return resourceApplyEnvLabel{Code: code, Name: name}
+	}
+	return resourceApplyEnvLabel{Code: raw, Name: raw}
+}
+
+func resourceApplyEnvFromInstance(inst *store.Instance, byID, byCode map[string]store.Environment) resourceApplyEnvLabel {
+	if inst == nil {
+		return resourceApplyEnvLabel{}
+	}
+	if lab := resourceApplyEnvFromCode(inst.EnvID, byID, byCode); lab.Code != "" {
+		return lab
+	}
+	return resourceApplyEnvFromCode(inst.IDC, byID, byCode)
 }
 
 func classifyResourceAction(ownerTenantID, applicantTenantID string) string {
@@ -128,6 +196,13 @@ func (h *ResourceApplyHandler) resolveResource(resourceType, resourceID string) 
 		}
 		if db == nil {
 			return "", "", "", fmt.Errorf("库不存在")
+		}
+		inst, e := h.Store.GetInstance(db.InstanceID)
+		if e != nil {
+			return "", "", "", e
+		}
+		if inst == nil || !store.IsLogicalDatabaseEngine(inst.DBType) {
+			return "", "", "", fmt.Errorf("所选资源不是可登记的逻辑库（父实例引擎不支持）")
 		}
 		note = ""
 		if strings.EqualFold(db.Visibility, "private") {
@@ -292,27 +367,54 @@ func resourceApplyDominantOwnerTenant(items []ResourceApplyItem) string {
 
 // mergeApproverIntentAssignees 平台管理员 ∪ 超级审核白名单（去重，保序）。
 func mergeApproverIntentAssignees(admins []string, whitelistRaw string) []string {
+	return mergeUsernameLists(admins, store.ParseApproverWhitelist(whitelistRaw))
+}
+
+// mergeUsernameLists 多组用户名并集，去重保序（大小写不敏感）。
+func mergeUsernameLists(groups ...[]string) []string {
 	seen := map[string]struct{}{}
-	out := make([]string, 0, len(admins)+4)
-	add := func(name string) {
-		name = strings.TrimSpace(name)
-		if name == "" {
-			return
+	out := make([]string, 0)
+	for _, g := range groups {
+		for _, name := range g {
+			name = strings.TrimSpace(name)
+			if name == "" {
+				continue
+			}
+			key := strings.ToLower(name)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, name)
 		}
-		key := strings.ToLower(name)
-		if _, ok := seen[key]; ok {
-			return
-		}
-		seen[key] = struct{}{}
-		out = append(out, name)
-	}
-	for _, a := range admins {
-		add(a)
-	}
-	for _, n := range store.ParseApproverWhitelist(whitelistRaw) {
-		add(n)
 	}
 	return out
+}
+
+// isDBATenant code=dba 的运维租户（跨租授权第三源只取该租户里的用户，不含默认租户）。
+func isDBATenant(_, code string) bool {
+	return strings.EqualFold(strings.TrimSpace(code), "dba")
+}
+
+// mergeResourceApplyGrantAssignees 跨租授权审批人池：管理员 ∪ 白名单 ∪ dba 租户里的用户。
+func mergeResourceApplyGrantAssignees(admins []string, whitelistRaw string, opsMembers []string) []string {
+	return mergeUsernameLists(admins, store.ParseApproverWhitelist(whitelistRaw), opsMembers)
+}
+
+func pickAssigneeFromPool(pool []string, preferred, emptyMsg, missMsg string) (string, error) {
+	preferred = strings.TrimSpace(preferred)
+	if preferred != "" {
+		for _, a := range pool {
+			if strings.EqualFold(a, preferred) {
+				return a, nil
+			}
+		}
+		return "", fmt.Errorf("%s", missMsg)
+	}
+	if len(pool) == 0 {
+		return "", fmt.Errorf("%s", emptyMsg)
+	}
+	return pool[0], nil
 }
 
 // listApproverIntentAssignees 库审核人申请的工单审批人：平台管理员 ∪ issue_global_approver_whitelist。
@@ -328,6 +430,72 @@ func (h *ResourceApplyHandler) listApproverIntentAssignees() ([]string, error) {
 	return mergeApproverIntentAssignees(admins, raw), nil
 }
 
+// listDBATenantMemberUsernames dba 租户里的活跃、未停用/锁定用户。
+func (h *ResourceApplyHandler) listDBATenantMemberUsernames() ([]string, error) {
+	tenants, err := h.Store.ListTenants()
+	if err != nil {
+		return nil, err
+	}
+	var groups [][]string
+	seenTID := map[string]struct{}{}
+	for i := range tenants {
+		t := &tenants[i]
+		if !isDBATenant(t.ID, t.Code) {
+			continue
+		}
+		if _, ok := seenTID[t.ID]; ok {
+			continue
+		}
+		seenTID[t.ID] = struct{}{}
+		names, err := listTenantMemberUsernames(h.Store, t.ID)
+		if err != nil {
+			return nil, err
+		}
+		active, err := h.filterActiveUsernames(names)
+		if err != nil {
+			return nil, err
+		}
+		groups = append(groups, active)
+	}
+	return mergeUsernameLists(groups...), nil
+}
+
+// listResourceApplyGrantAssignees 划拨/跨租可见性工单审批人：管理员 ∪ 白名单 ∪ dba 租户里的用户。
+func (h *ResourceApplyHandler) listResourceApplyGrantAssignees() ([]string, error) {
+	admins, err := h.listPlatformAdminUsernames()
+	if err != nil {
+		return nil, err
+	}
+	raw, err := h.Store.GetGlobalArg(store.ArgIssueGlobalApproverWhitelist)
+	if err != nil {
+		return nil, err
+	}
+	ops, err := h.listDBATenantMemberUsernames()
+	if err != nil {
+		return nil, err
+	}
+	return mergeResourceApplyGrantAssignees(admins, raw, ops), nil
+}
+
+func (h *ResourceApplyHandler) filterActiveUsernames(names []string) ([]string, error) {
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		u, err := h.Store.GetUserByUsername(name)
+		if err != nil {
+			return nil, err
+		}
+		if u == nil || u.IsLoginBlocked() {
+			continue
+		}
+		out = append(out, name)
+	}
+	return out, nil
+}
+
 func (h *ResourceApplyHandler) listPlatformAdminUsernames() ([]string, error) {
 	users, err := h.Store.ListUsers()
 	if err != nil {
@@ -336,11 +504,14 @@ func (h *ResourceApplyHandler) listPlatformAdminUsernames() ([]string, error) {
 	var out []string
 	for i := range users {
 		u := &users[i]
+		if u.IsLoginBlocked() || strings.TrimSpace(u.Username) == "" {
+			continue
+		}
 		ok, err := h.Store.UserIsPlatformAdmin(u.ID)
 		if err != nil {
 			return nil, err
 		}
-		if ok && strings.TrimSpace(u.Username) != "" {
+		if ok {
 			out = append(out, u.Username)
 		}
 	}
@@ -349,24 +520,6 @@ func (h *ResourceApplyHandler) listPlatformAdminUsernames() ([]string, error) {
 
 func (h *ResourceApplyHandler) resolveAssignee(applicantTID string, items []ResourceApplyItem, preferred string) (string, error) {
 	preferred = strings.TrimSpace(preferred)
-	if resourceApplyNeedsPlatformAdmin(items) {
-		admins, err := h.listPlatformAdminUsernames()
-		if err != nil {
-			return "", err
-		}
-		if preferred != "" {
-			for _, a := range admins {
-				if strings.EqualFold(a, preferred) {
-					return a, nil
-				}
-			}
-			return "", fmt.Errorf("含默认租户划拨项时，审批人须为平台管理员")
-		}
-		if len(admins) == 0 {
-			return "", fmt.Errorf("未找到平台管理员，无法审批划拨类申请")
-		}
-		return admins[0], nil
-	}
 	if resourceApplyHasApproverAction(items) {
 		cands, err := h.listApproverIntentAssignees()
 		if err != nil {
@@ -385,26 +538,35 @@ func (h *ResourceApplyHandler) resolveAssignee(applicantTID string, items []Reso
 		}
 		return cands[0], nil
 	}
-	if owner := resourceApplyDominantOwnerTenant(items); owner != "" && owner != applicantTID {
-		if preferred != "" {
-			if err := requireTenantMemberUsernames(h.Store, owner, []string{preferred}); err != nil {
-				return "", fmt.Errorf("跨租授权审批人须为资源归属租户成员: %w", err)
-			}
-			return preferred, nil
-		}
-		members, err := listTenantMemberUsernames(h.Store, owner)
+	// 划拨 / 跨租（含混合）：平台管理员 ∪ 白名单 ∪ dba 租户里的用户
+	if resourceApplyNeedsPlatformAdmin(items) {
+		cands, err := h.listResourceApplyGrantAssignees()
 		if err != nil {
 			return "", err
 		}
-		if len(members) == 0 {
-			return "", fmt.Errorf("资源归属租户无可用审批人")
+		return pickAssigneeFromPool(
+			cands,
+			preferred,
+			"未找到可用的审批人（平台管理员、超级审核白名单或 dba 租户里的用户）",
+			"审批人须为平台管理员、超级审核白名单或 dba 租户里的用户",
+		)
+	}
+	if owner := resourceApplyDominantOwnerTenant(items); owner != "" && owner != applicantTID {
+		cands, err := h.listResourceApplyGrantAssignees()
+		if err != nil {
+			return "", err
 		}
-		return members[0], nil
+		return pickAssigneeFromPool(
+			cands,
+			preferred,
+			"未找到可用的跨租授权审批人（平台管理员、超级审核白名单或 dba 租户里的用户）",
+			"跨租授权审批人须为平台管理员、超级审核白名单或 dba 租户里的用户",
+		)
 	}
 	return resolveTenantAssignee(h.Store, applicantTID, preferred)
 }
 
-// Candidates GET /resource-apply/candidates?type=&q=&intent=
+// Candidates GET /resource-apply/candidates?type=&q=&intent=&env=
 func (h *ResourceApplyHandler) Candidates(c *gin.Context) {
 	applicantTID := middleware.TenantID(c)
 	if applicantTID == "" {
@@ -418,7 +580,24 @@ func (h *ResourceApplyHandler) Candidates(c *gin.Context) {
 	}
 	q := strings.TrimSpace(c.Query("q"))
 	qLower := strings.ToLower(q)
+	filterEnv := strings.ToLower(strings.TrimSpace(c.Query("env")))
 	names := tenantNameMap(h.Store)
+	envByID, envByCode := resourceApplyEnvMaps(h.Store)
+	instByID := map[string]*store.Instance{}
+	ensureInstances := func() error {
+		if len(instByID) > 0 {
+			return nil
+		}
+		list, err := h.Store.ListInstances("", "")
+		if err != nil {
+			return err
+		}
+		for i := range list {
+			inst := &list[i]
+			instByID[inst.ID] = inst
+		}
+		return nil
+	}
 	var out []resourceApplyCandidate
 	match := func(parts ...string) bool {
 		if qLower == "" {
@@ -431,12 +610,22 @@ func (h *ResourceApplyHandler) Candidates(c *gin.Context) {
 		}
 		return false
 	}
-	appendCand := func(rt, id, display, owner, note, action string) {
+	appendCand := func(rt, id, display, owner, note, action string, env resourceApplyEnvLabel) {
 		if owner == "" {
 			owner = store.DefaultTenantID
 		}
 		if action == "" {
 			action = classifyResourceAction(owner, applicantTID)
+		}
+		if filterEnv != "" {
+			code := strings.ToLower(strings.TrimSpace(env.Code))
+			name := strings.ToLower(strings.TrimSpace(env.Name))
+			if code != filterEnv && name != filterEnv {
+				return
+			}
+		}
+		if !match(display, id, owner, names[owner], env.Code, env.Name, note) {
+			return
 		}
 		out = append(out, resourceApplyCandidate{
 			ResourceType:    rt,
@@ -444,6 +633,8 @@ func (h *ResourceApplyHandler) Candidates(c *gin.Context) {
 			DisplayName:     display,
 			OwnerTenantID:   owner,
 			OwnerTenantName: names[owner],
+			EnvCode:         env.Code,
+			EnvName:         env.Name,
 			SuggestedAction: action,
 			Note:            note,
 		})
@@ -451,15 +642,20 @@ func (h *ResourceApplyHandler) Candidates(c *gin.Context) {
 	collect := func(want string) error {
 		switch want {
 		case raTypeDatabase:
-			list, err := h.Store.ListDatabases("", q)
+			if err := ensureInstances(); err != nil {
+				return err
+			}
+			list, err := h.Store.ListDatabases("", "")
 			if err != nil {
 				return err
 			}
 			for i := range list {
 				db := &list[i]
-				if !match(db.DBName, db.ID) {
+				inst := instByID[db.InstanceID]
+				if inst == nil || !store.IsLogicalDatabaseEngine(inst.DBType) {
 					continue
 				}
+				env := resourceApplyEnvFromInstance(inst, envByID, envByCode)
 				owner := strings.TrimSpace(db.TenantID)
 				if owner == "" {
 					owner = store.DefaultTenantID
@@ -472,17 +668,17 @@ func (h *ResourceApplyHandler) Candidates(c *gin.Context) {
 					if strings.EqualFold(db.Visibility, "private") {
 						note = "加入审核人；私有库将同时开通可见"
 					}
-					appendCand(raTypeDatabase, db.ID, db.DBName, owner, note, raActionApprover)
+					appendCand(raTypeDatabase, db.ID, db.DBName, owner, note, raActionApprover, env)
 					continue
 				}
 				note := "全局库"
 				if strings.EqualFold(db.Visibility, "private") {
 					note = "私有库"
 				}
-				appendCand(raTypeDatabase, db.ID, db.DBName, db.TenantID, note, "")
+				appendCand(raTypeDatabase, db.ID, db.DBName, db.TenantID, note, "", env)
 			}
 		case raTypeDomain:
-			list, err := h.Store.ListAccessDomains("", "", q)
+			list, err := h.Store.ListAccessDomains("", "", "")
 			if err != nil {
 				return err
 			}
@@ -492,18 +688,14 @@ func (h *ResourceApplyHandler) Candidates(c *gin.Context) {
 				if ad.DBType != "" {
 					disp = ad.Domain + " (" + ad.DBType + ")"
 				}
-				if !match(ad.Domain, ad.DBType, ad.ID) {
-					continue
-				}
-				appendCand(raTypeDomain, ad.ID, disp, ad.TenantID, "", "")
+				env := resourceApplyEnvFromCode(ad.EnvCode, envByID, envByCode)
+				appendCand(raTypeDomain, ad.ID, disp, ad.TenantID, "", "", env)
 			}
 		case raTypeHost:
-			list, err := h.Store.ListInstances("", q)
-			if err != nil {
+			if err := ensureInstances(); err != nil {
 				return err
 			}
-			for i := range list {
-				inst := &list[i]
+			for _, inst := range instByID {
 				if !store.IsHostInstanceType(inst.DBType) {
 					continue
 				}
@@ -511,10 +703,8 @@ func (h *ResourceApplyHandler) Candidates(c *gin.Context) {
 				if name == "" {
 					name = inst.DomainName
 				}
-				if !match(name, inst.DomainName, inst.Host, inst.ID) {
-					continue
-				}
-				appendCand(raTypeHost, inst.ID, name, inst.TenantID, "", "")
+				env := resourceApplyEnvFromInstance(inst, envByID, envByCode)
+				appendCand(raTypeHost, inst.ID, name, inst.TenantID, "", "", env)
 			}
 		case raTypeSrCluster:
 			list, err := h.Store.ListSrClusters("")
@@ -523,10 +713,8 @@ func (h *ResourceApplyHandler) Candidates(c *gin.Context) {
 			}
 			for i := range list {
 				cl := &list[i]
-				if !match(cl.Name, cl.ID) {
-					continue
-				}
-				appendCand(raTypeSrCluster, cl.ID, cl.Name, cl.TenantID, "", "")
+				env := resourceApplyEnvFromCode(cl.Environment, envByID, envByCode)
+				appendCand(raTypeSrCluster, cl.ID, cl.Name, cl.TenantID, "", "", env)
 			}
 		case raTypeDbDeployCluster:
 			list, err := h.Store.ListDbDeployClusters("")
@@ -535,14 +723,12 @@ func (h *ResourceApplyHandler) Candidates(c *gin.Context) {
 			}
 			for i := range list {
 				cl := &list[i]
-				if !match(cl.Name, cl.Engine, cl.ID) {
-					continue
-				}
 				disp := cl.Name
 				if cl.Engine != "" {
 					disp = cl.Name + " (" + cl.Engine + ")"
 				}
-				appendCand(raTypeDbDeployCluster, cl.ID, disp, cl.TenantID, "", "")
+				env := resourceApplyEnvFromCode(cl.Environment, envByID, envByCode)
+				appendCand(raTypeDbDeployCluster, cl.ID, disp, cl.TenantID, "", "", env)
 			}
 		default:
 			return fmt.Errorf("type 须为 database|domain|host|sr_cluster|db_deploy_cluster")
@@ -603,12 +789,11 @@ func (h *ResourceApplyHandler) Approvers(c *gin.Context) {
 	ownerTID := strings.TrimSpace(c.Query("owner_tenant_id"))
 	var names []string
 	var err error
-	if hasAssign {
-		names, err = h.listPlatformAdminUsernames()
-	} else if intent == raIntentApprover {
+	if intent == raIntentApprover {
 		names, err = h.listApproverIntentAssignees()
-	} else if ownerTID != "" && ownerTID != applicantTID {
-		names, err = listTenantMemberUsernames(h.Store, ownerTID)
+	} else if hasAssign || (ownerTID != "" && ownerTID != applicantTID) {
+		// 划拨 / 跨租：管理员 ∪ 白名单 ∪ dba 租户里的用户
+		names, err = h.listResourceApplyGrantAssignees()
 	} else {
 		names, err = listTenantMemberUsernames(h.Store, applicantTID)
 	}

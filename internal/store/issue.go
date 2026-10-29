@@ -163,6 +163,54 @@ func (d *DB) ListResourceApplyAcrossTenants(status, q string) ([]Issue, error) {
 	return d.ListIssuesInTenant("", IssueTypeResourceApply, status, q, "", true)
 }
 
+// ListResourceApplyAssignedToAcrossTenants 全平台「指派给指定用户」的平台资源申请（仅 resource_apply，不按 tenant_id）。
+// 供 dba 等跨租审批人在本租上下文下列表/待办发现指派给自己的单；不影响其它工单类型。
+func (d *DB) ListResourceApplyAssignedToAcrossTenants(assignee, status, q string) ([]Issue, error) {
+	assignee = strings.TrimSpace(assignee)
+	if assignee == "" {
+		return []Issue{}, nil
+	}
+	query := `SELECT id, ticket_no, issue_type, instance_id, COALESCE(domain,''), database_id, db_name, sql_content, description, status, submitter, assigned_to, reject_reason, need_rollback, scheduled_at, created_at, updated_at, COALESCE(tenant_id,''), COALESCE(exec_progress,'')
+		 FROM tbl_issues WHERE issue_type=? AND LOWER(assigned_to)=LOWER(?)`
+	args := []any{IssueTypeResourceApply, assignee}
+	if status != "" {
+		query += ` AND status=?`
+		args = append(args, status)
+	}
+	if q != "" {
+		like := "%" + q + "%"
+		query += ` AND (ticket_no LIKE ? OR db_name LIKE ? OR description LIKE ?)`
+		args = append(args, like, like, like)
+	}
+	query += ` ORDER BY created_at DESC`
+	rows, err := d.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Issue
+	for rows.Next() {
+		var it Issue
+		var tid string
+		var prog sql.NullString
+		if err := rows.Scan(
+			&it.ID, &it.TicketNo, &it.IssueType, &it.InstanceID, &it.Domain, &it.DatabaseID, &it.DBName, &it.SQLContent, &it.Description,
+			&it.Status, &it.Submitter, &it.AssignedTo, &it.RejectReason, &it.NeedRollback, &it.ScheduledAt, &it.CreatedAt, &it.UpdatedAt, &tid, &prog,
+		); err != nil {
+			return nil, err
+		}
+		it.TenantID = strings.TrimSpace(tid)
+		it.Type = it.IssueType
+		it.ExecProgressRaw = prog.String
+		it.ExecProgress = ParseExecProgress(prog.String)
+		out = append(out, it)
+	}
+	if out == nil {
+		out = []Issue{}
+	}
+	return out, rows.Err()
+}
+
 func (d *DB) UpdateIssueStatus(id, status, reason string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := d.Exec(`UPDATE tbl_issues SET status=?, reject_reason=?, updated_at=? WHERE id=?`, status, reason, now, id)

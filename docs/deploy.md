@@ -27,13 +27,13 @@ KeePlus（进程 `auto-dba`）支持多种打包方式。**构建在有 Node 18+
 
 一体包与后端包解压后工作目录须为**包根**（存在 `deploy/node-agent/bin/node-agent`、`deploy/sql-agent/bin/sql-agent` 等），集群部署和 SQL 执行器 SSH 下发无需再本机构建。
 
-可选环境变量：`GOOS` `GOARCH`（默认 `linux`/`amd64`）、`STAMP`（默认时间戳；发版用 `STAMP=v1.12.55`）、`IMAGE_TAG`、`SKIP_PNPM_INSTALL=1`（已有 `node_modules` 时）。
+可选环境变量：`GOOS` `GOARCH`（默认 `linux`/`amd64`）、`STAMP`（默认时间戳；发版用 `STAMP=v1.12.56`）、`IMAGE_TAG`、`SKIP_PNPM_INSTALL=1`（已有 `node_modules` 时）。
 
 ```bash
-STAMP=v1.12.55 ./scripts/pack_release.sh all
-STAMP=v1.12.55 ./scripts/pack_release.sh backend
-STAMP=v1.12.55 ./scripts/pack_release.sh frontend
-IMAGE_TAG=auto-dba:v1.12.55 ./scripts/pack_release.sh docker
+STAMP=v1.12.56 ./scripts/pack_release.sh all
+STAMP=v1.12.56 ./scripts/pack_release.sh backend
+STAMP=v1.12.56 ./scripts/pack_release.sh frontend
+IMAGE_TAG=auto-dba:v1.12.56 ./scripts/pack_release.sh docker
 ```
 
 ## 发布到 GitHub Release（固定流程）
@@ -46,13 +46,13 @@ IMAGE_TAG=auto-dba:v1.12.55 ./scripts/pack_release.sh docker
 # 已 push 的提交 + 写好 docs/changelog-vX.Y.Z.md 后：
 
 # 推荐：打包 + 打 tag + 创建 Release（一体包）
-PACK=1 ./scripts/publish_github_release.sh v1.12.55
+PACK=1 ./scripts/publish_github_release.sh v1.12.56
 
-# 已有 dist/*-v1.12.55.tgz 时只发版
-./scripts/publish_github_release.sh v1.12.55
+# 已有 dist/*-v1.12.56.tgz 时只发版
+./scripts/publish_github_release.sh v1.12.56
 
 # 发版前顺带删若干旧 Release（不删受仓库 Rules 保护的 tag）
-DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12.55
+DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12.56
 ```
 
 前提：本机能 `git push origin HEAD`；已安装 `gh`。若 Keychain 无凭据，先手动 push 一次或导出 `GH_TOKEN=...`。
@@ -61,7 +61,8 @@ DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12
 
 | 版本 | 要点 |
 |------|------|
-| [v1.12.55](changelog-v1.12.55.md) | **当前推荐**。批量审核人并发；撤销拆逗号脏名；超时复核；库列表按租户筛 |
+| [v1.12.56](changelog-v1.12.56.md) | **当前推荐**。系统通知；跨租批量授权；划拨迁 grant；资源申请/工作台含 dba |
+| [v1.12.55](changelog-v1.12.55.md) | 批量审核人并发；撤销拆逗号脏名；超时复核；库列表按租户筛 |
 | [v1.12.54](changelog-v1.12.54.md) | 终端失效不重连刷屏；访问日志脱敏/限频；已登记库分页可改条数 |
 | [v1.12.53](changelog-v1.12.53.md) | 已登记库批量撤销审核人（差集，可撤空，含孤儿名） |
 | [v1.12.52](changelog-v1.12.52.md) | 库有效租户统一解析；批量审核人重试；域名按租户筛选 |

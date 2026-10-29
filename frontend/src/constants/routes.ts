@@ -126,6 +126,7 @@ export const PAGE_ROUTES = [
   { path: '/config/review-rules', title: '审核规则' },
   { path: '/config/sql-insight', title: 'SQL 洞察设置' },
   { path: '/config/args', title: '全局参数' },
+  { path: '/config/system-notice', title: '系统通知' },
   { path: '/config/menus', title: '菜单管理' },
   { path: '/config/roles', title: '角色授权' },
   { path: '/config/users', title: '用户管理' },

@@ -132,6 +132,23 @@ func (d *DB) Reopen(driver, dsn string, pool PoolSettings) error {
 
 // Open 打开元库。可选传入 PoolSettings；省略时使用默认池上限。
 func Open(driver, dsn string, pool ...PoolSettings) (*DB, error) {
+	d, err := OpenWithoutMigrate(driver, dsn, pool...)
+	if err != nil {
+		return nil, err
+	}
+	if err := d.migrateFast(); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("migrate: %w", err)
+	}
+	if err := d.seedFast(); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("seed: %w", err)
+	}
+	return d, nil
+}
+
+// OpenWithoutMigrate 仅连通元库（假设 schema 已存在），供集成测试在无 migrate 权限的库上使用。
+func OpenWithoutMigrate(driver, dsn string, pool ...PoolSettings) (*DB, error) {
 	if driver == "" {
 		driver = "postgres"
 	}
@@ -157,16 +174,7 @@ func Open(driver, dsn string, pool ...PoolSettings) (*DB, error) {
 		db.Close()
 		return nil, err
 	}
-	d := &DB{db: db, driver: driver}
-	if err := d.migrateFast(); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("migrate: %w", err)
-	}
-	if err := d.seedFast(); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("seed: %w", err)
-	}
-	return d, nil
+	return &DB{db: db, driver: driver}, nil
 }
 
 func ensurePostgresDatabase(dsn string) error {

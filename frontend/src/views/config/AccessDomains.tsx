@@ -342,7 +342,7 @@ export default function AccessDomains() {
     <div className="ops-page">
       {impersonating ? (
         <p className="muted" style={{ marginBottom: 8 }}>
-          审计中：列表含全平台域名。可勾选后「批量指定租户」或「批量删除」；一键同步按当前类型 Tab 过滤（「其他」则全量）。
+          租户模式：列表含全平台域名。可勾选后「批量指定租户」或「批量删除」；一键同步按当前类型 Tab 过滤（「其他」则全量）。
         </p>
       ) : null}
       <Tabs
@@ -534,7 +534,7 @@ export default function AccessDomains() {
           onChange={(v) => setAssignTid(v)}
           options={tenants.map((t) => ({
             value: t.id,
-            label: `${t.name || t.code || t.id}${t.id === currentTenantId ? '（当前审计）' : ''}`,
+            label: `${t.name || t.code || t.id}${t.id === currentTenantId ? '（当前工作租户）' : ''}`,
           }))}
         />
       </Modal>

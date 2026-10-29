@@ -53,6 +53,7 @@ import Regions from '../views/config/Regions'
 import Users from '../views/config/Users'
 import Roles from '../views/config/Roles'
 import GlobalArgs from '../views/config/GlobalArgs'
+import SystemNotice from '../views/config/SystemNotice'
 import SqlInsightSettings from '../views/config/SqlInsightSettings'
 import LoginLogs from '../views/config/LoginLogs'
 import LoginSessions from '../views/config/LoginSessions'
@@ -289,6 +290,7 @@ const router = createHashRouter([
       { path: 'metadata/database/manage/goinception', element: <Navigate to="/config/review-rules" replace /> },
       { path: 'database/manage/goinception', element: <Navigate to="/config/review-rules" replace /> },
       { path: 'config/args', element: <GlobalArgs /> },
+      { path: 'config/system-notice', element: <SystemNotice /> },
       { path: 'config/menus', element: <Menus /> },
       { path: 'config/roles', element: <Roles /> },
       { path: 'config/users', element: <Users /> },

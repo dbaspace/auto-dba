@@ -143,8 +143,10 @@ const (
 	URNTenantsImpersonate = "um.action.tenants.impersonate"
 	URNSidebarTenants     = "um.sidebar.tenants"
 
-	URNSidebarConfigDomains = "um.sidebar.config-domains"
-	URNSidebarSQLExecutors  = "um.sidebar.config-sql-executors"
+	URNSidebarConfigDomains     = "um.sidebar.config-domains"
+	URNSidebarSQLExecutors      = "um.sidebar.config-sql-executors"
+	URNSidebarSystemNotice      = "um.sidebar.config-system-notice"
+	URNSystemNoticeEdit         = "um.action.system-notice.edit"
 	URNDomainsSync          = "um.action.domains.sync"
 	URNDomainsAssign        = "um.action.domains.assign"
 	URNDomainsEdit          = "um.action.domains.edit"

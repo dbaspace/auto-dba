@@ -292,6 +292,9 @@ func (d *DB) seedRBAC(now string) error {
 	if err := d.ensureSQLExecutorMenu(now); err != nil {
 		return err
 	}
+	if err := d.ensureSystemNoticeMenu(now); err != nil {
+		return err
+	}
 	if err := d.ensureScheduledJobsActionMenus(now); err != nil {
 		return err
 	}
@@ -1183,10 +1186,11 @@ func (d *DB) ensureConfigCenterGroups(now string) error {
 		sort       int
 	}{
 		{"m-cfg-args", "m-cfg-base", 1},
-		{"m-cfg-region", "m-cfg-base", 2},
-		{"m-cfg-env", "m-cfg-base", 3},
-		{"m-cfg-sql-exec", "m-cfg-base", 4},
-		{"m-cloud-accounts", "m-cfg-base", 5},
+		{"m-cfg-system-notice", "m-cfg-base", 2},
+		{"m-cfg-region", "m-cfg-base", 3},
+		{"m-cfg-env", "m-cfg-base", 4},
+		{"m-cfg-sql-exec", "m-cfg-base", 5},
+		{"m-cloud-accounts", "m-cfg-base", 6},
 		{"m-cfg-tags", "m-cfg-access", 1},
 		{"m-cfg-conn", "m-cfg-access", 2},
 		{"m-cfg-agent", "m-cfg-access", 3},
@@ -1480,7 +1484,7 @@ func (d *DB) ensureSQLExecutorMenu(now string) error {
 	m := &Menu{
 		ID: "m-cfg-sql-exec", ParentID: "m-cfg-base", Title: "执行器", Path: "/config/sql-executors",
 		URN: URNSidebarSQLExecutors, PermissionDesc: "查看 SQL 执行器", Icon: "connection",
-		SortOrder: 4, Enabled: true, CreatedAt: now, UpdatedAt: now,
+		SortOrder: 5, Enabled: true, CreatedAt: now, UpdatedAt: now,
 	}
 	if err := d.EnsureMenu(m); err != nil {
 		return err
@@ -1489,6 +1493,38 @@ func (d *DB) ensureSQLExecutorMenu(now string) error {
 		return err
 	}
 	return d.grantMenuToRoleCode(m.ID, "admin")
+}
+
+func (d *DB) ensureSystemNoticeMenu(now string) error {
+	if err := d.ensureConfigCenterGroups(now); err != nil {
+		return err
+	}
+	m := &Menu{
+		ID: "m-cfg-system-notice", ParentID: "m-cfg-base", Title: "系统通知", Path: "/config/system-notice",
+		URN: URNSidebarSystemNotice, PermissionDesc: "查看系统通知设置", Icon: "notification",
+		SortOrder: 2, Enabled: true, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := d.EnsureMenu(m); err != nil {
+		return err
+	}
+	if err := d.GrantMenuFollowingParent(m.ID, m.ParentID); err != nil {
+		return err
+	}
+	act := &Menu{
+		ID: "m-act-system-notice-edit", ParentID: "m-cfg-system-notice", Title: "编辑系统通知", Path: "",
+		URN: URNSystemNoticeEdit, PermissionDesc: "编辑登录系统通知模板", Icon: "edit",
+		SortOrder: 90, Enabled: true, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := d.EnsureMenu(act); err != nil {
+		return err
+	}
+	if err := d.GrantMenuFollowingParent(act.ID, act.ParentID); err != nil {
+		return err
+	}
+	if err := d.grantMenuToRoleCode(m.ID, "admin"); err != nil {
+		return err
+	}
+	return d.grantMenuToRoleCode(act.ID, "admin")
 }
 
 func (d *DB) ensureScheduledJobsActionMenus(now string) error {
@@ -1917,7 +1953,7 @@ func (d *DB) ensureTenantMenus(now string) error {
 		{"m-act-tenants-delete", "m-cfg-tenants", "删除租户", "", URNTenantsDelete, "删除无成员且无绑定资源的租户", "delete", 93},
 		{"m-act-tenants-members", "m-cfg-tenants", "管理成员", "", URNTenantsMembers, "增删改租户成员与角色", "team", 94},
 		{"m-act-tenants-grants", "m-cfg-tenants", "资源授权", "", URNTenantsGrants, "跨租户资源授权", "share", 95},
-		{"m-act-tenants-impersonate", "m-cfg-tenants", "进入租户审计", "", URNTenantsImpersonate, "平台管理员进入租户上下文（审计）", "eye", 96},
+		{"m-act-tenants-impersonate", "m-cfg-tenants", "进入租户模式", "", URNTenantsImpersonate, "平台管理员进入租户模式（全量资源与划拨）", "eye", 96},
 	}
 	admin, _ := d.GetRoleByCode("admin")
 	for _, it := range items {

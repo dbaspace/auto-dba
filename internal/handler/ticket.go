@@ -825,15 +825,16 @@ func (h *TicketHandler) List(c *gin.Context) {
 	if list == nil {
 		list = []store.Issue{}
 	}
-	// 平台资源申请：平台管理员/白名单可看全平台该类工单（不影响其它类型）
+	// 平台资源申请跨租可见（不影响 DDL/DML 等其它类型）：
+	// 1) 平台管理员/白名单：全平台该类工单
+	// 2) 普通审批人：仅 assigned_to=自己的异租单（如 dba 租户成员审业务租户提单）
 	typeQ := c.Query("type")
-	if h.isPlatformResourceApplyReviewer(c) && (typeQ == "" || typeQ == store.IssueTypeResourceApply) {
-		extra, e2 := h.Store.ListResourceApplyAcrossTenants(c.Query("status"), c.Query("q"))
-		if e2 == nil {
-			seen := map[string]struct{}{}
-			for _, it := range list {
-				seen[it.ID] = struct{}{}
-			}
+	if typeQ == "" || typeQ == store.IssueTypeResourceApply {
+		seen := map[string]struct{}{}
+		for _, it := range list {
+			seen[it.ID] = struct{}{}
+		}
+		mergeExtra := func(extra []store.Issue) {
 			for _, it := range extra {
 				if tid != "" && strings.TrimSpace(it.TenantID) == tid {
 					continue
@@ -841,7 +842,17 @@ func (h *TicketHandler) List(c *gin.Context) {
 				if _, ok := seen[it.ID]; ok {
 					continue
 				}
+				seen[it.ID] = struct{}{}
 				list = append(list, it)
+			}
+		}
+		if h.isPlatformResourceApplyReviewer(c) {
+			if extra, e2 := h.Store.ListResourceApplyAcrossTenants(c.Query("status"), c.Query("q")); e2 == nil {
+				mergeExtra(extra)
+			}
+		} else if user != "" {
+			if extra, e2 := h.Store.ListResourceApplyAssignedToAcrossTenants(user, c.Query("status"), c.Query("q")); e2 == nil {
+				mergeExtra(extra)
 			}
 		}
 	}
@@ -2234,6 +2245,28 @@ func dashboardFilterFromQuery(c *gin.Context, viewer string) store.DashboardFilt
 	}
 }
 
+// canViewPlatformWorkbench 平台管理员 ∪ 超级审核白名单 ∪ dba 租户成员：工作台可看跨租工单数据（不含「我的草稿」）。
+func (h *TicketHandler) canViewPlatformWorkbench(c *gin.Context) bool {
+	if h == nil || h.Store == nil || c == nil {
+		return false
+	}
+	uid := middleware.UserID(c)
+	uname := middleware.Username(c)
+	if h.Store.IsPlatformResourceApplyReviewer(uid, uname) {
+		return true
+	}
+	return h.userInDBATenant(uid)
+}
+
+// dashboardFilterForWorkbench 特权角色清空 TenantID 以聚合全平台工单；普通用户仍限当前租户。
+func (h *TicketHandler) dashboardFilterForWorkbench(c *gin.Context, viewer string) store.DashboardFilter {
+	f := dashboardFilterFromQuery(c, viewer)
+	if h.canViewPlatformWorkbench(c) {
+		f.TenantID = ""
+	}
+	return f
+}
+
 func firstQuery(c *gin.Context, keys ...string) string {
 	for _, k := range keys {
 		if v := strings.TrimSpace(c.Query(k)); v != "" {
@@ -2244,7 +2277,7 @@ func firstQuery(c *gin.Context, keys ...string) string {
 }
 
 func (h *TicketHandler) DashboardStats(c *gin.Context) {
-	st, err := h.Store.DashboardStats(dashboardFilterFromQuery(c, middleware.Username(c)))
+	st, err := h.Store.DashboardStats(h.dashboardFilterForWorkbench(c, middleware.Username(c)))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -2254,8 +2287,9 @@ func (h *TicketHandler) DashboardStats(c *gin.Context) {
 
 func (h *TicketHandler) Todos(c *gin.Context) {
 	page, size := store.ParsePage(c.Query("current"), c.Query("page_size"))
-	seeAllRA := h.isPlatformResourceApplyReviewer(c)
-	list, total, err := h.Store.DashboardTodos(dashboardFilterFromQuery(c, ""), middleware.Username(c), page, size, seeAllRA)
+	seeAllWB := h.canViewPlatformWorkbench(c)
+	seeAllRA := h.isPlatformResourceApplyReviewer(c) || seeAllWB
+	list, total, err := h.Store.DashboardTodos(h.dashboardFilterForWorkbench(c, ""), middleware.Username(c), page, size, seeAllRA, seeAllWB)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -2279,7 +2313,7 @@ func (h *TicketHandler) Activities(c *gin.Context) {
 			limit = n
 		}
 	}
-	list, err := h.Store.DashboardActivities(dashboardFilterFromQuery(c, ""), limit)
+	list, err := h.Store.DashboardActivities(h.dashboardFilterForWorkbench(c, ""), limit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return

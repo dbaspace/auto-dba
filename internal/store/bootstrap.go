@@ -11,8 +11,8 @@ import (
 
 // 启动引导版本：修改 migrate.go / seed.go 后请递增对应常量，否则已初始化库会跳过重跑。
 const (
-	SchemaVersion = "2026-10-20.k8s-mgmt"
-	SeedVersion   = "2026-10-20.k8s-menus"
+	SchemaVersion = "2026-10-29.system-notice"
+	SeedVersion   = "2026-10-29.system-notice"
 )
 
 const (
@@ -106,6 +106,9 @@ func (d *DB) migrateFast() error {
 			if err := d.ensureJobRegTables(); err != nil {
 				return err
 			}
+			if err := d.ensureSystemNoticeTables(); err != nil {
+				return err
+			}
 			log.Printf("migrate: skip (schema_version=%s) in %s", SchemaVersion, time.Since(t0).Round(time.Millisecond))
 			return nil
 		}
@@ -183,6 +186,9 @@ func (d *DB) seedFast() error {
 				return err
 			}
 			if err := d.ensureConfigCenterGroups(now); err != nil {
+				return err
+			}
+			if err := d.ensureSystemNoticeMenu(now); err != nil {
 				return err
 			}
 			if err := d.SyncDefaultTenantMemberships(); err != nil {

@@ -50,6 +50,7 @@ import Users from '../views/config/Users'
 import Tenants from '../views/config/Tenants'
 import Roles from '../views/config/Roles'
 import GlobalArgs from '../views/config/GlobalArgs'
+import SystemNotice from '../views/config/SystemNotice'
 import SqlInsightSettings from '../views/config/SqlInsightSettings'
 import LoginLogs from '../views/config/LoginLogs'
 import LoginSessions from '../views/config/LoginSessions'
@@ -318,6 +319,7 @@ export function TabPagePanel({ pathname, search }: { pathname: string; search?: 
       <Route path="/metadata/database/manage/goinception" element={<Navigate to="/config/review-rules" replace />} />
       <Route path="/database/manage/goinception" element={<Navigate to="/config/review-rules" replace />} />
       <Route path="/config/args" element={<GlobalArgs />} />
+      <Route path="/config/system-notice" element={<SystemNotice />} />
       <Route path="/config/menus" element={<Menus />} />
       <Route path="/config/roles" element={<Roles />} />
       <Route path="/config/users" element={<Users />} />

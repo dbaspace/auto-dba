@@ -1624,7 +1624,37 @@ func (d *DB) ensureFlashbackSchema() error {
 	if _, err := d.BackfillAccessDomainsFromInstances(); err != nil {
 		return err
 	}
+	if err := d.ensureSystemNoticeTables(); err != nil {
+		return err
+	}
 	return nil
+}
+
+func (d *DB) ensureSystemNoticeTables() error {
+	if _, err := d.db.Exec(`CREATE TABLE IF NOT EXISTS tbl_system_notices (
+		id TEXT PRIMARY KEY,
+		title TEXT NOT NULL DEFAULT '',
+		body TEXT NOT NULL DEFAULT '',
+		enabled INTEGER NOT NULL DEFAULT 0,
+		show_mode TEXT NOT NULL DEFAULT 'on_version_change',
+		version INTEGER NOT NULL DEFAULT 1,
+		updated_by TEXT NOT NULL DEFAULT '',
+		updated_at TEXT NOT NULL,
+		created_at TEXT NOT NULL
+	)`); err != nil {
+		return err
+	}
+	if _, err := d.db.Exec(`CREATE TABLE IF NOT EXISTS tbl_system_notice_acks (
+		user_id TEXT NOT NULL,
+		notice_id TEXT NOT NULL,
+		notice_version INTEGER NOT NULL DEFAULT 1,
+		acked_at TEXT NOT NULL,
+		PRIMARY KEY (user_id, notice_id)
+	)`); err != nil {
+		return err
+	}
+	_, err := d.db.Exec(`CREATE INDEX IF NOT EXISTS idx_system_notice_acks_notice ON tbl_system_notice_acks(notice_id)`)
+	return err
 }
 
 func (d *DB) ensureCDCSyncLogsTable() error {

@@ -284,7 +284,7 @@ func (d *DB) DashboardStats(f DashboardFilter) (*DashboardStats, error) {
 	return st, nil
 }
 
-func (d *DB) DashboardTodos(f DashboardFilter, viewer string, page, pageSize int, seeAllResourceApply bool) ([]DashboardTodo, int, error) {
+func (d *DB) DashboardTodos(f DashboardFilter, viewer string, page, pageSize int, seeAllResourceApply bool, seeAllPending ...bool) ([]DashboardTodo, int, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -295,7 +295,11 @@ func (d *DB) DashboardTodos(f DashboardFilter, viewer string, page, pageSize int
 	if err != nil {
 		return nil, 0, err
 	}
-	seeAllPending := viewer != "" && d.IsGlobalApprover(viewer)
+	allowAllPending := viewer != "" && d.IsGlobalApprover(viewer)
+	if !allowAllPending && viewer != "" && len(seeAllPending) > 0 && seeAllPending[0] {
+		allowAllPending = true
+	}
+	seeAllPendingRows := allowAllPending
 	var todos []DashboardTodo
 	seen := map[string]struct{}{}
 	appendTodo := func(t DashboardTodo) {
@@ -312,7 +316,7 @@ func (d *DB) DashboardTodos(f DashboardFilter, viewer string, page, pageSize int
 		if r.Status != StatusPending {
 			continue
 		}
-		if viewer != "" && !seeAllPending && !strings.EqualFold(r.AssignedTo, viewer) {
+		if viewer != "" && !seeAllPendingRows && !strings.EqualFold(r.AssignedTo, viewer) {
 			continue
 		}
 		name := r.Description
@@ -325,9 +329,16 @@ func (d *DB) DashboardTodos(f DashboardFilter, viewer string, page, pageSize int
 			CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt, Source: "issue",
 		})
 	}
-	// 平台资源申请：平台管理员/白名单可看全平台 pending（不影响其它工单类型）
-	if seeAllResourceApply && (f.IssueType == "" || f.IssueType == IssueTypeResourceApply) {
-		extra, e2 := d.ListResourceApplyAcrossTenants(StatusPending, f.Q)
+	// 平台资源申请跨租待办（不影响其它工单类型）：
+	// 平台管理员/白名单看全平台 pending；普通审批人仅看 assigned_to=自己的异租 pending。
+	if f.IssueType == "" || f.IssueType == IssueTypeResourceApply {
+		var extra []Issue
+		var e2 error
+		if seeAllResourceApply {
+			extra, e2 = d.ListResourceApplyAcrossTenants(StatusPending, f.Q)
+		} else if viewer != "" {
+			extra, e2 = d.ListResourceApplyAssignedToAcrossTenants(viewer, StatusPending, f.Q)
+		}
 		if e2 == nil {
 			for _, r := range extra {
 				if r.Status != StatusPending {

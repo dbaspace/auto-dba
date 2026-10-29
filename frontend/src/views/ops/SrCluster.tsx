@@ -1582,7 +1582,7 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                     type="info"
                     showIcon
                     style={{ marginBottom: 8 }}
-                    message={`审计中：列表含全平台集群。其它租户资源可划拨到「${currentTenantLabel}」，该租户成员即可运维。`}
+                    message={`租户模式：列表含全平台集群。其它租户资源可划拨到「${currentTenantLabel}」，该租户成员即可运维。`}
                   />
                 ) : null}
                 <Table

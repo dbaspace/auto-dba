@@ -486,7 +486,7 @@ func TenantRequired(db *store.DB) gin.HandlerFunc {
 				return
 			}
 			if !ok {
-				c.JSON(http.StatusForbidden, gin.H{"message": "无效的租户审计会话"})
+				c.JSON(http.StatusForbidden, gin.H{"message": "无效的租户模式会话"})
 				c.Abort()
 				return
 			}

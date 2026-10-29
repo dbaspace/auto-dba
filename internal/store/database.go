@@ -162,6 +162,10 @@ func (d *DB) ListGrantedDatabases(toTenantID, toUserID, instanceID, q string) ([
 		if err != nil || it == nil {
 			continue
 		}
+		// from 须与当前归属一致，否则视为划拨后未迁移的脏授权
+		if strings.TrimSpace(g.FromTenantID) != strings.TrimSpace(it.TenantID) {
+			continue
+		}
 		if instanceID != "" && it.InstanceID != instanceID {
 			continue
 		}

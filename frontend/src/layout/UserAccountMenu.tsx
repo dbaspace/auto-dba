@@ -15,18 +15,21 @@ import {
 import {
   DownOutlined,
   EditOutlined,
+  EyeInvisibleOutlined,
   KeyOutlined,
   LockOutlined,
   UserOutlined,
   PoweroffOutlined,
   LaptopOutlined,
 } from '@ant-design/icons'
-import api, { beginLogout } from '../api/request'
+import api, { abortAuthReissue, beginAuthReissue, beginLogout, finishAuthReissue, getAuthEpoch } from '../api/request'
 import { useAppDispatch } from '../store'
-import { patchUser, clearAuth, CurrentUser } from '../store/authSlice'
-import { resetTabs } from '../store/tabsSlice'
+import { patchUser, clearAuth, setUser, CurrentUser } from '../store/authSlice'
+import { HOME_PATH, resetTabs } from '../store/tabsSlice'
 import { clearLastActivity } from '../hooks/useIdleLogout'
 import { clearSharedLegacyDrafts } from '../utils/workOrderDraft'
+import { clearSystemNoticeDismissals } from '../utils/systemNoticeSession'
+import { clearQueryTreeCache } from '../views/query/queryTreeCache'
 
 interface Props {
   user: CurrentUser
@@ -50,6 +53,31 @@ export default function UserAccountMenu({ user }: Props) {
 
   const accountName = user?.username || user?.display_name || '未登录'
   const avatarSrc = user?.avatar || ''
+  const impersonating = Boolean((user as { impersonating?: boolean })?.impersonating)
+
+  async function exitImpersonate() {
+    const epoch = beginAuthReissue()
+    try {
+      const { data } = await api.post('/tenants/exit-impersonate')
+      if (epoch !== getAuthEpoch()) {
+        abortAuthReissue()
+        return
+      }
+      const next = data.user || {}
+      if (data.token) localStorage.setItem('token', data.token)
+      localStorage.setItem('user', JSON.stringify(next))
+      if (!finishAuthReissue(epoch)) return
+      clearQueryTreeCache()
+      dispatch(setUser(next))
+      dispatch(resetTabs({ menus: next.menus || [] }))
+      const back = next.current_tenant?.name || '成员租户'
+      message.success(data.already_exited ? `已退出租户模式（回到 ${back}）` : `已退出租户模式，回到 ${back}`)
+      navigate(HOME_PATH, { replace: true })
+    } catch (e: any) {
+      abortAuthReissue()
+      message.error(e?.response?.data?.message || '退出租户模式失败')
+    }
+  }
 
   function openProfile() {
     setAvatar(user?.avatar || '')
@@ -175,6 +203,7 @@ export default function UserAccountMenu({ user }: Props) {
         dispatch(resetTabs({}))
         sessionStorage.removeItem('auto-dba-dml-prefill')
         sessionStorage.removeItem('auto-dba-query-workspace')
+        clearSystemNoticeDismissals()
         clearSharedLegacyDrafts()
         navigate('/login')
       },
@@ -190,6 +219,12 @@ export default function UserAccountMenu({ user }: Props) {
             { key: 'profile', icon: <UserOutlined />, label: '个人设置' },
             { key: 'security', icon: <LockOutlined />, label: '安全设置' },
             { key: 'sessions', icon: <LaptopOutlined />, label: '我的登录' },
+            ...(impersonating
+              ? [
+                  { type: 'divider' as const },
+                  { key: 'exit-audit', icon: <EyeInvisibleOutlined />, label: '退出租户模式' },
+                ]
+              : []),
             { type: 'divider' },
             { key: 'logout', icon: <PoweroffOutlined />, label: '退出登录' },
           ],
@@ -197,6 +232,7 @@ export default function UserAccountMenu({ user }: Props) {
             if (key === 'profile') openProfile()
             else if (key === 'security') setSecurityOpen(true)
             else if (key === 'sessions') openMySessions()
+            else if (key === 'exit-audit') void exitImpersonate()
             else if (key === 'logout') logout()
           },
         }}

@@ -923,7 +923,7 @@ func (h *InstanceHandler) Delete(c *gin.Context) {
 // AssignTenant POST /instances/:id/assign-tenant — 平台审计会话下将实例划拨到目标租户。
 func (h *InstanceHandler) AssignTenant(c *gin.Context) {
 	if !platformAdminAuditing(h.Store, c) {
-		c.JSON(http.StatusForbidden, gin.H{"message": "仅平台管理员在租户审计会话中可划拨资源"})
+		c.JSON(http.StatusForbidden, gin.H{"message": "仅平台管理员在租户模式下可划拨资源"})
 		return
 	}
 	var req struct {
@@ -1425,7 +1425,7 @@ func (h *DatabaseHandler) AssignTenant(c *gin.Context) {
 // AssignTenantBatch POST /databases/assign-tenant — 批量指定库归属租户。
 func (h *DatabaseHandler) AssignTenantBatch(c *gin.Context) {
 	if !platformAdminAuditing(h.Store, c) {
-		c.JSON(http.StatusForbidden, gin.H{"message": "仅平台管理员在租户审计会话中可划拨资源"})
+		c.JSON(http.StatusForbidden, gin.H{"message": "仅平台管理员在租户模式下可划拨资源"})
 		return
 	}
 	var req struct {

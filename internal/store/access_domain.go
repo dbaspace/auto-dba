@@ -265,6 +265,9 @@ func (d *DB) ListGrantedAccessDomains(toTenantID, toUserID, dbType, envCode, q s
 		if err != nil || it == nil {
 			continue
 		}
+		if strings.TrimSpace(g.FromTenantID) != strings.TrimSpace(it.TenantID) {
+			continue
+		}
 		if dbType != "" && NormalizeEngineType(it.DBType) != dbType {
 			continue
 		}
@@ -359,8 +362,23 @@ func (d *DB) AssignAccessDomainTenant(id, toTenantID string) error {
 	if t, err := d.GetTenant(toTenantID); err != nil || t == nil {
 		return fmt.Errorf("目标租户不存在")
 	}
+	row, err := d.GetAccessDomain(id)
+	if err != nil {
+		return err
+	}
+	if row == nil {
+		return fmt.Errorf("域名不存在")
+	}
+	if strings.TrimSpace(row.TenantID) == toTenantID {
+		return nil
+	}
+	tx, err := d.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
 	now := time.Now().UTC().Format(time.RFC3339)
-	res, err := d.Exec(`UPDATE tbl_access_domains SET tenant_id=?, updated_at=? WHERE id=?`, toTenantID, now, id)
+	res, err := tx.Exec(d.rewrite(`UPDATE tbl_access_domains SET tenant_id=?, updated_at=? WHERE id=?`), toTenantID, now, id)
 	if err != nil {
 		return err
 	}
@@ -368,7 +386,10 @@ func (d *DB) AssignAccessDomainTenant(id, toTenantID string) error {
 	if n == 0 {
 		return fmt.Errorf("域名不存在")
 	}
-	return nil
+	if _, err := d.migrateResourceGrantsOnAssignTx(tx, "domain", id, toTenantID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // SyncAccessDomainsFromInstance 按实例 domains 同步；新行归属默认租户；禁止跨 db_type 覆盖。

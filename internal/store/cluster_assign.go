@@ -108,6 +108,9 @@ func (d *DB) AssignSrClusterTenant(id, toTenantID string) error {
 		if _, err := d.Exec(`UPDATE tbl_sr_clusters SET tenant_id=?, updated_at=? WHERE id=?`, toTenantID, now, id); err != nil {
 			return err
 		}
+		if _, err := d.MigrateResourceGrantsOnAssign("sr_cluster", id, toTenantID); err != nil {
+			return err
+		}
 	}
 	for i := range linked {
 		if err := d.assignInstanceTenantOnly(linked[i].ID, toTenantID); err != nil {
@@ -227,6 +230,9 @@ func (d *DB) AssignDbDeployClusterTenant(id, toTenantID string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	if strings.TrimSpace(cl.TenantID) != toTenantID {
 		if _, err := d.Exec(`UPDATE tbl_db_deploy_clusters SET tenant_id=?, updated_at=? WHERE id=?`, toTenantID, now, id); err != nil {
+			return err
+		}
+		if _, err := d.MigrateResourceGrantsOnAssign("db_deploy_cluster", id, toTenantID); err != nil {
 			return err
 		}
 	}

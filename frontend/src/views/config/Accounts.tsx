@@ -321,7 +321,7 @@ export default function Accounts() {
       <p className="hint">新增数据库工单审批通过后会自动写入此处；密码以 AES-256-GCM 加密存储，查看时再解密。</p>
       {impersonating ? (
         <p className="hint" style={{ color: 'var(--ant-color-text-secondary, #666)' }}>
-          审计中：列表含全平台账号（含所属租户）。划拨请在实例页操作，账号随实例租户归属。
+          租户模式：列表含全平台账号（含所属租户）。划拨请在实例页操作，账号随实例租户归属。
         </p>
       ) : null}
       <Tabs
