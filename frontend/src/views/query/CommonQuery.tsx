@@ -273,7 +273,7 @@ export default function CommonQuery() {
   const [databases, setDatabases] = useState<any[]>([])
   const [instances, setInstances] = useState<any[]>([])
   const [tablesMap, setTablesMap] = useState<Record<string, string[]>>({})
-  const tableLoads = useRef<Record<string, Promise<string[]>>>({})
+  const tableLoads = useRef<Record<string, Promise<{ names: string[]; error: string }>>>({})
 
   const saved = useMemo(() => loadWorkspace(), [])
   const [tabs, setTabs] = useState<TabItem[]>(saved.tabs)
@@ -443,20 +443,22 @@ export default function CommonQuery() {
     return node
   }, [])
 
-  const fetchTables = useCallback((dbId: string): Promise<string[]> => {
+  const fetchTables = useCallback((dbId: string): Promise<{ names: string[]; error: string }> => {
     if (Object.prototype.hasOwnProperty.call(tablesMap, dbId)) {
-      return Promise.resolve(tablesMap[dbId])
+      return Promise.resolve({ names: tablesMap[dbId], error: '' })
     }
     if (tableLoads.current[dbId]) return tableLoads.current[dbId]
     const p = api.get(`/databases/${dbId}/tables`)
       .then((res) => {
         const names: string[] = res.data.data || []
+        const hint = String(res.data?.message || '').trim()
         setTablesMap((m) => ({ ...m, [dbId]: names }))
-        return names
+        return { names, error: !names.length && hint ? hint : '' }
       })
-      .catch(() => {
+      .catch((e: any) => {
+        const hint = String(e?.response?.data?.message || e?.message || '加载表失败').trim()
         setTablesMap((m) => ({ ...m, [dbId]: [] }))
-        return [] as string[]
+        return { names: [] as string[], error: hint }
       })
       .finally(() => {
         delete tableLoads.current[dbId]
@@ -537,10 +539,10 @@ export default function CommonQuery() {
     if (data.type !== 'db') return Promise.resolve()
     // 已有子节点则跳过
     if (node.children?.length) return Promise.resolve()
-    return fetchTables(data.dbId).then((names) => {
+    return fetchTables(data.dbId).then(({ names, error }) => {
       let children: DataNode[]
       if (!names.length) {
-        children = [buildNode({ id: `${data.dbId}__empty`, label: '暂无表', type: 'empty' }, true)]
+        children = [buildNode({ id: `${data.dbId}__empty`, label: error || '暂无表', type: 'empty' }, true)]
       } else {
         children = [...names].sort(cmpName).map((name) => buildNode({
           id: `${data.dbId}__${name}`,

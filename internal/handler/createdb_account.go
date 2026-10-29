@@ -85,25 +85,21 @@ func buildConnectGrantSQL(engine, username, dbName string) string {
 	return ""
 }
 
-func buildSchemaGrantSQL(engine, username, dbName string, perms []string) string {
+// buildSchemaGrantSQL 库内授权。PG 与 DCL 对齐（复用 buildPGDCLInDBStatements：USAGE 无 CREATE + FOR ROLE owner）。
+func buildSchemaGrantSQL(engine, username, dbName, owner string, perms []string) string {
 	user := strings.TrimSpace(username)
 	db := strings.TrimSpace(dbName)
 	if user == "" || db == "" {
 		return ""
 	}
-	privs := grantPrivileges(perms)
 	if engine == "postgres" {
-		u := pgQuoteIdent(user)
-		return fmt.Sprintf(
-			"GRANT %s ON ALL TABLES IN SCHEMA public TO %s;\n"+
-				"GRANT USAGE ON SCHEMA public TO %s;\n"+
-				"GRANT CREATE ON SCHEMA public TO %s;\n"+
-				"ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, DELETE, INSERT, UPDATE ON TABLES TO %s;\n"+
-				"GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO %s;\n"+
-				"ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL PRIVILEGES ON SEQUENCES TO %s",
-			privs, u, u, u, u, u, u,
-		)
+		stmts := buildPGDCLInDBStatements(user, owner, perms)
+		if len(stmts) == 0 {
+			return ""
+		}
+		return strings.Join(stmts, ";\n")
 	}
+	privs := grantPrivileges(perms)
 	return fmt.Sprintf("GRANT %s ON DATABASE %s TO %s", privs, db, user)
 }
 
@@ -514,7 +510,16 @@ func provisionCreateDBAccounts(ctx context.Context, h *TicketHandler, it *store.
 				warns = append(warns, "GRANT CONNECT: "+err.Error())
 			}
 		}
-		if sql := buildSchemaGrantSQL(engine, acc.Username, acc.DBName, extra.Permissions); sql != "" {
+		owner := ""
+		if engine == "postgres" {
+			o, oerr := ticketexec.LookupPostgresDatabaseOwner(ctx, admin, acc.DBName)
+			if oerr != nil {
+				warns = append(warns, "查库 owner("+acc.DBName+"): "+oerr.Error())
+				continue
+			}
+			owner = o
+		}
+		if sql := buildSchemaGrantSQL(engine, acc.Username, acc.DBName, owner, extra.Permissions); sql != "" {
 			target := admin
 			if engine == "postgres" {
 				target.ConnectDB = acc.DBName

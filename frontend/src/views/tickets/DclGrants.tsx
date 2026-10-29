@@ -27,6 +27,54 @@ import './DclGrants.css'
 
 const PERM_SQL: Record<string, string> = { r: 'SELECT', c: 'INSERT', u: 'UPDATE', d: 'DELETE' }
 
+function pgQuoteIdent(name: string) {
+  return `"${String(name || '').replace(/"/g, '""')}"`
+}
+
+function grantPrivs(perms: string[]) {
+  return (perms || []).map((p) => PERM_SQL[p]).filter(Boolean).join(', ')
+}
+
+/** 与后端模板对齐的只读预览（FOR ROLE 提交时替换为真实库 owner） */
+function previewGrantSql(dbType: string, dbNames: string[], username: string, permissions: string[]) {
+  const user = String(username || '').trim()
+  const perms = permissions || []
+  const privs = grantPrivs(perms)
+  if (!user || !dbNames.length || !privs) return ''
+  if (dbType === 'postgres') {
+    const u = pgQuoteIdent(user)
+    const owner = pgQuoteIdent('$DB_OWNER$')
+    const parts: string[] = [
+      '-- FOR ROLE 提交时按库查询 pg_database.datdba 替换；$DB_OWNER$ 仅为预览占位',
+      '-- 账号不存在时执行前自动 CREATE USER … ENCRYPTED PASSWORD',
+    ]
+    for (const db of dbNames) {
+      const d = String(db || '').trim()
+      if (!d) continue
+      parts.push(
+        [
+          `-- \\c ${d}`,
+          `GRANT CONNECT ON DATABASE ${pgQuoteIdent(d)} TO ${u};`,
+          `GRANT ${privs} ON ALL TABLES IN SCHEMA public TO ${u};`,
+          `GRANT USAGE ON SCHEMA public TO ${u};`,
+          `ALTER DEFAULT PRIVILEGES FOR ROLE ${owner} IN SCHEMA public GRANT ${privs} ON TABLES TO ${u};`,
+          `GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO ${u};`,
+          `ALTER DEFAULT PRIVILEGES FOR ROLE ${owner} IN SCHEMA public GRANT ALL PRIVILEGES ON SEQUENCES TO ${u};`,
+        ].join('\n'),
+      )
+    }
+    return parts.join('\n\n')
+  }
+  return dbNames
+    .map((db) => {
+      const d = String(db || '').trim().replace(/`/g, '``')
+      const u = user.replace(/'/g, "''")
+      return `GRANT ${privs} ON \`${d}\`.* TO '${u}'@'%';`
+    })
+    .filter(Boolean)
+    .join('\n')
+}
+
 function emptyForm() {
   return {
     env: '',
@@ -193,13 +241,18 @@ export default function DclGrants() {
     antdForm.setFieldsValue(next)
   }
 
-  function buildGrantSql() {
-    const privs = (form.permissions || []).map((p) => PERM_SQL[p]).filter(Boolean).join(', ')
-    const dbs = (form.db_ids || [])
-      .map((id) => databases.find((d) => d.id === id)?.db_name)
-      .filter(Boolean)
-    return `GRANT ${privs} ON ${dbs.join(', ')} TO ${form.username};`
-  }
+  const selectedDbNames = useMemo(
+    () =>
+      (form.db_ids || [])
+        .map((id) => databases.find((d) => d.id === id)?.db_name)
+        .filter(Boolean) as string[],
+    [form.db_ids, databases],
+  )
+
+  const previewSql = useMemo(
+    () => previewGrantSql(form.db_type, selectedDbNames, form.username, form.permissions),
+    [form.db_type, form.username, form.permissions, selectedDbNames],
+  )
 
   async function submit() {
     try {
@@ -216,19 +269,21 @@ export default function DclGrants() {
       message.warning('请选择带域名的数据源')
       return
     }
-    const dbName = (form.db_ids || [])
-      .map((id) => databases.find((d) => d.id === id)?.db_name)
-      .filter(Boolean)
-      .join(',')
+    if (!form.permissions?.length) {
+      message.warning('请选择账号权限')
+      return
+    }
+    const dbName = selectedDbNames.join(',')
     setSubmitting(true)
     try {
       await api.post('/dcl-grants', {
         instance_id: form.instance_id,
         domain: form.domain,
         db_name: dbName,
+        username,
+        permissions: form.permissions,
         assigned_to: form.assigned_to,
         description: form.description,
-        sql_content: buildGrantSql(),
       })
       message.success('工单创建成功')
       clearOnSubmitSuccess()
@@ -434,6 +489,21 @@ export default function DclGrants() {
               disabled={!form.env || !form.db_type || !form.instance_id}
             />
           </Form.Item>
+          {previewSql ? (
+            <div className="dcl-sql-preview">
+              <div className="dcl-main-title">授权 SQL 预览</div>
+              <pre className="dcl-sql-pre">{previewSql}</pre>
+              {form.db_type === 'postgres' ? (
+                <p className="hint">
+                  审批通过后：账号不存在则 CREATE USER … ENCRYPTED PASSWORD
+                  并通知密码；按库查询 owner 后执行 CONNECT / USAGE / 表与序列授权 /
+                  ALTER DEFAULT PRIVILEGES（无 schema CREATE）。
+                </p>
+              ) : (
+                <p className="hint">审批通过后将按库执行 GRANT；账号须事先存在。</p>
+              )}
+            </div>
+          ) : null}
         </main>
       </Form>
     </div>

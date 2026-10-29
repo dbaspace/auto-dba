@@ -18,6 +18,7 @@ import (
 	"auto-dba/internal/config"
 	"auto-dba/internal/middleware"
 	"auto-dba/internal/store"
+	"auto-dba/internal/ticketexec"
 )
 
 func notConfigured(c *gin.Context, name string) {
@@ -1559,61 +1560,112 @@ func (h *DCLHandler) Submit(c *gin.Context) {
 		return
 	}
 	req.Type = store.IssueTypeDCL
-	th := &TicketHandler{Store: h.Store}
-	c.Request.Header.Set("Content-Type", "application/json")
-	// reuse submit logic via constructing issue
-	username := middleware.Username(c)
-	ok, _, msg, err := th.canActOnTarget(middleware.TenantID(c), req.InstanceID, req.DBName, username)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+	th := &TicketHandler{Store: h.Store, Secret: h.Secret}
+	submitter := middleware.Username(c)
+	instID := strings.TrimSpace(req.InstanceID)
+	if instID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "请选择数据源实例"})
 		return
 	}
-	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"message": msg})
+	grantee := strings.TrimSpace(req.Username)
+	if grantee == "" {
+		// 兼容旧客户端：从 sql_content 无法可靠解析时要求显式 username
+		c.JSON(http.StatusBadRequest, gin.H{"message": "请填写数据库账号"})
 		return
 	}
-	reviewer, aerr := resolveTenantAssignee(h.Store, middleware.TenantID(c), req.reviewer())
+	dbs := splitDBNames(req.DBName)
+	if len(dbs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "请选择数据库"})
+		return
+	}
+	if len(req.Permissions) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "请选择账号权限"})
+		return
+	}
+	tid := middleware.TenantID(c)
+	uid := middleware.UserID(c)
+	for _, name := range dbs {
+		ok, _, msg, err := th.canActOnTarget(tid, instID, name, uid)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+			return
+		}
+		if !ok {
+			c.JSON(http.StatusBadRequest, gin.H{"message": th.decorateTargetDeny(instID, msg)})
+			return
+		}
+	}
+	resourceTid := th.resourceTenantIDForTarget(instID, dbs[0])
+	if resourceTid == "" {
+		resourceTid = tid
+	}
+	reviewer, aerr := resolveTenantAssignee(h.Store, resourceTid, req.reviewer())
 	if aerr != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": aerr.Error()})
 		return
 	}
+	inst, ierr := h.Store.GetInstance(instID)
+	if ierr != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": ierr.Error()})
+		return
+	}
+	if inst == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "实例未登记"})
+		return
+	}
 	domain := strings.TrimSpace(req.Domain)
-	if domain != "" && strings.TrimSpace(req.InstanceID) != "" {
-		inst, ierr := h.Store.GetInstance(req.InstanceID)
-		if ierr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"message": ierr.Error()})
-			return
-		}
-		if inst == nil {
-			c.JSON(http.StatusBadRequest, gin.H{"message": "数据源域名不属于所选实例登记的域名"})
-			return
-		}
+	if domain != "" {
 		if err := ensureTicketDomainVisible(h.Store, c, inst, domain); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 			return
 		}
-		if strings.TrimSpace(req.DBName) != "" {
-			for _, name := range strings.Split(req.DBName, ",") {
-				name = strings.TrimSpace(name)
-				if name == "" {
-					continue
-				}
-				dbEnt, derr := h.Store.FindDatabase(req.InstanceID, name)
-				if derr != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{"message": derr.Error()})
-					return
-				}
-				if dbEnt != nil && len(dbEnt.Domains) > 0 && !databaseContainsDomain(dbEnt, domain) {
-					c.JSON(http.StatusBadRequest, gin.H{"message": "所选数据库未绑定该域名: " + name})
-					return
-				}
+		for _, name := range dbs {
+			dbEnt, derr := h.Store.FindDatabase(instID, name)
+			if derr != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"message": derr.Error()})
+				return
+			}
+			if dbEnt != nil && len(dbEnt.Domains) > 0 && !databaseContainsDomain(dbEnt, domain) {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "所选数据库未绑定该域名: " + name})
+				return
 			}
 		}
 	}
+	engine := ticketexec.EngineOf(inst.DBType)
+	var sqlContent string
+	if engine == "postgres" {
+		admin, terr := th.execTarget(inst, dbs[0], domain)
+		if terr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "连接实例以查询库 owner 失败: " + terr.Error()})
+			return
+		}
+		admin.ConnectDB = ticketexec.AdminConnectDB(inst.DBType)
+		owners := make(map[string]string, len(dbs))
+		for _, name := range dbs {
+			owner, oerr := ticketexec.LookupPostgresDatabaseOwner(c.Request.Context(), admin, name)
+			if oerr != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "查询库 owner 失败 (" + name + "): " + oerr.Error()})
+				return
+			}
+			owners[name] = owner
+		}
+		sqlContent = renderPGDCLScript(dbs, grantee, owners, req.Permissions)
+	} else {
+		sqlContent = renderMySQLDCLScript(dbs, grantee, req.Permissions)
+	}
+	if strings.TrimSpace(sqlContent) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "无法生成授权 SQL"})
+		return
+	}
+	extra := &dclExtra{
+		Username: grantee, Permissions: req.Permissions, Databases: dbs,
+		DBType: inst.DBType,
+	}
 	issue := &store.Issue{
-		IssueType: store.IssueTypeDCL, InstanceID: req.InstanceID, Domain: domain, DBName: req.DBName,
-		SQLContent: req.SQLContent, Description: req.Description, Status: store.StatusPending,
-		Submitter: username, AssignedTo: reviewer,
+		IssueType: store.IssueTypeDCL, InstanceID: instID, Domain: domain,
+		DBName: strings.Join(dbs, ","), SQLContent: sqlContent, Description: req.Description,
+		Status: store.StatusPending, Submitter: submitter, AssignedTo: reviewer,
+		NeedRollback: encodeDCLExtra(extra),
 	}
 	stampTenantID(c, func(tid string) {
 		if issue != nil {

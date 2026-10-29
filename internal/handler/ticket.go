@@ -56,24 +56,26 @@ type ticketCheckReq struct {
 }
 
 type ticketSubmitReq struct {
-	InstanceID    string `json:"instance_id"`
-	Domain        string `json:"domain"`
-	DBName        string `json:"db_name"`
-	DatabaseID    string `json:"database_id"`
-	Type          string `json:"type"`
-	SQLContent    string `json:"sql_content"`
-	Description   string `json:"description"`
-	DBType        string `json:"db_type"`
-	AssignedTo    string `json:"assigned_to"`
-	AssignedToA   string `json:"AssignedTo"`
-	Reviewer      string `json:"reviewer"`
-	Approver      string `json:"approver"`
-	NeedRollback  string `json:"need_rollback"`
-	ScheduledAt   string `json:"scheduled_at"`
-	NeedSensitive bool   `json:"need_sensitive_data"`
-	DBAAssigned   string `json:"dba_assigned_to"`
-	SecAssigned   string `json:"security_assigned_to"`
-	RowCount      int    `json:"row_count"`
+	InstanceID    string   `json:"instance_id"`
+	Domain        string   `json:"domain"`
+	DBName        string   `json:"db_name"`
+	DatabaseID    string   `json:"database_id"`
+	Type          string   `json:"type"`
+	SQLContent    string   `json:"sql_content"`
+	Description   string   `json:"description"`
+	DBType        string   `json:"db_type"`
+	Username      string   `json:"username"`    // DCL 目标账号
+	Permissions   []string `json:"permissions"` // DCL: r/c/u/d
+	AssignedTo    string   `json:"assigned_to"`
+	AssignedToA   string   `json:"AssignedTo"`
+	Reviewer      string   `json:"reviewer"`
+	Approver      string   `json:"approver"`
+	NeedRollback  string   `json:"need_rollback"`
+	ScheduledAt   string   `json:"scheduled_at"`
+	NeedSensitive bool     `json:"need_sensitive_data"`
+	DBAAssigned   string   `json:"dba_assigned_to"`
+	SecAssigned   string   `json:"security_assigned_to"`
+	RowCount      int      `json:"row_count"`
 }
 
 func (r ticketSubmitReq) reviewer() string {
@@ -104,9 +106,10 @@ func usernameInList(username string, list []string) bool {
 	return false
 }
 
-// canActOnTarget 校验提交目标：实例/库已登记且归属当前租户。
-// 提交人不必在审批人名单中；所选审核人由 Submit 路径另行校验。
-func (h *TicketHandler) canActOnTarget(tenantID, instanceID, dbName, _ string) (bool, targetActDeny, string, error) {
+// canActOnTarget 校验提交目标：实例/库已登记，且对本租户可见（自有或跨租授权）。
+// tenantID 为空时仅校验登记存在（兼容无租户上下文的单测）。
+// 提交人不必在审批人名单中；所选审核人由 Submit 路径另行校验。userID 用于 to_user_id 授权判定。
+func (h *TicketHandler) canActOnTarget(tenantID, instanceID, dbName, userID string) (bool, targetActDeny, string, error) {
 	inst, err := h.Store.GetInstance(instanceID)
 	if err != nil {
 		return false, targetActAllow, "", err
@@ -114,14 +117,17 @@ func (h *TicketHandler) canActOnTarget(tenantID, instanceID, dbName, _ string) (
 	if inst == nil {
 		return false, targetActDenyInstanceMissing, "实例未登记，请先在「配置 → 实例」中登记", nil
 	}
-	ownsInst := strings.TrimSpace(inst.TenantID) == strings.TrimSpace(tenantID)
-	if !ownsInst {
-		n, err := h.Store.CountDatabasesOnInstanceInTenant(instanceID, tenantID)
-		if err != nil {
-			return false, targetActAllow, "", err
-		}
-		if n == 0 {
-			return false, targetActDenyInstanceMissing, "实例未登记，请先在「配置 → 实例」中登记", nil
+	tid := strings.TrimSpace(tenantID)
+	if tid != "" {
+		ownsInst := strings.TrimSpace(inst.TenantID) == tid
+		if !ownsInst {
+			ok, err := h.instanceReachableForTicket(tid, userID, instanceID)
+			if err != nil {
+				return false, targetActAllow, "", err
+			}
+			if !ok {
+				return false, targetActDenyInstanceMissing, "实例未登记，请先在「配置 → 实例」中登记", nil
+			}
 		}
 	}
 	if strings.TrimSpace(dbName) == "" {
@@ -134,10 +140,40 @@ func (h *TicketHandler) canActOnTarget(tenantID, instanceID, dbName, _ string) (
 	if dbEnt == nil {
 		return false, targetActDenyDBNotRegistered, "库未登记，请先在「配置 → 已登记库」中登记 " + dbName, nil
 	}
-	if tid := strings.TrimSpace(tenantID); tid != "" && strings.TrimSpace(dbEnt.TenantID) != tid {
-		return false, targetActDenyDBNotRegistered, "库未登记，请先在「配置 → 已登记库」中登记 " + dbName, nil
+	if tid != "" && strings.TrimSpace(dbEnt.TenantID) != tid {
+		ok, err := h.Store.HasResourceGrant(tid, userID, "database", dbEnt.ID)
+		if err != nil {
+			return false, targetActAllow, "", err
+		}
+		if !ok {
+			return false, targetActDenyDBNotRegistered, "库未登记，请先在「配置 → 已登记库」中登记 " + dbName, nil
+		}
 	}
 	return true, targetActAllow, "", nil
+}
+
+// instanceReachableForTicket 与 resolveInstanceInTenant 对齐：自有库宿主机 / instance 授权 / 域名可达 / 被授库父实例。
+func (h *TicketHandler) instanceReachableForTicket(tenantID, userID, instanceID string) (bool, error) {
+	n, err := h.Store.CountDatabasesOnInstanceInTenant(instanceID, tenantID)
+	if err != nil {
+		return false, err
+	}
+	if n > 0 {
+		return true, nil
+	}
+	ok, err := h.Store.HasResourceGrant(tenantID, userID, "instance", instanceID)
+	if err != nil || ok {
+		return ok, err
+	}
+	viaDomain, err := h.Store.InstanceReachableViaAccessDomain(instanceID, tenantID, userID)
+	if err != nil || viaDomain {
+		return viaDomain, err
+	}
+	granted, err := h.Store.ListGrantedDatabases(tenantID, userID, instanceID, "")
+	if err != nil {
+		return false, err
+	}
+	return len(granted) > 0, nil
 }
 
 // submitInstanceIDs 提交时要逐条校验审核人的实例。DDL 取全部数据源，其余用主实例。
@@ -247,28 +283,75 @@ func (h *TicketHandler) ListInstances(c *gin.Context) {
 }
 
 func (h *TicketHandler) ListInstanceDatabases(c *gin.Context) {
-	list, err := h.Store.ListDatabasesInTenant(effectiveListTenantID(h.Store, c), c.Param("instance_id"), c.Query("q"))
+	tid := effectiveListTenantID(h.Store, c)
+	instID := c.Param("instance_id")
+	q := c.Query("q")
+	list, err := h.Store.ListDatabasesInTenant(tid, instID, q)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
 	list = store.FilterVisibleDatabasesByTenant(list, viewerForRequest(h.Store, c))
+	// 与 DatabaseHandler.List 对齐：合并 to_tenant / to_user 授权库（不再二次 VisibleTo）
+	extra, gerr := h.Store.ListGrantedDatabases(middleware.TenantID(c), middleware.UserID(c), instID, q)
+	if gerr != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": gerr.Error()})
+		return
+	}
+	seen := map[string]struct{}{}
+	for i := range list {
+		seen[list[i].ID] = struct{}{}
+	}
+	for _, it := range extra {
+		if _, ok := seen[it.ID]; ok {
+			continue
+		}
+		list = append(list, it)
+	}
+	if list == nil {
+		list = []store.Database{}
+	}
 	c.JSON(http.StatusOK, gin.H{"data": list})
 }
 
+// resourceTenantIDForTarget 工单目标资源所属租户（库优先，否则实例）；用于审批人作用域。
+func (h *TicketHandler) resourceTenantIDForTarget(instanceID, dbName string) string {
+	instanceID = strings.TrimSpace(instanceID)
+	dbName = strings.TrimSpace(dbName)
+	if instanceID != "" && dbName != "" {
+		if dbEnt, err := h.Store.FindDatabase(instanceID, dbName); err == nil && dbEnt != nil {
+			if tid := strings.TrimSpace(dbEnt.TenantID); tid != "" {
+				return tid
+			}
+		}
+	}
+	if instanceID != "" {
+		if inst, err := h.Store.GetInstance(instanceID); err == nil && inst != nil {
+			return strings.TrimSpace(inst.TenantID)
+		}
+	}
+	return ""
+}
+
 func (h *TicketHandler) GetTargetApprovers(c *gin.Context) {
-	tid := middleware.TenantID(c)
-	if tid == "" {
+	if middleware.TenantID(c) == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "请先选择租户"})
 		return
 	}
+	instID := strings.TrimSpace(c.Query("instance_id"))
+	dbName := strings.TrimSpace(c.Query("db_name"))
+	list := h.resolveApprovers(instID, dbName)
+	configured := len(list) > 0
+	resourceTid := h.resourceTenantIDForTarget(instID, dbName)
+	if resourceTid == "" {
+		resourceTid = middleware.TenantID(c)
+	}
 	memberSet := map[string]struct{}{}
-	if members, err := listTenantMemberUsernames(h.Store, tid); err == nil {
+	if members, err := listTenantMemberUsernames(h.Store, resourceTid); err == nil {
 		for _, n := range members {
 			memberSet[strings.ToLower(n)] = struct{}{}
 		}
 	}
-	list := h.resolveApprovers(c.Query("instance_id"), c.Query("db_name"))
 	type item struct {
 		Type string `json:"type"`
 		Name string `json:"name"`
@@ -295,24 +378,31 @@ func (h *TicketHandler) GetTargetApprovers(c *gin.Context) {
 					add(name)
 				}
 			}
-			c.JSON(http.StatusOK, gin.H{"data": out})
+			c.JSON(http.StatusOK, gin.H{"data": out, "resource_tenant_id": resourceTid})
 			return
 		}
 	}
 	for _, name := range list {
 		add(name)
 	}
-	if len(out) == 0 {
-		if def, _ := h.Store.GetGlobalArg("sync_default_approver"); def != "" {
-			add(def)
+	// 已配置库/实例审批人：只返回资源所属租户内有效成员，禁止回退提交人租户全员/登录用户。
+	if configured {
+		msg := ""
+		if len(out) == 0 {
+			msg = "库/实例审批人不在资源所属租户或未配置有效成员，请到资源配置维护审批人"
 		}
-		if members, err := listTenantMemberUsernames(h.Store, tid); err == nil {
-			for _, name := range members {
-				add(name)
-			}
-		}
+		c.JSON(http.StatusOK, gin.H{"data": out, "resource_tenant_id": resourceTid, "message": msg})
+		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": out})
+	// 未配置审批人：仅允许全局默认审批人（须为资源所属租户成员），仍不回退本租全体成员。
+	if def, _ := h.Store.GetGlobalArg("sync_default_approver"); def != "" {
+		add(def)
+	}
+	msg := ""
+	if len(out) == 0 {
+		msg = "未配置库/实例审批人，且无可用的默认审批人（须为资源所属租户成员）"
+	}
+	c.JSON(http.StatusOK, gin.H{"data": out, "resource_tenant_id": resourceTid, "message": msg})
 }
 
 func (h *TicketHandler) CheckSQL(c *gin.Context) {
@@ -592,7 +682,7 @@ func (h *TicketHandler) Submit(c *gin.Context) {
 			return
 		}
 		for _, id := range ids {
-			ok, _, msg, err := h.canActOnTarget(middleware.TenantID(c), id, req.DBName, username)
+			ok, _, msg, err := h.canActOnTarget(middleware.TenantID(c), id, req.DBName, middleware.UserID(c))
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 				return
@@ -603,7 +693,7 @@ func (h *TicketHandler) Submit(c *gin.Context) {
 			}
 		}
 	} else {
-		ok, _, msg, err := h.canActOnTarget(middleware.TenantID(c), req.InstanceID, req.DBName, username)
+		ok, _, msg, err := h.canActOnTarget(middleware.TenantID(c), req.InstanceID, req.DBName, middleware.UserID(c))
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 			return
@@ -613,7 +703,11 @@ func (h *TicketHandler) Submit(c *gin.Context) {
 			return
 		}
 	}
-	reviewer, err := resolveTenantAssignee(h.Store, middleware.TenantID(c), req.reviewer())
+	resourceTid := h.resourceTenantIDForTarget(req.InstanceID, req.DBName)
+	if resourceTid == "" {
+		resourceTid = middleware.TenantID(c)
+	}
+	reviewer, err := resolveTenantAssignee(h.Store, resourceTid, req.reviewer())
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
@@ -825,27 +919,27 @@ func (h *TicketHandler) List(c *gin.Context) {
 	if list == nil {
 		list = []store.Issue{}
 	}
-	// 平台资源申请跨租可见（不影响 DDL/DML 等其它类型）：
-	// 1) 平台管理员/白名单：全平台该类工单
-	// 2) 普通审批人：仅 assigned_to=自己的异租单（如 dba 租户成员审业务租户提单）
+	// 跨租可见：
+	// 1) 平台资源申请：平台管理员/白名单看全平台该类；其它人看 assigned_to=自己
+	// 2) 其它类型：授权库工单指派给资源方成员时，审批人在本租也能看到 assigned_to=自己的异租单
 	typeQ := c.Query("type")
-	if typeQ == "" || typeQ == store.IssueTypeResourceApply {
-		seen := map[string]struct{}{}
-		for _, it := range list {
-			seen[it.ID] = struct{}{}
-		}
-		mergeExtra := func(extra []store.Issue) {
-			for _, it := range extra {
-				if tid != "" && strings.TrimSpace(it.TenantID) == tid {
-					continue
-				}
-				if _, ok := seen[it.ID]; ok {
-					continue
-				}
-				seen[it.ID] = struct{}{}
-				list = append(list, it)
+	seen := map[string]struct{}{}
+	for _, it := range list {
+		seen[it.ID] = struct{}{}
+	}
+	mergeExtra := func(extra []store.Issue) {
+		for _, it := range extra {
+			if tid != "" && strings.TrimSpace(it.TenantID) == tid {
+				continue
 			}
+			if _, ok := seen[it.ID]; ok {
+				continue
+			}
+			seen[it.ID] = struct{}{}
+			list = append(list, it)
 		}
+	}
+	if typeQ == "" || typeQ == store.IssueTypeResourceApply {
 		if h.isPlatformResourceApplyReviewer(c) {
 			if extra, e2 := h.Store.ListResourceApplyAcrossTenants(c.Query("status"), c.Query("q")); e2 == nil {
 				mergeExtra(extra)
@@ -854,6 +948,11 @@ func (h *TicketHandler) List(c *gin.Context) {
 			if extra, e2 := h.Store.ListResourceApplyAssignedToAcrossTenants(user, c.Query("status"), c.Query("q")); e2 == nil {
 				mergeExtra(extra)
 			}
+		}
+	}
+	if user != "" && typeQ != store.IssueTypeResourceApply {
+		if extra, e2 := h.Store.ListIssuesAssignedToAcrossTenants(user, typeQ, c.Query("status"), c.Query("q")); e2 == nil {
+			mergeExtra(extra)
 		}
 	}
 	names := tenantNameMap(h.Store)
@@ -1544,6 +1643,9 @@ func (h *TicketHandler) executeTicket(ctx context.Context, it *store.Issue) erro
 	if it.IssueType == store.IssueTypeCreateDB {
 		return h.executeCreateDBTicket(ctx, it)
 	}
+	if it.IssueType == store.IssueTypeDCL {
+		return h.executeDCLTicket(ctx, it)
+	}
 	if it.IssueType == store.IssueTypeDDL {
 		return h.executeDDLTicket(ctx, it)
 	}
@@ -1574,7 +1676,7 @@ func (h *TicketHandler) executeTicket(ctx context.Context, it *store.Issue) erro
 	if it.IssueType == store.IssueTypeBackupRestore {
 		return h.executeBackupRestoreTicket(ctx, it)
 	}
-	inst, err := h.Store.GetInstanceUsableInTenant(it.InstanceID, it.TenantID)
+	inst, err := h.instanceUsableOrRegistered(it.InstanceID, it.TenantID)
 	if err != nil {
 		return err
 	}
@@ -1747,7 +1849,7 @@ func (h *TicketHandler) executeDDLTicket(ctx context.Context, it *store.Issue) e
 		if err := ctx.Err(); err != nil {
 			return errExecStopped
 		}
-		inst, err := h.Store.GetInstanceUsableInTenant(id, it.TenantID)
+		inst, err := h.instanceUsableOrRegistered(id, it.TenantID)
 		if err != nil {
 			return err
 		}
@@ -2022,7 +2124,7 @@ func (h *TicketHandler) actorCanExecuteIssue(c *gin.Context, it *store.Issue) bo
 	return ok
 }
 
-// loadIssueForActor 本租可见；平台资源申请额外允许：提交人/指定审批人，或平台管理员/白名单跨租打开。
+// loadIssueForActor 本租可见；异租额外允许：提交人/指定审批人；平台资源申请另允许平台管理员/白名单。
 func (h *TicketHandler) loadIssueForActor(c *gin.Context, id string) (*store.Issue, error) {
 	tid := effectiveListTenantID(h.Store, c)
 	it, err := h.Store.GetIssueInTenant(id, tid)
@@ -2039,18 +2141,27 @@ func (h *TicketHandler) loadIssueForActor(c *gin.Context, id string) (*store.Iss
 	if h.actorCanStopIssue(c, raw) {
 		return raw, nil
 	}
-	if raw.IssueType != store.IssueTypeResourceApply {
-		return nil, nil
-	}
 	user := middleware.Username(c)
-	if strings.EqualFold(raw.Submitter, user) || strings.EqualFold(raw.AssignedTo, user) || h.isPlatformResourceApplyReviewer(c) {
+	if strings.EqualFold(raw.Submitter, user) || strings.EqualFold(raw.AssignedTo, user) {
+		return raw, nil
+	}
+	if raw.IssueType == store.IssueTypeResourceApply && h.isPlatformResourceApplyReviewer(c) {
 		return raw, nil
 	}
 	return nil, nil
 }
 
+// instanceUsableOrRegistered 执行用实例：先按租户可用性，再回退全局登记（授权库工单实例可能不在提交人租户）。
+func (h *TicketHandler) instanceUsableOrRegistered(instanceID, tenantID string) (*store.Instance, error) {
+	inst, err := h.Store.GetInstanceUsableInTenant(instanceID, tenantID)
+	if err != nil || inst != nil {
+		return inst, err
+	}
+	return h.Store.GetInstance(instanceID)
+}
+
 func (h *TicketHandler) executeRedisTicket(ctx context.Context, it *store.Issue) error {
-	inst, err := h.Store.GetInstanceUsableInTenant(it.InstanceID, it.TenantID)
+	inst, err := h.instanceUsableOrRegistered(it.InstanceID, it.TenantID)
 	if err != nil {
 		return err
 	}

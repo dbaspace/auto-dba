@@ -312,6 +312,10 @@ export default function DmlOrder() {
       const out = (data.data || []).map((a: any) => a.name || a).filter(Boolean)
       const uniq = [...new Set(out)] as string[]
       setApprovers(uniq)
+      const hint = String(data.message || '').trim()
+      if (!uniq.length && hint) {
+        message.warning(hint)
+      }
       const cur = formRef.current
       if (cur.assigned_to && !uniq.includes(cur.assigned_to)) patchForm({ assigned_to: '' })
     } catch {

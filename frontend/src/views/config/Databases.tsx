@@ -1728,12 +1728,15 @@ export default function Databases() {
               value={form.approvers || []}
               showSearch
               maxTagCount="responsive"
-              placeholder="仅限本库所属租户成员"
+              placeholder="仅限本库所属租户成员（授权用户≠审批人）"
               style={{ width: '100%' }}
               optionFilterProp="label"
               options={userOptions.map((u) => ({ value: u, label: u }))}
               onChange={(v) => setForm((f) => ({ ...f, approvers: v }))}
             />
+            <div style={{ marginTop: 4, color: '#6b7280', fontSize: 12 }}>
+              工单审核人取自此处配置；跨租授权不会自动写入审批人。
+            </div>
           </div>
         </div>
       </Modal>

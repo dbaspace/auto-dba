@@ -156,7 +156,60 @@ type CreateDBNotifyItem struct {
 	Permissions []string
 }
 
-// CreateDBDone 建库工单执行成功后飞书私聊申请人（唯一给申请人发结果的工单类型）。
+// DCLNotifyItem 权限申请执行结果（飞书私聊申请人）。
+type DCLNotifyItem struct {
+	Address     string
+	DBNames     []string
+	Username    string
+	Password    string // 明文；Created=false 时忽略
+	Created     bool   // 本次新建账号
+	Permissions []string
+}
+
+// DCLDone 权限申请工单执行成功后飞书私聊申请人（新建账号带密码，已存在注明沿用）。
+func DCLDone(db *store.DB, issue *store.Issue, item DCLNotifyItem) {
+	if db == nil || issue == nil || strings.TrimSpace(item.Username) == "" {
+		return
+	}
+	ncfg, err := db.GetNotifyConfig()
+	if err != nil || ncfg == nil || !ncfg.LarkOnTicketCreate {
+		return
+	}
+	recips := CollectLarkRecipients(db, []string{issue.Submitter}, "dcl ticket="+issue.TicketNo)
+	if len(recips) == 0 {
+		return
+	}
+	lines := []string{
+		"地址：" + item.Address,
+		"数据库：" + strings.Join(item.DBNames, ","),
+		"账号：" + item.Username,
+	}
+	if item.Created {
+		lines = append(lines, "密码："+item.Password)
+	} else {
+		lines = append(lines, "密码：沿用原密码")
+	}
+	if len(item.Permissions) > 0 {
+		lines = append(lines, "权限："+strings.Join(item.Permissions, ","))
+	}
+	note := strings.TrimSpace(issue.Description)
+	if item.Created {
+		note = joinNote(note, "账号已新建并完成授权")
+	} else {
+		note = joinNote(note, "账号已存在，仅授权")
+	}
+	if note != "" {
+		lines = append(lines, "说明："+note)
+	}
+	text := fmt.Sprintf("工单 %s 已执行完成\n\n%s", issue.TicketNo, strings.Join(lines, "\n"))
+	if err := SendViaErr(ChannelLark, Message{Title: "权限申请完成", Text: text, LarkRecipients: recips}); err != nil {
+		log.Printf("notify dcl done ticket=%s: %v", issue.TicketNo, err)
+		return
+	}
+	log.Printf("notify dcl done: sent to submitter=%s ticket=%s", issue.Submitter, issue.TicketNo)
+}
+
+// CreateDBDone 建库工单执行成功后飞书私聊申请人。
 func CreateDBDone(db *store.DB, issue *store.Issue, items []CreateDBNotifyItem, warn string) {
 	if db == nil || issue == nil || len(items) == 0 {
 		return

@@ -61,9 +61,29 @@
   flex-shrink: 0;
 }
 
-/* 右侧数据库选择占满剩余高度 */
+/* 右侧数据库选择 + SQL 预览 */
 .dcl-page .order-main {
-  overflow: hidden;
+  overflow: auto;
+}
+
+.dcl-sql-preview {
+  margin-top: 16px;
+  flex-shrink: 0;
+}
+
+.dcl-sql-pre {
+  margin: 0 0 8px;
+  padding: 12px;
+  max-height: 280px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-all;
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  color: #1f2937;
 }
 
 .dcl-page .db-item {

@@ -148,6 +148,19 @@ func (h *InstanceHandler) mergeHostedInstances(list []store.Instance, tid, dbTyp
 	if err != nil {
 		return list, err
 	}
+	return appendInstancesByIDs(h.Store, list, ids, dbType, q)
+}
+
+// mergeGrantedInstances 合并「被授库父实例」与 instance 级授权；应在 FilterVisible 之后调用，避免他租 private 被滤掉。
+func (h *InstanceHandler) mergeGrantedInstances(list []store.Instance, tid, userID, dbType, q string) ([]store.Instance, error) {
+	ids, err := grantedVisibleInstanceIDs(h.Store, tid, userID)
+	if err != nil {
+		return list, err
+	}
+	return appendInstancesByIDs(h.Store, list, ids, dbType, q)
+}
+
+func appendInstancesByIDs(db *store.DB, list []store.Instance, ids []string, dbType, q string) ([]store.Instance, error) {
 	seen := map[string]struct{}{}
 	for i := range list {
 		seen[list[i].ID] = struct{}{}
@@ -155,11 +168,18 @@ func (h *InstanceHandler) mergeHostedInstances(list []store.Instance, tid, dbTyp
 	dbType = strings.TrimSpace(dbType)
 	q = strings.ToLower(strings.TrimSpace(q))
 	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
 		if _, ok := seen[id]; ok {
 			continue
 		}
-		it, err := h.Store.GetInstance(id)
-		if err != nil || it == nil {
+		it, err := db.GetInstance(id)
+		if err != nil {
+			return list, err
+		}
+		if it == nil {
 			continue
 		}
 		if dbType != "" && !strings.EqualFold(it.DBType, dbType) {
@@ -175,6 +195,43 @@ func (h *InstanceHandler) mergeHostedInstances(list []store.Instance, tid, dbTyp
 		list = append(list, *it)
 	}
 	return list, nil
+}
+
+// grantedVisibleInstanceIDs 被授 database 的父实例 + instance 授权。
+func grantedVisibleInstanceIDs(db *store.DB, tid, userID string) ([]string, error) {
+	if db == nil {
+		return nil, nil
+	}
+	seen := map[string]struct{}{}
+	var out []string
+	add := func(id string) {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return
+		}
+		if _, ok := seen[id]; ok {
+			return
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	extra, err := db.ListGrantedDatabases(tid, userID, "", "")
+	if err != nil {
+		return nil, err
+	}
+	for i := range extra {
+		add(extra[i].InstanceID)
+	}
+	gs, err := db.ListTenantGrantsTo(tid, userID)
+	if err != nil {
+		return nil, err
+	}
+	for _, g := range gs {
+		if g.ResourceType == "instance" {
+			add(g.ResourceID)
+		}
+	}
+	return out, nil
 }
 
 func (h *InstanceHandler) List(c *gin.Context) {
@@ -199,6 +256,13 @@ func (h *InstanceHandler) List(c *gin.Context) {
 		list = []store.Instance{}
 	}
 	list = store.FilterVisibleInstancesByTenant(list, viewerForRequest(h.Store, c))
+	if !auditing || forceTenant {
+		list, err = h.mergeGrantedInstances(list, tid, middleware.UserID(c), c.Query("db_type"), c.Query("q"))
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+			return
+		}
+	}
 	h.enrichInstanceTenants(list)
 	for i := range list {
 		redactInstance(&list[i])

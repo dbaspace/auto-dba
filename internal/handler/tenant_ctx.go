@@ -219,5 +219,10 @@ func tenantInstanceIDSet(db *store.DB, c *gin.Context) map[string]bool {
 			out[id] = true
 		}
 	}
+	if granted, gerr := grantedVisibleInstanceIDs(db, tid, middleware.UserID(c)); gerr == nil {
+		for _, id := range granted {
+			out[id] = true
+		}
+	}
 	return out
 }

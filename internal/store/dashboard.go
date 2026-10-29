@@ -329,8 +329,23 @@ func (d *DB) DashboardTodos(f DashboardFilter, viewer string, page, pageSize int
 			CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt, Source: "issue",
 		})
 	}
-	// 平台资源申请跨租待办（不影响其它工单类型）：
-	// 平台管理员/白名单看全平台 pending；普通审批人仅看 assigned_to=自己的异租 pending。
+	// 跨租待办：平台资源申请（管理员/白名单全平台或 assigned_to）；其它类型仅 assigned_to=自己的异租 pending。
+	appendIssueTodos := func(extra []Issue) {
+		for _, r := range extra {
+			if r.Status != StatusPending {
+				continue
+			}
+			name := r.Description
+			if name == "" {
+				name = r.TicketNo + " " + r.DBName
+			}
+			appendTodo(DashboardTodo{
+				ID: r.ID, Name: strings.TrimSpace(name), CreatedBy: r.Submitter, CreatorName: r.Submitter,
+				Status: r.Status, IssueType: r.IssueType, TenantID: r.TenantID,
+				CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt, Source: "issue",
+			})
+		}
+	}
 	if f.IssueType == "" || f.IssueType == IssueTypeResourceApply {
 		var extra []Issue
 		var e2 error
@@ -340,20 +355,12 @@ func (d *DB) DashboardTodos(f DashboardFilter, viewer string, page, pageSize int
 			extra, e2 = d.ListResourceApplyAssignedToAcrossTenants(viewer, StatusPending, f.Q)
 		}
 		if e2 == nil {
-			for _, r := range extra {
-				if r.Status != StatusPending {
-					continue
-				}
-				name := r.Description
-				if name == "" {
-					name = r.TicketNo + " " + r.DBName
-				}
-				appendTodo(DashboardTodo{
-					ID: r.ID, Name: strings.TrimSpace(name), CreatedBy: r.Submitter, CreatorName: r.Submitter,
-					Status: r.Status, IssueType: r.IssueType, TenantID: r.TenantID,
-					CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt, Source: "issue",
-				})
-			}
+			appendIssueTodos(extra)
+		}
+	}
+	if viewer != "" && f.IssueType != IssueTypeResourceApply {
+		if extra, e2 := d.ListIssuesAssignedToAcrossTenants(viewer, f.IssueType, StatusPending, f.Q); e2 == nil {
+			appendIssueTodos(extra)
 		}
 	}
 	migs, err := d.ListMigrations()

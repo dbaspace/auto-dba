@@ -229,3 +229,37 @@ nacos:
 		t.Fatalf("err=%v", err)
 	}
 }
+
+func TestNacosCacheFileName(t *testing.T) {
+	if got := nacosCacheFileName("auto-dba.yaml", "DEFAULT_GROUP", ""); got != "auto-dba.yaml@@DEFAULT_GROUP@@" {
+		t.Fatalf("got %q", got)
+	}
+	if got := nacosCacheFileName("auto-dba.yaml", "", "public"); got != "auto-dba.yaml@@DEFAULT_GROUP@@" {
+		t.Fatalf("public ns: %q", got)
+	}
+}
+
+func TestReadLatestNacosDiskCache(t *testing.T) {
+	root := t.TempDir()
+	old := nacosDiskCacheRoot
+	nacosDiskCacheRoot = func() string { return root }
+	t.Cleanup(func() { nacosDiskCacheRoot = old })
+
+	nc := NacosConfig{DataID: "auto-dba.yaml", Group: "DEFAULT_GROUP"}
+	if _, _, err := readLatestNacosDiskCache(nc); err == nil {
+		t.Fatal("want miss")
+	}
+	dir := filepath.Join(root, "public-1", "cache", "config")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	name := nacosCacheFileName(nc.DataID, nc.Group, nc.Namespace)
+	body := "http:\n  port: 8800\napp:\n  jwt_secret: from-cache\n"
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, path, err := readLatestNacosDiskCache(nc)
+	if err != nil || !strings.Contains(got, "from-cache") || path == "" {
+		t.Fatalf("got=%q path=%q err=%v", got, path, err)
+	}
+}

@@ -260,6 +260,7 @@ type batchGrantReq struct {
 	ResourceType string   `json:"resource_type"`
 	ResourceIDs  []string `json:"resource_ids"`
 	ToTenantID   string   `json:"to_tenant_id"`
+	ToUserID     string   `json:"to_user_id"`
 	Permission   string   `json:"permission"`
 }
 
@@ -268,7 +269,25 @@ type batchGrantFail struct {
 	Message string `json:"message"`
 }
 
-// CreateGrantBatch POST /tenants/:id/grants/batch — 批量跨租授权，已存在则跳过。
+// userCoveredByTenantGrant 用户所属任一活跃租户是否已有该资源的租户级授权。
+func (h *TenantHandler) userCoveredByTenantGrant(userID, resourceType, resourceID string) (bool, error) {
+	tens, err := h.Store.ListUserTenants(userID)
+	if err != nil {
+		return false, err
+	}
+	for i := range tens {
+		ok, err := h.Store.HasResourceGrant(tens[i].ID, "", resourceType, resourceID)
+		if err != nil {
+			return false, err
+		}
+		if ok {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// CreateGrantBatch POST /tenants/:id/grants/batch — 批量跨租授权（目标租户或指定用户，互斥），已覆盖则跳过。
 func (h *TenantHandler) CreateGrantBatch(c *gin.Context) {
 	var req batchGrantReq
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -276,15 +295,33 @@ func (h *TenantHandler) CreateGrantBatch(c *gin.Context) {
 		return
 	}
 	fromID := strings.TrimSpace(c.Param("id"))
-	toID := strings.TrimSpace(req.ToTenantID)
+	toTenantID := strings.TrimSpace(req.ToTenantID)
+	toUserID := strings.TrimSpace(req.ToUserID)
 	typ := strings.TrimSpace(req.ResourceType)
-	if fromID == "" || typ == "" || toID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "from_tenant_id / resource_type / to_tenant_id 必填"})
+	if fromID == "" || typ == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "from_tenant_id / resource_type 必填"})
 		return
 	}
-	if fromID == toID {
+	hasTenant := toTenantID != ""
+	hasUser := toUserID != ""
+	if hasTenant == hasUser {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "to_tenant_id 与 to_user_id 须恰好其一"})
+		return
+	}
+	if hasTenant && fromID == toTenantID {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "目标租户不能与资源方相同"})
 		return
+	}
+	if hasUser {
+		u, err := h.Store.GetUserByID(toUserID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+			return
+		}
+		if u == nil {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "目标用户不存在"})
+			return
+		}
 	}
 	ids := uniqueTrimmedGrantIDs(req.ResourceIDs)
 	if len(ids) == 0 {
@@ -305,18 +342,32 @@ func (h *TenantHandler) CreateGrantBatch(c *gin.Context) {
 	var failed []batchGrantFail
 	skipped := 0
 	for _, rid := range ids {
-		ok, err := h.Store.HasResourceGrant(toID, "", typ, rid)
+		var covered bool
+		var err error
+		if hasTenant {
+			var existing *store.TenantGrant
+			existing, err = h.Store.FindActiveTenantGrant(toTenantID, "", typ, rid)
+			covered = existing != nil
+		} else {
+			var existing *store.TenantGrant
+			existing, err = h.Store.FindActiveTenantGrant("", toUserID, typ, rid)
+			covered = existing != nil
+			if err == nil && !covered {
+				covered, err = h.userCoveredByTenantGrant(toUserID, typ, rid)
+			}
+		}
 		if err != nil {
 			failed = append(failed, batchGrantFail{ID: rid, Message: err.Error()})
 			continue
 		}
-		if ok {
+		if covered {
 			skipped++
 			continue
 		}
 		g := store.TenantGrant{
 			FromTenantID: fromID,
-			ToTenantID:   toID,
+			ToTenantID:   toTenantID,
+			ToUserID:     toUserID,
 			ResourceType: typ,
 			ResourceID:   rid,
 			Permission:   perm,
@@ -326,7 +377,13 @@ func (h *TenantHandler) CreateGrantBatch(c *gin.Context) {
 			failed = append(failed, batchGrantFail{ID: rid, Message: err.Error()})
 			continue
 		}
-		_ = h.Store.AppendTenantAudit(fromID, actorID, "grant.create", typ+":"+rid)
+		detail := typ + ":" + rid
+		if hasUser {
+			detail += ":user:" + toUserID
+		} else {
+			detail += ":tenant:" + toTenantID
+		}
+		_ = h.Store.AppendTenantAudit(fromID, actorID, "grant.create", detail)
 		created = append(created, g)
 	}
 	if created == nil {

@@ -166,13 +166,32 @@ func (d *DB) ListResourceApplyAcrossTenants(status, q string) ([]Issue, error) {
 // ListResourceApplyAssignedToAcrossTenants 全平台「指派给指定用户」的平台资源申请（仅 resource_apply，不按 tenant_id）。
 // 供 dba 等跨租审批人在本租上下文下列表/待办发现指派给自己的单；不影响其它工单类型。
 func (d *DB) ListResourceApplyAssignedToAcrossTenants(assignee, status, q string) ([]Issue, error) {
+	return d.listIssuesAssignedToAcrossTenants(assignee, IssueTypeResourceApply, status, q, true)
+}
+
+// ListIssuesAssignedToAcrossTenants 全平台指派给指定用户的工单（可按类型过滤；默认排除 resource_apply，避免与专用合并重复）。
+func (d *DB) ListIssuesAssignedToAcrossTenants(assignee, issueType, status, q string) ([]Issue, error) {
+	return d.listIssuesAssignedToAcrossTenants(assignee, issueType, status, q, false)
+}
+
+func (d *DB) listIssuesAssignedToAcrossTenants(assignee, issueType, status, q string, onlyResourceApply bool) ([]Issue, error) {
 	assignee = strings.TrimSpace(assignee)
 	if assignee == "" {
 		return []Issue{}, nil
 	}
 	query := `SELECT id, ticket_no, issue_type, instance_id, COALESCE(domain,''), database_id, db_name, sql_content, description, status, submitter, assigned_to, reject_reason, need_rollback, scheduled_at, created_at, updated_at, COALESCE(tenant_id,''), COALESCE(exec_progress,'')
-		 FROM tbl_issues WHERE issue_type=? AND LOWER(assigned_to)=LOWER(?)`
-	args := []any{IssueTypeResourceApply, assignee}
+		 FROM tbl_issues WHERE LOWER(assigned_to)=LOWER(?)`
+	args := []any{assignee}
+	if onlyResourceApply {
+		query += ` AND issue_type=?`
+		args = append(args, IssueTypeResourceApply)
+	} else if t := strings.TrimSpace(issueType); t != "" {
+		query += ` AND issue_type=?`
+		args = append(args, t)
+	} else {
+		query += ` AND issue_type<>?`
+		args = append(args, IssueTypeResourceApply)
+	}
 	if status != "" {
 		query += ` AND status=?`
 		args = append(args, status)

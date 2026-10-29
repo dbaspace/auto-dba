@@ -10,12 +10,12 @@ import (
 )
 
 func TestShouldAutoRun(t *testing.T) {
-	if !ShouldAutoRun(store.IssueTypeDDL) || !ShouldAutoRun("dml") || !ShouldAutoRun(store.IssueTypeCreateDB) || !ShouldAutoRun(store.IssueTypeHA) ||
+	if !ShouldAutoRun(store.IssueTypeDDL) || !ShouldAutoRun("dml") || !ShouldAutoRun(store.IssueTypeDCL) || !ShouldAutoRun(store.IssueTypeCreateDB) || !ShouldAutoRun(store.IssueTypeHA) ||
 		!ShouldAutoRun(store.IssueTypeSrCluster) || !ShouldAutoRun(store.IssueTypeDbDeploy) || !ShouldAutoRun(store.IssueTypeResourceApply) ||
 		!ShouldAutoRun(store.IssueTypeRedis) || !ShouldAutoRun(store.IssueTypeBackupRestore) || !ShouldAutoRun(store.IssueTypeCloudPg) {
-		t.Fatal("ddl/dml/createdb/ha/sr_cluster/db_deploy/resource_apply/redis/backup_restore should auto run")
+		t.Fatal("ddl/dml/dcl/createdb/ha/sr_cluster/db_deploy/resource_apply/redis/backup_restore should auto run")
 	}
-	for _, typ := range []string{store.IssueTypeDQL, store.IssueTypeDCL, store.IssueTypeKafka, store.IssueTypeArchive,
+	for _, typ := range []string{store.IssueTypeDQL, store.IssueTypeKafka, store.IssueTypeArchive,
 		store.IssueTypeFlashback, store.IssueTypeCDC, store.IssueTypeMigration} {
 		if ShouldAutoRun(typ) {
 			t.Fatalf("%s should not auto run", typ)

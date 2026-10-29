@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Button, Form, Input, Modal, Popconfirm, Select, Space, Tag, Tooltip, message } from 'antd'
+import { Button, Form, Input, Modal, Pagination, Popconfirm, Select, Space, Tag, Tooltip, message } from 'antd'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import api, { beginLogout } from '../../api/request'
 import Auth from '../../components/Auth'
@@ -108,6 +108,8 @@ export default function Users() {
   const [busyId, setBusyId] = useState('')
   const [larkSyncing, setLarkSyncing] = useState(false)
   const [usernameQuery, setUsernameQuery] = useState('')
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(10)
   const me = currentUserId()
   const [form, setForm] = useState({
     id: '',
@@ -158,11 +160,26 @@ export default function Users() {
     }
   }
 
-  const shown = useMemo(() => {
+  const filtered = useMemo(() => {
     const q = usernameQuery.trim().toLowerCase()
     if (!q) return rows
     return rows.filter((r) => String(r.username || '').toLowerCase().includes(q))
   }, [rows, usernameQuery])
+
+  const pagedRows = useMemo(() => {
+    const start = (page - 1) * pageSize
+    return filtered.slice(start, start + pageSize)
+  }, [filtered, page, pageSize])
+
+  useEffect(() => {
+    setPage(1)
+  }, [usernameQuery])
+
+  useEffect(() => {
+    const maxPage = Math.max(1, Math.ceil(filtered.length / pageSize) || 1)
+    if (page > maxPage) setPage(maxPage)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtered, pageSize])
 
   const names = useMemo(() => {
     const m: Record<string, string> = {}
@@ -315,7 +332,7 @@ export default function Users() {
       <div className="ops-table">
         <ResponsiveTable
           rowKey={(r) => r.id || r.username}
-          dataSource={shown}
+          dataSource={pagedRows}
           bordered
           pagination={false}
           scroll={{ y: '100%' }}
@@ -475,6 +492,20 @@ export default function Users() {
               },
             },
           ]}
+        />
+      </div>
+      <div className="pager">
+        <span className="pager-total">共 {filtered.length} 条</span>
+        <Pagination
+          current={page}
+          pageSize={pageSize}
+          total={filtered.length}
+          showSizeChanger
+          pageSizeOptions={['10', '20', '30', '50', '100']}
+          onChange={(p, ps) => {
+            setPage(p)
+            if (ps && ps !== pageSize) setPageSize(ps)
+          }}
         />
       </div>
       <Modal

@@ -102,7 +102,7 @@ export default function Tenants() {
   const [grantForm] = Form.useForm()
   const [members, setMembers] = useState<Member[]>([])
   const [roles, setRoles] = useState<{ id: string; name: string; code: string }[]>([])
-  const [users, setUsers] = useState<{ id: string; username: string }[]>([])
+  const [users, setUsers] = useState<{ id: string; username: string; display_name?: string; status?: string }[]>([])
   const [planOptions, setPlanOptions] = useState<{ value: string; label: string }[]>([
     { value: 'free', label: '免费' },
     { value: 'standard', label: '标准' },
@@ -111,6 +111,7 @@ export default function Tenants() {
   const [form] = Form.useForm()
   const [memberForm] = Form.useForm()
   const memberOptsLoaded = useRef(false)
+  const grantTargetMode = Form.useWatch('grant_target_mode', grantForm)
 
   const targetTenantOptions = useMemo(
     () =>
@@ -119,6 +120,25 @@ export default function Tenants() {
         .map((t) => ({ value: t.id, label: `${t.name || t.code}（${t.code}）` })),
     [list, current?.id],
   )
+
+  const targetUserOptions = useMemo(
+    () =>
+      users
+        .filter((u) => String(u.status || 'active').toLowerCase() !== 'disabled')
+        .map((u) => ({
+          value: u.id,
+          label: u.display_name ? `${u.display_name}（${u.username}）` : u.username || u.id,
+        })),
+    [users],
+  )
+
+  const userLabelById = useMemo(() => {
+    const m: Record<string, string> = {}
+    for (const u of users) {
+      m[u.id] = u.display_name ? `${u.display_name}（${u.username}）` : u.username || u.id
+    }
+    return m
+  }, [users])
 
   const filteredList = useMemo(() => {
     const kw = listQ.trim().toLowerCase()
@@ -259,13 +279,18 @@ export default function Tenants() {
     setGrantLabelMap({})
     setGrantSelectedKeys([])
     grantForm.setFieldsValue({
+      grant_target_mode: 'tenant',
       resource_type: 'instance',
       resource_ids: [],
       to_tenant_id: undefined,
+      to_user_id: undefined,
       permission: 'read',
     })
-    const { data } = await api.get(`/tenants/${t.id}/grants`)
-    const rows = data.data || []
+    const [, grantsRes] = await Promise.all([
+      ensureUsersAndRoles(),
+      api.get(`/tenants/${t.id}/grants`),
+    ])
+    const rows = grantsRes.data.data || []
     setGrants(rows)
     await loadGrantResources(t.id, 'instance')
     await warmGrantLabels(t.id, rows)
@@ -280,24 +305,41 @@ export default function Tenants() {
       return
     }
     const typ = v.resource_type || 'instance'
+    const mode = v.grant_target_mode === 'user' ? 'user' : 'tenant'
+    const payload: Record<string, unknown> = {
+      resource_type: typ,
+      resource_ids: ids,
+      permission: v.permission || 'read',
+    }
+    if (mode === 'user') {
+      payload.to_user_id = v.to_user_id
+    } else {
+      payload.to_tenant_id = v.to_tenant_id
+    }
     try {
-      const { data } = await api.post(`/tenants/${current.id}/grants/batch`, {
-        resource_type: typ,
-        resource_ids: ids,
-        to_tenant_id: v.to_tenant_id,
-        permission: v.permission || 'read',
-      })
+      const { data } = await api.post(`/tenants/${current.id}/grants/batch`, payload)
       const created = Number(data.created || 0)
       const skipped = Number(data.skipped || 0)
       const failed = Array.isArray(data.failed) ? data.failed : []
       if (failed.length) {
         message.warning(`成功 ${created}，跳过 ${skipped}，失败 ${failed.length}`)
       } else if (created === 0 && skipped > 0) {
-        message.info(`所选资源均已授权（跳过 ${skipped}）`)
+        message.info(
+          mode === 'user'
+            ? `所选资源对该用户均已覆盖（已有用户授权或所属租户已授权，跳过 ${skipped}）`
+            : `所选资源均已授权（跳过 ${skipped}）`,
+        )
       } else {
-        message.success(`已授权 ${created} 项${skipped ? `，跳过已存在 ${skipped}` : ''}`)
+        message.success(`已授权 ${created} 项${skipped ? `，跳过已覆盖 ${skipped}` : ''}`)
       }
-      grantForm.setFieldsValue({ resource_type: typ, resource_ids: [], to_tenant_id: undefined, permission: 'read' })
+      grantForm.setFieldsValue({
+        grant_target_mode: mode,
+        resource_type: typ,
+        resource_ids: [],
+        to_tenant_id: mode === 'tenant' ? undefined : v.to_tenant_id,
+        to_user_id: mode === 'user' ? undefined : v.to_user_id,
+        permission: 'read',
+      })
       const listRes = await api.get(`/tenants/${current.id}/grants`)
       setGrants(listRes.data.data || [])
       await loadGrantResources(current.id, typ)
@@ -716,7 +758,7 @@ export default function Tenants() {
         destroyOnClose
       >
         <p style={{ marginBottom: 12, color: '#6b7280', fontSize: 13 }}>
-          从「{current?.name || '资源方租户'}」选出资源，授权给目标租户只读使用。下方表格为已创建的授权记录（不是资源目录）。
+          从「{current?.name || '资源方租户'}」选出资源，授权给目标租户或指定用户只读使用（授权仅控制可见与使用，不授予工单审批权；审批人须为资源所属租户成员）。若用户所属租户已有该资源授权，再授权给该用户会自动跳过。下方表格为已创建的授权记录。
         </p>
         <Form
           form={grantForm}
@@ -731,6 +773,23 @@ export default function Tenants() {
           }}
           onFinish={saveGrant}
         >
+          <Form.Item name="grant_target_mode" initialValue="tenant" style={{ marginInlineEnd: 0 }}>
+            <Select
+              style={{ width: 120 }}
+              options={[
+                { value: 'tenant', label: '目标租户' },
+                { value: 'user', label: '指定用户' },
+              ]}
+              onChange={(mode) => {
+                grantForm.setFieldsValue({
+                  to_tenant_id: undefined,
+                  to_user_id: undefined,
+                  grant_target_mode: mode,
+                })
+                if (mode === 'user') void ensureUsersAndRoles()
+              }}
+            />
+          </Form.Item>
           <Form.Item name="resource_type" rules={[{ required: true }]} initialValue="instance" style={{ marginInlineEnd: 0 }}>
             <Select
               style={{ width: 120 }}
@@ -748,7 +807,7 @@ export default function Tenants() {
           >
             <Select
               mode="multiple"
-              style={{ width: 280 }}
+              style={{ width: 260 }}
               showSearch
               optionFilterProp="label"
               maxTagCount="responsive"
@@ -784,15 +843,27 @@ export default function Tenants() {
               )}
             />
           </Form.Item>
-          <Form.Item name="to_tenant_id" rules={[{ required: true, message: '请选择目标租户' }]} style={{ marginInlineEnd: 0 }}>
-            <Select
-              style={{ width: 200 }}
-              showSearch
-              optionFilterProp="label"
-              placeholder="目标租户"
-              options={targetTenantOptions}
-            />
-          </Form.Item>
+          {grantTargetMode === 'user' ? (
+            <Form.Item name="to_user_id" rules={[{ required: true, message: '请选择目标用户' }]} style={{ marginInlineEnd: 0 }}>
+              <Select
+                style={{ width: 220 }}
+                showSearch
+                optionFilterProp="label"
+                placeholder="目标用户"
+                options={targetUserOptions}
+              />
+            </Form.Item>
+          ) : (
+            <Form.Item name="to_tenant_id" rules={[{ required: true, message: '请选择目标租户' }]} style={{ marginInlineEnd: 0 }}>
+              <Select
+                style={{ width: 200 }}
+                showSearch
+                optionFilterProp="label"
+                placeholder="目标租户"
+                options={targetTenantOptions}
+              />
+            </Form.Item>
+          )}
           <Form.Item name="permission" initialValue="read" style={{ marginInlineEnd: 0 }}>
             <Select style={{ width: 90 }} options={[{ value: 'read', label: 'read' }]} />
           </Form.Item>
@@ -813,7 +884,7 @@ export default function Tenants() {
             selectedRowKeys: grantSelectedKeys,
             onChange: (keys) => setGrantSelectedKeys(keys),
           }}
-          locale={{ emptyText: '暂无授权记录，请选择资源与目标租户后点击授权' }}
+          locale={{ emptyText: '暂无授权记录，请选择资源与目标后点击授权' }}
           columns={[
             {
               title: '类型',
@@ -828,12 +899,16 @@ export default function Tenants() {
               render: (id: string) => grantLabelMap[id] || id,
             },
             {
-              title: '目标租户',
-              dataIndex: 'to_tenant_id',
+              title: '授权对象',
+              key: 'grant_target',
               ellipsis: true,
-              render: (id: string) => {
-                const t = list.find((x) => x.id === id)
-                return t ? `${t.name || t.code}` : id || '—'
+              render: (_: unknown, row: { to_tenant_id?: string; to_user_id?: string }) => {
+                if (row.to_user_id) {
+                  return `用户 · ${userLabelById[row.to_user_id] || row.to_user_id}`
+                }
+                const tid = row.to_tenant_id || ''
+                const t = list.find((x) => x.id === tid)
+                return `租户 · ${t ? t.name || t.code : tid || '—'}`
               },
             },
             { title: '权限', dataIndex: 'permission', width: 80 },

@@ -21,6 +21,9 @@ import (
 // fetchNacosConfig 可在测试中替换。
 var fetchNacosConfig = fetchNacosConfigSDK
 
+// nacosDiskCacheRoot 本机 SDK 缓存根目录（可测时替换）。
+var nacosDiskCacheRoot = func() string { return filepath.Join(os.TempDir(), "nacos") }
+
 const watchDebounce = 800 * time.Millisecond
 
 func applyNacosEnvOverrides(nc *NacosConfig) {
@@ -159,6 +162,11 @@ func getOrCreateSharedClient(nc NacosConfig) (config_client.IConfigClient, error
 func fetchNacosConfigSDK(nc NacosConfig) (string, error) {
 	client, err := getOrCreateSharedClient(nc)
 	if err != nil {
+		// 客户端都建不起来时仍尝试磁盘缓存，方便离线/断网启动
+		if cached, path, cerr := readLatestNacosDiskCache(nc); cerr == nil {
+			log.Printf("nacos: 创建客户端失败，改用本地缓存 %s（%v）", path, err)
+			return cached, nil
+		}
 		return "", err
 	}
 	content, err := client.GetConfig(vo.ConfigParam{
@@ -166,12 +174,70 @@ func fetchNacosConfigSDK(nc NacosConfig) (string, error) {
 		Group:  strings.TrimSpace(nc.Group),
 	})
 	if err != nil {
+		if cached, path, cerr := readLatestNacosDiskCache(nc); cerr == nil {
+			log.Printf("nacos: GetConfig 失败，改用本地缓存 %s dataId=%s group=%s（%v）",
+				path, nc.DataID, nc.Group, err)
+			return cached, nil
+		}
 		return "", fmt.Errorf("GetConfig dataId=%s group=%s namespace=%s: %w",
 			nc.DataID, nc.Group, nc.Namespace, err)
 	}
 	log.Printf("已从 Nacos 加载配置 dataId=%s group=%s namespace=%s servers=%s",
 		nc.DataID, nc.Group, nc.Namespace, nc.ServerAddr)
 	return content, nil
+}
+
+// nacosCacheFileName 与 nacos-sdk-go 落盘命名一致：dataId@@group@@tenant
+func nacosCacheFileName(dataID, group, namespace string) string {
+	dataID = strings.TrimSpace(dataID)
+	group = strings.TrimSpace(group)
+	if group == "" {
+		group = "DEFAULT_GROUP"
+	}
+	tenant := strings.TrimSpace(namespace)
+	if strings.EqualFold(tenant, "public") {
+		tenant = ""
+	}
+	return dataID + "@@" + group + "@@" + tenant
+}
+
+// readLatestNacosDiskCache 在 GetConfig 失败时，复用本机其它进程留下的最近一份缓存
+//（cache 按 pid 隔离，新进程空目录会导致「server+cache 双失败」）。
+func readLatestNacosDiskCache(nc NacosConfig) (content, path string, err error) {
+	name := nacosCacheFileName(nc.DataID, nc.Group, nc.Namespace)
+	root := nacosDiskCacheRoot()
+	ents, err := os.ReadDir(root)
+	if err != nil {
+		return "", "", err
+	}
+	var bestPath string
+	var bestMod time.Time
+	for _, e := range ents {
+		if !e.IsDir() {
+			continue
+		}
+		p := filepath.Join(root, e.Name(), "cache", "config", name)
+		st, serr := os.Stat(p)
+		if serr != nil || st.IsDir() || st.Size() == 0 {
+			continue
+		}
+		if bestPath == "" || st.ModTime().After(bestMod) {
+			bestPath = p
+			bestMod = st.ModTime()
+		}
+	}
+	if bestPath == "" {
+		return "", "", fmt.Errorf("无可用本地缓存 %s", name)
+	}
+	b, err := os.ReadFile(bestPath)
+	if err != nil {
+		return "", "", err
+	}
+	s := strings.TrimSpace(string(b))
+	if s == "" {
+		return "", "", fmt.Errorf("本地缓存为空: %s", bestPath)
+	}
+	return s, bestPath, nil
 }
 
 // BeforeApplyFn 在写入 live 之前调用（如 DSN Reopen）；返回 error 则中止本次热更。

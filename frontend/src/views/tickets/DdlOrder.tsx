@@ -367,22 +367,25 @@ export default function DdlOrder() {
     const records = recordsOverride ?? dbRecords
     setReviewerLoading(true)
     try {
-      const lists = await Promise.all(
+      const results = await Promise.all(
         instIds.map(async (id) => {
           // 分库多实例：各实例用本机登记库名查审核人，避免共用逻辑库名导致回退成实例 admin
           const lookupDb = resolveDbNameForApprover(id, dbName, records, shardOpts)
           const { data } = await api.get('/tickets/target-approvers', {
             params: { instance_id: id, db_name: lookupDb },
           })
-          return (data.data || []).map((a: any) => a.name || a).filter(Boolean) as string[]
+          const names = (data.data || []).map((a: any) => a.name || a).filter(Boolean) as string[]
+          const hint = String(data.message || '').trim()
+          return { id, names, hint }
         }),
       )
+      const lists = results.map((r) => r.names)
       const out = unionApproverNames(lists)
       setApprovers(out)
       if (instIds.length > 1) {
-        const lines = instIds.map((id, i) => {
-          const dom = keys.map((k) => parseSourceKey(k)).find((p) => p?.instance_id === id)?.domain || id
-          const names = lists[i].length ? lists[i].join('、') : '未配置审核人'
+        const lines = results.map((r) => {
+          const dom = keys.map((k) => parseSourceKey(k)).find((p) => p?.instance_id === r.id)?.domain || r.id
+          const names = r.names.length ? r.names.join('、') : r.hint || '未配置审核人'
           return `${dom}：${names}`
         })
         const same =
@@ -400,7 +403,7 @@ export default function DdlOrder() {
           setApproverHint('')
         }
       } else {
-        setApproverHint('')
+        setApproverHint(out.length === 0 ? results[0]?.hint || '该库未配置可用审核人' : '')
       }
       const cur = formRef.current
       if (cur.assigned_to && !out.includes(cur.assigned_to)) patchForm({ assigned_to: '' })

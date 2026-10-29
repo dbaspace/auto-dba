@@ -182,7 +182,7 @@ func (h *CreateDBHandler) Submit(c *gin.Context) {
 		return
 	}
 	user := middleware.Username(c)
-	ok, _, msg, err := th.canActOnTarget(middleware.TenantID(c), ids[0], "", user)
+	ok, _, msg, err := th.canActOnTarget(middleware.TenantID(c), ids[0], "", middleware.UserID(c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
