@@ -5,12 +5,55 @@
 }
 .ds-opt {
   display: flex;
-  justify-content: space-between;
-  gap: 12px;
+  align-items: center;
+  gap: 8px;
   width: 100%;
+}
+.ds-opt-check {
+  pointer-events: none;
+  flex-shrink: 0;
+}
+.ds-opt-main {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ds-opt .muted {
+  flex-shrink: 0;
+  margin-left: auto;
 }
 .ds-select .ant-select-selector {
   flex-wrap: wrap;
+}
+/* 禁止选择后出现异常红色描边（不含真正的表单提交校验） */
+.ds-select:not(.ant-select-status-error) .ant-select-selector {
+  border-color: #d9d9d9 !important;
+  box-shadow: none !important;
+}
+.ds-select.ant-select-focused:not(.ant-select-status-error) .ant-select-selector,
+.ds-select.ant-select-open:not(.ant-select-status-error) .ant-select-selector {
+  border-color: var(--ant-color-primary, #1677ff) !important;
+  box-shadow: 0 0 0 2px rgba(22, 119, 255, 0.1) !important;
+}
+.ds-select-dropdown-panel {
+  display: flex;
+  flex-direction: column;
+}
+.ds-select-dropdown-filter {
+  padding: 8px 12px 4px;
+}
+.ds-select-match-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid #f0f0f0;
+}
+.ds-select-invert-btn {
+  padding-inline: 0;
+  height: auto;
 }
 .muted {
   color: #9ca3af;

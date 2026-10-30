@@ -16,6 +16,7 @@ import {
   Tooltip,
   message,
 } from 'antd'
+import type { InputRef } from 'antd/es/input'
 import CheckResultFilterBar from '../../components/CheckResultFilterBar'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import type { ColumnsType } from 'antd/es/table'
@@ -172,6 +173,9 @@ export default function DdlOrder() {
   const [mainTab, setMainTab] = useState('sql')
 
   const [dsLoading, setDsLoading] = useState(false)
+  const [dsSearch, setDsSearch] = useState('')
+  const [dsDropdownOpen, setDsDropdownOpen] = useState(false)
+  const dsFilterInputRef = useRef<InputRef>(null)
   const [dbLoading, setDbLoading] = useState(false)
   const [reviewerLoading, setReviewerLoading] = useState(false)
   const [checkLoading, setCheckLoading] = useState(false)
@@ -195,6 +199,22 @@ export default function DdlOrder() {
       }),
     )
   }, [accessDomains, form.env, form.instance_type, envGroups])
+
+  const matchedDataSources = useMemo(() => {
+    const q = dsSearch.trim().toLowerCase()
+    if (!q) return dataSourceOptions
+    return dataSourceOptions.filter((s) => {
+      const domain = String(s.domain || '').toLowerCase()
+      const name = String(s.name || '').toLowerCase()
+      return domain.includes(q) || name.includes(q)
+    })
+  }, [dataSourceOptions, dsSearch])
+
+  const selectedDsKeys = useMemo(() => new Set(form.data_source_ids || []), [form.data_source_ids])
+  const matchedSelectedCount = matchedDataSources.filter((s) => selectedDsKeys.has(s.key)).length
+  const matchedAllChecked =
+    matchedDataSources.length > 0 && matchedSelectedCount === matchedDataSources.length
+  const matchedIndeterminate = matchedSelectedCount > 0 && matchedSelectedCount < matchedDataSources.length
 
   const selectedDomainSources = useMemo(
     () =>
@@ -302,6 +322,27 @@ export default function DdlOrder() {
     setApprovers([])
     resetCheck()
     await loadDatabases(ids)
+  }
+
+  function selectMatchedDataSources() {
+    const keys = matchedDataSources.map((s) => s.key)
+    void onDataSourcesChange([...new Set([...(formRef.current.data_source_ids || []), ...keys])])
+  }
+
+  function deselectMatchedDataSources() {
+    const remove = new Set(matchedDataSources.map((s) => s.key))
+    void onDataSourcesChange((formRef.current.data_source_ids || []).filter((k) => !remove.has(k)))
+  }
+
+  function invertMatchedDataSources() {
+    const matched = matchedDataSources.map((s) => s.key)
+    if (!matched.length) return
+    const next = new Set(formRef.current.data_source_ids || [])
+    for (const k of matched) {
+      if (next.has(k)) next.delete(k)
+      else next.add(k)
+    }
+    void onDataSourcesChange([...next])
   }
 
   async function onDatabaseChange(v: string) {
@@ -795,33 +836,91 @@ export default function DdlOrder() {
               label="数据源(支持选多实例)"
               name="data_source_ids"
               rules={[{ type: 'array', required: true, min: 1, message: '请选择数据源' }]}
+              validateTrigger={['onSubmit']}
             >
               <Select
                 mode="multiple"
-                showSearch
-                allowClear
+                showSearch={false}
+                autoClearSearchValue
                 className="ds-select"
                 disabled={!form.env || !form.instance_type}
                 loading={dsLoading}
                 placeholder={dsPlaceholder}
                 style={{ width: '100%' }}
-                optionFilterProp="label"
+                suffixIcon={null}
+                maxTagCount={dsDropdownOpen ? undefined : 2}
+                onDropdownVisibleChange={(open) => {
+                  setDsDropdownOpen(open)
+                  if (!open) setDsSearch('')
+                }}
                 value={form.data_source_ids}
                 onChange={(v) => onDataSourcesChange(v as string[])}
-                options={dataSourceOptions.map((s) => ({
+                popupClassName="ds-select-dropdown"
+                menuItemSelectedIcon={null}
+                dropdownRender={(menu) => (
+                  <div className="ds-select-dropdown-panel">
+                    <div
+                      className="ds-select-dropdown-filter"
+                      onMouseDown={(e) => {
+                        // 阻止 Select 失焦关下拉；随后手动聚焦 Input（preventDefault 会挡住默认获焦）
+                        e.preventDefault()
+                        e.stopPropagation()
+                        queueMicrotask(() => dsFilterInputRef.current?.focus({ preventScroll: true }))
+                      }}
+                    >
+                      <Input
+                        ref={dsFilterInputRef}
+                        allowClear
+                        value={dsSearch}
+                        placeholder="输入关键字过滤域名或实例名"
+                        onChange={(e) => setDsSearch(e.target.value)}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                    </div>
+                    <div className="ds-select-match-bar" onMouseDown={(e) => e.preventDefault()}>
+                      <Checkbox
+                        checked={matchedAllChecked}
+                        indeterminate={matchedIndeterminate}
+                        disabled={!form.env || !form.instance_type || matchedDataSources.length === 0}
+                        onChange={(e) => {
+                          if (e.target.checked) selectMatchedDataSources()
+                          else deselectMatchedDataSources()
+                        }}
+                      >
+                        全选
+                      </Checkbox>
+                      <Button
+                        type="link"
+                        size="small"
+                        className="ds-select-invert-btn"
+                        disabled={!form.env || !form.instance_type || matchedDataSources.length === 0}
+                        onClick={invertMatchedDataSources}
+                      >
+                        反选
+                      </Button>
+                    </div>
+                    {menu}
+                  </div>
+                )}
+                options={matchedDataSources.map((s) => ({
                   value: s.key,
                   label: sourcePrimaryLabel(s),
                   optlabel: sourcePrimaryLabel(s),
                   secondary: sourceSecondaryLabel(s),
                 }))}
-                optionRender={(opt) => (
-                  <div className="ds-opt">
-                    <span>{(opt.data as any).optlabel}</span>
-                    {(opt.data as any).secondary ? (
-                      <span className="muted">{(opt.data as any).secondary}</span>
-                    ) : null}
-                  </div>
-                )}
+                optionRender={(opt) => {
+                  const value = String(opt.value ?? '')
+                  return (
+                    <div className="ds-opt">
+                      <Checkbox className="ds-opt-check" checked={selectedDsKeys.has(value)} />
+                      <span className="ds-opt-main">{(opt.data as any).optlabel}</span>
+                      {(opt.data as any).secondary ? (
+                        <span className="muted">{(opt.data as any).secondary}</span>
+                      ) : null}
+                    </div>
+                  )
+                }}
               />
             </Form.Item>
 
