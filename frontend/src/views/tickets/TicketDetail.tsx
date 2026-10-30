@@ -1,15 +1,18 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
-import { Alert, Avatar, Button, Descriptions, Input, Modal, Progress, Select, Tag, message } from 'antd'
+import { Alert, Avatar, Button, Descriptions, Input, Modal, Progress, Select, Steps, Tag, message } from 'antd'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import api from '../../api/request'
 import { useAppDispatch, useAppSelector } from '../../store'
 import { closeTab, openTab, tabKey } from '../../store/tabsSlice'
 import CollapsibleSqlBlock from '../../components/CollapsibleSqlBlock'
 import DdlExecImpact from './DdlExecImpact'
+import { normalizeExecHost } from './ddlExecGroups'
 import { ddlProgressView } from './execProgress'
 import DnsChangeDiff, { payloadRows } from '../dns/DnsChangeDiff'
 import { countNonEmptyLines, lineVsStatementHint, shouldHintLineVsStatement } from './sqlStatementCount'
+import { envCodeForSource } from '../../utils/ticketEnv'
+import type { AccessDomainRow } from '../../utils/instanceSource'
 import './TicketDetail.css'
 
 const SQL_TYPES = new Set(['ddl', 'dml'])
@@ -103,6 +106,56 @@ async function resolveExportBlob(
   return { blob }
 }
 
+const DQL_EXPORT_PIPELINE = [
+  { key: 'accepted', title: '已受理' },
+  { key: 'routing', title: '路由判定' },
+  { key: 'remote_submit', title: '下发执行器' },
+  { key: 'querying', title: '查询编码' },
+  { key: 'transferring', title: '回传平台' },
+  { key: 'ready', title: '文件就绪' },
+] as const
+
+const DQL_EXPORT_STAGE_ORDER = DQL_EXPORT_PIPELINE.map((s) => s.key)
+
+function dqlExportStageLabel(stage: string): string {
+  const hit = DQL_EXPORT_PIPELINE.find((s) => s.key === stage)
+  if (hit) return hit.title
+  if (stage === 'failed') return '导出失败'
+  return stage || '准备中'
+}
+
+function dqlExportStepStatus(
+  stepKey: string,
+  stage: string,
+  via: string,
+  ticketStatus: string,
+): 'wait' | 'process' | 'finish' | 'error' {
+  if (ticketStatus === 'failed' || stage === 'failed') {
+    const cur = stage === 'failed' ? 'querying' : stage
+    const curIdx = Math.max(0, DQL_EXPORT_STAGE_ORDER.indexOf(cur as (typeof DQL_EXPORT_STAGE_ORDER)[number]))
+    const stepIdx = DQL_EXPORT_STAGE_ORDER.indexOf(stepKey as (typeof DQL_EXPORT_STAGE_ORDER)[number])
+    if (stepIdx < curIdx) return 'finish'
+    if (stepIdx === curIdx) return 'error'
+    return 'wait'
+  }
+  const local = String(via || '').toLowerCase() === 'local'
+  if (local && (stepKey === 'remote_submit' || stepKey === 'transferring')) {
+    const stageIdx = DQL_EXPORT_STAGE_ORDER.indexOf(stage as (typeof DQL_EXPORT_STAGE_ORDER)[number])
+    const queryIdx = DQL_EXPORT_STAGE_ORDER.indexOf('querying')
+    if (ticketStatus === 'executed' || stage === 'ready' || (stageIdx >= 0 && stageIdx >= queryIdx)) {
+      return 'finish'
+    }
+    return 'wait'
+  }
+  if (ticketStatus === 'executed' || stage === 'ready') return 'finish'
+  const stageIdx = DQL_EXPORT_STAGE_ORDER.indexOf(stage as (typeof DQL_EXPORT_STAGE_ORDER)[number])
+  const stepIdx = DQL_EXPORT_STAGE_ORDER.indexOf(stepKey as (typeof DQL_EXPORT_STAGE_ORDER)[number])
+  if (stageIdx < 0) return stepIdx === 0 && ticketStatus === 'running' ? 'process' : 'wait'
+  if (stepIdx < stageIdx) return 'finish'
+  if (stepIdx === stageIdx) return 'process'
+  return 'wait'
+}
+
 interface ApplyField {
   key: string
   label: string
@@ -152,8 +205,11 @@ function parseDDLApplyExtra(raw: string) {
     const parsed = JSON.parse(raw)
     if (!parsed || typeof parsed !== 'object') return null
     const sources = (Array.isArray(parsed.data_sources) ? parsed.data_sources : [])
-      .map((s: any) => String(s?.domain || '').trim())
-      .filter(Boolean)
+      .map((s: any) => ({
+        instance_id: String(s?.instance_id || '').trim(),
+        domain: String(s?.domain || '').trim(),
+      }))
+      .filter((s: { domain: string }) => Boolean(s.domain))
     return {
       sources,
       shardDB: !!parsed.shard_db,
@@ -165,6 +221,21 @@ function parseDDLApplyExtra(raw: string) {
   } catch {
     return null
   }
+}
+
+function ddlSourceLabel(
+  s: { instance_id: string; domain: string },
+  opts: {
+    domains: AccessDomainRow[]
+    envByInstanceId: Record<string, string>
+    envByHost: Record<string, string>
+  },
+): string {
+  const fromDomain = envCodeForSource(opts.domains, s.instance_id, s.domain)
+  const fromId = String(opts.envByInstanceId[s.instance_id] || '').trim()
+  const fromHost = String(opts.envByHost[normalizeExecHost(s.domain)] || '').trim()
+  const env = fromDomain || fromId || fromHost
+  return env ? `${env} · ${s.domain}` : s.domain
 }
 
 export default function TicketDetail() {
@@ -194,10 +265,13 @@ export default function TicketDetail() {
   const [canTransferFlag, setCanTransferFlag] = useState(false)
   const [inst, setInst] = useState<any>(null)
   const [envByInstanceId, setEnvByInstanceId] = useState<Record<string, string>>({})
+  const [envByHost, setEnvByHost] = useState<Record<string, string>>({})
+  const [accessDomains, setAccessDomains] = useState<AccessDomainRow[]>([])
   const [loading, setLoading] = useState(false)
   const [loadError, setLoadError] = useState('')
   const [acting, setActing] = useState(false)
   const [downloading, setDownloading] = useState(false)
+  const [pullingFile, setPullingFile] = useState(false)
   const [comment, setComment] = useState('')
   const [fmtVisible, setFmtVisible] = useState(false)
   const [fileFormat, setFileFormat] = useState('csv')
@@ -320,18 +394,27 @@ export default function TicketDetail() {
       return fields
     }
     if (!isResourceApply) {
+      const ddlExtra = it.issue_type === 'ddl' ? parseDDLApplyExtra(it.need_rollback) : null
+      const multiSources = !!(ddlExtra && ddlExtra.sources.length >= 2)
       fields.push(
         { key: 'db_type', label: '数据库类型', kind: 'type-tag', value: dbType || '-' },
-        { key: 'db', label: '数据库', kind: 'db-tag', value: dbPath },
+        {
+          key: 'db',
+          label: '数据库',
+          kind: 'db-tag',
+          // 多数据源时不把主实例 idc 写成整单唯一环境
+          value: multiSources ? it.db_name || '-' : dbPath,
+        },
       )
       if (it.issue_type === 'ddl') {
-        const ddlExtra = parseDDLApplyExtra(it.need_rollback)
         if (ddlExtra && ddlExtra.sources.length >= 2) {
           fields.push({
             key: 'ddl_sources',
             label: '数据源',
             kind: 'ddl-sources',
-            value: ddlExtra.sources,
+            value: ddlExtra.sources.map((s) =>
+              ddlSourceLabel(s, { domains: accessDomains, envByInstanceId, envByHost }),
+            ),
           })
         }
         if (ddlExtra && (ddlExtra.shardDB || ddlExtra.shardTable)) {
@@ -474,7 +557,7 @@ export default function TicketDetail() {
     }
     fields.push({ key: 'created', label: '申请时间', value: fmtTime(it.created_at) })
     return fields
-  }, [item, inst, dbType, dbEnv, dbPath, createdbExtra, dqlExtra, resourceApplyExtra])
+  }, [item, inst, dbType, dbEnv, dbPath, createdbExtra, dqlExtra, resourceApplyExtra, accessDomains, envByInstanceId, envByHost])
 
   const canApprove = useMemo(() => {
     if (item?.status !== 'pending') return false
@@ -706,13 +789,46 @@ export default function TicketDetail() {
     }
     return true
   }, [item, isCreateDB])
-  const canDownload = useMemo(
+  const canStartExport = useMemo(
     () =>
       isDQL &&
       isSubmitter &&
-      (item?.status === 'approved' || item?.status === 'executed'),
+      (item?.status === 'approved' || item?.status === 'executed' || item?.status === 'failed'),
     [isDQL, isSubmitter, item],
   )
+  const canPullExportFile = useMemo(
+    () =>
+      isDQL &&
+      isSubmitter &&
+      item?.status === 'executed' &&
+      Boolean(String(dqlExtra?.export_file || '').trim()),
+    [isDQL, isSubmitter, item, dqlExtra],
+  )
+  const dqlExportStage = useMemo(() => {
+    const fromExtra = String(dqlExtra?.export_stage || '').trim()
+    const fromProg = String(item?.exec_progress?.phase || '').trim()
+    return fromExtra || fromProg
+  }, [dqlExtra, item])
+  const dqlExportVia = useMemo(() => String(dqlExtra?.export_via || '').trim(), [dqlExtra])
+  const showDqlExportPipeline = useMemo(
+    () =>
+      isDQL &&
+      (item?.status === 'running' ||
+        item?.status === 'failed' ||
+        item?.status === 'executed' ||
+        Boolean(dqlExportStage)),
+    [isDQL, item, dqlExportStage],
+  )
+  const dqlExportPipelineCurrent = useMemo(() => {
+    if (item?.status === 'failed' || dqlExportStage === 'failed') {
+      const cur = dqlExportStage === 'failed' ? 'querying' : dqlExportStage
+      const idx = DQL_EXPORT_STAGE_ORDER.indexOf(cur as (typeof DQL_EXPORT_STAGE_ORDER)[number])
+      return idx >= 0 ? idx : 0
+    }
+    if (item?.status === 'executed' || dqlExportStage === 'ready') return DQL_EXPORT_PIPELINE.length - 1
+    const idx = DQL_EXPORT_STAGE_ORDER.indexOf(dqlExportStage as (typeof DQL_EXPORT_STAGE_ORDER)[number])
+    return idx >= 0 ? idx : 0
+  }, [item, dqlExportStage])
 
   const execCardClass = useMemo(() => {
     const s = item?.status
@@ -733,20 +849,20 @@ export default function TicketDetail() {
 
   const wfExecSub = useMemo(() => {
     const s = item?.status
-    if (s === 'executed') return isDQL ? '已下载' : execSkipped ? '已跳过连库' : '已执行'
-    if (s === 'failed') return '执行失败'
+    if (s === 'executed') return isDQL ? '文件就绪' : execSkipped ? '已跳过连库' : '已执行'
+    if (s === 'failed') return isDQL ? (dqlExtra?.export_error ? '导出失败' : '执行失败') : '执行失败'
     if (s === 'stopped') return '已终止'
-    if (s === 'running') return '后台执行中'
+    if (s === 'running') return isDQL ? dqlExportStageLabel(dqlExportStage) : '后台执行中'
     if (s === 'approved')
       return isDQL
-        ? '点击下载'
+        ? '点击导出'
         : isFlashback || isCDC || isMigration || isCreateDB || item?.issue_type === 'redis'
           ? item?.scheduled_at
             ? '等待定时执行'
             : '已自动执行'
           : '等待执行'
     return '未开始'
-  }, [item, isDQL, execSkipped, isFlashback, isCDC, isMigration, isCreateDB])
+  }, [item, isDQL, execSkipped, isFlashback, isCDC, isMigration, isCreateDB, dqlExtra, dqlExportStage])
 
   const scheduledWaitText = useMemo(
     () =>
@@ -872,11 +988,15 @@ export default function TicketDetail() {
   }
 
   function openExport() {
-    if (!canDownload) {
-      message.warning('仅限工单发起人可下载')
+    if (!canStartExport) {
+      message.warning(isSubmitter ? '工单通过后才可导出' : '仅限工单发起人可导出')
       return
     }
-    setFileFormat('csv')
+    if (item?.status === 'running') {
+      message.warning('导出进行中，请稍候')
+      return
+    }
+    setFileFormat(String(dqlExtra?.export_format || 'csv'))
     setFmtVisible(true)
   }
 
@@ -888,43 +1008,59 @@ export default function TicketDetail() {
         message.error('工单不存在')
         return
       }
-      const res = await api.post(
-        `/tickets/${it.id}/export`,
-        { file_format: fileFormat },
-        { responseType: 'blob', timeout: 120000 },
-      )
+      await api.post(`/tickets/${it.id}/export`, { file_format: fileFormat })
+      setFmtVisible(false)
+      message.success('导出已开始，请查看下载流程进度')
+      void load()
+    } catch (e: any) {
+      if (!e?.response) {
+        message.error(e?.message || '导出失败')
+      }
+    } finally {
+      setDownloading(false)
+    }
+  }
+
+  async function pullExportFile() {
+    setPullingFile(true)
+    try {
+      const it = itemRef.current
+      if (!it?.id) {
+        message.error('工单不存在')
+        return
+      }
+      const fmt = String(dqlExtra?.export_format || fileFormat || 'csv')
+      const res = await api.get(`/tickets/${it.id}/export/file`, {
+        responseType: 'blob',
+        timeout: 120000,
+      })
       const resolved = await resolveExportBlob(
         res.data,
         String(res.headers['content-type'] || ''),
         String(res.headers['content-disposition'] || ''),
-        fileFormat,
+        fmt,
       )
       if ('error' in resolved) {
         message.error(resolved.error)
         return
       }
-      const { blob } = resolved
       const name = filenameFromHeader(
         res.headers['content-disposition'],
-        `dql_export.${fileFormat}`,
+        String(dqlExtra?.export_file || `dql_export.${fmt}`),
       )
-      const url = URL.createObjectURL(blob)
+      const url = URL.createObjectURL(resolved.blob)
       const a = document.createElement('a')
       a.href = url
       a.download = name
       a.click()
       URL.revokeObjectURL(url)
-      setFmtVisible(false)
       message.success('开始下载')
-      setDownloading(false)
-      void load()
     } catch (e: any) {
-      /* axios interceptor already toasts most errors */
       if (!e?.response) {
         message.error(e?.message || '下载失败')
       }
     } finally {
-      setDownloading(false)
+      setPullingFile(false)
     }
   }
 
@@ -1054,13 +1190,41 @@ export default function TicketDetail() {
     return () => window.clearInterval(timer)
   }, [item?.status, params.id])
 
-  // 多实例执行结果：按 instance_id 解析各自 idc，避免全部套用工单主实例环境
+  // 切换工单时清空环境映射，避免串单
+  useEffect(() => {
+    envFetchedRef.current = new Set()
+    setEnvByInstanceId({})
+    setEnvByHost({})
+    setAccessDomains([])
+  }, [params.id])
+
+  // 多实例执行结果：优先 access-domain.env_code，其次 instance.idc；禁止用主实例环境冒充其它实例
   useEffect(() => {
     let cancelled = false
     async function fillEnvByInstance() {
       // 平台资源申请执行记录里的 id 可能是库/资源 ID，勿按实例去拉
       if (item?.issue_type === 'resource_apply') return
-      if (!neededInstanceIds.length) return
+      const needDomains = SQL_TYPES.has(item?.issue_type)
+      if (!neededInstanceIds.length && !needDomains) return
+
+      let domains: AccessDomainRow[] = []
+      if (needDomains) {
+        try {
+          const res = await api.get('/access-domains', { silent: true })
+          domains = Array.isArray(res.data?.data) ? res.data.data : []
+        } catch {
+          domains = []
+        }
+        if (cancelled) return
+        setAccessDomains(domains)
+        const hostMap: Record<string, string> = {}
+        for (const r of domains) {
+          const key = normalizeExecHost(String(r.domain || ''))
+          const e = String(r.env_code || '').trim()
+          if (key && e) hostMap[key] = e
+        }
+        setEnvByHost(hostMap)
+      }
 
       const nextSeed: Record<string, string> = {}
       if (inst?.id && inst?.idc) {
@@ -1088,6 +1252,27 @@ export default function TicketDetail() {
       )
       if (cancelled) return
 
+      // access-domain.env_code 覆盖 idc（按提交时的 data_sources）
+      const domainOverride: Record<string, string> = {}
+      try {
+        const parsed = JSON.parse(String(item?.need_rollback || '') || '{}')
+        const sources = Array.isArray(parsed?.data_sources) ? parsed.data_sources : []
+        for (const s of sources) {
+          const iid = String(s?.instance_id || '').trim()
+          const e = envCodeForSource(domains, iid, String(s?.domain || ''))
+          if (iid && e) domainOverride[iid] = e
+        }
+      } catch {
+        /* ignore */
+      }
+      for (const id of neededInstanceIds) {
+        if (domainOverride[id]) continue
+        const hit = domains.find(
+          (r) => String(r.instance_id || '').trim() === id && String(r.env_code || '').trim(),
+        )
+        if (hit) domainOverride[id] = String(hit.env_code).trim()
+      }
+
       setEnvByInstanceId((prev) => {
         let changed = false
         const next = { ...prev }
@@ -1105,6 +1290,12 @@ export default function TicketDetail() {
             changed = true
           }
         }
+        for (const [id, e] of Object.entries(domainOverride)) {
+          if (next[id] !== e) {
+            next[id] = e
+            changed = true
+          }
+        }
         return changed ? next : prev
       })
     }
@@ -1112,7 +1303,7 @@ export default function TicketDetail() {
     return () => {
       cancelled = true
     }
-  }, [neededInstanceIds, inst])
+  }, [neededInstanceIds, inst, item?.issue_type, item?.need_rollback, params.id])
 
   return (
     <div className="review-page">
@@ -1295,23 +1486,100 @@ export default function TicketDetail() {
                   </div>
                 ) : isDQL ? (
                   <div className="flow-card-body download-body">
+                    {showDqlExportPipeline && (
+                      <div className="download-pipeline">
+                        <div className="download-pipeline-title">下载流程</div>
+                        <Steps
+                          size="small"
+                          current={dqlExportPipelineCurrent}
+                          status={
+                            item.status === 'failed' || dqlExportStage === 'failed'
+                              ? 'error'
+                              : item.status === 'executed'
+                                ? 'finish'
+                                : 'process'
+                          }
+                          items={DQL_EXPORT_PIPELINE.map((step) => {
+                            const st = dqlExportStepStatus(
+                              step.key,
+                              dqlExportStage,
+                              dqlExportVia,
+                              String(item.status || ''),
+                            )
+                            const localSkip =
+                              dqlExportVia === 'local' &&
+                              (step.key === 'remote_submit' || step.key === 'transferring') &&
+                              st === 'finish'
+                            return {
+                              title: step.title,
+                              description: localSkip ? '跳过（本机直连）' : undefined,
+                              status: st,
+                            }
+                          })}
+                        />
+                        {item.status === 'running' && (
+                          <div className="download-hint">
+                            当前：{dqlExportStageLabel(dqlExportStage)}
+                            {dqlExtra?.export_executor
+                              ? ` · 执行器 ${dqlExtra.export_executor}`
+                              : dqlExportVia === 'local'
+                                ? ' · 本机直连'
+                                : ''}
+                            {item.exec_progress?.last_error
+                              ? ` · ${String(item.exec_progress.last_error).slice(0, 120)}`
+                              : ''}
+                          </div>
+                        )}
+                      </div>
+                    )}
                     <div className="download-row">
-                      <span className={item.status === 'executed' ? 'status-text success' : 'exec-wait'}>
-                        {item.status === 'executed' ? '已下载' : '点击下载'}
+                      <span
+                        className={
+                          item.status === 'executed'
+                            ? 'status-text success'
+                            : item.status === 'failed'
+                              ? 'status-text danger'
+                              : item.status === 'running'
+                                ? 'exec-wait'
+                                : 'exec-wait'
+                        }
+                      >
+                        {item.status === 'executed'
+                          ? '文件就绪'
+                          : item.status === 'failed'
+                            ? '导出失败'
+                            : item.status === 'running'
+                              ? '导出进行中…'
+                              : '确认格式后开始导出'}
                       </span>
+                      {canPullExportFile && (
+                        <Button type="primary" loading={pullingFile} onClick={() => { void pullExportFile() }}>
+                          下载文件
+                        </Button>
+                      )}
                       <Button
-                        type="primary"
-                        disabled={!canDownload}
+                        type={canPullExportFile ? 'default' : 'primary'}
+                        disabled={!canStartExport || item.status === 'running'}
                         loading={downloading}
                         onClick={openExport}
                       >
-                        {item.status === 'executed' ? '再次下载' : '下载'}
+                        {item.status === 'executed' || item.status === 'failed' ? '重新导出' : '导出'}
                       </Button>
                     </div>
+                    {item.status === 'failed' && dqlExtra?.export_error ? (
+                      <div className="download-err">{String(dqlExtra.export_error)}</div>
+                    ) : null}
                     {item.status === 'executed' ? (
-                      <div className="download-hint">{fmtTime(item.updated_at) || '可再次下载'}</div>
+                      <div className="download-hint">
+                        {dqlExtra?.export_file
+                          ? `${dqlExtra.export_file}${dqlExtra.export_bytes ? ` · ${dqlExtra.export_bytes} 字节` : ''}`
+                          : fmtTime(item.updated_at)}
+                        {' · 可重新导出无需重审'}
+                      </div>
+                    ) : item.status === 'running' ? (
+                      <div className="download-hint">后台导出中，完成后可下载文件</div>
                     ) : (
-                      <div className="download-hint">仅限工单发起人可下载</div>
+                      <div className="download-hint">仅限工单发起人可导出/下载</div>
                     )}
                   </div>
                 ) : (
@@ -1538,6 +1806,7 @@ export default function TicketDetail() {
                     records={displayExecRecords}
                     env={dbEnv}
                     envByInstanceId={envByInstanceId}
+                    envByHost={envByHost}
                     fallbackDb={item?.db_name}
                     fallbackHost={inst?.host}
                     execMessage={isExecRunning ? '' : execErrorText}

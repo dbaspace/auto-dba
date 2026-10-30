@@ -11,7 +11,7 @@ import (
 
 // 启动引导版本：修改 migrate.go / seed.go 后请递增对应常量，否则已初始化库会跳过重跑。
 const (
-	SchemaVersion = "2026-10-29.system-notice"
+	SchemaVersion = "2026-10-30.ticket-submit-freeze"
 	SeedVersion   = "2026-10-29.system-notice"
 )
 

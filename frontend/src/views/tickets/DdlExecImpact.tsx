@@ -53,6 +53,7 @@ export default function DdlExecImpact(props: {
   records?: any[]
   env?: string
   envByInstanceId?: Record<string, string>
+  envByHost?: Record<string, string>
   fallbackDb?: string
   fallbackHost?: string
   execMessage?: string
@@ -77,6 +78,7 @@ export default function DdlExecImpact(props: {
       buildDdlExecGroups(props.records, {
         env: props.env,
         envByInstanceId: props.envByInstanceId,
+        envByHost: props.envByHost,
         fallbackDb: props.fallbackDb,
         fallbackHost: props.fallbackHost,
         execMessage: props.execMessage,
@@ -90,6 +92,7 @@ export default function DdlExecImpact(props: {
       props.records,
       props.env,
       props.envByInstanceId,
+      props.envByHost,
       props.fallbackDb,
       props.fallbackHost,
       props.execMessage,

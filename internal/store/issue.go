@@ -25,6 +25,12 @@ func ValidIssueType(t string) bool {
 }
 
 func (d *DB) CreateIssue(it *Issue) error {
+	if it == nil {
+		return errors.New("issue 必填")
+	}
+	if err := d.CheckTicketSubmitAllowed(it.Submitter); err != nil {
+		return err
+	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	if it.ID == "" {
 		it.ID = uuid.NewString()

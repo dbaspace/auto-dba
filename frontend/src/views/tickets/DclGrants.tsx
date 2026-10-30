@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { AutoComplete, Button, Checkbox, Form, Input, Select, Space, message } from 'antd'
+import { Alert, AutoComplete, Button, Checkbox, Form, Input, Select, Space, message } from 'antd'
 import api from '../../api/request'
 import DatabasePicker from '../../components/DatabasePicker'
 import { dbLabel } from '../../utils/db'
@@ -20,6 +20,7 @@ import {
   type AccessDomainRow,
   type DomainSource,
 } from '../../utils/instanceSource'
+import { useTicketSubmitFreeze } from '../../hooks/useTicketSubmitFreeze'
 import { useWorkOrderDraft } from '../../hooks/useWorkOrderDraft'
 import { useAppDispatch, useAppSelector } from '../../store'
 import { goTicketListAndClose } from './goTicketList'
@@ -94,6 +95,7 @@ export default function DclGrants() {
   const location = useLocation()
   const dispatch = useAppDispatch()
   const menus = useAppSelector((s) => s.auth.menus)
+  const ticketFreeze = useTicketSubmitFreeze()
   const [form, setForm] = useState(emptyForm())
   const formRef = useRef(form)
   formRef.current = form
@@ -255,6 +257,10 @@ export default function DclGrants() {
   )
 
   async function submit() {
+    if (ticketFreeze.enabled) {
+      message.warning(ticketFreeze.message)
+      return
+    }
     try {
       await antdForm.validateFields()
     } catch {
@@ -353,6 +359,9 @@ export default function DclGrants() {
 
   return (
     <div className="dcl-page order-page">
+      {ticketFreeze.enabled ? (
+        <Alert type="warning" showIcon style={{ marginBottom: 12 }} message={ticketFreeze.message} />
+      ) : null}
       <Form
         form={antdForm}
         layout="vertical"
@@ -466,7 +475,7 @@ export default function DclGrants() {
             <Space>
               <Button onClick={reset}>取消</Button>
               <Button onClick={() => saveDraft()}>保存草稿</Button>
-              <Button type="primary" loading={submitting} onClick={submit}>
+              <Button type="primary" loading={submitting} disabled={ticketFreeze.enabled} onClick={submit}>
                 提交申请
               </Button>
             </Space>

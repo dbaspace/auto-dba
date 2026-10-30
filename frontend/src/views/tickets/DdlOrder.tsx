@@ -43,6 +43,7 @@ import {
 import DbTypeIcon from '../../components/DbTypeIcon'
 import SqlEditor from '../../components/SqlEditor'
 import { useCheckResultView } from '../../hooks/useCheckResultView'
+import { useTicketSubmitFreeze } from '../../hooks/useTicketSubmitFreeze'
 import { useWorkOrderDraft } from '../../hooks/useWorkOrderDraft'
 import { useAppDispatch, useAppSelector } from '../../store'
 import { goTicketListAndClose } from './goTicketList'
@@ -152,6 +153,7 @@ export default function DdlOrder() {
   const location = useLocation()
   const dispatch = useAppDispatch()
   const menus = useAppSelector((s) => s.auth.menus)
+  const ticketFreeze = useTicketSubmitFreeze()
   const [form, setForm] = useState<FormState>(emptyForm())
   const formRef = useRef(form)
   formRef.current = form
@@ -257,10 +259,10 @@ export default function DdlOrder() {
     ? '请先选择环境'
     : !form.instance_type
       ? '请先选择实例类型'
-      : '选择数据源(别名) 或搜索...'
+      : '选择数据源(支持选多实例) 或搜索...'
 
   const dbPlaceholder = !form.data_source_ids.length
-    ? '请先选择数据源(别名)'
+    ? '请先选择数据源(支持选多实例)'
     : dbLoading
       ? '加载逻辑库…'
       : '请选择'
@@ -580,6 +582,10 @@ export default function DdlOrder() {
       message.error('请填写 SQL')
       return
     }
+    if (ticketFreeze.enabled) {
+      message.warning(ticketFreeze.message)
+      return
+    }
     if (submitBlockedByApprover) {
       message.warning('所选数据源没有可用审核人，无法提交')
       return
@@ -743,6 +749,9 @@ export default function DdlOrder() {
 
   return (
     <div className="order-page">
+      {ticketFreeze.enabled ? (
+        <Alert type="warning" showIcon style={{ marginBottom: 12 }} message={ticketFreeze.message} />
+      ) : null}
       <div className="order-split">
         <aside className="order-aside">
           <Form form={antdForm} layout="vertical" initialValues={form} onSubmitCapture={(e) => e.preventDefault()}>
@@ -783,7 +792,7 @@ export default function DdlOrder() {
             </Form.Item>
 
             <Form.Item
-              label="数据源(别名)"
+              label="数据源(支持选多实例)"
               name="data_source_ids"
               rules={[{ type: 'array', required: true, min: 1, message: '请选择数据源' }]}
             >
@@ -973,9 +982,23 @@ export default function DdlOrder() {
             <Form.Item className="aside-actions">
               <Space wrap>
                 <Button onClick={fetchStructure}>获取表结构</Button>
-                <Tooltip title={submitting || submitAllowed ? '' : submitDisabledReason} placement="top">
+                <Tooltip
+                  title={
+                    ticketFreeze.enabled
+                      ? ticketFreeze.message
+                      : submitting || submitAllowed
+                        ? ''
+                        : submitDisabledReason
+                  }
+                  placement="top"
+                >
                   <span className="submit-wrap">
-                    <Button type="primary" loading={submitting} disabled={!submitAllowed} onClick={submit}>
+                    <Button
+                      type="primary"
+                      loading={submitting}
+                      disabled={ticketFreeze.enabled || !submitAllowed}
+                      onClick={submit}
+                    >
                       提交
                     </Button>
                   </span>

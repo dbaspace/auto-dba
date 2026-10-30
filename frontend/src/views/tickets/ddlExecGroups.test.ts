@@ -105,4 +105,44 @@ describe('buildDdlExecGroups', () => {
     expect(stats.countsFromBackend).toBe(true)
     expect(stats.compacted).toBe(true)
   })
+
+  it('不同实例使用各自 envByInstanceId，path 前缀不同', () => {
+    const { groups } = buildDdlExecGroups(
+      [
+        { instance_id: 'bj', host: 'pg.scdata.bj', port: 5432, db: 'db_x', sql: 's1', status: 'success' },
+        { instance_id: 'fra', host: 'pg.scdata.fra', port: 5432, db: 'db_x', sql: 's1', status: 'success' },
+      ],
+      {
+        env: 'frankfurt',
+        envByInstanceId: { bj: 'beijing', fra: 'frankfurt' },
+        execSuccess: true,
+      },
+    )
+    expect(groups[0].path).toContain('beijing /')
+    expect(groups[1].path).toContain('frankfurt /')
+    expect(groups[0].path).not.toContain('frankfurt /')
+  })
+
+  it('有 instance_id 但缺映射时不套用主实例 fallbackEnv', () => {
+    const { groups } = buildDdlExecGroups(
+      [{ instance_id: 'other', host: 'pg.pobeice', db: 'db_x', sql: 's1', status: 'success' }],
+      { env: 'frankfurt', envByInstanceId: {}, execSuccess: true },
+    )
+    expect(groups[0].path.startsWith('- /')).toBe(true)
+    expect(groups[0].path).not.toContain('frankfurt /')
+  })
+
+  it('缺 instance_id 时可用 envByHost，否则回退主环境', () => {
+    const { groups: byHost } = buildDdlExecGroups(
+      [{ host: 'pg.scdata.bj:5432', db: 'db_x', sql: 's1', status: 'success' }],
+      { env: 'frankfurt', envByHost: { 'pg.scdata.bj': 'beijing' }, execSuccess: true },
+    )
+    expect(byHost[0].path).toContain('beijing /')
+
+    const { groups: fallback } = buildDdlExecGroups(
+      [{ host: 'unknown.host', db: 'db_x', sql: 's1', status: 'success' }],
+      { env: 'frankfurt', execSuccess: true },
+    )
+    expect(fallback[0].path).toContain('frankfurt /')
+  })
 })

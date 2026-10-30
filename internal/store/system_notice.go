@@ -13,19 +13,24 @@ const (
 	SystemNoticeModeEveryLogin      = "every_login"
 	SystemNoticeModeOnce            = "once"
 	SystemNoticeModeOnVersionChange = "on_version_change"
+
+	// DefaultTicketSubmitFreezeMessage 发版冻结开启且未自定义文案时的默认提示。
+	DefaultTicketSubmitFreezeMessage = "平台正在发版维护，暂不可提交工单，请稍后再试"
 )
 
-// SystemNotice 平台级登录弹框通知模板。
+// SystemNotice 平台级登录弹框通知模板（兼发版工单提交冻结开关）。
 type SystemNotice struct {
-	ID        string `json:"id"`
-	Title     string `json:"title"`
-	Body      string `json:"body"`
-	Enabled   bool   `json:"enabled"`
-	ShowMode  string `json:"show_mode"`
-	Version   int    `json:"version"`
-	UpdatedBy string `json:"updated_by,omitempty"`
-	UpdatedAt string `json:"updated_at"`
-	CreatedAt string `json:"created_at"`
+	ID                         string `json:"id"`
+	Title                      string `json:"title"`
+	Body                       string `json:"body"`
+	Enabled                    bool   `json:"enabled"`
+	ShowMode                   string `json:"show_mode"`
+	Version                    int    `json:"version"`
+	TicketSubmitFreeze         bool   `json:"ticket_submit_freeze"`
+	TicketSubmitFreezeMessage  string `json:"ticket_submit_freeze_message"`
+	UpdatedBy                  string `json:"updated_by,omitempty"`
+	UpdatedAt                  string `json:"updated_at"`
+	CreatedAt                  string `json:"created_at"`
 }
 
 func NormalizeSystemNoticeShowMode(mode string) string {
@@ -41,9 +46,12 @@ func NormalizeSystemNoticeShowMode(mode string) string {
 	}
 }
 
+const systemNoticeSelectCols = `id, title, body, enabled, show_mode, version, updated_by, updated_at, created_at,
+		COALESCE(ticket_submit_freeze,0), COALESCE(ticket_submit_freeze_message,'')`
+
 func (d *DB) GetEnabledSystemNotice() (*SystemNotice, error) {
 	it, err := scanSystemNotice(d.QueryRow(`
-		SELECT id, title, body, enabled, show_mode, version, updated_by, updated_at, created_at
+		SELECT ` + systemNoticeSelectCols + `
 		FROM tbl_system_notices WHERE enabled=1 ORDER BY updated_at DESC LIMIT 1`))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -57,7 +65,7 @@ func (d *DB) GetSystemNoticeSettings() (*SystemNotice, error) {
 		return it, err
 	}
 	it, err = scanSystemNotice(d.QueryRow(`
-		SELECT id, title, body, enabled, show_mode, version, updated_by, updated_at, created_at
+		SELECT ` + systemNoticeSelectCols + `
 		FROM tbl_system_notices ORDER BY updated_at DESC LIMIT 1`))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -67,12 +75,46 @@ func (d *DB) GetSystemNoticeSettings() (*SystemNotice, error) {
 
 func (d *DB) GetSystemNotice(id string) (*SystemNotice, error) {
 	it, err := scanSystemNotice(d.QueryRow(`
-		SELECT id, title, body, enabled, show_mode, version, updated_by, updated_at, created_at
+		SELECT `+systemNoticeSelectCols+`
 		FROM tbl_system_notices WHERE id=?`, strings.TrimSpace(id)))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	return it, err
+}
+
+// GetTicketSubmitFreeze 读取当前系统通知设置行上的发版冻结状态。
+func (d *DB) GetTicketSubmitFreeze() (enabled bool, message string, err error) {
+	it, err := d.GetSystemNoticeSettings()
+	if err != nil {
+		return false, "", err
+	}
+	if it == nil {
+		return false, DefaultTicketSubmitFreezeMessage, nil
+	}
+	msg := strings.TrimSpace(it.TicketSubmitFreezeMessage)
+	if msg == "" {
+		msg = DefaultTicketSubmitFreezeMessage
+	}
+	return it.TicketSubmitFreeze, msg, nil
+}
+
+// CheckTicketSubmitAllowed 发版冻结开启时禁止非 system 提交者新建工单。
+func (d *DB) CheckTicketSubmitAllowed(submitter string) error {
+	if strings.EqualFold(strings.TrimSpace(submitter), "system") {
+		return nil
+	}
+	enabled, msg, err := d.GetTicketSubmitFreeze()
+	if err != nil {
+		return err
+	}
+	if !enabled {
+		return nil
+	}
+	if strings.TrimSpace(msg) == "" {
+		msg = DefaultTicketSubmitFreezeMessage
+	}
+	return errors.New(msg)
 }
 
 // UpsertSystemNotice 保存模板；bumpVersion 为真时 version+1。启用时关闭其它启用行。
@@ -83,6 +125,7 @@ func (d *DB) UpsertSystemNotice(it *SystemNotice, bumpVersion bool, actor string
 	now := time.Now().UTC().Format(time.RFC3339)
 	it.Title = strings.TrimSpace(it.Title)
 	it.Body = strings.TrimSpace(it.Body)
+	it.TicketSubmitFreezeMessage = strings.TrimSpace(it.TicketSubmitFreezeMessage)
 	it.ShowMode = NormalizeSystemNoticeShowMode(it.ShowMode)
 	it.UpdatedBy = strings.TrimSpace(actor)
 	it.UpdatedAt = now
@@ -109,9 +152,10 @@ func (d *DB) UpsertSystemNotice(it *SystemNotice, bumpVersion bool, actor string
 		if bumpVersion && it.Version < 1 {
 			it.Version = 1
 		}
-		_, err := d.Exec(`INSERT INTO tbl_system_notices(id, title, body, enabled, show_mode, version, updated_by, updated_at, created_at)
-			VALUES(?,?,?,?,?,?,?,?,?)`,
-			it.ID, it.Title, it.Body, boolToInt(it.Enabled), it.ShowMode, it.Version, it.UpdatedBy, it.UpdatedAt, it.CreatedAt)
+		_, err := d.Exec(`INSERT INTO tbl_system_notices(id, title, body, enabled, show_mode, version, updated_by, updated_at, created_at, ticket_submit_freeze, ticket_submit_freeze_message)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+			it.ID, it.Title, it.Body, boolToInt(it.Enabled), it.ShowMode, it.Version, it.UpdatedBy, it.UpdatedAt, it.CreatedAt,
+			boolToInt(it.TicketSubmitFreeze), it.TicketSubmitFreezeMessage)
 		if err != nil {
 			return err
 		}
@@ -131,8 +175,9 @@ func (d *DB) UpsertSystemNotice(it *SystemNotice, bumpVersion bool, actor string
 				it.Version = 1
 			}
 		}
-		_, err = d.Exec(`UPDATE tbl_system_notices SET title=?, body=?, enabled=?, show_mode=?, version=?, updated_by=?, updated_at=? WHERE id=?`,
-			it.Title, it.Body, boolToInt(it.Enabled), it.ShowMode, it.Version, it.UpdatedBy, it.UpdatedAt, it.ID)
+		_, err = d.Exec(`UPDATE tbl_system_notices SET title=?, body=?, enabled=?, show_mode=?, version=?, updated_by=?, updated_at=?, ticket_submit_freeze=?, ticket_submit_freeze_message=? WHERE id=?`,
+			it.Title, it.Body, boolToInt(it.Enabled), it.ShowMode, it.Version, it.UpdatedBy, it.UpdatedAt,
+			boolToInt(it.TicketSubmitFreeze), it.TicketSubmitFreezeMessage, it.ID)
 		if err != nil {
 			return err
 		}
@@ -147,10 +192,12 @@ func (d *DB) UpsertSystemNotice(it *SystemNotice, bumpVersion bool, actor string
 func scanSystemNotice(row interface{ Scan(dest ...any) error }) (*SystemNotice, error) {
 	var it SystemNotice
 	var enabled int
-	if err := row.Scan(&it.ID, &it.Title, &it.Body, &enabled, &it.ShowMode, &it.Version, &it.UpdatedBy, &it.UpdatedAt, &it.CreatedAt); err != nil {
+	var freeze int
+	if err := row.Scan(&it.ID, &it.Title, &it.Body, &enabled, &it.ShowMode, &it.Version, &it.UpdatedBy, &it.UpdatedAt, &it.CreatedAt, &freeze, &it.TicketSubmitFreezeMessage); err != nil {
 		return nil, err
 	}
 	it.Enabled = enabled != 0
+	it.TicketSubmitFreeze = freeze != 0
 	it.ShowMode = NormalizeSystemNoticeShowMode(it.ShowMode)
 	return &it, nil
 }

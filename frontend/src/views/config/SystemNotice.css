@@ -1,0 +1,61 @@
+/* 全宽平铺，避免 page-card 嵌套滚动与左侧窄栏留白 */
+.system-notice-page.page-card {
+  max-width: none;
+  width: 100%;
+  height: auto;
+  min-height: 100%;
+  overflow: visible;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.system-notice-page h2 {
+  flex-shrink: 0;
+}
+
+.system-notice-page > .ant-form {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+.system-notice-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  align-items: start;
+  width: 100%;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.system-notice-col {
+  min-width: 0;
+}
+
+.system-notice-col h3 {
+  margin-top: 0;
+  margin-bottom: 12px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.system-notice-footer {
+  flex-shrink: 0;
+  margin-top: auto;
+  padding-top: 16px;
+  border-top: 1px solid var(--app-border, #f0f0f0);
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+
+@media (max-width: 900px) {
+  .system-notice-grid {
+    grid-template-columns: 1fr;
+  }
+}

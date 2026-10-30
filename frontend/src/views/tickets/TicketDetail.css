@@ -139,8 +139,12 @@
 .remark-text { margin-top: 8px; color: #4b5563; font-size: 13px; white-space: pre-wrap; }
 .exec-body { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .download-body { background: linear-gradient(90deg, #fffbeb, #fff); }
-.download-row { display: flex; align-items: center; gap: 12px; }
+.download-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .download-hint { margin-top: 8px; color: #a16207; font-size: 12px; }
+.download-pipeline { margin-bottom: 12px; }
+.download-pipeline-title { font-size: 12px; color: #78716c; margin-bottom: 8px; }
+.download-pipeline .ant-steps-item-title { font-size: 12px !important; line-height: 1.3 !important; }
+.download-err { margin-top: 8px; color: #b91c1c; font-size: 12px; word-break: break-word; }
 .exec-wait { color: #a16207; font-weight: 600; }
 .fmt-label { margin-bottom: 8px; color: #4b5563; }
 .status-text { font-size: 13px; }

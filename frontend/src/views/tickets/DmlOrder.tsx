@@ -36,6 +36,7 @@ import {
 import DbTypeIcon from '../../components/DbTypeIcon'
 import SqlEditor from '../../components/SqlEditor'
 import { useCheckResultView } from '../../hooks/useCheckResultView'
+import { useTicketSubmitFreeze } from '../../hooks/useTicketSubmitFreeze'
 import { useWorkOrderDraft } from '../../hooks/useWorkOrderDraft'
 import { useAppDispatch, useAppSelector } from '../../store'
 import { goTicketListAndClose } from './goTicketList'
@@ -128,6 +129,7 @@ export default function DmlOrder() {
   const location = useLocation()
   const dispatch = useAppDispatch()
   const menus = useAppSelector((s) => s.auth.menus)
+  const ticketFreeze = useTicketSubmitFreeze()
   const [searchParams] = useSearchParams()
   const [form, setForm] = useState<FormState>(emptyForm())
   const formRef = useRef(form)
@@ -428,6 +430,10 @@ export default function DmlOrder() {
   }, [form, schedulePersist])
 
   async function submit() {
+    if (ticketFreeze.enabled) {
+      message.warning(ticketFreeze.message)
+      return
+    }
     try {
       await antdForm.validateFields()
     } catch {
@@ -615,6 +621,9 @@ export default function DmlOrder() {
 
   return (
     <div className="order-page">
+      {ticketFreeze.enabled ? (
+        <Alert type="warning" showIcon style={{ marginBottom: 12 }} message={ticketFreeze.message} />
+      ) : null}
       <div className="order-split">
         <aside className="order-aside">
           <Form form={antdForm} layout="vertical" initialValues={form} onSubmitCapture={(e) => e.preventDefault()}>
@@ -743,9 +752,24 @@ export default function DmlOrder() {
               <p className="hint">将按 {statementCount} 条语句执行（按分号拆分）</p>
             ) : null}
             <Form.Item className="aside-actions">
-              <Tooltip title={submitting || submitAllowed ? '' : submitDisabledReason} placement="top">
+              <Tooltip
+                title={
+                  ticketFreeze.enabled
+                    ? ticketFreeze.message
+                    : submitting || submitAllowed
+                      ? ''
+                      : submitDisabledReason
+                }
+                placement="top"
+              >
                 <span className="submit-wrap">
-                  <Button type="primary" style={{ width: '100%' }} loading={submitting} disabled={!submitAllowed} onClick={submit}>
+                  <Button
+                    type="primary"
+                    style={{ width: '100%' }}
+                    loading={submitting}
+                    disabled={ticketFreeze.enabled || !submitAllowed}
+                    onClick={submit}
+                  >
                     提交
                   </Button>
                 </span>

@@ -1,12 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { Button, Form, Input, Select, Space, Switch, message } from 'antd'
+import { Alert, Button, Form, Input, Select, Space, Switch, message } from 'antd'
 import api from '../../api/request'
 import { useAppDispatch, useAppSelector } from '../../store'
 import { goTicketListAndClose } from './goTicketList'
 import { dbLabel } from '../../utils/db'
 import { envCodeInGroup, loadTicketEnvGroups, resolveTicketEnvValue, type TicketEnvGroup } from '../../utils/ticketEnv'
 import DbTypeIcon from '../../components/DbTypeIcon'
+import { useTicketSubmitFreeze } from '../../hooks/useTicketSubmitFreeze'
 import { useWorkOrderDraft } from '../../hooks/useWorkOrderDraft'
 import './DqlExport.css'
 
@@ -86,6 +87,7 @@ export default function DqlExport() {
   const location = useLocation()
   const dispatch = useAppDispatch()
   const menus = useAppSelector((s) => s.auth.menus)
+  const ticketFreeze = useTicketSubmitFreeze()
 
   const leaveToList = () => goTicketListAndClose(dispatch, navigate, location, menus)
   const [form, setForm] = useState(emptyForm())
@@ -314,6 +316,10 @@ export default function DqlExport() {
   }
 
   async function submit() {
+    if (ticketFreeze.enabled) {
+      message.warning(ticketFreeze.message)
+      return
+    }
     const curSQL = String(antdForm.getFieldValue('sql_content') ?? formRef.current.sql_content ?? '')
     const withLimit = ensureSqlHasLimit(curSQL)
     if (withLimit !== curSQL) {
@@ -417,6 +423,9 @@ export default function DqlExport() {
 
   return (
     <div className="dql-page order-page">
+      {ticketFreeze.enabled ? (
+        <Alert type="warning" showIcon style={{ marginBottom: 12 }} message={ticketFreeze.message} />
+      ) : null}
       <Form
         form={antdForm}
         layout="vertical"
@@ -525,7 +534,7 @@ export default function DqlExport() {
           </Form.Item>
           <Form.Item className="aside-actions">
             <Space>
-              <Button type="primary" loading={saving} onClick={submit}>
+              <Button type="primary" loading={saving} disabled={ticketFreeze.enabled} onClick={submit}>
                 提交申请
               </Button>
               <Button onClick={() => saveDraft()}>保存草稿</Button>

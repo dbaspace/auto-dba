@@ -61,11 +61,54 @@ export function isTicketExecFailed(opts: { execFailed?: boolean; execSuccess?: b
   return false
 }
 
+/** 规范化 host，便于与 access-domain / record.host 匹配（去掉端口）。 */
+export function normalizeExecHost(host: string): string {
+  const h = String(host || '')
+    .trim()
+    .toLowerCase()
+  if (!h) return ''
+  if (h.startsWith('[')) {
+    const end = h.indexOf(']')
+    return end > 0 ? h.slice(1, end) : h
+  }
+  const idx = h.lastIndexOf(':')
+  if (idx > 0 && /^\d+$/.test(h.slice(idx + 1))) return h.slice(0, idx)
+  return h
+}
+
+/**
+ * 解析执行块环境前缀。
+ * - 有 instance_id：只用该实例/域名映射，缺省为 "-"，禁止套用工单主实例环境
+ * - 无 instance_id：可用 host 映射，再回退 opts.env
+ */
+export function resolveDdlExecEnv(opts: {
+  instanceId?: string
+  host?: string
+  envByInstanceId?: Record<string, string>
+  envByHost?: Record<string, string>
+  fallbackEnv?: string
+}): string {
+  const iid = String(opts.instanceId || '').trim()
+  const hostKey = normalizeExecHost(opts.host || '')
+  const byId = opts.envByInstanceId || {}
+  const byHost = opts.envByHost || {}
+  if (iid) {
+    const e = String(byId[iid] || '').trim()
+    if (e) return e
+    const h = hostKey ? String(byHost[hostKey] || '').trim() : ''
+    return h || '-'
+  }
+  const h = hostKey ? String(byHost[hostKey] || '').trim() : ''
+  if (h) return h
+  return String(opts.fallbackEnv || '-').trim() || '-'
+}
+
 export function buildDdlExecGroups(
   records: any[] | undefined,
   opts: {
     env?: string
     envByInstanceId?: Record<string, string>
+    envByHost?: Record<string, string>
     fallbackDb?: string
     fallbackHost?: string
     execMessage?: string
@@ -79,6 +122,7 @@ export function buildDdlExecGroups(
   const recs = Array.isArray(records) ? records : []
   const fallbackEnv = String(opts.env || '-').trim() || '-'
   const envById = opts.envByInstanceId || {}
+  const envByHost = opts.envByHost || {}
   const ticketFailed = isTicketExecFailed(opts)
   const map = new Map<string, any[]>()
   const order: string[] = []
@@ -120,7 +164,13 @@ export function buildDdlExecGroups(
     const hostPort = host ? (port ? `${host}:${port}` : host) : name || key
     const label = db && hostPort ? `${db} - ${hostPort}` : hostPort || db || key
     const iid = String(first.instance_id || '').trim()
-    const env = (iid && String(envById[iid] || '').trim()) || fallbackEnv
+    const env = resolveDdlExecEnv({
+      instanceId: iid,
+      host,
+      envByInstanceId: envById,
+      envByHost,
+      fallbackEnv,
+    })
     const path = `${env} / ${db}${hostPort ? ` · ${hostPort}` : ''}`
     const failed = list.filter((r) => String(r.status || '').toLowerCase() === 'failed')
     const rolledBack = list.filter((r) => String(r.status || '').toLowerCase() === 'rolled_back').length

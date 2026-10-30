@@ -170,6 +170,7 @@ export default function Databases() {
   const [rows, setRows] = useState<DatabaseRow[]>([])
   const [initLoading, setInitLoading] = useState(true)
   const [dbNameQ, setDbNameQ] = useState('')
+  const [approverQ, setApproverQ] = useState('')
   const [domainFilter, setDomainFilter] = useState('')
   const [envFilter, setEnvFilter] = useState('')
   const [tenantFilter, setTenantFilter] = useState('')
@@ -324,12 +325,17 @@ export default function Databases() {
 
   const filteredRows = useMemo(() => {
     const q = dbNameQ.trim().toLowerCase()
+    const approver = approverQ.trim().toLowerCase()
     const dom = domainFilter.trim().toLowerCase()
     return rows.filter((r) => {
       const inst = instances.find((i) => i.id === r.instance_id)
       const dbType = inst?.db_type || ''
       if (activeType && !matchType(dbType, activeType)) return false
       if (q && !String(r.db_name || '').toLowerCase().includes(q)) return false
+      if (approver) {
+        const names = (r.approvers || []).map((n) => String(n || '').trim().toLowerCase()).filter(Boolean)
+        if (!names.includes(approver)) return false
+      }
       if (envFilter) {
         if (resolveRowEnv(r, inst) !== envFilter) return false
       }
@@ -343,7 +349,7 @@ export default function Databases() {
       return true
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, activeType, dbNameQ, domainFilter, envFilter, tenantFilter, instances, knownTypes])
+  }, [rows, activeType, dbNameQ, approverQ, domainFilter, envFilter, tenantFilter, instances, knownTypes])
 
   const pagedRows = useMemo(() => {
     const start = (page - 1) * pageSize
@@ -353,7 +359,7 @@ export default function Databases() {
   useEffect(() => {
     setPage(1)
     setSelectedKeys([])
-  }, [activeType, dbNameQ, domainFilter, envFilter, tenantFilter])
+  }, [activeType, dbNameQ, approverQ, domainFilter, envFilter, tenantFilter])
 
   useEffect(() => {
     const maxPage = Math.max(1, Math.ceil(filteredRows.length / pageSize) || 1)
@@ -1157,6 +1163,16 @@ export default function Databases() {
             value={domainFilter || undefined}
             onChange={(v) => setDomainFilter(v || '')}
             options={domainFilterOptions}
+          />
+        </div>
+        <div className="filter-item filter-item-fixed">
+          <span className="label">审核人：</span>
+          <Input
+            value={approverQ}
+            placeholder="请输入审核人名"
+            allowClear
+            style={{ width: 180 }}
+            onChange={(e) => setApproverQ(e.target.value)}
           />
         </div>
         <div className="filter-item filter-item-fixed">

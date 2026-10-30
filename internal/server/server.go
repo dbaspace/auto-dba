@@ -121,6 +121,7 @@ func Run(cfg *config.Config, configPath string) {
 	flashback.SetRuntime(&flashback.Runtime{Store: db, Secret: fieldCrypto, Cfg: cfg.Flashback})
 	fbEngine := flashback.New()
 	ticketH := &handler.TicketHandler{Store: db, Secret: fieldCrypto, Flashback: fbEngine, Migration: migEngine, Archive: arcEngine, CDC: cdcOrch, Backup: bakEngine}
+	ticketH.ReapDQLExportFiles()
 	cloudSvc := cloudsvc.New(db, fieldCrypto)
 	cloudSvc.Install()
 	ticketH.Cloud = cloudSvc

@@ -1640,8 +1640,16 @@ func (d *DB) ensureSystemNoticeTables() error {
 		version INTEGER NOT NULL DEFAULT 1,
 		updated_by TEXT NOT NULL DEFAULT '',
 		updated_at TEXT NOT NULL,
-		created_at TEXT NOT NULL
+		created_at TEXT NOT NULL,
+		ticket_submit_freeze INTEGER NOT NULL DEFAULT 0,
+		ticket_submit_freeze_message TEXT NOT NULL DEFAULT ''
 	)`); err != nil {
+		return err
+	}
+	if _, err := d.db.Exec(`ALTER TABLE tbl_system_notices ADD COLUMN IF NOT EXISTS ticket_submit_freeze INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return err
+	}
+	if _, err := d.db.Exec(`ALTER TABLE tbl_system_notices ADD COLUMN IF NOT EXISTS ticket_submit_freeze_message TEXT NOT NULL DEFAULT ''`); err != nil {
 		return err
 	}
 	if _, err := d.db.Exec(`CREATE TABLE IF NOT EXISTS tbl_system_notice_acks (

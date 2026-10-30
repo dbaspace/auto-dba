@@ -660,6 +660,11 @@ func (h *TicketHandler) Submit(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
+	username := middleware.Username(c)
+	if err := h.Store.CheckTicketSubmitAllowed(username); err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"message": err.Error()})
+		return
+	}
 	req.Type = strings.ToLower(strings.TrimSpace(req.Type))
 	if !store.ValidIssueType(req.Type) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "不支持的工单类型: " + req.Type})
@@ -669,7 +674,6 @@ func (h *TicketHandler) Submit(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "请使用 POST /resource-apply 提交平台资源申请"})
 		return
 	}
-	username := middleware.Username(c)
 	if req.Type == store.IssueTypeDQL {
 		if err := h.prepareDQLSubmit(c, &req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})

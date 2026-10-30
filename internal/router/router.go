@@ -232,6 +232,7 @@ func Init(e *gin.Engine, d Deps) {
 		secured.PUT("/settings/system-notice", requireURN(store.URNSystemNoticeEdit), d.SystemNotice.UpdateSettings)
 		secured.GET("/system-notice/active", d.SystemNotice.Active)
 		secured.POST("/system-notice/ack", d.SystemNotice.Ack)
+		secured.GET("/ticket-submit-freeze", d.SystemNotice.TicketSubmitFreeze)
 	}
 
 	secured.GET("/menus/mine", d.RBAC.MineMenus)
@@ -560,6 +561,7 @@ func Init(e *gin.Engine, d Deps) {
 	t.POST("/:id/execute", d.Ticket.Execute)
 	t.POST("/:id/stop", d.Ticket.Stop)
 	t.POST("/:id/export", d.Ticket.Export)
+	t.GET("/:id/export/file", d.Ticket.ExportFile)
 
 	cd := secured.Group("/create-db")
 	cd.GET("/instances", d.CreateDB.ListInstances)

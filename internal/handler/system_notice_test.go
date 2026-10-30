@@ -146,3 +146,75 @@ func TestSystemNoticeActiveAckVersionBump(t *testing.T) {
 		t.Fatalf("every_login should show: %v", data)
 	}
 }
+
+func TestTicketSubmitFreezeCreateIssue(t *testing.T) {
+	db := systemNoticeTestStore(t)
+	h := &SystemNoticeHandler{Store: db}
+	gin.SetMode(gin.TestMode)
+
+	_, _ = db.Exec(`DELETE FROM tbl_system_notice_acks`)
+	_, _ = db.Exec(`DELETE FROM tbl_system_notices`)
+
+	it := &store.SystemNotice{
+		Title: "freeze-test", Body: "x", Enabled: false,
+		ShowMode: store.SystemNoticeModeOnVersionChange,
+		TicketSubmitFreeze: true,
+		TicketSubmitFreezeMessage: "发版中勿提交",
+	}
+	if err := db.UpsertSystemNotice(it, false, "admin"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Exec(`DELETE FROM tbl_system_notices WHERE id=?`, it.ID)
+	})
+
+	enabled, msg, err := db.GetTicketSubmitFreeze()
+	if err != nil || !enabled || msg != "发版中勿提交" {
+		t.Fatalf("freeze state enabled=%v msg=%q err=%v", enabled, msg, err)
+	}
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+	h.TicketSubmitFreeze(c)
+	if w.Code != http.StatusOK {
+		t.Fatalf("freeze api code=%d body=%s", w.Code, w.Body.String())
+	}
+	var out map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &out)
+	data, _ := out["data"].(map[string]any)
+	if data["enabled"] != true || data["message"] != "发版中勿提交" {
+		t.Fatalf("freeze api data=%v", data)
+	}
+
+	err = db.CreateIssue(&store.Issue{
+		IssueType: store.IssueTypeDDL, Status: store.StatusPending,
+		Submitter: "admin", TenantID: store.DefaultTenantID,
+		Description: "should block",
+	})
+	if err == nil || err.Error() != "发版中勿提交" {
+		t.Fatalf("expect freeze block, got %v", err)
+	}
+
+	err = db.CreateIssue(&store.Issue{
+		IssueType: store.IssueTypeDDL, Status: store.StatusPending,
+		Submitter: "system", TenantID: store.DefaultTenantID,
+		Description: "system ok",
+	})
+	if err != nil {
+		// system may still fail on other constraints; only freeze must pass
+		if err.Error() == "发版中勿提交" {
+			t.Fatal("system submitter should not be frozen")
+		}
+	} else {
+		_, _ = db.Exec(`DELETE FROM tbl_issues WHERE description=?`, "system ok")
+	}
+
+	it.TicketSubmitFreeze = false
+	if err := db.UpsertSystemNotice(it, false, "admin"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CheckTicketSubmitAllowed("admin"); err != nil {
+		t.Fatalf("freeze off should allow: %v", err)
+	}
+}

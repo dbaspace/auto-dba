@@ -27,6 +27,15 @@ type dqlApprovalExtra struct {
 	SecApprovedBy      string `json:"security_approved_by,omitempty"`
 	RejectedPhase      string `json:"rejected_phase,omitempty"`
 	RejectedBy         string `json:"rejected_by,omitempty"`
+	// 异步导出元数据（与审批字段共存于 need_rollback）
+	ExportFormat   string `json:"export_format,omitempty"`
+	ExportFile     string `json:"export_file,omitempty"`
+	ExportBytes    int64  `json:"export_bytes,omitempty"`
+	ExportReadyAt  string `json:"export_ready_at,omitempty"`
+	ExportError    string `json:"export_error,omitempty"`
+	ExportVia      string `json:"export_via,omitempty"`
+	ExportExecutor string `json:"export_executor,omitempty"`
+	ExportStage    string `json:"export_stage,omitempty"`
 }
 
 func parseDQLApprovalExtra(raw string) (*dqlApprovalExtra, error) {

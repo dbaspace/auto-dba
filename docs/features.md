@@ -87,10 +87,10 @@ Client Secret（及 LDAP Bind 密码）用字段加密密钥落库（优先 `app
 
 | 页面 | 路径 | 说明 |
 |------|------|------|
-| 工单列表 | `/ops/tickets` | 全部工单的查询、审批与执行记录；展示申请原因、环境、数据库类型；DQL 导出完成后状态为「已下载」。DDL 执行中显示进度（含远程执行器当前库与语句）；可筛选「已终止」。服务重启后会回收仍标执行中、但进程已不在的工单 |
+| 工单列表 | `/ops/tickets` | 全部工单的查询、审批与执行记录；展示申请原因、环境、数据库类型；DQL 导出文件就绪后状态为「已下载」。DDL 执行中显示进度（含远程执行器当前库与语句）；可筛选「已终止」。服务重启后会回收仍标执行中、但进程已不在的工单 |
 | DDL 工单 | `/ops/ddl` | 结构变更。提交前按审核规则做 SQL 检查（结果可按状态过滤、按屏分页），支持美化与关键字高亮；可看执行影响；可多选域名级数据源。勾选分库并填写前缀时，PostgreSQL 按前缀现查数字后缀库并逐库执行，代表库须已登记，其余分库不要求登记；某个库失败后继续其余库，汇总写明成功与失败个数；重试按库跳过已成功的库。执行中显示进度，审核人、admin 或 DBA 租户成员可终止当前会话，工单变为「已终止」。全局参数 `ticket_ddl_constraint_check_enabled` 默认开启，关闭后跳过全部 SQL 审核、只保留提交门禁，详情会标明。PostgreSQL `ADD COLUMN IF NOT EXISTS` 在列注释规则开启时仍要带 `COMMENT ON COLUMN` |
 | DML 工单 | `/ops/dml` | 数据变更，同样走审核与审批；填写 SQL 支持美化/高亮，检测结果分页与状态过滤。PostgreSQL DML 由平台包事务执行，脚本中的 `BEGIN`/`COMMIT`/`ROLLBACK` 会被忽略（避免与外层事务双重提交）；会话号在事务连接上读取，避免占死连接导致「执行中」却不落库 |
-| DQL 工单 | `/ops/dql` | 数据导出。左侧填环境、库、审批人和事由，右侧写查询 SQL |
+| DQL 工单 | `/ops/dql` | 数据导出。左侧填环境、库、审批人和事由，右侧写查询 SQL。审批通过后发起人确认格式即异步导出：按环境就近本机或 SQL 执行器查询编码，落盘平台临时目录后再下载；详情展示下载流程步骤与进度；缺执行器时拒绝硬跨网直连；失败可重导无需重审；临时文件约保留 7 天 |
 | Kafka 工单 | `/ops/kafka` | 创建或调整 Topic；地址选自域名管理（本租户可见），环境选自环境管理 |
 | Redis 工单 | `/ops/redis` | 按 Redis 命令规则提交变更；地址选自域名管理，环境选自环境管理 |
 | 权限申请 | `/ops/dcl` | 为数据库账号申请权限并选择目标库。PostgreSQL：提交/执行时按库查 `pg_database.datdba` 写入可执行 `ALTER DEFAULT PRIVILEGES FOR ROLE`；schema 仅 `GRANT USAGE`（无 CREATE）；账号不存在则 `CREATE USER … ENCRYPTED PASSWORD` 并飞书通知密码；逐库 CONNECT + 表/序列授权（勾选 SELECT/INSERT/UPDATE/DELETE）。MySQL/StarRocks 为库级 GRANT。与平台资源申请不同 |
@@ -297,10 +297,10 @@ DBA 域配置管理门面：统一目录（含 SR/部署/代理/账号/CDC）、
 | 页面 | 路径 | 说明 |
 |------|------|------|
 | 全局参数 | `/config/args` | 审批开关、默认审批人、SQL 约束、登录空闲时长、水印等 |
-| 系统通知 | `/config/system-notice` | 平台级登录弹框：标题/正文、启停、展示模式（每次登录 / 仅一次 / 版本变更时）；用户可确认不再提示（按模式与版本） |
+| 系统通知 | `/config/system-notice` | 平台级登录弹框：标题/正文、启停、展示模式（每次登录 / 仅一次 / 版本变更时）；用户可确认不再提示（按模式与版本）。可开启「发版冻结」拦截工单类提交并展示自定义提示 |
 | 区域管理 | `/config/regions` | 机房或区域，并可绑定环境 |
 | 环境管理 | `/config/environments` | 生产、测试等环境 |
-| 执行器 | `/config/sql-executors` | 从平台 Agent 下发成功的记录登记 SQL 执行器并绑定环境，地址自动带出，本页不填账号密码。可停止远端进程、重新下发；删除默认先停远端。`ticket_local_idc` 中的环境在本进程直连，其余已绑定环境把 DDL/DML 下发到执行器。一体包、后端包与 Docker 镜像均含 `deploy/sql-agent/bin/sql-agent` |
+| 执行器 | `/config/sql-executors` | 从平台 Agent 下发成功的记录登记 SQL 执行器并绑定环境，地址自动带出，本页不填账号密码。可停止远端进程、重新下发；删除默认先停远端。`ticket_local_idc` 中的环境在本进程直连，其余已绑定环境把 DDL/DML/DQL 导出下发到执行器（DQL 走 `/v1/sql/export-jobs`）。一体包、后端包与 Docker 镜像均含 `deploy/sql-agent/bin/sql-agent` |
 | 云账号 | `/config/cloud-accounts` | 登记云厂商密钥，供云资源同步与变更 |
 | 连接器 | `/config/connectors` | CDC、迁移等外部组件的连接信息。可按环境、Kafka 地址、Debezium 地址筛选 |
 | 平台 Agent | `/config/agents` | 平台级执行面登记 / 下发；备份、RDB、高可用按归属引用 |

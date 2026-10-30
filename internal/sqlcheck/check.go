@@ -505,11 +505,98 @@ func firstFromTable(item string) string {
 	return name
 }
 
+// bufferIsPendingCreateDatabase 缓冲区为 CREATE DATABASE [IF NOT EXISTS] name，尚未跟选项/子句。
+// 用于抑制下一行 WITH ENCODING / WITH OWNER 等被误当成新语句。
+func bufferIsPendingCreateDatabase(buf string) bool {
+	s := strings.TrimSpace(stripSQLComments(buf))
+	i, ok := matchWordAt(s, 0, "CREATE")
+	if !ok {
+		return false
+	}
+	i, ok = matchWordAt(s, i, "DATABASE")
+	if !ok {
+		return false
+	}
+	if ni, yes := matchWordAt(s, i, "IF"); yes {
+		if ni2, mat := matchWordAt(s, ni, "NOT"); mat {
+			if ni3, mat2 := matchWordAt(s, ni2, "EXISTS"); mat2 {
+				i = ni3
+			}
+		}
+	}
+	_, ni, ok := readSQLIdent(s, i)
+	if !ok {
+		return false
+	}
+	return strings.TrimSpace(s[ni:]) == ""
+}
+
+// bufferIsAlterTableStatement 缓冲区以 ALTER TABLE 开头（可含后续已写子句）。
+func bufferIsAlterTableStatement(buf string) bool {
+	s := strings.TrimSpace(stripSQLComments(buf))
+	i, ok := matchWordAt(s, 0, "ALTER")
+	if !ok {
+		return false
+	}
+	_, ok = matchWordAt(s, i, "TABLE")
+	return ok
+}
+
+func wordAfterKeywordAt(s string, i int) string {
+	j := i
+	for j < len(s) && isWordByte(s[j]) {
+		j++
+	}
+	j = skipSpaceSQL(s, j)
+	start := j
+	for j < len(s) && isWordByte(s[j]) {
+		j++
+	}
+	if start == j {
+		return ""
+	}
+	return strings.ToUpper(s[start:j])
+}
+
+// alterTableDropIsClause 行首 DROP 实为 ALTER TABLE 子句（DROP COLUMN/CONSTRAINT…），而非 DROP TABLE 等新语句。
+func alterTableDropIsClause(sqlContent string, i int) bool {
+	switch wordAfterKeywordAt(sqlContent, i) {
+	case "COLUMN", "CONSTRAINT", "DEFAULT", "IDENTITY", "EXPRESSION", "STATISTICS":
+		return true
+	default:
+		return false
+	}
+}
+
+// alterTableAlterIsClause 行首 ALTER 实为 ALTER COLUMN …，而非新的 ALTER TABLE。
+func alterTableAlterIsClause(sqlContent string, i int) bool {
+	return wordAfterKeywordAt(sqlContent, i) == "COLUMN"
+}
+
 // shouldSuppressMissingSemicolonSplit 在 DDL 多行语句内部子句处不强制分段。
 func shouldSuppressMissingSemicolonSplit(buf string, keyword string, sqlContent string, i int) bool {
 	switch keyword {
 	case "INSERT", "UPDATE", "DELETE", "SELECT", "WITH":
 		if bufferIsPendingCTEHead(buf) {
+			return true
+		}
+	}
+	// CREATE DATABASE db\nWITH ENCODING …（PG 建库选项，非 CTE）
+	if keyword == "WITH" && bufferIsPendingCreateDatabase(buf) {
+		return true
+	}
+	// ALTER TABLE t\nDROP COLUMN / ALTER COLUMN / RENAME …
+	if bufferIsAlterTableStatement(buf) {
+		switch keyword {
+		case "DROP":
+			if alterTableDropIsClause(sqlContent, i) {
+				return true
+			}
+		case "ALTER":
+			if alterTableAlterIsClause(sqlContent, i) {
+				return true
+			}
+		case "RENAME":
 			return true
 		}
 	}

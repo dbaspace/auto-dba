@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { Button, DatePicker, Form, Input, Select, Space, Tooltip, message } from 'antd'
+import { Alert, Button, DatePicker, Form, Input, Select, Space, Tooltip, message } from 'antd'
 import CheckResultFilterBar from '../../components/CheckResultFilterBar'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import dayjs, { Dayjs } from 'dayjs'
@@ -24,6 +24,7 @@ import {
 import DbTypeIcon from '../../components/DbTypeIcon'
 import SqlEditor from '../../components/SqlEditor'
 import { useCheckResultView } from '../../hooks/useCheckResultView'
+import { useTicketSubmitFreeze } from '../../hooks/useTicketSubmitFreeze'
 import { useWorkOrderDraft } from '../../hooks/useWorkOrderDraft'
 import { useAppDispatch, useAppSelector } from '../../store'
 import { goTicketListAndClose } from './goTicketList'
@@ -97,6 +98,7 @@ export default function CreateDb() {
   const location = useLocation()
   const dispatch = useAppDispatch()
   const menus = useAppSelector((s) => s.auth.menus)
+  const ticketFreeze = useTicketSubmitFreeze()
   const [form, setForm] = useState(emptyForm())
   const formMirror = useRef(form)
   formMirror.current = form
@@ -274,6 +276,10 @@ export default function CreateDb() {
   }, [form, schedulePersist])
 
   async function submit() {
+    if (ticketFreeze.enabled) {
+      message.warning(ticketFreeze.message)
+      return
+    }
     try {
       await antdForm.validateFields()
     } catch {
@@ -380,6 +386,9 @@ export default function CreateDb() {
 
   return (
     <div className="order-page">
+      {ticketFreeze.enabled ? (
+        <Alert type="warning" showIcon style={{ marginBottom: 12 }} message={ticketFreeze.message} />
+      ) : null}
       <div className="order-split">
         <aside className="order-aside">
           <Form form={antdForm} layout="vertical" initialValues={form}>
@@ -529,8 +538,21 @@ export default function CreateDb() {
                 <Button disabled={submitting} onClick={reset}>
                   重置
                 </Button>
-                <Tooltip title={submitAllowed || submitting ? '' : submitDisabledReason}>
-                  <Button type="primary" loading={submitting} disabled={!submitAllowed} onClick={submit}>
+                <Tooltip
+                  title={
+                    ticketFreeze.enabled
+                      ? ticketFreeze.message
+                      : submitAllowed || submitting
+                        ? ''
+                        : submitDisabledReason
+                  }
+                >
+                  <Button
+                    type="primary"
+                    loading={submitting}
+                    disabled={ticketFreeze.enabled || !submitAllowed}
+                    onClick={submit}
+                  >
                     提交
                   </Button>
                 </Tooltip>
