@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
-import { Alert, Avatar, Button, Descriptions, Input, Modal, Progress, Select, Steps, Tag, message } from 'antd'
+import { Alert, Avatar, Button, Descriptions, Input, Modal, Progress, Select, Tag, message } from 'antd'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import api from '../../api/request'
 import { useAppDispatch, useAppSelector } from '../../store'
@@ -108,10 +108,10 @@ async function resolveExportBlob(
 
 const DQL_EXPORT_PIPELINE = [
   { key: 'accepted', title: '已受理' },
-  { key: 'routing', title: '路由判定' },
-  { key: 'remote_submit', title: '下发执行器' },
-  { key: 'querying', title: '查询编码' },
-  { key: 'transferring', title: '回传平台' },
+  { key: 'routing', title: '选择导出方式' },
+  { key: 'remote_submit', title: '下发到就近执行器' },
+  { key: 'querying', title: '查询数据并生成文件' },
+  { key: 'transferring', title: '传回平台临时目录' },
   { key: 'ready', title: '文件就绪' },
 ] as const
 
@@ -819,16 +819,26 @@ export default function TicketDetail() {
         Boolean(dqlExportStage)),
     [isDQL, item, dqlExportStage],
   )
-  const dqlExportPipelineCurrent = useMemo(() => {
-    if (item?.status === 'failed' || dqlExportStage === 'failed') {
-      const cur = dqlExportStage === 'failed' ? 'querying' : dqlExportStage
-      const idx = DQL_EXPORT_STAGE_ORDER.indexOf(cur as (typeof DQL_EXPORT_STAGE_ORDER)[number])
-      return idx >= 0 ? idx : 0
+  // 本机路径不展示下发/回传；远程或未知时仍展示全链路
+  const dqlExportVisibleSteps = useMemo(() => {
+    const remote = String(dqlExportVia || '').toLowerCase() === 'remote'
+    if (remote) return [...DQL_EXPORT_PIPELINE]
+    return DQL_EXPORT_PIPELINE.filter((s) => s.key !== 'remote_submit' && s.key !== 'transferring')
+  }, [dqlExportVia])
+  const dqlExportExecutorLine = useMemo(() => {
+    const via = String(dqlExportVia || '').toLowerCase()
+    const name = String(dqlExtra?.export_executor || item?.exec_progress?.executor || '').trim()
+    const url = String(item?.exec_progress?.executor_url || '').trim()
+    if (via === 'local') return { kind: 'local' as const, text: '执行方式：本机直连' }
+    if (via === 'remote' || name || url) {
+      const parts = [name, url].filter(Boolean)
+      return {
+        kind: 'remote' as const,
+        text: parts.length ? `执行器：${parts.join(' · ')}` : '执行器：远程',
+      }
     }
-    if (item?.status === 'executed' || dqlExportStage === 'ready') return DQL_EXPORT_PIPELINE.length - 1
-    const idx = DQL_EXPORT_STAGE_ORDER.indexOf(dqlExportStage as (typeof DQL_EXPORT_STAGE_ORDER)[number])
-    return idx >= 0 ? idx : 0
-  }, [item, dqlExportStage])
+    return null
+  }, [dqlExportVia, dqlExtra, item])
 
   const execCardClass = useMemo(() => {
     const s = item?.status
@@ -1488,43 +1498,62 @@ export default function TicketDetail() {
                   <div className="flow-card-body download-body">
                     {showDqlExportPipeline && (
                       <div className="download-pipeline">
-                        <div className="download-pipeline-title">下载流程</div>
-                        <Steps
-                          size="small"
-                          current={dqlExportPipelineCurrent}
-                          status={
-                            item.status === 'failed' || dqlExportStage === 'failed'
-                              ? 'error'
-                              : item.status === 'executed'
-                                ? 'finish'
-                                : 'process'
-                          }
-                          items={DQL_EXPORT_PIPELINE.map((step) => {
+                        <div className="download-pipeline-head">
+                          <div className="download-pipeline-title">下载流程</div>
+                          {dqlExportExecutorLine ? (
+                            <div
+                              className={`download-pipeline-executor ${dqlExportExecutorLine.kind === 'local' ? 'is-local' : ''}`}
+                              title={dqlExportExecutorLine.text}
+                            >
+                              {dqlExportExecutorLine.text}
+                            </div>
+                          ) : null}
+                        </div>
+                        <div className="download-pipeline-list" role="list">
+                          {dqlExportVisibleSteps.map((step, idx) => {
                             const st = dqlExportStepStatus(
                               step.key,
                               dqlExportStage,
                               dqlExportVia,
                               String(item.status || ''),
                             )
-                            const localSkip =
-                              dqlExportVia === 'local' &&
-                              (step.key === 'remote_submit' || step.key === 'transferring') &&
+                            const rowClass =
                               st === 'finish'
-                            return {
-                              title: step.title,
-                              description: localSkip ? '跳过（本机直连）' : undefined,
-                              status: st,
-                            }
+                                ? 'is-ok'
+                                : st === 'process'
+                                  ? 'is-current'
+                                  : st === 'error'
+                                    ? 'is-fail'
+                                    : 'is-wait'
+                            return (
+                              <div key={step.key} className="download-pipeline-row">
+                                {idx > 0 ? (
+                                  <div className="download-pipeline-wrap" aria-hidden>
+                                    ↓
+                                  </div>
+                                ) : null}
+                                <div role="listitem" className={`download-pipeline-item ${rowClass}`}>
+                                  <span className="download-pipeline-dot" aria-hidden>
+                                    {st === 'finish' ? '✓' : st === 'error' ? '!' : idx + 1}
+                                  </span>
+                                  <span className="download-pipeline-label">
+                                    {idx === 0 ? (
+                                      <>
+                                        <span className="download-pipeline-start">起</span>
+                                        {step.title}
+                                      </>
+                                    ) : (
+                                      step.title
+                                    )}
+                                  </span>
+                                </div>
+                              </div>
+                            )
                           })}
-                        />
+                        </div>
                         {item.status === 'running' && (
                           <div className="download-hint">
                             当前：{dqlExportStageLabel(dqlExportStage)}
-                            {dqlExtra?.export_executor
-                              ? ` · 执行器 ${dqlExtra.export_executor}`
-                              : dqlExportVia === 'local'
-                                ? ' · 本机直连'
-                                : ''}
                             {item.exec_progress?.last_error
                               ? ` · ${String(item.exec_progress.last_error).slice(0, 120)}`
                               : ''}

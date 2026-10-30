@@ -142,8 +142,97 @@
 .download-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .download-hint { margin-top: 8px; color: #a16207; font-size: 12px; }
 .download-pipeline { margin-bottom: 12px; }
-.download-pipeline-title { font-size: 12px; color: #78716c; margin-bottom: 8px; }
-.download-pipeline .ant-steps-item-title { font-size: 12px !important; line-height: 1.3 !important; }
+.download-pipeline-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.download-pipeline-title { font-size: 12px; color: #78716c; }
+.download-pipeline-executor {
+  font-size: 12px;
+  color: #57534e;
+  line-height: 1.4;
+  word-break: break-all;
+}
+.download-pipeline-executor.is-local { color: #78716c; }
+.download-pipeline-list {
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.download-pipeline-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+.download-pipeline-wrap {
+  margin-left: 7px;
+  color: #a8a29e;
+  font-size: 12px;
+  line-height: 14px;
+  height: 14px;
+}
+.download-pipeline-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  min-width: 0;
+  width: 100%;
+}
+.download-pipeline-start {
+  display: inline-block;
+  margin-right: 4px;
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #92400e;
+  background: #fef3c7;
+  vertical-align: 1px;
+}
+.download-pipeline-dot {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: #6b7280;
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
+}
+.download-pipeline-item.is-ok .download-pipeline-dot {
+  color: #fff;
+  background: #22c55e;
+  border-color: #16a34a;
+}
+.download-pipeline-item.is-current .download-pipeline-dot {
+  color: #fff;
+  background: #f59e0b;
+  border-color: #d97706;
+}
+.download-pipeline-item.is-fail .download-pipeline-dot {
+  color: #fff;
+  background: #ef4444;
+  border-color: #dc2626;
+}
+.download-pipeline-label {
+  font-size: 13px;
+  color: #374151;
+  line-height: 1.35;
+  min-width: 0;
+}
+.download-pipeline-item.is-ok .download-pipeline-label { color: #15803d; }
+.download-pipeline-item.is-current .download-pipeline-label { color: #b45309; font-weight: 600; }
+.download-pipeline-item.is-fail .download-pipeline-label { color: #b91c1c; font-weight: 600; }
+.download-pipeline-item.is-wait .download-pipeline-label { color: #9ca3af; }
 .download-err { margin-top: 8px; color: #b91c1c; font-size: 12px; word-break: break-word; }
 .exec-wait { color: #a16207; font-weight: 600; }
 .fmt-label { margin-bottom: 8px; color: #4b5563; }
