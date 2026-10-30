@@ -58,7 +58,11 @@ function filenameFromHeader(header: any, fallback: string): string {
   return plain?.[1] || fallback
 }
 
-function exportMime(format: string): string {
+function exportMime(format: string, filename?: string): string {
+  const name = String(filename || '')
+  if (/\.gz$/i.test(name) || String(format || '').toLowerCase().endsWith('.gz')) {
+    return 'application/gzip'
+  }
   switch (String(format || '').toLowerCase()) {
     case 'json':
       return 'application/json;charset=utf-8'
@@ -69,22 +73,24 @@ function exportMime(format: string): string {
   }
 }
 
-/** 解析导出 blob：csv/json/sql 共用；区分错误 JSON 与成功文件（含 json 成功也是 application/json） */
+/** 解析导出 blob：csv/json/sql（及 .gz）共用；区分错误 JSON 与成功文件 */
 async function resolveExportBlob(
   data: any,
   contentType: string,
   contentDisposition: string,
   format: string,
 ): Promise<{ blob: Blob } | { error: string }> {
-  const mime = exportMime(format)
+  const headerName = filenameFromHeader(contentDisposition, '')
+  const mime = exportMime(format, headerName)
   let blob = data instanceof Blob ? data : new Blob([data], { type: mime })
   const ctype = String(contentType || '')
   const hasFile = /filename/i.test(String(contentDisposition || ''))
+  const isGzip = /\.gz$/i.test(headerName) || ctype.includes('gzip')
 
   // 成功导出会带 Content-Disposition；错误体多为 JSON 且无文件名
-  // json 成功也是 application/json，不能只靠 Content-Type：有文件名则直接当下载体
-  // csv/sql 若误标成 application/json（无文件名或错类型）也要能读出 message
-  const maybeErrorJSON = !hasFile || (ctype.includes('application/json') && format !== 'json')
+  // gzip 压缩体勿当错误 JSON 解析；json 明文成功也是 application/json，靠文件名区分
+  const maybeErrorJSON =
+    !isGzip && (!hasFile || (ctype.includes('application/json') && format !== 'json'))
 
   if (maybeErrorJSON) {
     const text = await blob.text()
@@ -99,7 +105,7 @@ async function resolveExportBlob(
     return { blob: new Blob([text], { type: ctype || mime }) }
   }
 
-  // 有文件名的成功响应：统一补齐 MIME，避免浏览器把 json/sql 存成错误扩展名
+  // 有文件名的成功响应：统一补齐 MIME
   if (!blob.type || blob.type === 'application/octet-stream') {
     blob = new Blob([blob], { type: mime })
   }
@@ -110,7 +116,7 @@ const DQL_EXPORT_PIPELINE = [
   { key: 'accepted', title: '已受理' },
   { key: 'routing', title: '选择导出方式' },
   { key: 'remote_submit', title: '下发到就近执行器' },
-  { key: 'querying', title: '查询数据并生成文件' },
+  { key: 'querying', title: '查询数据并生成压缩文件' },
   { key: 'transferring', title: '传回平台临时目录' },
   { key: 'ready', title: '文件就绪' },
 ] as const

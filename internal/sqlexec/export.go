@@ -223,12 +223,14 @@ func (r *ExportRunner) run(ctx context.Context, j *exportJob, req ExportRequest)
 		res.Limit = dbprobe.MaxExportLimit
 	}
 
-	j.setPhase("running", ExportEncoding, "正在编码")
+	// 落盘为 *.gz；平台 FetchExportFile 原样回传。部署侧需同步升级 sql-agent，否则旧 agent 仍回传明文。
+	j.setPhase("running", ExportEncoding, "正在编码并压缩")
 	table := dqlexport.TableNameFromSQL(req.SQL)
 	body, ext, _ := dqlexport.Encode(res, req.Format, table, strings.ToLower(t.DBType))
-	name := fmt.Sprintf("dql_%s_%s.%s", dqlexport.SanitizeFilePart(req.TicketNo), time.Now().Format("20060102_150405"), ext)
+	name := fmt.Sprintf("dql_%s_%s.%s", dqlexport.SanitizeFilePart(req.TicketNo), time.Now().Format("20060102_150405"), dqlexport.GzipExt(ext))
 	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, body, 0o600); err != nil {
+	n, err := dqlexport.WriteGzipFile(path, body)
+	if err != nil {
 		j.setPhase(ExportFailed, ExportFailed, "写文件失败: "+err.Error())
 		_ = os.RemoveAll(dir)
 		j.mu.Lock()
@@ -241,8 +243,8 @@ func (r *ExportRunner) run(ctx context.Context, j *exportJob, req ExportRequest)
 	j.view.Status = ExportDone
 	j.view.Phase = ExportDone
 	j.view.Filename = name
-	j.view.Bytes = int64(len(body))
-	j.view.Message = "导出完成"
+	j.view.Bytes = n
+	j.view.Message = "导出完成（gzip）"
 	j.view.Format = strings.ToLower(strings.TrimSpace(req.Format))
 	if j.view.Format == "" {
 		j.view.Format = "csv"

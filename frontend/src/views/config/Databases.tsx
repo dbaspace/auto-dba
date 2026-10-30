@@ -254,14 +254,40 @@ export default function Databases() {
     return list
   }, [typeOptions, instances, knownTypes])
 
+  // 顶部过滤栏条件（不含类型 Tab）；类型 Tab 数字与表格共用
+  const barFilteredRows = useMemo(() => {
+    const q = dbNameQ.trim().toLowerCase()
+    const approver = approverQ.trim().toLowerCase()
+    const dom = domainFilter.trim().toLowerCase()
+    return rows.filter((r) => {
+      const inst = instances.find((i) => i.id === r.instance_id)
+      if (q && !String(r.db_name || '').toLowerCase().includes(q)) return false
+      if (approver) {
+        const names = (r.approvers || []).map((n) => String(n || '').trim().toLowerCase()).filter(Boolean)
+        if (!names.includes(approver)) return false
+      }
+      if (envFilter) {
+        if (resolveRowEnv(r, inst) !== envFilter) return false
+      }
+      if (tenantFilter) {
+        if (String(r.tenant_id || '').trim() !== tenantFilter) return false
+      }
+      if (dom) {
+        const domains = resolveRowDomains(r, inst)
+        if (!domains.some((d) => d.toLowerCase() === dom || d.toLowerCase().includes(dom))) return false
+      }
+      return true
+    })
+  }, [rows, dbNameQ, approverQ, domainFilter, envFilter, tenantFilter, instances])
+
   function typeCount(value: string) {
-    return rows.filter((r) => matchType(instanceType(r.instance_id), value)).length
+    return barFilteredRows.filter((r) => matchType(instanceType(r.instance_id), value)).length
   }
 
   const { visible: visibleTypeTabs, more: moreTypeTabs } = useMemo(
     () => splitTypeTabsByDataCount(tabs, typeCount, activeType),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [tabs, rows, instances, knownTypes, activeType],
+    [tabs, barFilteredRows, instances, knownTypes, activeType],
   )
 
   const tabInstances = useMemo(() => {
@@ -324,32 +350,12 @@ export default function Databases() {
   }, [tenants, rows, currentTenantId])
 
   const filteredRows = useMemo(() => {
-    const q = dbNameQ.trim().toLowerCase()
-    const approver = approverQ.trim().toLowerCase()
-    const dom = domainFilter.trim().toLowerCase()
-    return rows.filter((r) => {
-      const inst = instances.find((i) => i.id === r.instance_id)
-      const dbType = inst?.db_type || ''
-      if (activeType && !matchType(dbType, activeType)) return false
-      if (q && !String(r.db_name || '').toLowerCase().includes(q)) return false
-      if (approver) {
-        const names = (r.approvers || []).map((n) => String(n || '').trim().toLowerCase()).filter(Boolean)
-        if (!names.includes(approver)) return false
-      }
-      if (envFilter) {
-        if (resolveRowEnv(r, inst) !== envFilter) return false
-      }
-      if (tenantFilter) {
-        if (String(r.tenant_id || '').trim() !== tenantFilter) return false
-      }
-      if (dom) {
-        const domains = resolveRowDomains(r, inst)
-        if (!domains.some((d) => d.toLowerCase() === dom || d.toLowerCase().includes(dom))) return false
-      }
-      return true
+    return barFilteredRows.filter((r) => {
+      if (!activeType) return true
+      return matchType(instanceType(r.instance_id), activeType)
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, activeType, dbNameQ, approverQ, domainFilter, envFilter, tenantFilter, instances, knownTypes])
+  }, [barFilteredRows, activeType, instances, knownTypes])
 
   const pagedRows = useMemo(() => {
     const start = (page - 1) * pageSize

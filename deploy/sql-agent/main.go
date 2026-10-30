@@ -153,7 +153,11 @@ func main() {
 			if name == "" {
 				name = filepath.Base(fpath)
 			}
-			w.Header().Set("Content-Type", "application/octet-stream")
+			if strings.HasSuffix(strings.ToLower(name), ".gz") {
+				w.Header().Set("Content-Type", "application/gzip")
+			} else {
+				w.Header().Set("Content-Type", "application/octet-stream")
+			}
 			w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
 			if view.Bytes > 0 {
 				w.Header().Set("Content-Length", strconv.FormatInt(view.Bytes, 10))

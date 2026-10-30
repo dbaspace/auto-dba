@@ -174,6 +174,9 @@ func (h *TicketHandler) ExportFile(c *gin.Context) {
 		return
 	}
 	name := filepath.Base(ex.ExportFile)
+	if strings.HasSuffix(strings.ToLower(name), ".gz") {
+		c.Header("Content-Type", dqlexport.GzipContentType)
+	}
 	c.Header("Content-Disposition", `attachment; filename="`+name+`"; filename*=UTF-8''`+url.QueryEscape(name))
 	c.File(path)
 }
@@ -248,13 +251,14 @@ func (h *TicketHandler) runDQLExportLocal(ctx context.Context, it *store.Issue, 
 		res.Limit = dbprobe.MaxExportLimit
 	}
 	body, ext, _ := dqlexport.Encode(res, format, dqlexport.TableNameFromSQL(it.SQLContent), strings.ToLower(inst.DBType))
-	name := fmt.Sprintf("dql_%s_%s.%s", dqlexport.SanitizeFilePart(it.TicketNo), time.Now().Format("20060102_150405"), ext)
+	name := fmt.Sprintf("dql_%s_%s.%s", dqlexport.SanitizeFilePart(it.TicketNo), time.Now().Format("20060102_150405"), dqlexport.GzipExt(ext))
 	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, body, 0o600); err != nil {
+	n, err := dqlexport.WriteGzipFile(path, body)
+	if err != nil {
 		h.failDQLExport(it.ID, "写导出文件失败: "+err.Error())
 		return
 	}
-	h.completeDQLExport(it.ID, name, int64(len(body)), "local", "")
+	h.completeDQLExport(it.ID, name, n, "local", "")
 }
 
 func (h *TicketHandler) runDQLExportRemote(ctx context.Context, it *store.Issue, inst *store.Instance, rec *store.Database, host, password, format string, limit int, dir string, exec *sqlexec.Executor) {
@@ -331,7 +335,7 @@ func (h *TicketHandler) runDQLExportRemote(ctx context.Context, it *store.Issue,
 			h.saveDQLExportProgress(it, inst, host, dqlExportPhaseTransferring, exec.Name, sqlexec.Decision{Mode: sqlexec.ModeRemote, Executor: exec})
 			name := strings.TrimSpace(view.Filename)
 			if name == "" {
-				name = fmt.Sprintf("dql_%s.%s", dqlexport.SanitizeFilePart(it.TicketNo), format)
+				name = fmt.Sprintf("dql_%s.%s", dqlexport.SanitizeFilePart(it.TicketNo), dqlexport.GzipExt(format))
 			}
 			name = filepath.Base(name)
 			dest := filepath.Join(dir, name)
