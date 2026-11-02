@@ -468,12 +468,34 @@ func cdcInstanceIDsFromPayload(raw map[string]any) (sourceID, targetID string) {
 	return sourceID, targetID
 }
 
-func cdcNeedsApproval(taskType string) bool {
+func cdcTaskTypeNeedsApproval(taskType string) bool {
 	switch strings.TrimSpace(taskType) {
 	case "init", "add_table", "alter_schema", "remove_table", "delete_task":
 		return true
 	default:
 		return false
+	}
+}
+
+// cdcNeedsApproval 兼容旧调用：仅按任务类型判断（默认需要审批）。
+func cdcNeedsApproval(taskType string) bool {
+	return cdcTaskTypeNeedsApproval(taskType)
+}
+
+// cdcApprovalRequired 读取全局参数 sync_approval_enabled；关闭时免审直跑。
+func (h *CDCHandler) cdcApprovalRequired(taskType string) bool {
+	if !cdcTaskTypeNeedsApproval(taskType) {
+		return false
+	}
+	if h == nil || h.Store == nil {
+		return true
+	}
+	v, _ := h.Store.GetGlobalArg("sync_approval_enabled")
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "false", "0", "off", "no":
+		return false
+	default:
+		return true
 	}
 }
 
@@ -615,6 +637,21 @@ func (h *CDCHandler) prepareCDCCreate(c *gin.Context, t *store.CDCTask) error {
 	if err := cdc.ValidateMappingShardScopes(maps, taskDBs); err != nil {
 		return err
 	}
+	if t.TaskType == "add_table" && t.ParentID != "" {
+		parent, _ := h.Store.GetCDCInTenant(t.ParentID, tid)
+		occupied := h.listOccupiedSourceTables(parent)
+		want := extraCSVTables(t.Description)
+		if len(want) == 0 {
+			want = sourceTablesFromCDCDesc(t.Description)
+		}
+		kept := subtractFold(want, occupied)
+		if len(kept) == 0 {
+			return fmt.Errorf("no new tables to add (all already synced)")
+		}
+		if len(kept) != len(want) {
+			t.Description = rewriteCDCTaskTables(t.Description, kept)
+		}
+	}
 	return nil
 }
 
@@ -682,7 +719,8 @@ func (h *CDCHandler) persistCDCTaskShared(c *gin.Context, t *store.CDCTask, shar
 	t.Description = encodeCDCExtraJSON(text, extra)
 	t.ApprovalStatus = "none"
 	t.Status = store.StatusInit
-	if cdcNeedsApproval(t.TaskType) {
+	needApproval := h.cdcApprovalRequired(t.TaskType)
+	if needApproval {
 		if shared == nil {
 			issue, err := h.createSharedCDCIssue(c, t, reviewerRaw...)
 			if err != nil {
@@ -697,6 +735,9 @@ func (h *CDCHandler) persistCDCTaskShared(c *gin.Context, t *store.CDCTask, shar
 			extra["assigned_to"] = shared.AssignedTo
 			t.Description = encodeCDCExtraJSON(text, extra)
 		}
+	} else {
+		t.ApprovalStatus = store.StatusApproved
+		t.Status = store.StatusInit
 	}
 	stampTenantID(c, func(tid string) { t.TenantID = tid })
 	if err := h.Store.CreateCDC(t); err != nil {
@@ -709,6 +750,19 @@ func (h *CDCHandler) persistCDCTaskShared(c *gin.Context, t *store.CDCTask, shar
 		Message:  fmt.Sprintf("任务已创建 type=%s name=%s publication=%s slot=%s connector=%s", t.TaskType, t.Name, jsonAnyString(extra["publication_name"]), jsonAnyString(extra["slot_name"]), jsonAnyString(extra["connector_name"])),
 		Operator: user,
 	})
+	if !needApproval {
+		taskID := t.ID
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			defer cancel()
+			if err := h.orch().Apply(ctx, taskID, ""); err != nil {
+				_ = h.Store.InsertCDCLog(&store.CDCSyncLog{
+					TaskID: taskID, Level: "ERROR", Step: "create",
+					Message: "免审直跑失败: " + err.Error(), Operator: user,
+				})
+			}
+		}()
+	}
 	return t, nil
 }
 

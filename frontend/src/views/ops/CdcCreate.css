@@ -3,6 +3,13 @@
   height: 100%;
   min-height: 0;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.cdc-create > .cdc-back,
+.cdc-create > .cdc-title-row,
+.cdc-create > .cdc-steps {
+  flex-shrink: 0;
 }
 .cdc-create > .cdc-form {
   flex: 1 1 auto;
@@ -11,6 +18,22 @@
 }
 .cdc-create > .cdc-nav {
   flex-shrink: 0;
+}
+.cdc-parent-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 16px;
+}
+.cdc-parent-filter-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.cdc-parent-filter-label {
+  color: rgba(0, 0, 0, 0.88);
+  font-size: 14px;
+  white-space: nowrap;
 }
 .cdc-form:has(.cdc-step-fill) {
   display: flex;

@@ -958,11 +958,59 @@ export function resolveParentInstanceKey(row: any, inst: any): string {
   return String(row?.source_instance_id || '').trim()
 }
 
-export function validateAddTableParents(rows: any[], instOf: (id: string) => any): string {
+/** 至少选一个父任务；允许多分库、多实例批量（对齐业务批量加表）。 */
+export function validateAddTableParents(rows: any[], _instOf?: (id: string) => any): string {
   if (!rows?.length) return '请至少选择一个已有初始化任务'
-  const keys = new Set(rows.map((r) => resolveParentInstanceKey(r, instOf?.(r.source_instance_id))).filter(Boolean))
-  if (keys.size > 1) return '所选任务须属于同一源端实例，请取消不同实例的任务'
   return ''
+}
+
+/** 多选父任务：勾选累加、取消移除，不按源库/实例顶替。 */
+export function nextAddTableParentIds(currentIds: string[], rowId: string, checked: boolean): string[] {
+  const id = String(rowId || '').trim()
+  if (!id) return [...(currentIds || [])]
+  const cur = (currentIds || []).map((x) => String(x)).filter(Boolean)
+  if (!checked) return cur.filter((x) => x !== id)
+  if (cur.includes(id)) return cur
+  return [...cur, id]
+}
+
+export type BatchAddTablePlanRow = {
+  parent_id: string
+  parent_name: string
+  source_db: string
+  child_name: string
+  tables_to_add: string[]
+  skipped_tables: string[]
+  skipped: boolean
+}
+
+/** 确认页批量提交计划：按父任务跳过已同步表并生成子任务名。 */
+export function buildBatchAddTablePlan(opts: {
+  parents: any[]
+  tables: string[]
+  baseName?: string
+}): BatchAddTablePlanRow[] {
+  const tables = (opts.tables || []).map((t) => String(t || '').trim()).filter(Boolean)
+  const base = String(opts.baseName || '').trim()
+  const multi = (opts.parents || []).length > 1
+  return (opts.parents || []).map((p) => {
+    const synced = Array.isArray(p?.synced_tables) ? p.synced_tables.map(String) : parentTablesOf(p)
+    const syncedSet = new Set(synced.map((t: string) => String(t).toLowerCase()))
+    const tablesToAdd = tables.filter((t) => !syncedSet.has(t.toLowerCase()))
+    const skipped = tables.filter((t) => syncedSet.has(t.toLowerCase()))
+    let childName = base || `${p.name || p.id}_加表`
+    if (multi && base) childName = `${base}_${p.name || p.id}`
+    else if (multi && !base) childName = `${p.name || p.id}_加表`
+    return {
+      parent_id: String(p.id || ''),
+      parent_name: String(p.name || p.id || ''),
+      source_db: String(p.source_db || ''),
+      child_name: childName,
+      tables_to_add: tablesToAdd,
+      skipped_tables: skipped,
+      skipped: tablesToAdd.length === 0,
+    }
+  })
 }
 
 export function pgTypeToStarRocksType(col: any): string {

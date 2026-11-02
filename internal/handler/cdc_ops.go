@@ -26,6 +26,8 @@ func encodeCDCExtraJSON(text string, extra map[string]any) string {
 }
 
 func (h *CDCHandler) InitList(c *gin.Context) {
+	envQ := strings.TrimSpace(c.Query("env"))
+	nameQ := strings.ToLower(strings.TrimSpace(c.Query("q")))
 	list, err := h.Store.ListCDCInTenant(effectiveListTenantID(h.Store, c), "", "init")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
@@ -44,16 +46,36 @@ func (h *CDCHandler) InitList(c *gin.Context) {
 		counts := cdcListTableCounts(parseCDCExtraMap(norm))
 		desc := slimCDCDescriptionForList(norm)
 		extra := cdc.ParseTaskExtra(desc)
+		taskEnv := strings.TrimSpace(extra["env"])
+		if envQ != "" && !strings.EqualFold(taskEnv, envQ) {
+			continue
+		}
+		if nameQ != "" {
+			name := strings.ToLower(t.Name)
+			db := strings.ToLower(t.SourceDB)
+			if !strings.Contains(name, nameQ) && !strings.Contains(db, nameQ) {
+				continue
+			}
+		}
 		synced := counts["target"]
 		if synced == 0 {
 			synced = counts["source"]
+		}
+		sourceHost, sourcePort := "", 0
+		if inst, _ := h.Store.GetInstance(t.SourceID); inst != nil {
+			sourceHost = strings.TrimSpace(inst.Host)
+			if sourceHost == "" {
+				sourceHost = strings.TrimSpace(inst.DomainName)
+			}
+			sourcePort = inst.Port
 		}
 		out = append(out, gin.H{
 			"id": t.ID, "name": t.Name, "status": t.Status, "task_type": t.TaskType,
 			"source_instance_id": t.SourceID, "target_instance_id": t.TargetID,
 			"source_db": t.SourceDB, "target_db": t.TargetDB,
+			"source_host": sourceHost, "source_port": sourcePort,
 			"synced_table_count": synced,
-			"publication_name":  extra["publication_name"], "env": extra["env"],
+			"publication_name":  extra["publication_name"], "env": taskEnv,
 			"description": desc,
 		})
 	}
@@ -66,7 +88,7 @@ func (h *CDCHandler) SyncedTables(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"message": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": extraCSVTables(init.Description)})
+	c.JSON(http.StatusOK, gin.H{"data": h.listOccupiedSourceTables(init)})
 }
 
 func (h *CDCHandler) SyncedTablesBatch(c *gin.Context) {
@@ -77,7 +99,7 @@ func (h *CDCHandler) SyncedTablesBatch(c *gin.Context) {
 	out := map[string][]string{}
 	for _, id := range uniqueNonEmpty(req.IDs) {
 		if t, _ := h.Store.GetCDCInTenant(id, effectiveListTenantID(h.Store, c)); t != nil {
-			out[id] = extraCSVTables(t.Description)
+			out[id] = h.listOccupiedSourceTables(t)
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{"data": out})
@@ -120,7 +142,7 @@ func (h *CDCHandler) AvailableTables(c *gin.Context) {
 		}
 	}
 	synced := map[string]struct{}{}
-	for _, t := range extraCSVTables(init.Description) {
+	for _, t := range h.listOccupiedSourceTables(init) {
 		synced[strings.ToLower(t)] = struct{}{}
 	}
 	var avail []string

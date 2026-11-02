@@ -93,16 +93,46 @@ func (o *Orchestrator) applyAddTable(ctx context.Context, t *store.CDCTask, from
 		o.appendLog(t, "INFO", "debezium", "connector include.list 已合并")
 	}
 	if runSR && extra["auto_create_table"] != "false" && strings.TrimSpace(t.TargetID) != "" {
-		sqlText, err := PreviewTargetSQL(ctx, o.Store, o.Secret, t)
-		if err != nil {
-			o.appendLog(t, "WARN", "starrocks", "预览目标 SQL 失败: "+err.Error())
-		} else if o.Cfg.Enabled {
-			if err := o.applyTargetSQL(ctx, t, sqlText); err != nil {
-				extra["error_step"] = "starrocks"
-				o.appendLog(t, "ERROR", "starrocks", err.Error())
-				o.saveExtra(t, extra)
-				_ = o.Store.UpdateCDCStatus(t.ID, store.StatusFailed, t.ApprovalStatus)
-				return err
+		parentMaps := ParseMappingsJSON(parentExtra["mappings"])
+		addMaps := ParseMappingsJSON(extra["mappings"])
+		provisionMaps, reused := splitAddTableMapsForProvision(addMaps, parentMaps, tables)
+		for _, tgt := range reused {
+			o.appendLog(t, "INFO", "starrocks", "shard extension: skip SR/RL for existing target "+tgt)
+		}
+		if len(provisionMaps) == 0 && len(reused) > 0 {
+			o.appendLog(t, "INFO", "starrocks", "全部为分表扩展复用，跳过 StarRocks 建表/RL")
+		} else if len(provisionMaps) > 0 || len(addMaps) == 0 {
+			previewTask := *t
+			if len(provisionMaps) > 0 {
+				previewExtra := parseTaskExtra(t.Description)
+				if b, merr := json.Marshal(provisionMaps); merr == nil {
+					previewExtra["mappings"] = string(b)
+				}
+				var provTables []string
+				for _, m := range provisionMaps {
+					provTables = append(provTables, m.SourceTables...)
+					if tt := strings.TrimSpace(m.TargetTable); tt != "" {
+						provTables = append(provTables, tt)
+					}
+				}
+				if len(provTables) > 0 {
+					previewExtra["tables"] = strings.Join(uniqueFoldPreserve(provTables), ",")
+				}
+				text, _ := splitCDCDesc(t.Description)
+				b, _ := json.Marshal(previewExtra)
+				previewTask.Description = strings.TrimSpace(text + "\n-- auto-dba-cdc:" + string(b))
+			}
+			sqlText, err := PreviewTargetSQL(ctx, o.Store, o.Secret, &previewTask)
+			if err != nil {
+				o.appendLog(t, "WARN", "starrocks", "预览目标 SQL 失败: "+err.Error())
+			} else if o.Cfg.Enabled {
+				if err := o.applyTargetSQL(ctx, t, sqlText); err != nil {
+					extra["error_step"] = "starrocks"
+					o.appendLog(t, "ERROR", "starrocks", err.Error())
+					o.saveExtra(t, extra)
+					_ = o.Store.UpdateCDCStatus(t.ID, store.StatusFailed, t.ApprovalStatus)
+					return err
+				}
 			}
 		}
 	}
@@ -246,14 +276,17 @@ func (o *Orchestrator) stepAddTableDebezium(ctx context.Context, t, parent *stor
 		if cfg == nil {
 			cfg = CurrentConfigFromExtra(parentExtra)
 		}
-		next := MergeTableIncludeList(cfg["table.include.list"], schema, tables)
-		if next == cfg["table.include.list"] {
+		prev := cfg["table.include.list"]
+		next := MergeTableIncludeList(prev, schema, tables)
+		if next == prev {
+			o.appendLog(t, "INFO", "debezium", "include.list 无变化，跳过 PUT connector="+name)
 			continue
 		}
 		cfg["table.include.list"] = next
 		if err := o.PutConnectorConfig(ctx, parentExtra, name, cfg); err != nil {
 			return err
 		}
+		o.appendLog(t, "INFO", "debezium", "include.list delta 已 PUT connector="+name)
 		o.restartConnectorBestEffort(ctx, t, parentExtra, name)
 	}
 	return nil
@@ -712,6 +745,76 @@ func selectedAlterColumns(cols []SchemaDiffColumn) []SchemaDiffColumn {
 		}
 		c.Selected = true
 		out = append(out, c)
+	}
+	return out
+}
+
+// mappingReusesParentTarget 分表扩展：目标表已在父 mappings 中则跳过 SR/RL 重建。
+func mappingReusesParentTarget(m TableMapping, parentMaps []TableMapping) bool {
+	tgt := strings.TrimSpace(m.TargetTable)
+	if tgt == "" {
+		return false
+	}
+	// 优先分表组；单表扩展到已有目标时同样复用
+	for _, p := range parentMaps {
+		if strings.EqualFold(strings.TrimSpace(p.Status), "deleted") {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(p.TargetTable), tgt) {
+			return true
+		}
+	}
+	return false
+}
+
+// splitAddTableMapsForProvision 拆出需完整建表的 mapping 与可复用目标表名。
+func splitAddTableMapsForProvision(addMaps, parentMaps []TableMapping, tables []string) (need []TableMapping, reusedTargets []string) {
+	if len(addMaps) == 0 {
+		// 无 mappings 时按 tables 构造；若目标已在父中则记为 reused
+		for _, t := range tables {
+			t = strings.TrimSpace(t)
+			if t == "" {
+				continue
+			}
+			m := TableMapping{SourceTables: []string{t}, TargetTable: t}
+			if mappingReusesParentTarget(m, parentMaps) {
+				reusedTargets = append(reusedTargets, t)
+				continue
+			}
+			need = append(need, m)
+		}
+		return need, uniqueFoldPreserve(reusedTargets)
+	}
+	for _, m := range addMaps {
+		if strings.EqualFold(strings.TrimSpace(m.Status), "deleted") {
+			continue
+		}
+		if mappingReusesParentTarget(m, parentMaps) {
+			tgt := strings.TrimSpace(m.TargetTable)
+			if tgt != "" {
+				reusedTargets = append(reusedTargets, tgt)
+			}
+			continue
+		}
+		need = append(need, m)
+	}
+	return need, uniqueFoldPreserve(reusedTargets)
+}
+
+func uniqueFoldPreserve(in []string) []string {
+	seen := map[string]struct{}{}
+	var out []string
+	for _, s := range in {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		k := strings.ToLower(s)
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, s)
 	}
 	return out
 }

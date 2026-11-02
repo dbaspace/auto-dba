@@ -113,6 +113,35 @@ func (d *DB) ListCDCInTenant(tenantID, status, taskType string) ([]CDCTask, erro
 	return out, rows.Err()
 }
 
+// ListCDCByParentID 列出某 init 下的子任务（可选按 task_type 过滤）。
+func (d *DB) ListCDCByParentID(parentID, taskType string) ([]CDCTask, error) {
+	parentID = strings.TrimSpace(parentID)
+	if parentID == "" {
+		return nil, nil
+	}
+	q := `SELECT ` + cdcTaskCols + ` FROM tbl_cdc_tasks WHERE parent_id=?`
+	args := []any{parentID}
+	if tt := strings.TrimSpace(taskType); tt != "" {
+		q += ` AND task_type=?`
+		args = append(args, tt)
+	}
+	q += ` ORDER BY created_at ASC`
+	rows, err := d.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []CDCTask
+	for rows.Next() {
+		var t CDCTask
+		if err := rows.Scan(&t.ID, &t.Name, &t.TaskType, &t.Status, &t.SourceID, &t.TargetID, &t.SourceDB, &t.TargetDB, &t.ParentID, &t.ApprovalStatus, &t.IssueID, &t.Description, &t.CreatedAt, &t.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
 func (d *DB) UpdateCDCStatus(id, status, approval string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := d.Exec(`UPDATE tbl_cdc_tasks SET status=?, approval_status=?, updated_at=? WHERE id=?`, status, approval, now, id)

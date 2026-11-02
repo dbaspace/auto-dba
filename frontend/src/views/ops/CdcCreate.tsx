@@ -63,7 +63,8 @@ import {
   parentTablesOf,
   positiveInt,
   resolveEffectivePartitionColumn,
-  resolveParentInstanceKey,
+  buildBatchAddTablePlan,
+  nextAddTableParentIds,
   resolveSourceScope,
   shardDbPrefixHint,
   snapshotLabel,
@@ -367,6 +368,19 @@ export default function CdcCreate() {
     return new Set(form.parent_id ? [form.parent_id] : [])
   }, [form.task_type, form.parent_ids, form.parent_id])
 
+  const batchAddTablePlan = useMemo(() => {
+    if (form.task_type !== 'add_table' && form.task_type !== 'alter_schema') return []
+    if (selectedParents.length <= 1) return []
+    return buildBatchAddTablePlan({
+      parents: selectedParents.map((p) => ({
+        ...p,
+        synced_tables: syncedByParent[p.id] || parentTablesOf(p),
+      })),
+      tables: form.tables,
+      baseName: form.name,
+    })
+  }, [form.task_type, form.tables, form.name, selectedParents, syncedByParent])
+
   const parentTables = useMemo(() => {
     const p = parentTasks.find((t) => t.id === form.parent_id) || selectedParents[0]
     if (!p) return []
@@ -420,6 +434,7 @@ export default function CdcCreate() {
   }, [alterDiffItems])
 
   const parentCandidates = useMemo(() => {
+    // 服务端已按 env/q 过滤时仍做本地兜底（status / add_table 仅 running）
     const q = parentTaskQ.trim().toLowerCase()
     return parentTasks.filter((t) => {
       if (t.task_type !== 'init') return false
@@ -427,7 +442,7 @@ export default function CdcCreate() {
       if (!['running', 'paused', 'init', 'creating', 'provisioning'].includes(t.status)) return false
       if (form.env) {
         const extra = decodeCdcExtra(t.description).extra
-        const env = extra.env || instEnv(instances.find((i) => i.id === t.source_instance_id))
+        const env = t.env || extra.env || instEnv(instances.find((i) => i.id === t.source_instance_id))
         if (env !== form.env) return false
       }
       if (q) {
@@ -438,6 +453,16 @@ export default function CdcCreate() {
       return true
     })
   }, [parentTasks, form.task_type, form.env, instances, parentTaskQ])
+
+  const filteredParentsAllSelected = useMemo(() => {
+    if (!parentCandidates.length) return false
+    return parentCandidates.every((t) => selectedParentIdSet.has(t.id))
+  }, [parentCandidates, selectedParentIdSet])
+
+  const filteredParentsSomeSelected = useMemo(() => {
+    if (!parentCandidates.length) return false
+    return parentCandidates.some((t) => selectedParentIdSet.has(t.id)) && !filteredParentsAllSelected
+  }, [parentCandidates, selectedParentIdSet, filteredParentsAllSelected])
 
   const sourceInstances = useMemo(() => {
     const eng = form.source_engine === 'mysql' ? 'mysql' : 'postgres'
@@ -1016,22 +1041,12 @@ export default function CdcCreate() {
       onPickParent(row)
       return
     }
-    const dbOf = (t: any) => String(t?.source_db || '').trim().toLowerCase()
-    const current = parentTasks.filter((t) => form.parent_ids.includes(t.id))
-    let ids: string[]
-    if (!checked) {
-      ids = form.parent_ids.filter((id) => id !== row.id)
-    } else {
-      const sameDb = current.filter((t) => dbOf(t) === dbOf(row))
-      const selected = sameDb.some((t) => t.id === row.id) ? sameDb : [...sameDb, row]
-      const err = validateAddTableParents(selected, (id: string) => instances.find((i) => i.id === id))
-      if (err) {
-        message.warning(err)
-        return
-      }
-      const rest = sameDb.map((t) => t.id).filter((id) => id !== row.id)
-      const keepRep = form.parent_id && rest.includes(form.parent_id)
-      ids = keepRep ? [form.parent_id, ...rest.filter((id) => id !== form.parent_id), row.id] : [row.id, ...rest]
+    const ids = nextAddTableParentIds(form.parent_ids, row.id, checked)
+    const selectedRows = parentTasks.filter((t) => ids.includes(t.id))
+    const err = validateAddTableParents(selectedRows)
+    if (checked && err) {
+      message.warning(err)
+      return
     }
     const ref = parentTasks.find((t) => t.id === ids[0]) || (checked ? row : null)
     if (!ref) {
@@ -1044,19 +1059,9 @@ export default function CdcCreate() {
     }
 
     const prev = formRef.current
-    const prevKey = prev.parent_id
-      ? resolveParentInstanceKey(
-          parentTasks.find((t) => t.id === prev.parent_id) || { source_instance_id: prev.source_instance_id },
-          instances.find((i) => i.id === (parentTasks.find((t) => t.id === prev.parent_id)?.source_instance_id || prev.source_instance_id)),
-        )
-      : ''
-    const nextKey = resolveParentInstanceKey(ref, instances.find((i) => i.id === ref.source_instance_id))
-    const instanceChanged = !prev.parent_id || prevKey !== nextKey
-    const dbChanged = String(prev.source_db || '').toLowerCase() !== String(ref.source_db || '').toLowerCase()
-
-    // 同源多选：仅更新 ids，避免每次整表 patch + 同步打 API
-    if (!instanceChanged && !dbChanged && prev.parent_id) {
-      const light: Partial<CdcForm> = { parent_ids: ids, parent_id: ids[0] || prev.parent_id }
+    // 已有代表任务时只更新 ids，跨库/跨实例累加不清空已选表
+    if (prev.parent_id && ids.includes(prev.parent_id)) {
+      const light: Partial<CdcForm> = { parent_ids: ids, parent_id: prev.parent_id }
       patchForm(light)
       formRef.current = { ...formRef.current, ...light }
       scheduleLoadParentExtras(ids)
@@ -1066,11 +1071,53 @@ export default function CdcCreate() {
     const { patch, sourceID } = buildParentEndpointPatch(ref)
     patch.parent_ids = ids
     patch.parent_id = ids[0] || ref.id
-    if (prev.parent_id && (instanceChanged || dbChanged)) {
-      patch.tables = []
-      patch.table_map = {}
-      clearPickedTables()
+    patchForm(patch)
+    formRef.current = { ...formRef.current, ...patch }
+    void loadSourceDbs(sourceID)
+    scheduleLoadParentExtras(ids)
+  }
+
+  function selectAllFilteredParents(checked: boolean) {
+    const visibleIds = parentCandidates.map((t) => t.id)
+    if (!visibleIds.length) return
+    let ids = [...form.parent_ids]
+    if (checked) {
+      const set = new Set(ids)
+      for (const id of visibleIds) set.add(id)
+      ids = [...set]
+    } else {
+      const drop = new Set(visibleIds)
+      ids = ids.filter((id) => !drop.has(id))
     }
+    const selectedRows = parentTasks.filter((t) => ids.includes(t.id))
+    const err = validateAddTableParents(selectedRows)
+    if (checked && err) {
+      message.warning(err)
+      return
+    }
+    if (!ids.length) {
+      const cleared = { parent_ids: [] as string[], parent_id: '', tables: [] as string[], table_map: {} as Record<string, string> }
+      patchForm(cleared)
+      formRef.current = { ...formRef.current, ...cleared }
+      clearPickedTables()
+      scheduleLoadParentExtras([])
+      return
+    }
+    const keepRep = form.parent_id && ids.includes(form.parent_id)
+    const ref = keepRep
+      ? parentTasks.find((t) => t.id === form.parent_id)
+      : parentTasks.find((t) => t.id === ids[0])
+    if (!ref) return
+    if (keepRep) {
+      const light: Partial<CdcForm> = { parent_ids: ids, parent_id: form.parent_id }
+      patchForm(light)
+      formRef.current = { ...formRef.current, ...light }
+      scheduleLoadParentExtras(ids)
+      return
+    }
+    const { patch, sourceID } = buildParentEndpointPatch(ref)
+    patch.parent_ids = ids
+    patch.parent_id = ids[0]
     patchForm(patch)
     formRef.current = { ...formRef.current, ...patch }
     void loadSourceDbs(sourceID)
@@ -1527,23 +1574,69 @@ export default function CdcCreate() {
     setSubmitting(true)
     try {
       const body = submitBodyNow()
-      if (f.task_type === 'add_table' && f.parent_ids.length > 1) {
+      if ((f.task_type === 'add_table' || f.task_type === 'alter_schema') && f.parent_ids.length > 1) {
+        const prePath =
+          f.task_type === 'alter_schema'
+            ? '/cdc-sync/tasks/batch-alter-schema/precheck'
+            : '/cdc-sync/tasks/batch-add-table/precheck'
         const { data: pre } = await api
-          .post('/cdc-sync/tasks/batch-add-table/precheck', { ...body, parent_ids: f.parent_ids })
+          .post(prePath, { ...body, parent_ids: f.parent_ids })
           .catch(() => ({ data: {} as any }))
         if (pre.data?.failed) message.warning(`批量预检：${pre.data.failed} 个父任务未通过，仍将提交可通过的任务`)
-      }
-      if ((f.task_type === 'add_table' || f.task_type === 'alter_schema') && f.parent_ids.length > 1) {
         const path =
           f.task_type === 'alter_schema' ? '/cdc-sync/tasks/batch-alter-schema' : '/cdc-sync/tasks/batch-add-table'
-        const { data } = await api.post(path, { ...body, parent_ids: f.parent_ids })
-        clearOnSubmitSuccess()
-        const created = data.data?.created || 0
-        const skipped = data.data?.skipped || 0
         const label = f.task_type === 'alter_schema' ? '加列' : '加表'
-        message.success(`已提交 ${created} 条${label}任务${skipped ? `，跳过 ${skipped} 个` : ''}`)
-        goList({ tab: 'pending' })
-        return
+        try {
+          const { data } = await api.post(path, { ...body, parent_ids: f.parent_ids })
+          clearOnSubmitSuccess()
+          const created = data.data?.created || 0
+          const skipped = data.data?.skipped || 0
+          message.success(`已提交 ${created} 条${label}任务${skipped ? `，跳过 ${skipped} 个` : ''}`)
+          goList({ tab: 'pending' })
+          return
+        } catch (err: any) {
+          const status = err?.response?.status
+          if (status !== 404) throw err
+          // 对齐 Hub：batch 接口未部署时逐 parent 单建
+          let created = 0
+          const failures: string[] = []
+          for (const pid of f.parent_ids) {
+            const parent = parentTasksRef.current.find((t) => t.id === pid)
+            try {
+              await api.post('/cdc-sync/tasks', {
+                ...body,
+                parent_id: pid,
+                parent_ids: [pid],
+                name: body.name ? `${body.name}_${parent?.name || pid}` : undefined,
+              })
+              created += 1
+            } catch (e: any) {
+              failures.push(`${parent?.name || pid}: ${e?.response?.data?.message || e?.message || '失败'}`)
+            }
+          }
+          if (created > 0) clearOnSubmitSuccess()
+          if (failures.length) {
+            Modal.warning({
+              title: `批量${label}部分失败`,
+              content: (
+                <div>
+                  <p>
+                    成功 {created} 条，失败 {failures.length} 条（batch 接口 404，已降级逐条创建）
+                  </p>
+                  <ul style={{ paddingLeft: 18, margin: 0 }}>
+                    {failures.map((line) => (
+                      <li key={line}>{line}</li>
+                    ))}
+                  </ul>
+                </div>
+              ),
+            })
+          } else {
+            message.success(`已提交 ${created} 条${label}任务（batch 404 降级）`)
+          }
+          if (created > 0) goList({ tab: 'pending' })
+          return
+        }
       }
       await api.post('/cdc-sync/tasks', body)
       clearOnSubmitSuccess()
@@ -1617,6 +1710,27 @@ export default function CdcCreate() {
     setEnvLoading(false)
   }, [instances])
 
+  async function reloadParentTasks(env?: string, q?: string) {
+    const params: Record<string, string> = {}
+    const envVal = String(env ?? formRef.current.env ?? '').trim()
+    const qVal = String(q ?? parentTaskQ ?? '').trim()
+    if (envVal) params.env = envVal
+    if (qVal) params.q = qVal
+    try {
+      const { data } = await api.get('/cdc-sync/tasks/init-list', { params })
+      const inits = (data.data || []).filter((t: any) => t.task_type === 'init')
+      setParentTasks(inits)
+      parentTasksRef.current = inits
+      return inits
+    } catch {
+      const { data } = await api.get('/cdc-sync/tasks', { params: { task_type: 'init' } }).catch(() => ({ data: { data: [] } }))
+      const inits = (data.data || []).filter((t: any) => t.task_type === 'init')
+      setParentTasks(inits)
+      parentTasksRef.current = inits
+      return inits
+    }
+  }
+
   // ---- 初始化加载 ----
   useEffect(() => {
     if (didInit.current) return
@@ -1673,6 +1787,16 @@ export default function CdcCreate() {
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // 选父任务：环境 / 任务名走服务端 init-list 过滤（debounce）
+  useEffect(() => {
+    if (!needParent || !didInit.current) return
+    const timer = window.setTimeout(() => {
+      void reloadParentTasks(form.env, parentTaskQ)
+    }, 300)
+    return () => window.clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [needParent, form.env, parentTaskQ])
 
   // ---- 映射面板 onChange 适配（React 版 panel 用 onChange） ----
   function onMappingsChange(next: Mapping[]) {
@@ -2677,7 +2801,7 @@ export default function CdcCreate() {
                 </Descriptions.Item>
                 {needParent && selectedParents.length > 1 ? (
                   <Descriptions.Item label="父任务" span={2}>
-                    {selectedParents.map((p) => p.name).join('、')}
+                    已选 {selectedParents.length} 个（代表：{parentName}）
                   </Descriptions.Item>
                 ) : needParent ? (
                   <Descriptions.Item label="父任务" span={2}>
@@ -2698,6 +2822,32 @@ export default function CdcCreate() {
                 </Descriptions.Item>
               </Descriptions>
             </Card>
+            {batchAddTablePlan.length > 0 && (
+              <Card size="small" className="cdc-card small" title={<span className="card-title">批量提交计划</span>}>
+                <ResponsiveTable
+                  size="small"
+                  rowKey="parent_id"
+                  pagination={false}
+                  dataSource={batchAddTablePlan}
+                  columns={[
+                    { title: '父任务', dataIndex: 'parent_name', ellipsis: true },
+                    { title: '源库', dataIndex: 'source_db', width: 120 },
+                    { title: '子任务名', dataIndex: 'child_name', ellipsis: true },
+                    {
+                      title: '待加表',
+                      width: 80,
+                      render: (_: any, row: any) => row.tables_to_add.length,
+                    },
+                    {
+                      title: '跳过已同步',
+                      width: 100,
+                      render: (_: any, row: any) =>
+                        row.skipped ? <Tag color="default">全部跳过</Tag> : row.skipped_tables.length,
+                    },
+                  ]}
+                />
+              </Card>
+            )}
             <Card size="small" className="cdc-card small" title={<span className="card-title">源端 / 目标端</span>}>
               <Descriptions column={2} bordered size="small">
                 <Descriptions.Item label="PG 实例">
@@ -2874,42 +3024,51 @@ export default function CdcCreate() {
             title={
               <span className="card-title">
                 {form.task_type === 'add_table' || form.task_type === 'alter_schema'
-                  ? '选择已有初始化任务（可多选同一源端）'
+                  ? '选择已有初始化任务（可多选，支持分库多实例）'
                   : '选择已有初始化任务'}
               </span>
             }
           >
-            <Form layout="inline" className="mb" style={{ gap: 8, flexWrap: 'wrap' }}>
-              <Form.Item label="环境" style={{ marginInlineEnd: 0 }}>
+            <div className="cdc-parent-filter-bar mb">
+              <div className="cdc-parent-filter-item">
+                <span className="cdc-parent-filter-label">环境</span>
                 <Select
                   allowClear
                   showSearch
                   loading={envLoading}
                   placeholder={envLoading ? '环境加载中' : '全部'}
-                  style={{ width: 220 }}
+                  style={{ width: 200 }}
                   value={form.env || undefined}
                   onChange={(v) => patchForm({ env: v || '' })}
                   options={envOptions}
                   optionFilterProp="label"
                   notFoundContent={envLoading ? '环境加载中' : '暂无数据'}
                 />
-              </Form.Item>
-              <Form.Item label="任务名称" style={{ marginInlineEnd: 0 }}>
+              </div>
+              <div className="cdc-parent-filter-item">
+                <span className="cdc-parent-filter-label">任务名称</span>
                 <Input
                   allowClear
                   placeholder="过滤任务名或源库"
-                  style={{ width: 220 }}
+                  style={{ width: 240 }}
                   value={parentTaskQ}
                   prefix={<SearchOutlined />}
                   onChange={(e) => setParentTaskQ(e.target.value)}
                 />
-              </Form.Item>
+              </div>
               {(form.task_type === 'add_table' || form.task_type === 'alter_schema') && (
-                <Form.Item style={{ marginInlineEnd: 0 }}>
+                <>
+                  <Checkbox
+                    checked={filteredParentsAllSelected}
+                    indeterminate={filteredParentsSomeSelected}
+                    onChange={(e) => selectAllFilteredParents(e.target.checked)}
+                  >
+                    全选当前筛选（{parentCandidates.length}）
+                  </Checkbox>
                   <span className="muted">已选 {form.parent_ids.length} 个</span>
-                </Form.Item>
+                </>
               )}
-            </Form>
+            </div>
             {(form.task_type === 'add_table' || form.task_type === 'alter_schema') && (
               <Alert
                 type="info"
@@ -2918,8 +3077,8 @@ export default function CdcCreate() {
                 message="批量父任务"
                 description={
                   form.task_type === 'alter_schema'
-                    ? '可勾选同一源端实例下的多个 init 任务；提交后共享一张工单，每个父任务各生成一条加列子任务。'
-                    : '可勾选同一源端实例下的多个 init 任务；提交后共享一张工单，每个父任务各生成一条加表子任务，已同步的表会自动跳过。'
+                    ? '可多选多个 init 任务（支持分库多实例，一次勾选全部库任务）；提交后共享一张工单，每个父任务各生成一条加列子任务。'
+                    : '可多选多个 init 任务（支持分库多实例，一次勾选全部库任务）；提交后共享一张工单，每个父任务各生成一条加表子任务，已同步的表会自动跳过。'
                 }
               />
             )}
@@ -2930,7 +3089,7 @@ export default function CdcCreate() {
               pagination={{
                 pageSize: 10,
                 showSizeChanger: true,
-                pageSizeOptions: ['10', '20', '50'],
+                pageSizeOptions: ['10', '20', '50', '100'],
                 showTotal: (total) => `共 ${total} 条`,
               }}
               locale={{ emptyText: parentTaskQ.trim() ? '无匹配的初始化任务' : '暂无可用的初始化任务' }}
@@ -2955,9 +3114,23 @@ export default function CdcCreate() {
                       />
                     ),
                 },
-                { title: '任务名称', dataIndex: 'name', ellipsis: true, width: 180 },
-                { title: '源端', ellipsis: true, render: (_: any, row: any) => row.source_db || '—' },
+                { title: '任务名称', dataIndex: 'name', ellipsis: true, width: 200 },
+                {
+                  title: '源端',
+                  ellipsis: true,
+                  render: (_: any, row: any) => {
+                    const host = row.source_host || instances.find((i) => i.id === row.source_instance_id)?.host
+                    const port = row.source_port || instances.find((i) => i.id === row.source_instance_id)?.port
+                    const ep = host ? `${host}${port ? `:${port}` : ''}` : ''
+                    return ep ? `${ep} / ${row.source_db || '—'}` : row.source_db || '—'
+                  },
+                },
                 { title: '目标端', ellipsis: true, render: (_: any, row: any) => row.target_db || '—' },
+                {
+                  title: '已同步',
+                  width: 80,
+                  render: (_: any, row: any) => row.synced_table_count ?? parentTablesOf(row).length,
+                },
                 {
                   title: '状态',
                   width: 100,
@@ -2975,7 +3148,8 @@ export default function CdcCreate() {
           <div className="cdc-step-fill">
             <Card size="small" className="cdc-card small mb" title={<span className="card-title">继承自已有任务</span>}>
               <Descriptions column={2} bordered size="small">
-                <Descriptions.Item label="任务">{parentName}</Descriptions.Item>
+                <Descriptions.Item label="代表任务">{parentName}</Descriptions.Item>
+                <Descriptions.Item label="已选父任务数">{selectedParents.length}</Descriptions.Item>
                 <Descriptions.Item label="Publication">{form.publication_name || '—'}</Descriptions.Item>
                 <Descriptions.Item label="源端实例">
                   {endpointLabel(sourceInst, form.source_host, form.source_port, true)}
@@ -2983,7 +3157,7 @@ export default function CdcCreate() {
                 <Descriptions.Item label="目标端实例">
                   {endpointLabel(targetInst, form.target_host, form.target_port, true)}
                 </Descriptions.Item>
-                <Descriptions.Item label="PG 库">{form.source_db || '—'}</Descriptions.Item>
+                <Descriptions.Item label="代表库">{form.source_db || '—'}</Descriptions.Item>
                 <Descriptions.Item label="Schema">{form.source_schema || 'public'}</Descriptions.Item>
                 <Descriptions.Item label="目标库">{form.target_db || '—'}</Descriptions.Item>
                 <Descriptions.Item label="Debezium 模式">{form.debezium_mode || '—'}</Descriptions.Item>
@@ -2991,6 +3165,36 @@ export default function CdcCreate() {
                 <Descriptions.Item label="动态分区">{form.sr_dynamic_partition_enable ? '已开启' : '未开启'}</Descriptions.Item>
               </Descriptions>
             </Card>
+            {selectedParents.length > 1 && (
+              <>
+                <Alert
+                  type="info"
+                  showIcon
+                  className="mb"
+                  message={`已选 ${selectedParents.length} 个父任务`}
+                  description="表结构须与代表任务库一致；提交时按每个父任务分别跳过已同步表，共享一张工单。"
+                />
+                <Card size="small" className="cdc-card small mb" title={<span className="card-title">已选父任务</span>}>
+                  <ResponsiveTable
+                    size="small"
+                    rowKey="id"
+                    pagination={false}
+                    dataSource={selectedParents}
+                    columns={[
+                      { title: '任务名称', dataIndex: 'name', ellipsis: true },
+                      { title: '源库', dataIndex: 'source_db', width: 140 },
+                      { title: '目标库', dataIndex: 'target_db', width: 140 },
+                      {
+                        title: '已同步',
+                        width: 80,
+                        render: (_: any, row: any) =>
+                          (syncedByParent[row.id] || parentTablesOf(row)).length,
+                      },
+                    ]}
+                  />
+                </Card>
+              </>
+            )}
             <Alert
               type="info"
               showIcon

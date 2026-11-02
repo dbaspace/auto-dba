@@ -16,7 +16,7 @@ import (
 	"auto-dba/internal/store"
 )
 
-const cdcBatchAddTableMaxParents = 50
+const cdcBatchAddTableMaxParents = 128
 
 func (h *CDCHandler) resolveInitTask(id, tenantID string) (*store.CDCTask, error) {
 	t, err := h.Store.GetCDCInTenant(id, tenantID)
@@ -217,6 +217,10 @@ func (h *CDCHandler) BatchAddTablePrecheck(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "请至少选择一个 parent_id"})
 		return
 	}
+	if len(ids) > cdcBatchAddTableMaxParents {
+		c.JSON(http.StatusBadRequest, gin.H{"message": fmt.Sprintf("父任务过多（最多 %d）", cdcBatchAddTableMaxParents)})
+		return
+	}
 	newTables := jsonAnyStringSlice(raw["tables"])
 	if len(newTables) == 0 {
 		t := hydrateCDCFromMap(raw)
@@ -226,40 +230,82 @@ func (h *CDCHandler) BatchAddTablePrecheck(c *gin.Context) {
 	okN, skipN, failN := 0, 0, 0
 	for _, id := range ids {
 		item := gin.H{"parent_id": id}
+		checks := make([]gin.H, 0, 4)
+		addCheck := func(code, name, level, status, msg string) {
+			checks = append(checks, gin.H{"code": code, "name": name, "level": level, "status": status, "message": msg})
+		}
 		p, _ := h.Store.GetCDCInTenant(id, effectiveListTenantID(h.Store, c))
 		if p == nil || p.TaskType != "init" {
+			addCheck("parent_task", "父任务", "required", "failed", "不是初始化任务")
 			item["ok"] = false
 			item["ready"] = false
 			item["message"] = "不是初始化任务"
+			item["checks"] = checks
 			failN++
 			items = append(items, item)
 			continue
 		}
 		item["parent_name"] = p.Name
-		pe := cdc.ParseTaskExtra(p.Description)
-		if pe["publication_name"] == "" || pe["connector_name"] == "" {
+		item["source_db"] = p.SourceDB
+		item["source_instance_id"] = p.SourceID
+		if p.Status != store.StatusRunning {
+			addCheck("parent_status", "父任务状态", "required", "failed", "仅 running 的初始化任务可加表，当前: "+string(p.Status))
 			item["ok"] = false
 			item["ready"] = false
-			item["message"] = "父任务尚未具备 Publication / Connector"
+			item["message"] = "父任务状态须为 running"
+			item["checks"] = checks
 			failN++
 			items = append(items, item)
 			continue
 		}
-		synced := extraCSVTables(p.Description)
+		addCheck("parent_status", "父任务状态", "required", "passed", string(p.Status))
+		pe := cdc.ParseTaskExtra(p.Description)
+		if pe["publication_name"] == "" || pe["connector_name"] == "" {
+			addCheck("parent_pipeline", "父任务链路", "required", "failed", "父任务尚未具备 Publication / Connector")
+			item["ok"] = false
+			item["ready"] = false
+			item["message"] = "父任务尚未具备 Publication / Connector"
+			item["checks"] = checks
+			failN++
+			items = append(items, item)
+			continue
+		}
+		addCheck("parent_pipeline", "父任务链路", "required", "passed", pe["publication_name"]+" / "+pe["connector_name"])
+		if inst, _ := h.Store.GetInstance(p.SourceID); inst == nil {
+			addCheck("source_instance", "源端实例", "required", "failed", "源端实例不存在")
+			item["ok"] = false
+			item["ready"] = false
+			item["message"] = "源端实例不存在"
+			item["checks"] = checks
+			failN++
+			items = append(items, item)
+			continue
+		}
+		addCheck("source_instance", "源端实例", "required", "passed", p.SourceID)
+		synced := h.listOccupiedSourceTables(p)
 		kept := subtractFold(newTables, synced)
+		skipped := subtractFold(newTables, kept)
+		if len(skipped) > 0 {
+			addCheck("already_synced", "已同步表", "warning", "warning", "将跳过: "+cdc.JoinSample(skipped, 20))
+		}
 		if len(kept) == 0 {
+			addCheck("tables_to_add", "待加表", "required", "passed", "所选表均已在该任务同步")
 			item["ok"] = true
 			item["ready"] = true
 			item["skipped"] = true
 			item["message"] = "所选表均已在该任务同步"
+			item["skipped_tables"] = skipped
+			item["checks"] = checks
 			skipN++
 			items = append(items, item)
 			continue
 		}
+		addCheck("tables_to_add", "待加表", "required", "passed", fmt.Sprintf("%d 张", len(kept)))
 		item["ok"] = true
 		item["ready"] = true
 		item["tables"] = kept
-		item["skipped_tables"] = subtractFold(newTables, kept)
+		item["skipped_tables"] = skipped
+		item["checks"] = checks
 		okN++
 		items = append(items, item)
 	}
@@ -285,18 +331,10 @@ func (h *CDCHandler) BatchAddTable(c *gin.Context) {
 		return
 	}
 	parents := make([]*store.CDCTask, 0, len(ids))
-	var instKey string
 	for _, id := range ids {
 		p, _ := h.Store.GetCDCInTenant(id, effectiveListTenantID(h.Store, c))
 		if p == nil || p.TaskType != "init" {
 			c.JSON(http.StatusBadRequest, gin.H{"message": "parent " + id + " 不是初始化任务"})
-			return
-		}
-		key := h.cdcParentInstanceKey(p)
-		if instKey == "" {
-			instKey = key
-		} else if key != instKey {
-			c.JSON(http.StatusBadRequest, gin.H{"message": "所选任务须属于同一源端实例"})
 			return
 		}
 		parents = append(parents, p)
@@ -314,8 +352,9 @@ func (h *CDCHandler) BatchAddTable(c *gin.Context) {
 	items := make([]gin.H, 0, len(parents))
 	okN, skipN, failN := 0, 0, 0
 	var shared *store.Issue
+	needApproval := h.cdcApprovalRequired("add_table")
 	for _, p := range parents {
-		synced := extraCSVTables(p.Description)
+		synced := h.listOccupiedSourceTables(p)
 		kept := subtractFold(newTables, synced)
 		item := gin.H{"parent_id": p.ID, "parent_name": p.Name}
 		if len(kept) == 0 {
@@ -333,6 +372,7 @@ func (h *CDCHandler) BatchAddTable(c *gin.Context) {
 		child.TargetID = p.TargetID
 		child.SourceDB = p.SourceDB
 		child.TargetDB = p.TargetDB
+		child.Description = rewriteCDCTaskTables(base.Description, kept)
 		if child.Name == "" || len(parents) > 1 {
 			child.Name = strings.TrimSpace(base.Name)
 			if child.Name == "" {
@@ -348,7 +388,7 @@ func (h *CDCHandler) BatchAddTable(c *gin.Context) {
 			items = append(items, item)
 			continue
 		}
-		if shared == nil {
+		if needApproval && shared == nil {
 			issue, ierr := h.createSharedCDCIssue(c, &child, cdcReviewersFromMap(raw)...)
 			if ierr != nil {
 				item["ok"] = false
@@ -379,6 +419,80 @@ func (h *CDCHandler) BatchAddTable(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": failN == 0, "data": gin.H{"created": okN, "skipped": skipN, "failed": failN, "items": items, "issue_id": issueID}})
 }
 
+func (h *CDCHandler) BatchAlterSchemaPrecheck(c *gin.Context) {
+	var raw map[string]any
+	if err := c.ShouldBindJSON(&raw); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	ids := cdcParentIDsFromMap(raw)
+	if len(ids) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "请至少选择一个 parent_id"})
+		return
+	}
+	if len(ids) > cdcBatchAddTableMaxParents {
+		c.JSON(http.StatusBadRequest, gin.H{"message": fmt.Sprintf("父任务过多（最多 %d）", cdcBatchAddTableMaxParents)})
+		return
+	}
+	base := hydrateCDCFromMap(raw)
+	wanted := extraCSVTables(base.Description)
+	alterItems := parseAlterSchemaTargets(base.Description)
+	if len(wanted) == 0 {
+		for _, it := range alterItems {
+			wanted = append(wanted, it)
+		}
+	}
+	if len(wanted) == 0 {
+		wanted = jsonAnyStringSlice(raw["tables"])
+	}
+	items := make([]gin.H, 0, len(ids))
+	okN, skipN, failN := 0, 0, 0
+	for _, id := range ids {
+		item := gin.H{"parent_id": id}
+		checks := make([]gin.H, 0, 3)
+		addCheck := func(code, name, level, status, msg string) {
+			checks = append(checks, gin.H{"code": code, "name": name, "level": level, "status": status, "message": msg})
+		}
+		p, _ := h.Store.GetCDCInTenant(id, effectiveListTenantID(h.Store, c))
+		if p == nil || p.TaskType != "init" {
+			addCheck("parent_task", "父任务", "required", "failed", "不是初始化任务")
+			item["ok"] = false
+			item["ready"] = false
+			item["message"] = "不是初始化任务"
+			item["checks"] = checks
+			failN++
+			items = append(items, item)
+			continue
+		}
+		item["parent_name"] = p.Name
+		item["source_db"] = p.SourceDB
+		synced := extraCSVTables(p.Description)
+		kept := intersectFold(wanted, synced)
+		if len(kept) == 0 {
+			addCheck("target_tables", "目标表", "required", "passed", "该任务没有匹配的目标表")
+			item["ok"] = true
+			item["ready"] = true
+			item["skipped"] = true
+			item["message"] = "该任务没有匹配的目标表"
+			item["checks"] = checks
+			skipN++
+			items = append(items, item)
+			continue
+		}
+		addCheck("target_tables", "目标表", "required", "passed", fmt.Sprintf("%d 张", len(kept)))
+		item["ok"] = true
+		item["ready"] = true
+		item["tables"] = kept
+		item["checks"] = checks
+		okN++
+		items = append(items, item)
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"ok": failN == 0, "ready": failN == 0,
+		"data": gin.H{"ready_count": okN, "skipped": skipN, "failed": failN, "items": items},
+	})
+}
+
 func (h *CDCHandler) BatchAlterSchema(c *gin.Context) {
 	var raw map[string]any
 	if err := c.ShouldBindJSON(&raw); err != nil {
@@ -395,18 +509,10 @@ func (h *CDCHandler) BatchAlterSchema(c *gin.Context) {
 		return
 	}
 	parents := make([]*store.CDCTask, 0, len(ids))
-	var instKey string
 	for _, id := range ids {
 		p, _ := h.Store.GetCDCInTenant(id, effectiveListTenantID(h.Store, c))
 		if p == nil || p.TaskType != "init" {
 			c.JSON(http.StatusBadRequest, gin.H{"message": "parent " + id + " 不是初始化任务"})
-			return
-		}
-		key := h.cdcParentInstanceKey(p)
-		if instKey == "" {
-			instKey = key
-		} else if key != instKey {
-			c.JSON(http.StatusBadRequest, gin.H{"message": "所选任务须属于同一源端实例"})
 			return
 		}
 		parents = append(parents, p)
@@ -431,8 +537,9 @@ func (h *CDCHandler) BatchAlterSchema(c *gin.Context) {
 	items := make([]gin.H, 0, len(parents))
 	okN, skipN, failN := 0, 0, 0
 	var shared *store.Issue
+	needApproval := h.cdcApprovalRequired("alter_schema")
 	for _, p := range parents {
-		synced := extraCSVTables(p.Description)
+		synced := h.listOccupiedSourceTables(p)
 		kept := intersectFold(wanted, synced)
 		item := gin.H{"parent_id": p.ID, "parent_name": p.Name}
 		if len(kept) == 0 {
@@ -465,7 +572,7 @@ func (h *CDCHandler) BatchAlterSchema(c *gin.Context) {
 			items = append(items, item)
 			continue
 		}
-		if shared == nil {
+		if needApproval && shared == nil {
 			issue, ierr := h.createSharedCDCIssue(c, &child, reviewers...)
 			if ierr != nil {
 				item["ok"] = false
@@ -619,16 +726,3 @@ func uniqueNonEmpty(in []string) []string {
 	return out
 }
 
-func (h *CDCHandler) cdcParentInstanceKey(t *store.CDCTask) string {
-	if t == nil {
-		return ""
-	}
-	if inst, _ := h.Store.GetInstance(t.SourceID); inst != nil {
-		host := strings.TrimSpace(inst.Host)
-		if host == "" {
-			host = strings.TrimSpace(inst.DomainName)
-		}
-		return fmt.Sprintf("%s:%d", host, inst.Port)
-	}
-	return strings.TrimSpace(t.SourceID)
-}

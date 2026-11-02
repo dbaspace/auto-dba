@@ -12,6 +12,16 @@ func TestCDCNeedsApproval(t *testing.T) {
 	}
 }
 
+func TestCDCApprovalRequiredReadsGlobalArg(t *testing.T) {
+	h := &CDCHandler{}
+	if !h.cdcApprovalRequired("add_table") {
+		t.Fatal("nil store should default require approval")
+	}
+	if h.cdcApprovalRequired("unknown") {
+		t.Fatal("unknown type should not require")
+	}
+}
+
 func TestCDCApproved(t *testing.T) {
 	if cdcApproved(&store.CDCTask{ApprovalStatus: store.StatusPending, IssueID: "i1"}) {
 		t.Fatal("pending must block")

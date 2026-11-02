@@ -604,6 +604,7 @@ func Init(e *gin.Engine, d Deps) {
 	cdc.POST("/tasks/preview-target-sql", d.CDC.PreviewTargetSQL)
 	cdc.POST("/tasks/batch-add-table/precheck", d.CDC.BatchAddTablePrecheck)
 	cdc.POST("/tasks/batch-add-table", d.CDC.BatchAddTable)
+	cdc.POST("/tasks/batch-alter-schema/precheck", d.CDC.BatchAlterSchemaPrecheck)
 	cdc.POST("/tasks/batch-alter-schema", d.CDC.BatchAlterSchema)
 	cdc.POST("/tasks/synced-tables/batch", d.CDC.SyncedTablesBatch)
 	cdc.GET("/tasks/init-list", d.CDC.InitList)

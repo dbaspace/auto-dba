@@ -1,0 +1,63 @@
+import { describe, expect, it } from 'vitest'
+import {
+  buildBatchAddTablePlan,
+  nextAddTableParentIds,
+  validateAddTableParents,
+} from './cdc'
+
+describe('nextAddTableParentIds', () => {
+  it('accumulates across different source dbs', () => {
+    expect(nextAddTableParentIds(['a'], 'b', true)).toEqual(['a', 'b'])
+    expect(nextAddTableParentIds(['a', 'b'], 'c', true)).toEqual(['a', 'b', 'c'])
+  })
+
+  it('does not duplicate', () => {
+    expect(nextAddTableParentIds(['a', 'b'], 'a', true)).toEqual(['a', 'b'])
+  })
+
+  it('removes on uncheck', () => {
+    expect(nextAddTableParentIds(['a', 'b', 'c'], 'b', false)).toEqual(['a', 'c'])
+  })
+})
+
+describe('validateAddTableParents', () => {
+  it('requires at least one', () => {
+    expect(validateAddTableParents([])).toContain('至少选择')
+  })
+
+  it('allows cross-instance rows', () => {
+    const rows = [
+      { id: '1', source_instance_id: 'inst-a' },
+      { id: '2', source_instance_id: 'inst-b' },
+    ]
+    expect(validateAddTableParents(rows, () => ({ host: 'h', port: 1 }))).toBe('')
+  })
+})
+
+describe('buildBatchAddTablePlan', () => {
+  it('skips already synced tables per parent', () => {
+    const plan = buildBatchAddTablePlan({
+      parents: [
+        { id: 'p1', name: 't1', source_db: 'db_0', synced_tables: ['orders'] },
+        { id: 'p2', name: 't2', source_db: 'db_1', synced_tables: [] },
+      ],
+      tables: ['orders', 'items'],
+      baseName: 'batch_add',
+    })
+    expect(plan).toHaveLength(2)
+    expect(plan[0].tables_to_add).toEqual(['items'])
+    expect(plan[0].skipped_tables).toEqual(['orders'])
+    expect(plan[0].child_name).toBe('batch_add_t1')
+    expect(plan[1].tables_to_add).toEqual(['orders', 'items'])
+    expect(plan[1].skipped).toBe(false)
+  })
+
+  it('marks fully skipped parents', () => {
+    const plan = buildBatchAddTablePlan({
+      parents: [{ id: 'p1', name: 't1', synced_tables: ['a'] }],
+      tables: ['a'],
+    })
+    expect(plan[0].skipped).toBe(true)
+    expect(plan[0].tables_to_add).toEqual([])
+  })
+})

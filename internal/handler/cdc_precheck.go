@@ -330,11 +330,14 @@ func (h *CDCHandler) Precheck(c *gin.Context) {
 			} else {
 				add(cdcPrecheckItem{Code: "parent_pipeline", Name: "父任务链路", Level: "required", Status: "passed", Message: pe["publication_name"] + " / " + pe["connector_name"]})
 			}
-			synced := extraCSVTables(parent.Description)
+			synced := h.listOccupiedSourceTables(parent)
 			skip := subtractFold(tables, synced)
 			if len(synced) > 0 && len(skip) < len(tables) {
 				already := subtractFold(tables, skip)
 				add(cdcPrecheckItem{Code: "already_synced", Name: "已同步表", Level: "warning", Status: "warning", Message: "将跳过: " + cdc.JoinSample(already, 20)})
+			}
+			if len(tables) > 0 && len(skip) == 0 {
+				add(cdcPrecheckItem{Code: "tables_to_add", Name: "待加表", Level: "required", Status: "failed", Message: "no new tables to add (all already synced)"})
 			}
 			if pe["auto_create_table"] == "false" && autoCreate {
 				add(cdcPrecheckItem{Code: "parent_auto_create", Name: "自动建表", Level: "warning", Status: "warning", Message: "父任务为手动 DDL，加表自动建表可能无法执行 Routine Load"})
