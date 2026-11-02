@@ -1,8 +1,10 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { Button, Input, InputNumber, Modal, Pagination, Popconfirm, Select, Space, Tabs, Tag, message } from 'antd'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import api from '../../api/request'
 import './LoginLogs.css'
+
+type PlatformUser = { id?: string; username?: string; display_name?: string; status?: string }
 
 interface GrantRow {
   id?: string
@@ -49,48 +51,94 @@ function GrantsPanel() {
   const [status, setStatus] = useState('active')
   const [page, setPage] = useState(1)
   const [open, setOpen] = useState(false)
-  const [formUser, setFormUser] = useState('')
+  const [formUser, setFormUser] = useState<string | undefined>()
   const [formDays, setFormDays] = useState<number | null>(90)
   const [formRemark, setFormRemark] = useState('')
+  const [userOptionsLoading, setUserOptionsLoading] = useState(false)
+  const [platformUsers, setPlatformUsers] = useState<PlatformUser[]>([])
 
-  async function load(nextPage = page) {
+  const userSelectOptions = useMemo(
+    () =>
+      platformUsers
+        .filter((u) => String(u.status || 'active').toLowerCase() !== 'disabled')
+        .filter((u) => String(u.username || '').trim())
+        .map((u) => {
+          const name = String(u.username || '').trim()
+          const display = String(u.display_name || '').trim()
+          return {
+            value: name,
+            label: display ? `${name}（${display}）` : name,
+          }
+        }),
+    [platformUsers],
+  )
+
+  async function load(nextPage = page, override?: { username?: string; status?: string }) {
+    const u = override?.username !== undefined ? override.username : username
+    const st = override?.status !== undefined ? override.status : status
     setLoading(true)
     try {
       const { data } = await api.get('/client-access/grants', {
         params: {
-          username: username.trim() || undefined,
-          status: status || undefined,
+          username: String(u || '').trim() || undefined,
+          status: String(st || '').trim() || undefined,
           page: nextPage,
           page_size: PAGE_SIZE,
         },
       })
       setRows(data.data || [])
       setTotal(data.total || 0)
+    } catch (e: any) {
+      message.error(e?.response?.data?.message || '查询失败')
+      setRows([])
+      setTotal(0)
     } finally {
       setLoading(false)
     }
   }
 
   useEffect(() => {
-    load(1)
+    void load(1)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  async function ensurePlatformUsers() {
+    if (platformUsers.length) return
+    setUserOptionsLoading(true)
+    try {
+      const { data } = await api.get('/users')
+      setPlatformUsers(data.data || [])
+    } catch (e: any) {
+      message.error(e?.response?.data?.message || '加载用户列表失败')
+    } finally {
+      setUserOptionsLoading(false)
+    }
+  }
+
+  function openCreate() {
+    setFormUser(undefined)
+    setFormRemark('')
+    setFormDays(90)
+    setOpen(true)
+    void ensurePlatformUsers()
+  }
+
   async function createGrant() {
-    if (!formUser.trim()) {
-      message.warning('请填写用户名')
+    const username = String(formUser || '').trim()
+    if (!username) {
+      message.warning('请选择登录用户名')
       return
     }
     try {
       await api.post('/client-access/grants', {
-        username: formUser.trim(),
+        username,
         days: formDays || 0,
         remark: formRemark.trim(),
         scopes: 'query',
       })
-      message.success('已开通授权')
+      message.success('已开通授权，请对方登录后在「我的访问令牌」中自行签发')
       setOpen(false)
-      setFormUser('')
+      setFormUser(undefined)
       setFormRemark('')
       load(1)
       setPage(1)
@@ -103,8 +151,11 @@ function GrantsPanel() {
     if (!id) return
     try {
       await api.delete('/client-access/grants/' + id)
-      message.success('已吊销')
-      load(page)
+      message.success('已吊销，可在状态「已吊销」中查看')
+      setPage(1)
+      // 吊销后当前若筛「有效」会变空，自动切到已吊销列表
+      setStatus('revoked')
+      void load(1, { status: 'revoked' })
     } catch (e: any) {
       message.error(e?.response?.data?.message || '吊销失败')
     }
@@ -121,23 +172,38 @@ function GrantsPanel() {
           placeholder="用户名"
           value={username}
           onChange={(e) => setUsername(e.target.value)}
+          onPressEnter={() => {
+            setPage(1)
+            void load(1)
+          }}
           style={{ width: 160 }}
         />
         <Select
           allowClear
-          placeholder="状态"
+          placeholder="状态（空=全部）"
           value={status || undefined}
-          onChange={(v) => setStatus(v || '')}
-          style={{ width: 120 }}
+          onChange={(v) => {
+            const next = v || ''
+            setStatus(next)
+            setPage(1)
+            void load(1, { status: next })
+          }}
+          style={{ width: 140 }}
           options={[
             { value: 'active', label: '有效' },
             { value: 'revoked', label: '已吊销' },
           ]}
         />
-        <Button type="primary" onClick={() => { setPage(1); load(1) }}>
+        <Button
+          type="primary"
+          onClick={() => {
+            setPage(1)
+            void load(1)
+          }}
+        >
           查询
         </Button>
-        <Button type="primary" onClick={() => setOpen(true)}>
+        <Button type="primary" onClick={openCreate}>
           开通授权
         </Button>
       </div>
@@ -185,9 +251,36 @@ function GrantsPanel() {
           load(p)
         }}
       />
-      <Modal title="开通客户端访问授权" open={open} onCancel={() => setOpen(false)} onOk={createGrant} okText="开通">
+      <Modal
+        title="开通客户端访问授权"
+        open={open}
+        onCancel={() => {
+          setOpen(false)
+          setFormUser(undefined)
+        }}
+        onOk={createGrant}
+        okText="开通"
+      >
         <Space direction="vertical" style={{ width: '100%' }} size="middle">
-          <Input placeholder="用户名" value={formUser} onChange={(e) => setFormUser(e.target.value)} />
+          <Select
+            showSearch
+            allowClear
+            style={{ width: '100%' }}
+            placeholder="登录用户名"
+            loading={userOptionsLoading}
+            value={formUser}
+            onChange={(v) => setFormUser(v)}
+            options={userSelectOptions}
+            optionFilterProp="label"
+            filterOption={(input, option) => {
+              const q = input.trim().toLowerCase()
+              if (!q) return true
+              const label = String(option?.label ?? '').toLowerCase()
+              const value = String(option?.value ?? '').toLowerCase()
+              return label.includes(q) || value.includes(q)
+            }}
+            notFoundContent={userOptionsLoading ? '加载中…' : '无匹配用户'}
+          />
           <InputNumber
             style={{ width: '100%' }}
             min={0}

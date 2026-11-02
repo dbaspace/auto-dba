@@ -90,7 +90,7 @@ Client Secret（及 LDAP Bind 密码）用字段加密密钥落库（优先 `app
 | 工单列表 | `/ops/tickets` | 全部工单的查询、审批与执行记录；展示申请原因、环境、数据库类型；DQL 导出文件就绪后状态为「已下载」。DDL 执行中显示进度（含远程执行器当前库与语句）；可筛选「已终止」。服务重启后会回收仍标执行中、但进程已不在的工单 |
 | DDL 工单 | `/ops/ddl` | 结构变更。提交前按审核规则做 SQL 检查（结果可按状态过滤、按屏分页），支持美化与关键字高亮；可看执行影响；可多选域名级数据源（下拉内关键字过滤、全选/反选匹配项）。勾选分库并填写前缀时，PostgreSQL 按前缀现查数字后缀库并逐库执行，代表库须已登记，其余分库不要求登记；某个库失败后继续其余库，汇总写明成功与失败个数；重试按库跳过已成功的库。执行中显示进度，审核人、admin 或 DBA 租户成员可终止当前会话，工单变为「已终止」。全局参数 `ticket_ddl_constraint_check_enabled` 默认开启，关闭后跳过全部 SQL 审核、只保留提交门禁，详情会标明。PostgreSQL `ADD COLUMN IF NOT EXISTS` 在列注释规则开启时仍要带 `COMMENT ON COLUMN` |
 | DML 工单 | `/ops/dml` | 数据变更，同样走审核与审批；填写 SQL 支持美化/高亮，检测结果分页与状态过滤。PostgreSQL DML 由平台包事务执行，脚本中的 `BEGIN`/`COMMIT`/`ROLLBACK` 会被忽略（避免与外层事务双重提交）；会话号在事务连接上读取，避免占死连接导致「执行中」却不落库 |
-| DQL 工单 | `/ops/dql` | 数据导出。左侧填环境、库、审批人和事由，右侧写查询 SQL。审批通过后发起人确认格式即异步导出：按环境就近本机或 SQL 执行器查询编码并 gzip 落盘（`*.csv|json|sql.gz`），再下载；详情单列展示下载流程（含执行方式/执行器地址与进度）；缺执行器时拒绝硬跨网直连；失败可重导无需重审；临时文件约保留 7 天。远程导出须同步升级 sql-agent |
+| DQL 工单 | `/ops/dql` | 数据导出。左侧填环境、库、审批人和事由，右侧写查询 SQL。审批通过后发起人确认格式即异步导出：按环境就近本机或 SQL 执行器查询编码并 gzip 落盘（`*.csv|json|sql.gz`），再下载（浏览器原生下载，刷新不中断）；详情单列展示下载流程（含执行方式/执行器地址与进度）；缺执行器时拒绝硬跨网直连；失败可重导无需重审；临时文件约保留 7 天。远程导出须同步升级 sql-agent |
 | Kafka 工单 | `/ops/kafka` | 创建或调整 Topic；地址选自域名管理（本租户可见），环境选自环境管理 |
 | Redis 工单 | `/ops/redis` | 按 Redis 命令规则提交变更；地址选自域名管理，环境选自环境管理 |
 | 权限申请 | `/ops/dcl` | 为数据库账号申请权限并选择目标库。PostgreSQL：提交/执行时按库查 `pg_database.datdba` 写入可执行 `ALTER DEFAULT PRIVILEGES FOR ROLE`；schema 仅 `GRANT USAGE`（无 CREATE）；账号不存在则 `CREATE USER … ENCRYPTED PASSWORD` 并飞书通知密码；逐库 CONNECT + 表/序列授权（勾选 SELECT/INSERT/UPDATE/DELETE）。MySQL/StarRocks 为库级 GRANT。与平台资源申请不同 |
@@ -232,7 +232,7 @@ Client Secret（及 LDAP Bind 密码）用字段加密密钥落库（优先 `app
 | 业务权限 | 侧栏与业务 URN 按**当前租户成员** `role_ids`；平台 URN（用户/菜单/LDAP 等）走全局角色 |
 | 可见范围 | 实例/库「全局」= 本租成员可见；「私有」= 仅可访问用户或绑定角色命中（候选项与写入均须本租成员）。异租用户不能靠填 ACL 跨租访问 |
 | 划拨 | 审计会话下可将实例/已登记库/**域名**/部署集群/代理划到指定租户；**库与域名可单独归属**（不迁实例），均支持批量指定租户。划拨库到目标租户时会去掉非该租户活跃成员的审核人与可访问用户 |
-| 跨租授权 | 资源方租户选出实例/库/域名/集群，授权给**目标租户或指定用户**只读（互斥）；弹窗按类型拉 `grant-resources`，支持多选批量授权与勾选批量撤销；用户所属租户已有授权则跳过用户级重复。授权控制可见/使用，不授予工单审批权。划拨时相关 grant 自动迁到新归属（见 [tenancy.md](tenancy.md)） |
+| 跨租授权 | 资源方租户选出实例/库/域名/集群，授权给**目标租户或指定用户**只读（互斥）；弹窗按类型拉 `grant-resources`，支持多选批量授权与勾选批量撤销（资源下拉可关键字过滤）；用户所属租户已有授权则跳过用户级重复。授权控制可见/使用，不授予工单审批权。划拨时相关 grant 自动迁到新归属（见 [tenancy.md](tenancy.md)） |
 
 删除用户时会清理其租户成员与按用户授权，避免幽灵成员行。
 
@@ -248,7 +248,7 @@ Client Secret（及 LDAP Bind 密码）用字段加密密钥落库（优先 `app
 | 菜单管理 | `/config/menus` | 维护侧栏页面与操作权限节点 |
 | 登录日志 | `/config/login-logs` | 登录成功与失败记录 |
 | 登录会话 | `/config/login-sessions` | 以 Redis 为准展示仍有效的登录。有效期内再次访问会把过期时间续到当前时间 + 会话 TTL（默认 1 天）；到期后需重新登录。与闲置退出是两套规则 |
-| 客户端访问授权 | `/config/client-access` | 管理员开通本地 AI / CLI / MCP 访问；接口审计。见 [client-access.md](client-access.md) |
+| 客户端访问授权 | `/config/client-access` | 管理员开通本地 AI / CLI / MCP 访问（从平台用户列表选择登录名）；接口审计。见 [client-access.md](client-access.md) |
 | 我的访问令牌 | `/config/my-access-tokens` | 用户签发与吊销个人访问令牌（PAT） |
 | 认证配置 | `/config/ldap` | LDAP、SSO、邮件、通知四个配置页 |
 | 查询审计 | `/config/query-audits` | 数据库、Kafka、Redis 查询语句的审计检索；可按客户端类型筛选 |

@@ -63,6 +63,7 @@ import {
   parentTablesOf,
   positiveInt,
   resolveEffectivePartitionColumn,
+  resolveParentInstanceKey,
   resolveSourceScope,
   shardDbPrefixHint,
   snapshotLabel,
@@ -261,6 +262,7 @@ export default function CdcCreate() {
   const [shardTarget, setShardTarget] = useState('')
   const [parentMappingRows, setParentMappingRows] = useState<any[]>([])
   const [syncedByParent, setSyncedByParent] = useState<Record<string, string[]>>({})
+  const [parentTaskQ, setParentTaskQ] = useState('')
   const [discoverLoading, setDiscoverLoading] = useState(false)
   const [discoveredTables, setDiscoveredTables] = useState<string[]>([])
   const [diffLoading, setDiffLoading] = useState(false)
@@ -301,6 +303,8 @@ export default function CdcCreate() {
 
   const didInit = useRef(false)
   const discoverTimer = useRef<number>(0)
+  const parentExtrasTimer = useRef<number>(0)
+  const parentExtrasPendingIds = useRef<string[]>([])
 
   function patchForm(next: Partial<CdcForm>) {
     setForm((prev) => ({ ...prev, ...next }))
@@ -357,6 +361,12 @@ export default function CdcCreate() {
     return parentTasks.filter((t) => ids.includes(t.id))
   }, [form.task_type, form.parent_ids, form.parent_id, parentTasks])
 
+  const selectedParentIdSet = useMemo(() => {
+    const multi = form.task_type === 'add_table' || form.task_type === 'alter_schema'
+    if (multi) return new Set(form.parent_ids || [])
+    return new Set(form.parent_id ? [form.parent_id] : [])
+  }, [form.task_type, form.parent_ids, form.parent_id])
+
   const parentTables = useMemo(() => {
     const p = parentTasks.find((t) => t.id === form.parent_id) || selectedParents[0]
     if (!p) return []
@@ -410,16 +420,24 @@ export default function CdcCreate() {
   }, [alterDiffItems])
 
   const parentCandidates = useMemo(() => {
+    const q = parentTaskQ.trim().toLowerCase()
     return parentTasks.filter((t) => {
       if (t.task_type !== 'init') return false
       if (form.task_type === 'add_table' && t.status !== 'running') return false
       if (!['running', 'paused', 'init', 'creating', 'provisioning'].includes(t.status)) return false
-      if (!form.env) return true
-      const extra = decodeCdcExtra(t.description).extra
-      const env = extra.env || instEnv(instances.find((i) => i.id === t.source_instance_id))
-      return env === form.env
+      if (form.env) {
+        const extra = decodeCdcExtra(t.description).extra
+        const env = extra.env || instEnv(instances.find((i) => i.id === t.source_instance_id))
+        if (env !== form.env) return false
+      }
+      if (q) {
+        const name = String(t.name || '').toLowerCase()
+        const db = String(t.source_db || '').toLowerCase()
+        if (!name.includes(q) && !db.includes(q)) return false
+      }
+      return true
     })
-  }, [parentTasks, form.task_type, form.env, instances])
+  }, [parentTasks, form.task_type, form.env, instances, parentTaskQ])
 
   const sourceInstances = useMemo(() => {
     const eng = form.source_engine === 'mysql' ? 'mysql' : 'postgres'
@@ -902,47 +920,7 @@ export default function CdcCreate() {
   }
 
   // ---- 父任务选择 ----
-  function onParentRowClick(row: any) {
-    if (!row) return
-    if (form.task_type === 'add_table' || form.task_type === 'alter_schema') {
-      toggleParent(row, !form.parent_ids.includes(row.id))
-    } else {
-      onPickParent(row)
-    }
-  }
-
-  function toggleParent(row: any, checked: boolean) {
-    if (!row) return
-    const dbOf = (t: any) => String(t?.source_db || '').trim().toLowerCase()
-    const current = parentTasks.filter((t) => form.parent_ids.includes(t.id))
-    let ids: string[]
-    if (!checked) {
-      ids = form.parent_ids.filter((id) => id !== row.id)
-    } else {
-      const sameDb = current.filter((t) => dbOf(t) === dbOf(row))
-      const selected = sameDb.some((t) => t.id === row.id) ? sameDb : [...sameDb, row]
-      const err = validateAddTableParents(selected, (id: string) => instances.find((i) => i.id === id))
-      if (err) {
-        message.warning(err)
-        return
-      }
-      const rest = sameDb.map((t) => t.id).filter((id) => id !== row.id)
-      const keepRep = form.parent_id && rest.includes(form.parent_id)
-      ids = keepRep ? [form.parent_id, ...rest.filter((id) => id !== form.parent_id), row.id] : [row.id, ...rest]
-    }
-    const ref = parentTasks.find((t) => t.id === ids[0]) || (checked ? row : null)
-    if (!ref) {
-      patchForm({ parent_ids: [], parent_id: '', tables: [], table_map: {} })
-      formRef.current = { ...formRef.current, parent_ids: [], parent_id: '', tables: [], table_map: {} }
-      clearPickedTables()
-      return
-    }
-    onPickParent(ref, ids)
-  }
-
-  function onPickParent(row: any, parentIdsOverride?: string[]) {
-    if (!row) return
-    const isMulti = form.task_type === 'add_table' || form.task_type === 'alter_schema'
+  function buildParentEndpointPatch(row: any): { patch: Partial<CdcForm>; sourceID: string } {
     const extra = decodeCdcExtra(row.description).extra
     const suffix = form.task_type === 'alter_schema' ? '加列' : form.task_type === 'remove_table' ? '移除表' : '加表'
     const sourceHost = extra.source_host || ''
@@ -969,13 +947,13 @@ export default function CdcCreate() {
       target_port: targetPort,
       source_db: row.source_db,
       target_db: row.target_db,
-      env: extra.env || form.env,
+      env: extra.env || formRef.current.env,
       source_schema: extra.source_schema || 'public',
       connector_id: extra.connector_id || '',
       debezium_mode: extra.debezium_mode || 'after_only',
       message_schema_mode: extra.message_schema_mode || 'without_schema',
       key_model: extra.key_model || 'unique_key',
-      auto_create_table: form.task_type === 'add_table' ? false : extra.auto_create_table !== false,
+      auto_create_table: formRef.current.task_type === 'add_table' ? false : extra.auto_create_table !== false,
       sr_dynamic_partition_enable: extra.sr_dynamic_partition_enable === true,
       sr_partition_column: extra.sr_partition_column || '',
       kafka_bootstrap_servers: extra.kafka_bootstrap_servers || '',
@@ -992,11 +970,118 @@ export default function CdcCreate() {
       connector_name: extra.connector_name || '',
       topic_prefix: extra.topic_prefix || '',
     }
-    if (!form.name) patch.name = `${row.name}_${suffix}`
-    if (isMulti) patch.parent_ids = parentIdsOverride && parentIdsOverride.length ? parentIdsOverride : [row.id]
-    // canAutoAlter 需基于新 parent 计算
+    if (!formRef.current.name) patch.name = `${row.name}_${suffix}`
     const autoAlterOk = extra.auto_create_table !== false && !!(targetID && row.target_db)
-    if (!autoAlterOk && form.task_type === 'alter_schema') patch.alter_schema_exec_mode = 'sql_only'
+    if (!autoAlterOk && formRef.current.task_type === 'alter_schema') patch.alter_schema_exec_mode = 'sql_only'
+    return { patch, sourceID }
+  }
+
+  function scheduleLoadParentExtras(ids: string[]) {
+    parentExtrasPendingIds.current = ids
+    if (parentExtrasTimer.current) window.clearTimeout(parentExtrasTimer.current)
+    parentExtrasTimer.current = window.setTimeout(() => {
+      parentExtrasTimer.current = 0
+      void loadParentExtras(ids)
+    }, 400)
+  }
+
+  async function flushParentExtras() {
+    if (parentExtrasTimer.current) {
+      window.clearTimeout(parentExtrasTimer.current)
+      parentExtrasTimer.current = 0
+    }
+    const ids = parentExtrasPendingIds.current.length
+      ? parentExtrasPendingIds.current
+      : formRef.current.parent_ids.length
+        ? formRef.current.parent_ids
+        : formRef.current.parent_id
+          ? [formRef.current.parent_id]
+          : []
+    await loadParentExtras(ids)
+  }
+
+  function onParentRowClick(row: any) {
+    if (!row) return
+    if (form.task_type === 'add_table' || form.task_type === 'alter_schema') {
+      toggleParent(row, !selectedParentIdSet.has(row.id))
+    } else {
+      onPickParent(row)
+    }
+  }
+
+  function toggleParent(row: any, checked: boolean) {
+    if (!row) return
+    const isMulti = form.task_type === 'add_table' || form.task_type === 'alter_schema'
+    if (!isMulti) {
+      onPickParent(row)
+      return
+    }
+    const dbOf = (t: any) => String(t?.source_db || '').trim().toLowerCase()
+    const current = parentTasks.filter((t) => form.parent_ids.includes(t.id))
+    let ids: string[]
+    if (!checked) {
+      ids = form.parent_ids.filter((id) => id !== row.id)
+    } else {
+      const sameDb = current.filter((t) => dbOf(t) === dbOf(row))
+      const selected = sameDb.some((t) => t.id === row.id) ? sameDb : [...sameDb, row]
+      const err = validateAddTableParents(selected, (id: string) => instances.find((i) => i.id === id))
+      if (err) {
+        message.warning(err)
+        return
+      }
+      const rest = sameDb.map((t) => t.id).filter((id) => id !== row.id)
+      const keepRep = form.parent_id && rest.includes(form.parent_id)
+      ids = keepRep ? [form.parent_id, ...rest.filter((id) => id !== form.parent_id), row.id] : [row.id, ...rest]
+    }
+    const ref = parentTasks.find((t) => t.id === ids[0]) || (checked ? row : null)
+    if (!ref) {
+      const cleared = { parent_ids: [] as string[], parent_id: '', tables: [] as string[], table_map: {} as Record<string, string> }
+      patchForm(cleared)
+      formRef.current = { ...formRef.current, ...cleared }
+      clearPickedTables()
+      scheduleLoadParentExtras([])
+      return
+    }
+
+    const prev = formRef.current
+    const prevKey = prev.parent_id
+      ? resolveParentInstanceKey(
+          parentTasks.find((t) => t.id === prev.parent_id) || { source_instance_id: prev.source_instance_id },
+          instances.find((i) => i.id === (parentTasks.find((t) => t.id === prev.parent_id)?.source_instance_id || prev.source_instance_id)),
+        )
+      : ''
+    const nextKey = resolveParentInstanceKey(ref, instances.find((i) => i.id === ref.source_instance_id))
+    const instanceChanged = !prev.parent_id || prevKey !== nextKey
+    const dbChanged = String(prev.source_db || '').toLowerCase() !== String(ref.source_db || '').toLowerCase()
+
+    // 同源多选：仅更新 ids，避免每次整表 patch + 同步打 API
+    if (!instanceChanged && !dbChanged && prev.parent_id) {
+      const light: Partial<CdcForm> = { parent_ids: ids, parent_id: ids[0] || prev.parent_id }
+      patchForm(light)
+      formRef.current = { ...formRef.current, ...light }
+      scheduleLoadParentExtras(ids)
+      return
+    }
+
+    const { patch, sourceID } = buildParentEndpointPatch(ref)
+    patch.parent_ids = ids
+    patch.parent_id = ids[0] || ref.id
+    if (prev.parent_id && (instanceChanged || dbChanged)) {
+      patch.tables = []
+      patch.table_map = {}
+      clearPickedTables()
+    }
+    patchForm(patch)
+    formRef.current = { ...formRef.current, ...patch }
+    void loadSourceDbs(sourceID)
+    scheduleLoadParentExtras(ids)
+  }
+
+  function onPickParent(row: any, parentIdsOverride?: string[]) {
+    if (!row) return
+    const isMulti = form.task_type === 'add_table' || form.task_type === 'alter_schema'
+    const { patch, sourceID } = buildParentEndpointPatch(row)
+    if (isMulti) patch.parent_ids = parentIdsOverride && parentIdsOverride.length ? parentIdsOverride : [row.id]
     const prev = formRef.current
     const parentChanged = !!prev.parent_id && prev.parent_id !== row.id
     const dbChanged = String(prev.source_db || '').toLowerCase() !== String(row.source_db || '').toLowerCase()
@@ -1008,19 +1093,25 @@ export default function CdcCreate() {
     patchForm(patch)
     formRef.current = { ...formRef.current, ...patch }
     void loadSourceDbs(sourceID)
-    void loadParentExtras(patch.parent_ids || (form.parent_ids.length ? form.parent_ids : [row.id]))
+    scheduleLoadParentExtras(patch.parent_ids || (form.parent_ids.length ? form.parent_ids : [row.id]))
   }
 
   async function loadParentExtras(idsArg?: string[]) {
     const ids = idsArg && idsArg.length ? idsArg : formRef.current.parent_ids.length ? formRef.current.parent_ids : formRef.current.parent_id ? [formRef.current.parent_id] : []
-    setParentMappingRows([])
-    setSyncedByParent({})
-    if (!ids.length) return
+    parentExtrasPendingIds.current = ids
+    if (!ids.length) {
+      setParentMappingRows([])
+      setSyncedByParent({})
+      return
+    }
     try {
       const [maps, synced] = await Promise.all([
         api.get(`/cdc-sync/tasks/${ids[0]}/tables`).catch(() => ({ data: {} as any })),
         api.post('/cdc-sync/tasks/synced-tables/batch', { parent_ids: ids }).catch(() => ({ data: {} as any })),
       ])
+      // 防抖期间若 ids 已变，丢弃过期响应
+      const latest = parentExtrasPendingIds.current
+      if (latest.length !== ids.length || latest.some((id, i) => id !== ids[i])) return
       setParentMappingRows(maps.data.data || [])
       setSyncedByParent(synced.data.data || {})
     } catch {
@@ -1325,6 +1416,7 @@ export default function CdcCreate() {
         message.warning('请选择已有初始化任务')
         return
       }
+      await flushParentExtras()
     }
     if (f.task_type === 'add_table' && step === 0) await loadTables()
     if (f.task_type === 'add_table' && step === 1) {
@@ -2787,8 +2879,8 @@ export default function CdcCreate() {
               </span>
             }
           >
-            <Form layout="vertical">
-              <Form.Item label="环境">
+            <Form layout="inline" className="mb" style={{ gap: 8, flexWrap: 'wrap' }}>
+              <Form.Item label="环境" style={{ marginInlineEnd: 0 }}>
                 <Select
                   allowClear
                   showSearch
@@ -2802,6 +2894,21 @@ export default function CdcCreate() {
                   notFoundContent={envLoading ? '环境加载中' : '暂无数据'}
                 />
               </Form.Item>
+              <Form.Item label="任务名称" style={{ marginInlineEnd: 0 }}>
+                <Input
+                  allowClear
+                  placeholder="过滤任务名或源库"
+                  style={{ width: 220 }}
+                  value={parentTaskQ}
+                  prefix={<SearchOutlined />}
+                  onChange={(e) => setParentTaskQ(e.target.value)}
+                />
+              </Form.Item>
+              {(form.task_type === 'add_table' || form.task_type === 'alter_schema') && (
+                <Form.Item style={{ marginInlineEnd: 0 }}>
+                  <span className="muted">已选 {form.parent_ids.length} 个</span>
+                </Form.Item>
+              )}
             </Form>
             {(form.task_type === 'add_table' || form.task_type === 'alter_schema') && (
               <Alert
@@ -2820,12 +2927,15 @@ export default function CdcCreate() {
               size="small"
               rowKey="id"
               dataSource={parentCandidates}
-              pagination={false}
-              locale={{ emptyText: '暂无可用的初始化任务' }}
+              pagination={{
+                pageSize: 10,
+                showSizeChanger: true,
+                pageSizeOptions: ['10', '20', '50'],
+                showTotal: (total) => `共 ${total} 条`,
+              }}
+              locale={{ emptyText: parentTaskQ.trim() ? '无匹配的初始化任务' : '暂无可用的初始化任务' }}
               onRow={(row) => ({ onClick: () => onParentRowClick(row) })}
-              rowClassName={(row) =>
-                form.parent_id === row.id || form.parent_ids.includes(row.id) ? 'ant-table-row-selected' : ''
-              }
+              rowClassName={(row) => (selectedParentIdSet.has(row.id) ? 'ant-table-row-selected' : '')}
               columns={[
                 {
                   title: '',
@@ -2833,13 +2943,13 @@ export default function CdcCreate() {
                   render: (_: any, row: any) =>
                     form.task_type === 'add_table' || form.task_type === 'alter_schema' ? (
                       <Checkbox
-                        checked={form.parent_ids.includes(row.id)}
+                        checked={selectedParentIdSet.has(row.id)}
                         onClick={(e) => e.stopPropagation()}
                         onChange={(e) => toggleParent(row, e.target.checked)}
                       />
                     ) : (
                       <Radio
-                        checked={form.parent_id === row.id}
+                        checked={selectedParentIdSet.has(row.id)}
                         onClick={(e) => e.stopPropagation()}
                         onChange={() => onPickParent(row)}
                       />

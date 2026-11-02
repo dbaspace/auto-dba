@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
   AutoComplete,
   Button,
+  Checkbox,
   Dropdown,
   Form,
   Input,
@@ -14,6 +15,7 @@ import {
   message,
   type MenuProps,
 } from 'antd'
+import type { InputRef } from 'antd/es/input'
 import api, { abortAuthReissue, beginAuthReissue, finishAuthReissue, getAuthEpoch } from '../../api/request'
 import Auth from '../../components/Auth'
 import { Perm, usePermission } from '../../hooks/usePermission'
@@ -98,6 +100,8 @@ export default function Tenants() {
   const [grantResources, setGrantResources] = useState<GrantResourceOpt[]>([])
   const [grantLabelMap, setGrantLabelMap] = useState<Record<string, string>>({})
   const [grantResLoading, setGrantResLoading] = useState(false)
+  const [grantResSearch, setGrantResSearch] = useState('')
+  const grantFilterInputRef = useRef<InputRef>(null)
   const [editForm] = Form.useForm()
   const [grantForm] = Form.useForm()
   const [members, setMembers] = useState<Member[]>([])
@@ -112,6 +116,20 @@ export default function Tenants() {
   const [memberForm] = Form.useForm()
   const memberOptsLoaded = useRef(false)
   const grantTargetMode = Form.useWatch('grant_target_mode', grantForm)
+  const grantSelectedIds = Form.useWatch('resource_ids', grantForm) as string[] | undefined
+
+  const matchedGrantResources = useMemo(() => {
+    const q = grantResSearch.trim().toLowerCase()
+    if (!q) return grantResources
+    return grantResources.filter(
+      (r) => r.label.toLowerCase().includes(q) || String(r.id || '').toLowerCase().includes(q),
+    )
+  }, [grantResources, grantResSearch])
+
+  const selectedGrantKeys = useMemo(
+    () => new Set(Array.isArray(grantSelectedIds) ? grantSelectedIds.map(String) : []),
+    [grantSelectedIds],
+  )
 
   const targetTenantOptions = useMemo(
     () =>
@@ -752,6 +770,7 @@ export default function Tenants() {
           setGrantResources([])
           setGrantLabelMap({})
           setGrantSelectedKeys([])
+          setGrantResSearch('')
         }}
         footer={null}
         width={1000}
@@ -796,6 +815,7 @@ export default function Tenants() {
               options={GRANT_TYPES}
               onChange={(typ) => {
                 grantForm.setFieldsValue({ resource_ids: [] })
+                setGrantResSearch('')
                 if (current) void loadGrantResources(current.id, typ)
               }}
             />
@@ -808,15 +828,47 @@ export default function Tenants() {
             <Select
               mode="multiple"
               style={{ width: 260 }}
-              showSearch
-              optionFilterProp="label"
+              showSearch={false}
               maxTagCount="responsive"
               loading={grantResLoading}
               placeholder={grantResLoading ? '加载中…' : grantResources.length ? '选择资源（可多选）' : '该类型下暂无资源'}
-              options={grantResources.map((r) => ({ value: r.id, label: r.label }))}
-              notFoundContent={grantResLoading ? '加载中…' : '暂无可选资源'}
+              options={matchedGrantResources.map((r) => ({ value: r.id, label: r.label }))}
+              notFoundContent={grantResLoading ? '加载中…' : grantResSearch.trim() ? '无匹配资源' : '暂无可选资源'}
+              menuItemSelectedIcon={null}
+              optionRender={(opt) => {
+                const value = String(opt.value ?? '')
+                return (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
+                    <Checkbox style={{ pointerEvents: 'none', flexShrink: 0 }} checked={selectedGrantKeys.has(value)} />
+                    <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {(opt.data as { label?: string })?.label ?? opt.label}
+                    </span>
+                  </div>
+                )
+              }}
+              onDropdownVisibleChange={(open) => {
+                if (!open) setGrantResSearch('')
+              }}
               dropdownRender={(menu) => (
-                <>
+                <div>
+                  <div
+                    style={{ padding: '8px 12px 4px' }}
+                    onMouseDown={(e) => {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      queueMicrotask(() => grantFilterInputRef.current?.focus({ preventScroll: true }))
+                    }}
+                  >
+                    <Input
+                      ref={grantFilterInputRef}
+                      allowClear
+                      value={grantResSearch}
+                      placeholder="输入关键字过滤资源"
+                      onChange={(e) => setGrantResSearch(e.target.value)}
+                      onMouseDown={(e) => e.stopPropagation()}
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  </div>
                   <div
                     style={{
                       padding: '4px 8px',
@@ -829,8 +881,12 @@ export default function Tenants() {
                     <Button
                       type="link"
                       size="small"
-                      disabled={!grantResources.length}
-                      onClick={() => grantForm.setFieldsValue({ resource_ids: grantResources.map((r) => r.id) })}
+                      disabled={!matchedGrantResources.length}
+                      onClick={() => {
+                        const keys = matchedGrantResources.map((r) => r.id)
+                        const cur = Array.isArray(grantSelectedIds) ? grantSelectedIds : []
+                        grantForm.setFieldsValue({ resource_ids: [...new Set([...cur, ...keys])] })
+                      }}
                     >
                       全选
                     </Button>
@@ -839,7 +895,7 @@ export default function Tenants() {
                     </Button>
                   </div>
                   {menu}
-                </>
+                </div>
               )}
             />
           </Form.Item>

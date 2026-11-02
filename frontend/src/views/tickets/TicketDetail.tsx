@@ -44,72 +44,18 @@ function isPrivileged(): boolean {
   )
 }
 
-function filenameFromHeader(header: any, fallback: string): string {
-  const raw = String(header || '')
-  const star = raw.match(/filename\*=UTF-8''([^;]+)/i)
-  if (star?.[1]) {
-    try {
-      return decodeURIComponent(star[1])
-    } catch {
-      /* ignore */
-    }
-  }
-  const plain = raw.match(/filename="?([^";]+)"?/i)
-  return plain?.[1] || fallback
-}
-
-function exportMime(format: string, filename?: string): string {
-  const name = String(filename || '')
-  if (/\.gz$/i.test(name) || String(format || '').toLowerCase().endsWith('.gz')) {
-    return 'application/gzip'
-  }
-  switch (String(format || '').toLowerCase()) {
-    case 'json':
-      return 'application/json;charset=utf-8'
-    case 'sql':
-      return 'application/sql;charset=utf-8'
-    default:
-      return 'text/csv;charset=utf-8'
+function seedAuthCookie() {
+  const token = localStorage.getItem('token') || ''
+  if (token) {
+    document.cookie = `token=${encodeURIComponent(token)}; path=/; SameSite=Lax`
   }
 }
 
-/** 解析导出 blob：csv/json/sql（及 .gz）共用；区分错误 JSON 与成功文件 */
-async function resolveExportBlob(
-  data: any,
-  contentType: string,
-  contentDisposition: string,
-  format: string,
-): Promise<{ blob: Blob } | { error: string }> {
-  const headerName = filenameFromHeader(contentDisposition, '')
-  const mime = exportMime(format, headerName)
-  let blob = data instanceof Blob ? data : new Blob([data], { type: mime })
-  const ctype = String(contentType || '')
-  const hasFile = /filename/i.test(String(contentDisposition || ''))
-  const isGzip = /\.gz$/i.test(headerName) || ctype.includes('gzip')
-
-  // 成功导出会带 Content-Disposition；错误体多为 JSON 且无文件名
-  // gzip 压缩体勿当错误 JSON 解析；json 明文成功也是 application/json，靠文件名区分
-  const maybeErrorJSON =
-    !isGzip && (!hasFile || (ctype.includes('application/json') && format !== 'json'))
-
-  if (maybeErrorJSON) {
-    const text = await blob.text()
-    try {
-      const parsed = JSON.parse(text)
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && parsed.message) {
-        return { error: String(parsed.message) }
-      }
-    } catch {
-      /* csv/sql/json 文件正文 */
-    }
-    return { blob: new Blob([text], { type: ctype || mime }) }
-  }
-
-  // 有文件名的成功响应：统一补齐 MIME
-  if (!blob.type || blob.type === 'application/octet-stream') {
-    blob = new Blob([blob], { type: mime })
-  }
-  return { blob }
+/** 浏览器原生下载（不经 axios blob），刷新页面不中断 */
+function dqlExportFileURL(ticketId: string) {
+  const token = localStorage.getItem('token') || ''
+  const q = token ? `?access_token=${encodeURIComponent(token)}` : ''
+  return `/api/v1/tickets/${encodeURIComponent(ticketId)}/export/file${q}`
 }
 
 const DQL_EXPORT_PIPELINE = [
@@ -277,7 +223,6 @@ export default function TicketDetail() {
   const [loadError, setLoadError] = useState('')
   const [acting, setActing] = useState(false)
   const [downloading, setDownloading] = useState(false)
-  const [pullingFile, setPullingFile] = useState(false)
   const [comment, setComment] = useState('')
   const [fmtVisible, setFmtVisible] = useState(false)
   const [fileFormat, setFileFormat] = useState('csv')
@@ -1037,47 +982,20 @@ export default function TicketDetail() {
     }
   }
 
-  async function pullExportFile() {
-    setPullingFile(true)
-    try {
-      const it = itemRef.current
-      if (!it?.id) {
-        message.error('工单不存在')
-        return
-      }
-      const fmt = String(dqlExtra?.export_format || fileFormat || 'csv')
-      const res = await api.get(`/tickets/${it.id}/export/file`, {
-        responseType: 'blob',
-        timeout: 120000,
-      })
-      const resolved = await resolveExportBlob(
-        res.data,
-        String(res.headers['content-type'] || ''),
-        String(res.headers['content-disposition'] || ''),
-        fmt,
-      )
-      if ('error' in resolved) {
-        message.error(resolved.error)
-        return
-      }
-      const name = filenameFromHeader(
-        res.headers['content-disposition'],
-        String(dqlExtra?.export_file || `dql_export.${fmt}`),
-      )
-      const url = URL.createObjectURL(resolved.blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = name
-      a.click()
-      URL.revokeObjectURL(url)
-      message.success('开始下载')
-    } catch (e: any) {
-      if (!e?.response) {
-        message.error(e?.message || '下载失败')
-      }
-    } finally {
-      setPullingFile(false)
+  function pullExportFile() {
+    const it = itemRef.current
+    if (!it?.id) {
+      message.error('工单不存在')
+      return
     }
+    seedAuthCookie()
+    const a = document.createElement('a')
+    a.href = dqlExportFileURL(it.id)
+    a.rel = 'noopener'
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    message.success('已交由浏览器下载，刷新页面不影响')
   }
 
   function promptRejectReason(): Promise<string | null> {
@@ -1588,7 +1506,7 @@ export default function TicketDetail() {
                               : '确认格式后开始导出'}
                       </span>
                       {canPullExportFile && (
-                        <Button type="primary" loading={pullingFile} onClick={() => { void pullExportFile() }}>
+                        <Button type="primary" onClick={pullExportFile}>
                           下载文件
                         </Button>
                       )}
@@ -1609,7 +1527,7 @@ export default function TicketDetail() {
                         {dqlExtra?.export_file
                           ? `${dqlExtra.export_file}${dqlExtra.export_bytes ? ` · ${dqlExtra.export_bytes} 字节` : ''}`
                           : fmtTime(item.updated_at)}
-                        {' · 可重新导出无需重审'}
+                        {' · 可重新导出无需重审 · 下载由浏览器接管，刷新不影响'}
                       </div>
                     ) : item.status === 'running' ? (
                       <div className="download-hint">后台导出中，完成后可下载文件</div>
