@@ -76,7 +76,7 @@ import {
   validateAddTableParents,
   validatePartitionColumnsForMappings,
 } from './cdc'
-import type { BatchAvailableTables } from './cdc'
+import type { BatchAvailableTables, BatchParentTableRef } from './cdc'
 import {
   ADD_STEPS,
   ADD_STEPS_AUTO,
@@ -397,7 +397,7 @@ export default function CdcCreate() {
   }, [form.task_type, form.tables, form.name, selectedParents, syncedByParent])
 
   const batchAvailByTable = useMemo(() => {
-    const m = new Map<string, { addable: number; exists: number }>()
+    const m = new Map<string, BatchAvailableTables['tables'][number]>()
     for (const t of batchAvail?.tables || []) m.set(String(t.name).toLowerCase(), t)
     return m
   }, [batchAvail])
@@ -939,6 +939,27 @@ export default function CdcCreate() {
     }
   }
 
+  function mergeParentRefs(lists: (BatchParentTableRef[] | undefined)[]): BatchParentTableRef[] {
+    const m = new Map<string, BatchParentTableRef>()
+    for (const list of lists) {
+      for (const r of list || []) {
+        const id = String(r.parent_id || '')
+        if (!id || m.has(id)) continue
+        m.set(id, r)
+      }
+    }
+    return [...m.values()].sort((a, b) =>
+      String(a.source_db || a.name || a.parent_id).localeCompare(String(b.source_db || b.name || b.parent_id)),
+    )
+  }
+
+  function formatParentRef(r: BatchParentTableRef) {
+    const db = String(r.source_db || '').trim()
+    const name = String(r.name || '').trim()
+    if (db && name) return `${db}（${name}）`
+    return db || name || r.parent_id
+  }
+
   function addableTag(names: string[]) {
     const total = batchAvail?.total || 0
     const failedN = batchAvail?.failed?.length || 0
@@ -946,20 +967,50 @@ export default function CdcCreate() {
     if (total <= 1 || !batchAvailByTable.size || checked <= 0) return null
     let addable = Number.POSITIVE_INFINITY
     let exists = Number.POSITIVE_INFINITY
+    const missLists: (BatchParentTableRef[] | undefined)[] = []
+    const occLists: (BatchParentTableRef[] | undefined)[] = []
     for (const n of names) {
       const row = batchAvailByTable.get(String(n).toLowerCase())
       addable = Math.min(addable, row?.addable ?? 0)
       exists = Math.min(exists, row?.exists ?? 0)
+      missLists.push(row?.missing)
+      occLists.push(row?.occupied)
     }
     if (!Number.isFinite(addable)) addable = 0
     if (!Number.isFinite(exists)) exists = 0
     if (addable >= checked) return null
+    const missing = mergeParentRefs(missLists)
+    const occupied = mergeParentRefs(occLists)
+    const showN = 12
     const tip = (
-      <div>
+      <div style={{ maxWidth: 360 }}>
         <div>分母是父任务数，不是分表片数。</div>
+        <div>各父任务按其 SourceDB 拉表清单。</div>
         <div>
           源库有表 {exists} · 可加 {addable} · 拉取失败 {failedN} · 已选父任务 {total}
         </div>
+        {missing.length ? (
+          <div style={{ marginTop: 6 }}>
+            <div>缺表（{missing.length}）</div>
+            <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+              {missing.slice(0, showN).map((r) => (
+                <li key={r.parent_id}>{formatParentRef(r)}</li>
+              ))}
+              {missing.length > showN ? <li>…等共 {missing.length} 个</li> : null}
+            </ul>
+          </div>
+        ) : null}
+        {occupied.length ? (
+          <div style={{ marginTop: 6 }}>
+            <div>已占用（{occupied.length}）</div>
+            <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+              {occupied.slice(0, showN).map((r) => (
+                <li key={r.parent_id}>{formatParentRef(r)}</li>
+              ))}
+              {occupied.length > showN ? <li>…等共 {occupied.length} 个</li> : null}
+            </ul>
+          </div>
+        ) : null}
       </div>
     )
     return (

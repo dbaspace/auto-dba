@@ -186,8 +186,68 @@ type cdcParentOccupancyEntry struct {
 	cdcOccupancyEntry
 }
 
+// cdcParentTableRef 批量可选表中「某父任务 / 其 SourceDB」引用，用于缺表与占用明细。
+type cdcParentTableRef struct {
+	ParentID string `json:"parent_id"`
+	Name     string `json:"name,omitempty"`
+	SourceDB string `json:"source_db,omitempty"`
+}
+
+type batchAvailParentSnap struct {
+	Ref           cdcParentTableRef
+	InstanceName  string
+	ViaAgent      bool
+	ExistsChecked bool
+	OccupiedCount int
+	TableSet      map[string]struct{} // lower(table) → present in SourceDB
+	AvailSet      map[string]struct{} // lower(table) → present and not occupied
+}
+
+type batchAvailTableAgg struct {
+	Name     string
+	Addable  int
+	Exists   int
+	Missing  []cdcParentTableRef
+	Occupied []cdcParentTableRef
+}
+
+// buildBatchAvailTableAggs 两遍聚合：先收集各父 SourceDB 表集合与全局表名，再按表归类有表/可加/缺表/占用。
+func buildBatchAvailTableAggs(snaps []batchAvailParentSnap) (order []string, agg map[string]*batchAvailTableAgg) {
+	agg = map[string]*batchAvailTableAgg{}
+	seen := map[string]struct{}{}
+	for _, s := range snaps {
+		for k := range s.TableSet {
+			if _, ok := seen[k]; ok {
+				continue
+			}
+			seen[k] = struct{}{}
+			order = append(order, k)
+		}
+	}
+	sort.Strings(order)
+	for _, k := range order {
+		agg[k] = &batchAvailTableAgg{Name: k, Missing: []cdcParentTableRef{}, Occupied: []cdcParentTableRef{}}
+	}
+	for _, s := range snaps {
+		for _, k := range order {
+			a := agg[k]
+			if _, ok := s.TableSet[k]; !ok {
+				a.Missing = append(a.Missing, s.Ref)
+				continue
+			}
+			a.Exists++
+			if _, ok := s.AvailSet[k]; ok {
+				a.Addable++
+			} else {
+				a.Occupied = append(a.Occupied, s.Ref)
+			}
+		}
+	}
+	return order, agg
+}
+
 // AvailableTablesBatch POST /cdc-sync/tasks/add-table/available-tables/batch —
-// 按父任务取表减占用；异地走 sql-agent；响应瘦身不回全量 exists/occupied。
+// 按父任务取表减占用；异地走 sql-agent；响应瘦身不回全量 exists/occupied，但回每表缺表/占用父任务明细。
 func (h *CDCHandler) AvailableTablesBatch(c *gin.Context) {
 	var req struct {
 		IDs []string `json:"parent_ids"`
@@ -211,14 +271,16 @@ func (h *CDCHandler) AvailableTablesBatch(c *gin.Context) {
 		Message  string `json:"message"`
 	}
 	type parentOut struct {
-		OccupiedCount int  `json:"occupied_count"`
-		ExistsChecked bool `json:"exists_checked"`
-		ViaAgent      bool `json:"via_agent,omitempty"`
+		Name          string `json:"name,omitempty"`
+		SourceDB      string `json:"source_db,omitempty"`
+		InstanceName  string `json:"instance_name,omitempty"`
+		OccupiedCount int    `json:"occupied_count"`
+		ExistsChecked bool   `json:"exists_checked"`
+		ViaAgent      bool   `json:"via_agent,omitempty"`
 	}
 	failed := make([]failItem, 0)
 	tid := effectiveListTenantID(h.Store, c)
 	var jobs []cdcMetaJob
-	var jobInits []*store.CDCTask
 	for _, id := range ids {
 		t, _ := h.Store.GetCDCInTenant(id, tid)
 		if t == nil || t.TaskType != "init" {
@@ -231,21 +293,17 @@ func (h *CDCHandler) AvailableTablesBatch(c *gin.Context) {
 			continue
 		}
 		jobs = append(jobs, cdcMetaJob{Init: t, Inst: inst})
-		jobInits = append(jobInits, t)
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 90*time.Second)
 	defer cancel()
 	metas := h.loadSourceMetaForParents(ctx, jobs)
 
-	type tableAgg struct {
-		name            string
-		addable, exists int
-	}
-	agg := map[string]*tableAgg{}
-	var order []string
 	parents := map[string]parentOut{}
 	inFlight := make([]cdcParentOccupancyEntry, 0)
 	stale := make([]cdcParentOccupancyEntry, 0)
+	snaps := make([]batchAvailParentSnap, 0, len(jobs))
+	displayName := map[string]string{} // lower -> first-seen casing
+
 	for i, j := range jobs {
 		meta := metas[i]
 		if meta.Error != "" {
@@ -253,28 +311,40 @@ func (h *CDCHandler) AvailableTablesBatch(c *gin.Context) {
 			continue
 		}
 		occ := h.occupancyFromMeta(j.Init, meta)
+		instName := ""
+		if j.Inst != nil {
+			instName = j.Inst.Name
+		}
+		ref := cdcParentTableRef{ParentID: j.Init.ID, Name: j.Init.Name, SourceDB: j.Init.SourceDB}
 		parents[j.Init.ID] = parentOut{
+			Name:          j.Init.Name,
+			SourceDB:      j.Init.SourceDB,
+			InstanceName:  instName,
 			OccupiedCount: len(occ.Tables),
 			ExistsChecked: !cdc.ShardModeActive(cdc.ParseTaskExtra(j.Init.Description)),
 			ViaAgent:      meta.ViaAgent,
+		}
+		tableSet := map[string]struct{}{}
+		for _, t := range meta.Tables {
+			k := strings.ToLower(t)
+			tableSet[k] = struct{}{}
+			if _, ok := displayName[k]; !ok {
+				displayName[k] = t
+			}
 		}
 		avail := map[string]struct{}{}
 		for _, t := range subtractOccupied(meta.Tables, occ.Tables) {
 			avail[strings.ToLower(t)] = struct{}{}
 		}
-		for _, t := range meta.Tables {
-			k := strings.ToLower(t)
-			a := agg[k]
-			if a == nil {
-				a = &tableAgg{name: t}
-				agg[k] = a
-				order = append(order, k)
-			}
-			a.exists++
-			if _, ok := avail[k]; ok {
-				a.addable++
-			}
-		}
+		snaps = append(snaps, batchAvailParentSnap{
+			Ref:           ref,
+			InstanceName:  instName,
+			ViaAgent:      meta.ViaAgent,
+			ExistsChecked: !cdc.ShardModeActive(cdc.ParseTaskExtra(j.Init.Description)),
+			OccupiedCount: len(occ.Tables),
+			TableSet:      tableSet,
+			AvailSet:      avail,
+		})
 		for _, e := range occ.InFlight {
 			inFlight = append(inFlight, cdcParentOccupancyEntry{ParentID: j.Init.ID, ParentName: j.Init.Name, SourceDB: j.Init.SourceDB, cdcOccupancyEntry: e})
 		}
@@ -282,12 +352,22 @@ func (h *CDCHandler) AvailableTablesBatch(c *gin.Context) {
 			stale = append(stale, cdcParentOccupancyEntry{ParentID: j.Init.ID, ParentName: j.Init.Name, SourceDB: j.Init.SourceDB, cdcOccupancyEntry: e})
 		}
 	}
-	_ = jobInits
-	sort.Strings(order)
+	order, agg := buildBatchAvailTableAggs(snaps)
+	for k, n := range displayName {
+		if a := agg[k]; a != nil && n != "" {
+			a.Name = n
+		}
+	}
 	tables := make([]gin.H, 0, len(order))
 	for _, k := range order {
 		a := agg[k]
-		tables = append(tables, gin.H{"name": a.name, "addable": a.addable, "exists": a.exists})
+		tables = append(tables, gin.H{
+			"name":     a.Name,
+			"addable":  a.Addable,
+			"exists":   a.Exists,
+			"missing":  a.Missing,
+			"occupied": a.Occupied,
+		})
 	}
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{
 		"tables":    tables,

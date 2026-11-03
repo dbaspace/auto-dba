@@ -112,6 +112,47 @@ func TestParentTableStateSplitAddTables(t *testing.T) {
 	}
 }
 
+func TestBuildBatchAvailTableAggsMissingAndOccupied(t *testing.T) {
+	snaps := []batchAvailParentSnap{
+		{
+			Ref:      cdcParentTableRef{ParentID: "p1", Name: "task-1", SourceDB: "db_bill_1"},
+			TableSet: map[string]struct{}{"tbl_a": {}, "tbl_b": {}},
+			AvailSet: map[string]struct{}{"tbl_a": {}, "tbl_b": {}},
+		},
+		{
+			Ref:      cdcParentTableRef{ParentID: "p2", Name: "task-2", SourceDB: "db_bill_2"},
+			TableSet: map[string]struct{}{"tbl_a": {}},
+			AvailSet: map[string]struct{}{}, // tbl_a occupied
+		},
+		{
+			Ref:      cdcParentTableRef{ParentID: "p3", Name: "task-3", SourceDB: "db_bill_3"},
+			TableSet: map[string]struct{}{}, // no tables
+			AvailSet: map[string]struct{}{},
+		},
+	}
+	order, agg := buildBatchAvailTableAggs(snaps)
+	if len(order) != 2 {
+		t.Fatalf("order=%v", order)
+	}
+	a := agg["tbl_a"]
+	if a == nil || a.Exists != 2 || a.Addable != 1 {
+		t.Fatalf("tbl_a exists=%d addable=%d", a.Exists, a.Addable)
+	}
+	if len(a.Missing) != 1 || a.Missing[0].SourceDB != "db_bill_3" {
+		t.Fatalf("tbl_a missing=%v", a.Missing)
+	}
+	if len(a.Occupied) != 1 || a.Occupied[0].ParentID != "p2" {
+		t.Fatalf("tbl_a occupied=%v", a.Occupied)
+	}
+	b := agg["tbl_b"]
+	if b == nil || b.Exists != 1 || b.Addable != 1 {
+		t.Fatalf("tbl_b exists=%d addable=%d", b.Exists, b.Addable)
+	}
+	if len(b.Missing) != 2 {
+		t.Fatalf("tbl_b missing want 2 got %v", b.Missing)
+	}
+}
+
 func TestAvailableTablesBatchValidatesIDs(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	h := &CDCHandler{}
