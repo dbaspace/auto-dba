@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Layout, Tooltip } from 'antd'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { CloseOutlined, MenuFoldOutlined, MenuUnfoldOutlined } from '@ant-design/icons'
-import api from '../api/request'
+import api, { abortAuthReissue, beginAuthReissue, finishAuthReissue, getAuthEpoch } from '../api/request'
 import { menuIconTone, resolveMenuIcon } from '../components/MenuIcon'
 import { BrandWordmark } from '../components/BrandMark'
 import { useAppDispatch, useAppSelector } from '../store'
@@ -15,6 +15,7 @@ import {
   openTab,
   pruneUnauthorizedTabs,
   reorderTabs,
+  resetTabs,
   tabKey,
   titleForPath,
 } from '../store/tabsSlice'
@@ -240,15 +241,46 @@ export default function AppLayout() {
   useEffect(() => {
     let mounted = true
     async function refreshMe() {
+      const epoch = beginAuthReissue()
       try {
         const { data } = await api.get('/auth/me')
+        if (!mounted) {
+          abortAuthReissue()
+          return
+        }
+        if (epoch !== getAuthEpoch()) {
+          abortAuthReissue()
+          return
+        }
         const u = data.data || {}
-        if (!mounted) return
+        // 迁租后 JWT tid 失效：后端自动换票，或要求重新选租户
+        if (data.token) {
+          localStorage.setItem('token', data.token)
+          localStorage.setItem('user', JSON.stringify(u))
+          if (!finishAuthReissue(epoch)) return
+          dispatch(setUser(u))
+          dispatch(resetTabs({ menus: u.menus || [] }))
+          if (u.tenant_session_rebound) {
+            navigate(HOME_PATH, { replace: true })
+          } else {
+            dispatch(pruneUnauthorizedTabs({ menus: u.menus || [] }))
+          }
+          return
+        }
+        if (u.need_tenant_select) {
+          localStorage.setItem('pending_tenants', JSON.stringify(u.tenants || []))
+          localStorage.setItem('user', JSON.stringify({ ...u, current_tenant: undefined }))
+          if (!finishAuthReissue(epoch)) return
+          dispatch(setUser({ ...u, current_tenant: undefined } as any))
+          navigate('/select-tenant', { replace: true })
+          return
+        }
+        abortAuthReissue()
         localStorage.setItem('user', JSON.stringify(u))
         dispatch(setUser(u))
         dispatch(pruneUnauthorizedTabs({ menus: u.menus || [] }))
       } catch {
-        /* ignore */
+        abortAuthReissue()
       }
     }
     // 始终拉一次 /auth/me，避免 seed 新增菜单后仍沿用 localStorage 旧 menus
@@ -259,7 +291,7 @@ export default function AppLayout() {
       mounted = false
       window.removeEventListener('menus-changed', handler)
     }
-  }, [dispatch])
+  }, [dispatch, navigate])
 
   function toggleCollapsed() {
     setCollapsed((c) => {

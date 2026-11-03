@@ -1169,6 +1169,8 @@ func (h *AuthHandler) ListQueryAudits(c *gin.Context) {
 }
 
 // menusForUserInTenant 按租户成员角色出菜单；tenantID 空则空树（不再回退平台全量角色菜单）。
+// 非审计会话：若 JWT tid 已非有效成员（如加入业务租户后被移出 default），自动换票到唯一剩余租户，
+// 或多租户时返回 need_tenant_select，避免空菜单 + 业务 API 403。
 func (h *AuthHandler) Me(c *gin.Context) {
 	start := time.Now()
 	u, err := h.Store.GetUserByUsername(middleware.Username(c))
@@ -1180,6 +1182,57 @@ func (h *AuthHandler) Me(c *gin.Context) {
 	imp := middleware.IsImpersonating(c)
 	out := h.userPublicJSON(u, nil)
 	_ = h.Store.EnsurePlatformAdminDefaultMembership(u.ID)
+
+	var reboundToken string
+	if !imp && strings.TrimSpace(tid) != "" {
+		ok, mErr := h.Store.IsActiveTenantMember(tid, u.ID)
+		if mErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": mErr.Error()})
+			return
+		}
+		if !ok {
+			picked, tenants, pErr := h.Store.PickLoginTenant(u.ID, "")
+			if pErr != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"message": pErr.Error()})
+				return
+			}
+			out["tenants"] = tenants
+			out["impersonating"] = false
+			if picked != nil {
+				ttl := time.Duration(h.Cfg.App.JWTTTLHours) * time.Hour
+				if old := middleware.JTI(c); old != "" && h.Sessions != nil && h.Sessions.Enabled() {
+					_ = h.Sessions.RevokeJTI(c.Request.Context(), u.ID, old)
+					_ = h.Store.MarkUserSessionOffline(old, "tenant_session_rebound", u.ID)
+				}
+				tok, ierr := h.issueLoginToken(c, u, picked.ID, picked.Code, false, ttl)
+				if ierr != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"message": ierr.Error()})
+					return
+				}
+				reboundToken = tok
+				tid = picked.ID
+				out["tenant_session_rebound"] = true
+				_ = h.Store.AppendTenantAudit(picked.ID, u.ID, "tenant.session_rebound", picked.Code)
+			} else if len(tenants) == 0 {
+				out["menus"] = []store.MenuNode{}
+				out["permissions"] = []string{}
+				out["need_tenant_select"] = true
+				out["message"] = "当前账号无可用租户，请联系管理员"
+				log.Printf("me timing username=%s stale_tid rebound=none total_ms=%d", u.Username, time.Since(start).Milliseconds())
+				c.JSON(http.StatusOK, gin.H{"data": out})
+				return
+			} else {
+				out["menus"] = []store.MenuNode{}
+				out["permissions"] = []string{}
+				out["need_tenant_select"] = true
+				out["message"] = "当前会话租户已失效，请重新选择租户"
+				log.Printf("me timing username=%s stale_tid need_select tenants=%d total_ms=%d", u.Username, len(tenants), time.Since(start).Milliseconds())
+				c.JSON(http.StatusOK, gin.H{"data": out})
+				return
+			}
+		}
+	}
+
 	menusStart := time.Now()
 	h.applyUserAccess(out, u, tid, imp)
 	menusMS := time.Since(menusStart).Milliseconds()
@@ -1204,8 +1257,12 @@ func (h *AuthHandler) Me(c *gin.Context) {
 		}
 	}
 	out["impersonating"] = imp
-	log.Printf("me timing username=%s menus_ms=%d total_ms=%d", u.Username, menusMS, time.Since(start).Milliseconds())
-	c.JSON(http.StatusOK, gin.H{"data": out})
+	log.Printf("me timing username=%s menus_ms=%d total_ms=%d rebound=%v", u.Username, menusMS, time.Since(start).Milliseconds(), reboundToken != "")
+	resp := gin.H{"data": out}
+	if reboundToken != "" {
+		resp["token"] = reboundToken
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 func (h *AuthHandler) SelectTenant(c *gin.Context) {

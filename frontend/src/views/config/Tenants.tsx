@@ -222,7 +222,7 @@ export default function Tenants() {
     if (!current) return
     const v = await memberForm.validateFields()
     await api.put(`/tenants/${current.id}/members`, v)
-    message.success('已保存成员')
+    message.success('已保存成员；对方若已登录请刷新页面（或重新登录）以切换到本租户')
     memberForm.resetFields()
     const { data } = await api.get(`/tenants/${current.id}/members`)
     setMembers(data.data || [])
