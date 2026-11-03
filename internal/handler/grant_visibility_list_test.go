@@ -276,4 +276,75 @@ func TestDomainGrantExpandsTicketDatabases(t *testing.T) {
 	if !found {
 		t.Fatalf("ticket databases missing domain-expanded db %s; got %d rows", rec.ID, len(out.Data))
 	}
+
+	// 配置页：实例列表应含父实例（供前端解析 db_type），已登记库列表应含展开库
+	{
+		ih := &InstanceHandler{Store: db}
+		w2 := httptest.NewRecorder()
+		c2, _ := gin.CreateTestContext(w2)
+		c2.Request = httptest.NewRequest(http.MethodGet, "/instances?scope=tenant", nil)
+		c2.Set(middleware.CtxUserID, u.ID)
+		c2.Set(middleware.CtxUsername, u.Username)
+		c2.Set(middleware.CtxTenantID, viewerTenID)
+		c2.Set(middleware.CtxRole, "developer")
+		ih.List(c2)
+		if w2.Code != http.StatusOK {
+			t.Fatalf("instances code=%d body=%s", w2.Code, w2.Body.String())
+		}
+		var iout struct {
+			Data []store.Instance `json:"data"`
+		}
+		if err := json.Unmarshal(w2.Body.Bytes(), &iout); err != nil {
+			t.Fatal(err)
+		}
+		ifound := false
+		for _, it := range iout.Data {
+			if it.ID == inst.ID {
+				ifound = true
+				if strings.TrimSpace(it.DBType) == "" {
+					t.Fatalf("merged instance missing db_type: %#v", it)
+				}
+				break
+			}
+		}
+		if !ifound {
+			t.Fatalf("instances list missing domain-granted parent %s; got %d rows", inst.ID, len(iout.Data))
+		}
+	}
+	{
+		dh := &DatabaseHandler{Store: db}
+		w3 := httptest.NewRecorder()
+		c3, _ := gin.CreateTestContext(w3)
+		c3.Request = httptest.NewRequest(http.MethodGet, "/databases?scope=tenant", nil)
+		c3.Set(middleware.CtxUserID, u.ID)
+		c3.Set(middleware.CtxUsername, u.Username)
+		c3.Set(middleware.CtxTenantID, viewerTenID)
+		c3.Set(middleware.CtxRole, "developer")
+		dh.List(c3)
+		if w3.Code != http.StatusOK {
+			t.Fatalf("databases code=%d body=%s", w3.Code, w3.Body.String())
+		}
+		var dout struct {
+			Data []store.Database `json:"data"`
+		}
+		if err := json.Unmarshal(w3.Body.Bytes(), &dout); err != nil {
+			t.Fatal(err)
+		}
+		dfound := false
+		for _, d := range dout.Data {
+			if d.ID == rec.ID {
+				dfound = true
+				break
+			}
+		}
+		if !dfound {
+			t.Fatalf("databases list missing domain-expanded db %s; got %d rows", rec.ID, len(dout.Data))
+		}
+	}
+	{
+		vis, err := db.GetDatabaseVisible(rec.ID, viewerTenID, u.ID)
+		if err != nil || vis == nil || vis.ID != rec.ID {
+			t.Fatalf("GetDatabaseVisible via domain grant: vis=%#v err=%v", vis, err)
+		}
+	}
 }

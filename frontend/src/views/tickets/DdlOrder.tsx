@@ -231,17 +231,27 @@ export default function DdlOrder() {
       list.push(p.domain)
       domainsByInst.set(p.instance_id, list)
     }
+    const matched: { value: string; label: string }[] = []
+    const fallback: { value: string; label: string }[] = []
     const seen = new Set<string>()
-    const out: { value: string; label: string }[] = []
+    const seenFb = new Set<string>()
     for (const d of dbRecords) {
       const name = d.db_name || ''
-      if (!name || seen.has(name)) continue
+      if (!name) continue
       const domains = domainsByInst.get(d.instance_id) || []
-      if (domains.length && !domains.some((dom) => filterDbsByDomain([d], dom).length)) continue
+      const hit =
+        !domains.length || domains.some((dom) => filterDbsByDomain([d], dom).length > 0)
+      if (!seenFb.has(name)) {
+        seenFb.add(name)
+        fallback.push({ value: name, label: dbLabel(d) })
+      }
+      if (!hit) continue
+      if (seen.has(name)) continue
       seen.add(name)
-      out.push({ value: name, label: dbLabel(d) })
+      matched.push({ value: name, label: dbLabel(d) })
     }
-    return out
+    // 同实例多域名：库只绑了其它域名时，避免下拉被滤空
+    return matched.length > 0 ? matched : fallback
   }, [dbRecords, selectedDomainSources])
 
   const shardDbPrefixHint = getShardDbPrefixHint(form.db_name, form.shard_db_prefix)

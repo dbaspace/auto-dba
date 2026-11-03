@@ -166,10 +166,13 @@ export default function DmlOrder() {
     )
   }, [accessDomains, form.env, form.instance_type, envGroups])
 
-  const filteredDbRecords = useMemo(
-    () => (form.domain ? filterDbsByDomain(dbRecords, form.domain) : []),
-    [dbRecords, form.domain],
-  )
+  const filteredDbRecords = useMemo(() => {
+    if (!form.domain) return []
+    const scoped = filterDbsByDomain(dbRecords, form.domain)
+    // 同实例多域名：库只绑定了其它域名时，避免下拉被滤空（接口已按 instance 返回）
+    if (scoped.length === 0 && dbRecords.length > 0) return dbRecords
+    return scoped
+  }, [dbRecords, form.domain])
 
   const dbNameOptions = useMemo(() => {
     const seen = new Set<string>()

@@ -100,7 +100,7 @@ func (d *DB) GetDatabaseInTenant(id, tenantID string) (*Database, error) {
 	return ownedInTenant(d, it, err, "tbl_databases", id, tenantID)
 }
 
-// GetDatabaseVisible 本租户拥有或被 grant 的库。
+// GetDatabaseVisible 本租户拥有、database grant，或经 domain/instance 展开可见的库。
 func (d *DB) GetDatabaseVisible(id, tenantID, userID string) (*Database, error) {
 	it, err := d.GetDatabaseInTenant(id, tenantID)
 	if err != nil || it != nil {
@@ -111,7 +111,14 @@ func (d *DB) GetDatabaseVisible(id, tenantID, userID string) (*Database, error) 
 		return it, err
 	}
 	ok, err := d.HasResourceGrant(tenantID, userID, "database", id)
-	if err != nil || !ok {
+	if err != nil {
+		return nil, err
+	}
+	if ok {
+		return it, nil
+	}
+	via, err := d.DatabaseVisibleViaInstanceAccess(tenantID, userID, it)
+	if err != nil || !via {
 		return nil, err
 	}
 	return it, nil
@@ -231,7 +238,8 @@ func (d *DB) OwnerTenantsViaInstanceAccess(toTenantID, toUserID, instanceID stri
 		}
 	}
 
-	// 本租拥有该实例下任一域名 → 可见实例归属租户下的库（只划拨域名、库仍在实例租户）
+	// 本租拥有该实例下任一域名 → 展开该实例上「非本租」已登记库的归属租户
+	//（覆盖：域名/实例已划到本租，库仍留在 default 或其它租户）
 	owned, err := d.ListAccessDomainsInTenant(toTenantID, "", "", "")
 	if err != nil {
 		return nil, err
@@ -249,11 +257,23 @@ func (d *DB) OwnerTenantsViaInstanceAccess(toTenantID, toUserID, instanceID stri
 			continue
 		}
 		seenInst[iid] = struct{}{}
-		inst, err := d.GetInstance(iid)
-		if err != nil || inst == nil {
-			continue
+		dbs, err := d.ListDatabases(iid, "")
+		if err != nil {
+			return nil, err
 		}
-		add(inst.TenantID)
+		for i := range dbs {
+			add(dbs[i].TenantID)
+		}
+		// 实例仍属外租且尚无已登记库时，保留实例归属以便后续登记可见
+		if len(dbs) == 0 {
+			inst, err := d.GetInstance(iid)
+			if err != nil {
+				return nil, err
+			}
+			if inst != nil {
+				add(inst.TenantID)
+			}
+		}
 	}
 	return owners, nil
 }
@@ -337,11 +357,23 @@ func (d *DB) ListDatabasesViaInstanceAccess(toTenantID, toUserID, instanceID, q 
 			continue
 		}
 		seenInst[iid] = struct{}{}
-		inst, err := d.GetInstance(iid)
-		if err != nil || inst == nil {
-			continue
+		// 本租拥有域名：展开该实例上所有非本租已登记库（库未随域名划拨时仍可见）
+		dbs, err := d.ListDatabases(iid, q)
+		if err != nil {
+			return nil, err
 		}
-		addOwner(iid, inst.TenantID)
+		for i := range dbs {
+			addOwner(iid, dbs[i].TenantID)
+		}
+		if len(dbs) == 0 {
+			inst, err := d.GetInstance(iid)
+			if err != nil {
+				return nil, err
+			}
+			if inst != nil {
+				addOwner(iid, inst.TenantID)
+			}
+		}
 	}
 
 	var out []Database

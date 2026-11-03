@@ -211,12 +211,18 @@ export default function Databases() {
 
   const knownTypes = useMemo(() => new Set(typeOptions.map((t) => t.value)), [typeOptions])
 
+  /** 解析库所属引擎；父实例不在 /instances（跨租授权边缘）时返回 OTHER，避免 PostgreSQL Tab 滤空 */
   function instanceType(id?: string) {
-    return instances.find((i) => i.id === id)?.db_type || ''
+    const iid = String(id || '').trim()
+    if (!iid) return ''
+    const inst = instances.find((i) => i.id === iid)
+    if (inst?.db_type) return inst.db_type
+    if (!inst) return OTHER
+    return ''
   }
 
   function matchType(dbType: string, tab: string) {
-    if (tab === OTHER) return !!dbType && !knownTypes.has(dbType)
+    if (tab === OTHER) return dbType === OTHER || (!!dbType && !knownTypes.has(dbType))
     return dbType === tab
   }
 
@@ -249,10 +255,15 @@ export default function Databases() {
 
   const tabs = useMemo(() => {
     const list = typeOptions.map((t) => ({ value: t.value, label: t.label }))
-    const hasOther = instances.some((i) => i.db_type && !knownTypes.has(i.db_type))
+    const hasOther =
+      instances.some((i) => i.db_type && !knownTypes.has(i.db_type)) ||
+      rows.some((r) => {
+        const iid = String(r.instance_id || '').trim()
+        return iid && !instances.some((i) => i.id === iid)
+      })
     if (hasOther) list.push({ value: OTHER, label: '其他' })
     return list
-  }, [typeOptions, instances, knownTypes])
+  }, [typeOptions, instances, knownTypes, rows])
 
   // 顶部过滤栏条件（不含类型 Tab）；类型 Tab 数字与表格共用
   const barFilteredRows = useMemo(() => {
@@ -1267,9 +1278,16 @@ export default function Databases() {
           type="info"
           showIcon
           style={{ marginBottom: 12 }}
-          message={`租户模式：可指定库的归属租户（单一归属）。实例地址可留在原租户；跨租户共用请用授权（只读），不要多租户共编同一行。`}
+          message={`租户模式：可指定库的归属租户（单一归属）。实例地址可留在原租户；跨租户共用请到「租户管理 → 授权」（只读），不要多租户共编同一行。本页「可访问用户」仅限本租私有可见，不是跨租授权。`}
         />
-      ) : null}
+      ) : (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="跨租只读请到「租户管理 → 授权」；本页「可访问用户 / 可见范围」只作用于本租 ACL，「指定租户」是划拨归属。"
+        />
+      )}
       {initLoading ? null : (
       <Tabs
         className="inst-tabs inst-tabs-fixed6"

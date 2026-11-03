@@ -40,7 +40,13 @@ func (h *DatabaseHandler) resolveVisibleDB(c *gin.Context, id string) (*store.Da
 	}
 	granted := false
 	if !platformAdminAuditing(h.Store, c) {
-		granted, _ = h.Store.HasResourceGrant(middleware.TenantID(c), middleware.UserID(c), "database", rec.ID)
+		tid := middleware.TenantID(c)
+		uid := middleware.UserID(c)
+		granted, _ = h.Store.HasResourceGrant(tid, uid, "database", rec.ID)
+		if !granted {
+			via, _ := h.Store.DatabaseVisibleViaInstanceAccess(tid, uid, rec)
+			granted = via
+		}
 	}
 	if !granted {
 		viewer := h.Store.ViewerOfInTenant(middleware.Username(c), middleware.Role(c), rec.TenantID)

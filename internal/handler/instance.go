@@ -197,7 +197,8 @@ func appendInstancesByIDs(db *store.DB, list []store.Instance, ids []string, dbT
 	return list, nil
 }
 
-// grantedVisibleInstanceIDs 被授 database 的父实例 + instance 授权。
+// grantedVisibleInstanceIDs 被授 database 的父实例 + instance/domain 授权，
+// 以及本租拥有、指向外租实例的域名（与 ListDatabasesViaInstanceAccess 对齐）。
 func grantedVisibleInstanceIDs(db *store.DB, tid, userID string) ([]string, error) {
 	if db == nil {
 		return nil, nil
@@ -227,9 +228,54 @@ func grantedVisibleInstanceIDs(db *store.DB, tid, userID string) ([]string, erro
 		return nil, err
 	}
 	for _, g := range gs {
-		if g.ResourceType == "instance" {
+		from := strings.TrimSpace(g.FromTenantID)
+		switch g.ResourceType {
+		case "instance":
+			inst, err := db.GetInstance(g.ResourceID)
+			if err != nil || inst == nil {
+				continue
+			}
+			if from != "" && from != strings.TrimSpace(inst.TenantID) {
+				continue
+			}
 			add(g.ResourceID)
+		case "domain":
+			ad, err := db.GetAccessDomain(g.ResourceID)
+			if err != nil || ad == nil {
+				continue
+			}
+			if from != "" && from != strings.TrimSpace(ad.TenantID) {
+				continue
+			}
+			add(ad.InstanceID)
 		}
+	}
+	// 本租拥有域名指向外租实例 → 配置页需能解析父实例 db_type
+	owned, err := db.ListAccessDomainsInTenant(tid, "", "", "")
+	if err != nil {
+		return nil, err
+	}
+	for _, ad := range owned {
+		iid := strings.TrimSpace(ad.InstanceID)
+		if iid == "" {
+			continue
+		}
+		inst, err := db.GetInstance(iid)
+		if err != nil || inst == nil {
+			continue
+		}
+		if strings.TrimSpace(inst.TenantID) == strings.TrimSpace(tid) {
+			continue
+		}
+		add(iid)
+	}
+	// 与 viaAccess 展开结果再对齐一次（含 instance grant 展开出的库父实例）
+	via, err := db.ListDatabasesViaInstanceAccess(tid, userID, "", "")
+	if err != nil {
+		return nil, err
+	}
+	for i := range via {
+		add(via[i].InstanceID)
 	}
 	return out, nil
 }
