@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"io"
@@ -179,6 +180,26 @@ func main() {
 			return
 		}
 		writeJSON(w, http.StatusOK, view)
+	}))
+
+	mux.HandleFunc("/v1/sql/meta", withAuth(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req sqlexec.MetaRequest
+		if err := json.NewDecoder(io.LimitReader(r.Body, 4<<20)).Decode(&req); err != nil {
+			http.Error(w, "请求无法解析", http.StatusBadRequest)
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+		defer cancel()
+		out, err := sqlexec.RunMeta(ctx, req)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, out)
 	}))
 
 	log.Printf("sql-agent listen=%s", *listen)

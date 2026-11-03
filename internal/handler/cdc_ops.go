@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"sort"
 	"strings"
@@ -85,7 +86,8 @@ func (h *CDCHandler) SyncedTables(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"message": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": h.effectiveOccupiedSourceTables(c.Request.Context(), init)})
+	// 列表/勾选用平台记录即可，不连源库核对 publication（live 核对只在可选表/提交）
+	c.JSON(http.StatusOK, gin.H{"data": h.listOccupiedSourceTables(init)})
 }
 
 func (h *CDCHandler) SyncedTablesBatch(c *gin.Context) {
@@ -93,19 +95,11 @@ func (h *CDCHandler) SyncedTablesBatch(c *gin.Context) {
 		IDs []string `json:"parent_ids"`
 	}
 	_ = c.ShouldBindJSON(&req)
-	var inits []*store.CDCTask
+	out := map[string][]string{}
 	for _, id := range uniqueNonEmpty(req.IDs) {
 		if t, _ := h.Store.GetCDCInTenant(id, effectiveListTenantID(h.Store, c)); t != nil {
-			inits = append(inits, t)
+			out[id] = h.listOccupiedSourceTables(t)
 		}
-	}
-	occ := make([][]string, len(inits))
-	runBounded(len(inits), cdcBatchConcurrency, func(i int) {
-		occ[i] = h.effectiveOccupiedSourceTables(c.Request.Context(), inits[i])
-	})
-	out := map[string][]string{}
-	for i, t := range inits {
-		out[t.ID] = occ[i]
 	}
 	c.JSON(http.StatusOK, gin.H{"data": out})
 }
@@ -127,31 +121,13 @@ func runBounded(n, limit int, fn func(i int)) {
 	wg.Wait()
 }
 
-// listSourceSchemaTables 列出父任务源库 schema 下的基表（按任务生效地址连接）。
+// listSourceSchemaTables 列出父任务源库 schema 下的基表（单连接，顺带可复用 meta）。
 func (h *CDCHandler) listSourceSchemaTables(ctx context.Context, inst *store.Instance, init *store.CDCTask) ([]string, error) {
-	initExtra := cdc.ParseTaskExtra(init.Description)
-	db, err := dbmig.OpenInstance(ctx, cdc.TaskSourceInstance(inst, initExtra), h.Secret, init.SourceDB)
-	if err != nil {
-		return nil, err
+	meta := h.loadSourceMetaLocal(ctx, inst, init)
+	if meta.Error != "" {
+		return nil, fmt.Errorf("%s", meta.Error)
 	}
-	defer db.Close()
-	schema := initExtra["source_schema"]
-	if schema == "" {
-		schema = "public"
-	}
-	rows, err := db.QueryContext(ctx, `SELECT table_name FROM information_schema.tables WHERE table_schema=$1 AND table_type='BASE TABLE' ORDER BY table_name`, schema)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var all []string
-	for rows.Next() {
-		var n string
-		if rows.Scan(&n) == nil && n != "" && !strings.EqualFold(n, "debezium_signal") {
-			all = append(all, n)
-		}
-	}
-	return all, rows.Err()
+	return meta.Tables, nil
 }
 
 func subtractOccupied(all, occupied []string) []string {
@@ -179,16 +155,17 @@ func (h *CDCHandler) AvailableTables(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "源端实例不存在"})
 		return
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 25*time.Second)
 	defer cancel()
-	all, err := h.listSourceSchemaTables(ctx, inst, init)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+	metas := h.loadSourceMetaForParents(ctx, []cdcMetaJob{{Init: init, Inst: inst}})
+	meta := metas[0]
+	if meta.Error != "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": meta.Error})
 		return
 	}
-	occ := h.effectiveOccupancy(ctx, init)
+	occ := h.occupancyFromMeta(init, meta)
 	c.JSON(http.StatusOK, gin.H{
-		"data":         subtractOccupied(all, occ.Tables),
+		"data":         subtractOccupied(meta.Tables, occ.Tables),
 		"in_flight":    nonNilEntries(occ.InFlight),
 		"stale":        nonNilEntries(occ.Stale),
 		"live_checked": occ.LiveChecked,
@@ -210,7 +187,7 @@ type cdcParentOccupancyEntry struct {
 }
 
 // AvailableTablesBatch POST /cdc-sync/tasks/add-table/available-tables/batch —
-// 逐父任务连本库列表、减本父任务占用，返回并集及每张表可加/存在的父任务数。
+// 按父任务取表减占用；异地走 sql-agent；响应瘦身不回全量 exists/occupied。
 func (h *CDCHandler) AvailableTablesBatch(c *gin.Context) {
 	var req struct {
 		IDs []string `json:"parent_ids"`
@@ -234,18 +211,14 @@ func (h *CDCHandler) AvailableTablesBatch(c *gin.Context) {
 		Message  string `json:"message"`
 	}
 	type parentOut struct {
-		Exists []string `json:"exists"`
-		// ExistsChecked=false：分库模式仅列了代表库，不能据此判定表不存在
-		ExistsChecked bool     `json:"exists_checked"`
-		Occupied      []string `json:"occupied"`
+		OccupiedCount int  `json:"occupied_count"`
+		ExistsChecked bool `json:"exists_checked"`
+		ViaAgent      bool `json:"via_agent,omitempty"`
 	}
-	type job struct {
-		init *store.CDCTask
-		inst *store.Instance
-	}
-	var jobs []job
 	failed := make([]failItem, 0)
 	tid := effectiveListTenantID(h.Store, c)
+	var jobs []cdcMetaJob
+	var jobInits []*store.CDCTask
 	for _, id := range ids {
 		t, _ := h.Store.GetCDCInTenant(id, tid)
 		if t == nil || t.TaskType != "init" {
@@ -257,19 +230,13 @@ func (h *CDCHandler) AvailableTablesBatch(c *gin.Context) {
 			failed = append(failed, failItem{ParentID: id, Name: t.Name, Message: "源端实例不存在"})
 			continue
 		}
-		jobs = append(jobs, job{init: t, inst: inst})
+		jobs = append(jobs, cdcMetaJob{Init: t, Inst: inst})
+		jobInits = append(jobInits, t)
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 90*time.Second)
 	defer cancel()
-	alls := make([][]string, len(jobs))
-	occs := make([]cdcOccupancy, len(jobs))
-	errs := make([]error, len(jobs))
-	runBounded(len(jobs), cdcBatchConcurrency, func(i int) {
-		alls[i], errs[i] = h.listSourceSchemaTables(ctx, jobs[i].inst, jobs[i].init)
-		if errs[i] == nil {
-			occs[i] = h.effectiveOccupancy(ctx, jobs[i].init)
-		}
-	})
+	metas := h.loadSourceMetaForParents(ctx, jobs)
+
 	type tableAgg struct {
 		name            string
 		addable, exists int
@@ -280,28 +247,22 @@ func (h *CDCHandler) AvailableTablesBatch(c *gin.Context) {
 	inFlight := make([]cdcParentOccupancyEntry, 0)
 	stale := make([]cdcParentOccupancyEntry, 0)
 	for i, j := range jobs {
-		if errs[i] != nil {
-			failed = append(failed, failItem{ParentID: j.init.ID, Name: j.init.Name, Message: errs[i].Error()})
+		meta := metas[i]
+		if meta.Error != "" {
+			failed = append(failed, failItem{ParentID: j.Init.ID, Name: j.Init.Name, Message: meta.Error})
 			continue
 		}
-		occTables := occs[i].Tables
-		if occTables == nil {
-			occTables = []string{}
-		}
-		exists := alls[i]
-		if exists == nil {
-			exists = []string{}
-		}
-		parents[j.init.ID] = parentOut{
-			Exists:        exists,
-			ExistsChecked: !cdc.ShardModeActive(cdc.ParseTaskExtra(j.init.Description)),
-			Occupied:      occTables,
+		occ := h.occupancyFromMeta(j.Init, meta)
+		parents[j.Init.ID] = parentOut{
+			OccupiedCount: len(occ.Tables),
+			ExistsChecked: !cdc.ShardModeActive(cdc.ParseTaskExtra(j.Init.Description)),
+			ViaAgent:      meta.ViaAgent,
 		}
 		avail := map[string]struct{}{}
-		for _, t := range subtractOccupied(alls[i], occTables) {
+		for _, t := range subtractOccupied(meta.Tables, occ.Tables) {
 			avail[strings.ToLower(t)] = struct{}{}
 		}
-		for _, t := range alls[i] {
+		for _, t := range meta.Tables {
 			k := strings.ToLower(t)
 			a := agg[k]
 			if a == nil {
@@ -314,13 +275,14 @@ func (h *CDCHandler) AvailableTablesBatch(c *gin.Context) {
 				a.addable++
 			}
 		}
-		for _, e := range occs[i].InFlight {
-			inFlight = append(inFlight, cdcParentOccupancyEntry{ParentID: j.init.ID, ParentName: j.init.Name, SourceDB: j.init.SourceDB, cdcOccupancyEntry: e})
+		for _, e := range occ.InFlight {
+			inFlight = append(inFlight, cdcParentOccupancyEntry{ParentID: j.Init.ID, ParentName: j.Init.Name, SourceDB: j.Init.SourceDB, cdcOccupancyEntry: e})
 		}
-		for _, e := range occs[i].Stale {
-			stale = append(stale, cdcParentOccupancyEntry{ParentID: j.init.ID, ParentName: j.init.Name, SourceDB: j.init.SourceDB, cdcOccupancyEntry: e})
+		for _, e := range occ.Stale {
+			stale = append(stale, cdcParentOccupancyEntry{ParentID: j.Init.ID, ParentName: j.Init.Name, SourceDB: j.Init.SourceDB, cdcOccupancyEntry: e})
 		}
 	}
+	_ = jobInits
 	sort.Strings(order)
 	tables := make([]gin.H, 0, len(order))
 	for _, k := range order {

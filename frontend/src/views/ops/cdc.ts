@@ -1019,10 +1019,10 @@ export type CdcOccupancyEntry = {
   status?: string
 }
 
-/** POST /cdc-sync/tasks/batch-add-table/available-tables 返回 */
+/** POST /cdc-sync/tasks/batch-add-table/available-tables 返回（瘦身：无全量 exists/occupied） */
 export type BatchAvailableTables = {
   tables: { name: string; addable: number; exists: number }[]
-  parents: Record<string, { exists: string[]; exists_checked: boolean; occupied: string[] }>
+  parents: Record<string, { occupied_count: number; exists_checked: boolean; via_agent?: boolean }>
   in_flight: CdcOccupancyEntry[]
   stale: CdcOccupancyEntry[]
   failed: { parent_id: string; name?: string; message: string }[]

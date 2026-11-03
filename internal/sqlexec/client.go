@@ -71,6 +71,10 @@ func StopJob(ctx context.Context, baseURL, user, pass, id string) error {
 }
 
 func call(ctx context.Context, method, url, user, pass string, body any, dest any) error {
+	return callWithTimeout(ctx, 30*time.Second, method, url, user, pass, body, dest)
+}
+
+func callWithTimeout(ctx context.Context, timeout time.Duration, method, url, user, pass string, body any, dest any) error {
 	var rdr io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -89,7 +93,10 @@ func call(ctx context.Context, method, url, user, pass string, body any, dest an
 	if user != "" {
 		req.SetBasicAuth(user, pass)
 	}
-	client := &http.Client{Timeout: 30 * time.Second}
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	client := &http.Client{Timeout: timeout}
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("地址不通: %s", err.Error())

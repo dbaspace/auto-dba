@@ -4,10 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
-	"time"
 
 	"auto-dba/internal/cdc"
-	"auto-dba/internal/dbmig"
 	"auto-dba/internal/store"
 )
 
@@ -200,58 +198,17 @@ func computeCDCOccupancy(initTask *store.CDCTask, children []store.CDCTask, live
 	return out
 }
 
-// livePublicationTables 读父任务各分库 publication 的实际成员（表名小写、去 schema）。任一分库失败返回 false。
-func (h *CDCHandler) livePublicationTables(ctx context.Context, initTask *store.CDCTask) (map[string]struct{}, bool) {
-	if h == nil || h.Store == nil || initTask == nil {
-		return nil, false
-	}
-	extra := cdc.ParseTaskExtra(initTask.Description)
-	pub := strings.TrimSpace(extra["publication_name"])
-	inst, err := h.Store.GetInstance(initTask.SourceID)
-	if err != nil || inst == nil || pub == "" {
-		return nil, false
-	}
-	inst = cdc.TaskSourceInstance(inst, extra)
-	bindings := cdc.ResolveOrBuildShardBindings(extra, initTask.SourceDB, pub, extra["slot_name"], extra["connector_name"])
-	if len(bindings) == 0 {
-		bindings = []cdc.ShardDbBinding{{DbName: initTask.SourceDB, PublicationName: pub}}
-	}
-	live := map[string]struct{}{}
-	for _, b := range bindings {
-		bp := firstNonEmpty(b.PublicationName, pub)
-		dbName := firstNonEmpty(b.DbName, initTask.SourceDB)
-		names, ok := func() ([]string, bool) {
-			cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-			defer cancel()
-			db, err := dbmig.OpenInstance(cctx, inst, h.Secret, dbName)
-			if err != nil {
-				return nil, false
-			}
-			defer db.Close()
-			names, err := cdc.ListPublicationTables(cctx, db, bp)
-			return names, err == nil
-		}()
-		if !ok {
-			return nil, false
-		}
-		for _, n := range names {
-			live[bareTableKey(n)] = struct{}{}
-		}
-	}
-	return live, true
-}
-
 // effectiveOccupancy 占用核对源库 publication；连不上或无 publication 时回退原口径。
 func (h *CDCHandler) effectiveOccupancy(ctx context.Context, initTask *store.CDCTask) cdcOccupancy {
 	if initTask == nil {
 		return cdcOccupancy{}
 	}
-	var children []store.CDCTask
-	if h != nil && h.Store != nil {
-		children, _ = h.Store.ListCDCByParentID(initTask.ID, "add_table")
+	if h == nil || h.Store == nil {
+		return computeCDCOccupancy(initTask, nil, nil, false)
 	}
-	live, ok := h.livePublicationTables(ctx, initTask)
-	return computeCDCOccupancy(initTask, children, live, ok)
+	inst, _ := h.Store.GetInstance(initTask.SourceID)
+	meta := h.loadSourceMetaLocal(ctx, inst, initTask)
+	return h.occupancyFromMeta(initTask, meta)
 }
 
 func (h *CDCHandler) effectiveOccupiedSourceTables(ctx context.Context, initTask *store.CDCTask) []string {
@@ -268,29 +225,31 @@ type cdcParentTableState struct {
 	ExistsChecked bool
 }
 
-// parentTableStates 并发计算各父任务的占用与源库现有表；parents 须已按租户解析。
+// parentTableStates 并发计算各父任务的占用与源库现有表；parents 须已按租户解析。异地走 sql-agent。
 func (h *CDCHandler) parentTableStates(ctx context.Context, parents []*store.CDCTask) []cdcParentTableState {
 	out := make([]cdcParentTableState, len(parents))
-	runBounded(len(parents), cdcBatchConcurrency, func(i int) {
-		p := parents[i]
-		if p == nil {
-			return
-		}
-		out[i].Occupied = h.effectiveOccupiedSourceTables(ctx, p)
-		if cdc.ShardModeActive(cdc.ParseTaskExtra(p.Description)) || h.Store == nil {
-			return
+	jobs := make([]cdcMetaJob, len(parents))
+	for i, p := range parents {
+		if p == nil || h == nil || h.Store == nil {
+			continue
 		}
 		inst, _ := h.Store.GetInstance(p.SourceID)
-		if inst == nil {
-			return
+		jobs[i] = cdcMetaJob{Init: p, Inst: inst}
+	}
+	metas := h.loadSourceMetaForParents(ctx, jobs)
+	for i, p := range parents {
+		if p == nil {
+			continue
 		}
-		cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		defer cancel()
-		if names, err := h.listSourceSchemaTables(cctx, inst, p); err == nil {
-			out[i].Existing = names
-			out[i].ExistsChecked = true
+		meta := metas[i]
+		occ := h.occupancyFromMeta(p, meta)
+		out[i].Occupied = occ.Tables
+		if meta.Error != "" || cdc.ShardModeActive(cdc.ParseTaskExtra(p.Description)) {
+			continue
 		}
-	})
+		out[i].Existing = meta.Tables
+		out[i].ExistsChecked = true
+	}
 	return out
 }
 

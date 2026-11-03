@@ -386,18 +386,15 @@ export default function CdcCreate() {
     if (form.task_type !== 'add_table' && form.task_type !== 'alter_schema') return []
     if (selectedParents.length <= 1) return []
     return buildBatchAddTablePlan({
-      parents: selectedParents.map((p) => {
-        const st = form.task_type === 'add_table' ? batchAvail?.parents?.[p.id] : undefined
-        return {
-          ...p,
-          synced_tables: st?.occupied || syncedByParent[p.id] || parentTablesOf(p),
-          existing_tables: st?.exists_checked ? st.exists : undefined,
-        }
-      }),
+      parents: selectedParents.map((p) => ({
+        ...p,
+        // 全量 occupied/exists 已从批量可选表响应去掉；确认页按平台已同步跳过，缺失表由提交/预检后端过滤
+        synced_tables: syncedByParent[p.id] || parentTablesOf(p),
+      })),
       tables: form.tables,
       baseName: form.name,
     })
-  }, [form.task_type, form.tables, form.name, selectedParents, syncedByParent, batchAvail])
+  }, [form.task_type, form.tables, form.name, selectedParents, syncedByParent])
 
   const batchAvailByTable = useMemo(() => {
     const m = new Map<string, { addable: number; exists: number }>()
@@ -1532,7 +1529,9 @@ export default function CdcCreate() {
         message.warning('请选择已有初始化任务')
         return
       }
-      await flushParentExtras()
+      // 多父加表：占用/可选表由 loadTables 批量接口一次完成，跳过 synced-tables 重复等待
+      const multiAdd = f.task_type === 'add_table' && (f.parent_ids.length > 1 || selectedParents.length > 1)
+      if (!multiAdd) await flushParentExtras()
     }
     if (f.task_type === 'add_table' && step === 0) await loadTables()
     if (f.task_type === 'add_table' && step === 1) {
@@ -3311,6 +3310,7 @@ export default function CdcCreate() {
                         title: '已同步',
                         width: 80,
                         render: (_: any, row: any) =>
+                          batchAvail?.parents?.[row.id]?.occupied_count ??
                           (syncedByParent[row.id] || parentTablesOf(row)).length,
                       },
                     ]}
