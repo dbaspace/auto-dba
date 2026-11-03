@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildBatchAddTablePlan,
   nextAddTableParentIds,
+  summarizeOccupancy,
   validateAddTableParents,
 } from './cdc'
 
@@ -84,5 +85,34 @@ describe('buildBatchAddTablePlan', () => {
     expect(plan[1].publication_name).toBe('ai_beijing_db_bill_29')
     expect(plan[1].connector_name).toBe('ai_beijing_db_bill_29')
     expect(plan[1].slot_name).toBe('slot_ai_beijing_db_bill_29')
+  })
+
+  it('skips tables missing in a parent db when existing_tables is given', () => {
+    const plan = buildBatchAddTablePlan({
+      parents: [
+        { id: 'p1', name: 't1', synced_tables: ['a'], existing_tables: ['a', 'tbl_order_tax_0'] },
+        { id: 'p2', name: 't2', synced_tables: [], existing_tables: ['a'] },
+        { id: 'p3', name: 't3', synced_tables: [] },
+      ],
+      tables: ['a', 'tbl_order_tax_0'],
+    })
+    expect(plan[0].tables_to_add).toEqual(['tbl_order_tax_0'])
+    expect(plan[0].skipped_tables).toEqual(['a'])
+    expect(plan[0].missing_tables).toEqual([])
+    expect(plan[1].tables_to_add).toEqual(['a'])
+    expect(plan[1].missing_tables).toEqual(['tbl_order_tax_0'])
+    expect(plan[2].tables_to_add).toEqual(['a', 'tbl_order_tax_0'])
+    expect(plan[2].missing_tables).toEqual([])
+  })
+})
+
+describe('summarizeOccupancy', () => {
+  it('groups tables by occupying task', () => {
+    const lines = summarizeOccupancy([
+      { parent_id: 'p1', parent_name: 'db_51', by_task_id: 'c1', by_task_name: 'add_x', status: 'failed', table: 't_0' },
+      { parent_id: 'p1', parent_name: 'db_51', by_task_id: 'c1', by_task_name: 'add_x', status: 'failed', table: 't_1' },
+      { parent_id: 'p2', parent_name: 'db_52', by_task_id: 'p2', by_task_name: 'db_52', status: 'running', table: 'u' },
+    ])
+    expect(lines).toEqual(['db_51 · add_x（failed）：t_0、t_1', 'db_52（running）：u'])
   })
 })

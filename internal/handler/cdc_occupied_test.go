@@ -1,7 +1,14 @@
 package handler
 
 import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/gin-gonic/gin"
 
 	"auto-dba/internal/store"
 )
@@ -18,6 +25,110 @@ func TestCdcOccupancyReleased(t *testing.T) {
 	}
 	if cdcOccupancyReleased(&store.CDCTask{Status: store.StatusFailed}) {
 		t.Fatal("failed/error should still occupy")
+	}
+}
+
+func TestComputeCDCOccupancyLivePublication(t *testing.T) {
+	init := &store.CDCTask{ID: "p1", Name: "p1", Status: store.StatusRunning,
+		Description: encodeCDCExtraJSON("", map[string]any{"tables": []string{"a", "t_x"}})}
+	children := []store.CDCTask{
+		{ID: "c-pending", Name: "pend", Status: store.StatusPending, ApprovalStatus: store.StatusPending,
+			Description: encodeCDCExtraJSON("", map[string]any{"tables": []string{"p_1"}})},
+		{ID: "c-failed", Name: "fail", Status: store.StatusFailed,
+			Description: encodeCDCExtraJSON("", map[string]any{"tables": []string{"t_a_0", "t_a_1"}})},
+		{ID: "c-done", Name: "done", Status: store.StatusRunning,
+			Description: encodeCDCExtraJSON("", map[string]any{"tables": []string{"b"}, "pipeline_status": "running"})},
+		{ID: "c-rej", Name: "rej", Status: store.StatusRejected,
+			Description: encodeCDCExtraJSON("", map[string]any{"tables": []string{"r"}})},
+	}
+	live := map[string]struct{}{"a": {}, "b": {}}
+
+	occ := computeCDCOccupancy(init, children, live, true)
+	got := map[string]bool{}
+	for _, n := range occ.Tables {
+		got[n] = true
+	}
+	if !got["a"] || !got["b"] || !got["p_1"] {
+		t.Fatalf("occupied = %v", occ.Tables)
+	}
+	if got["t_x"] || got["t_a_0"] || got["r"] {
+		t.Fatalf("stale/rejected must not occupy: %v", occ.Tables)
+	}
+	if len(occ.InFlight) != 1 || occ.InFlight[0].ByTaskID != "c-pending" {
+		t.Fatalf("in_flight = %+v", occ.InFlight)
+	}
+	staleBy := map[string]string{}
+	for _, e := range occ.Stale {
+		staleBy[e.Table] = e.ByTaskID
+	}
+	if staleBy["t_x"] != "p1" || staleBy["t_a_0"] != "c-failed" || staleBy["t_a_1"] != "c-failed" || len(staleBy) != 3 {
+		t.Fatalf("stale = %+v", occ.Stale)
+	}
+
+	fallback := computeCDCOccupancy(init, children, nil, false)
+	want := []string{"a", "t_x", "p_1", "t_a_0", "t_a_1", "b"}
+	if len(fallback.Tables) != len(want) || len(fallback.Stale) != 0 {
+		t.Fatalf("fallback = %+v", fallback)
+	}
+	for i := range want {
+		if fallback.Tables[i] != want[i] {
+			t.Fatalf("fallback order = %v", fallback.Tables)
+		}
+	}
+}
+
+func TestCdcChildInFlight(t *testing.T) {
+	cases := []struct {
+		t    store.CDCTask
+		want bool
+	}{
+		{store.CDCTask{Status: store.StatusPending}, true},
+		{store.CDCTask{Status: store.StatusApproved, ApprovalStatus: store.StatusApproved}, true},
+		{store.CDCTask{Status: store.StatusRunning}, true},
+		{store.CDCTask{Status: store.StatusRunning, Description: encodeCDCExtraJSON("", map[string]any{"pipeline_status": "running"})}, false},
+		{store.CDCTask{Status: store.StatusFailed}, false},
+		{store.CDCTask{Status: "error"}, false},
+	}
+	for i, c := range cases {
+		if got := cdcChildInFlight(&c.t); got != c.want {
+			t.Fatalf("case %d: got %v want %v", i, got, c.want)
+		}
+	}
+}
+
+func TestParentTableStateSplitAddTables(t *testing.T) {
+	st := cdcParentTableState{Occupied: []string{"a"}, Existing: []string{"a", "b"}, ExistsChecked: true}
+	kept, occ, missing := st.splitAddTables([]string{"a", "b", "c", "public.b"})
+	if len(kept) != 2 || kept[0] != "b" || kept[1] != "public.b" {
+		t.Fatalf("kept = %v", kept)
+	}
+	if len(occ) != 1 || occ[0] != "a" || len(missing) != 1 || missing[0] != "c" {
+		t.Fatalf("occ=%v missing=%v", occ, missing)
+	}
+	unchecked := cdcParentTableState{Occupied: []string{"a"}}
+	kept, _, missing = unchecked.splitAddTables([]string{"a", "c"})
+	if len(kept) != 1 || kept[0] != "c" || len(missing) != 0 {
+		t.Fatalf("unchecked kept=%v missing=%v", kept, missing)
+	}
+}
+
+func TestAvailableTablesBatchValidatesIDs(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := &CDCHandler{}
+	ids := make([]string, cdcBatchAddTableMaxParents+1)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("p%d", i)
+	}
+	tooMany, _ := json.Marshal(map[string]any{"parent_ids": ids})
+	for _, body := range []string{`{}`, `{"parent_ids":[" "]}`, string(tooMany)} {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodPost, "/cdc-sync/tasks/batch-add-table/available-tables", strings.NewReader(body))
+		c.Request.Header.Set("Content-Type", "application/json")
+		h.AvailableTablesBatch(c)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("body=%s code=%d resp=%s", body[:min(len(body), 40)], w.Code, w.Body.String())
+		}
 	}
 }
 
@@ -48,14 +159,14 @@ func TestOverlayParentPipelineExtraOverridesWrongChildNames(t *testing.T) {
 		"source_schema":    "public",
 	})
 	parent := encodeCDCExtraJSON("", map[string]any{
-		"publication_name": "ai_beijing_db_bill_29",
-		"slot_name":        "slot_ai_beijing_db_bill_29",
-		"connector_name":   "ai_beijing_db_bill_29",
-		"topic_prefix":     "ai_beijing_db_bill_29",
-		"connector_id":     "conn-1",
-		"connect_base_url": "http://dz:8083",
-		"env":              "beijing",
-		"source_schema":    "public",
+		"publication_name":        "ai_beijing_db_bill_29",
+		"slot_name":               "slot_ai_beijing_db_bill_29",
+		"connector_name":          "ai_beijing_db_bill_29",
+		"topic_prefix":            "ai_beijing_db_bill_29",
+		"connector_id":            "conn-1",
+		"connect_base_url":        "http://dz:8083",
+		"env":                     "beijing",
+		"source_schema":           "public",
 		"kafka_bootstrap_servers": "kafka:9092",
 	})
 	out := overlayParentPipelineExtra(child, parent)

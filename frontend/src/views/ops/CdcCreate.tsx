@@ -49,6 +49,7 @@ import {
   decodeCdcExtra,
   filterShardDatabases,
   endpointLabel,
+  sourceEndpointLabel,
   formatSourceScopeLabel,
   formatSrDynamicPartitionDisplay,
   groupShardTables,
@@ -64,6 +65,7 @@ import {
   positiveInt,
   resolveEffectivePartitionColumn,
   buildBatchAddTablePlan,
+  summarizeOccupancy,
   nextAddTableParentIds,
   resolveSourceScope,
   shardDbPrefixHint,
@@ -74,6 +76,7 @@ import {
   validateAddTableParents,
   validatePartitionColumnsForMappings,
 } from './cdc'
+import type { BatchAvailableTables } from './cdc'
 import {
   ADD_STEPS,
   ADD_STEPS_AUTO,
@@ -263,6 +266,7 @@ export default function CdcCreate() {
   const [shardTarget, setShardTarget] = useState('')
   const [parentMappingRows, setParentMappingRows] = useState<any[]>([])
   const [syncedByParent, setSyncedByParent] = useState<Record<string, string[]>>({})
+  const [batchAvail, setBatchAvail] = useState<BatchAvailableTables | null>(null)
   const [parentTaskQ, setParentTaskQ] = useState('')
   const [discoverLoading, setDiscoverLoading] = useState(false)
   const [discoveredTables, setDiscoveredTables] = useState<string[]>([])
@@ -354,7 +358,17 @@ export default function CdcCreate() {
 
   const sourceInst = instances.find((i) => String(i.id) === instanceID(form.source_instance_id))
   const targetInst = instances.find((i) => String(i.id) === instanceID(form.target_instance_id))
-  const parentName = parentTasks.find((t) => t.id === form.parent_id)?.name || form.parent_id || '—'
+  const parentRow = parentTasks.find((t) => t.id === form.parent_id)
+  const parentName = parentRow?.name || form.parent_id || '—'
+  const sourceInstView = sourceInst || parentRow?.source_instance
+  // 子任务（加表/加列/移除表）以父任务生效地址为准，与列表、详情一致
+  const sourceEndpointView = sourceEndpointLabel(
+    sourceInstView,
+    form.task_type !== 'init' && parentRow
+      ? { source_host: parentRow.source_host, source_port: parentRow.source_port }
+      : { source_host: form.source_host, source_port: form.source_port },
+    true,
+  )
 
   const selectedParents = useMemo(() => {
     const multi = form.task_type === 'add_table' || form.task_type === 'alter_schema'
@@ -372,14 +386,35 @@ export default function CdcCreate() {
     if (form.task_type !== 'add_table' && form.task_type !== 'alter_schema') return []
     if (selectedParents.length <= 1) return []
     return buildBatchAddTablePlan({
-      parents: selectedParents.map((p) => ({
-        ...p,
-        synced_tables: syncedByParent[p.id] || parentTablesOf(p),
-      })),
+      parents: selectedParents.map((p) => {
+        const st = form.task_type === 'add_table' ? batchAvail?.parents?.[p.id] : undefined
+        return {
+          ...p,
+          synced_tables: st?.occupied || syncedByParent[p.id] || parentTablesOf(p),
+          existing_tables: st?.exists_checked ? st.exists : undefined,
+        }
+      }),
       tables: form.tables,
       baseName: form.name,
     })
-  }, [form.task_type, form.tables, form.name, selectedParents, syncedByParent])
+  }, [form.task_type, form.tables, form.name, selectedParents, syncedByParent, batchAvail])
+
+  const batchAvailByTable = useMemo(() => {
+    const m = new Map<string, { addable: number; exists: number }>()
+    for (const t of batchAvail?.tables || []) m.set(String(t.name).toLowerCase(), t)
+    return m
+  }, [batchAvail])
+
+  const selectedSourceInstances = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const p of selectedParents) {
+      const id = String(p.source_instance_id || '')
+      if (!id || m.has(id)) continue
+      const inst = instances.find((i) => String(i.id) === id) || p.source_instance
+      m.set(id, inst?.name || id)
+    }
+    return [...m.values()]
+  }, [selectedParents, instances])
 
   const parentTables = useMemo(() => {
     const p = parentTasks.find((t) => t.id === form.parent_id) || selectedParents[0]
@@ -907,11 +942,21 @@ export default function CdcCreate() {
     }
   }
 
+  function addableTag(names: string[]) {
+    const total = batchAvail?.total || 0
+    if (total <= 1 || !batchAvailByTable.size) return null
+    let addable = 0
+    for (const n of names) addable = Math.max(addable, batchAvailByTable.get(String(n).toLowerCase())?.addable || 0)
+    if (addable >= total) return null
+    return <Tag color="blue">可加 {addable}/{total}</Tag>
+  }
+
   function clearPickedTables() {
     setMappings([])
     mappingsRef.current = []
     setTables([])
     setTableHint('')
+    setBatchAvail(null)
   }
 
   async function loadTables() {
@@ -924,8 +969,32 @@ export default function CdcCreate() {
     setTableHint('')
     try {
       if (f.task_type === 'add_table' && f.parent_id) {
+        const ids = f.parent_ids.length ? f.parent_ids : [f.parent_id]
+        if (ids.length > 1) {
+          try {
+            const { data } = await api.post(
+              '/cdc-sync/tasks/batch-add-table/available-tables',
+              { parent_ids: ids },
+              { timeout: 90000 },
+            )
+            const res: BatchAvailableTables = data.data || {}
+            setBatchAvail(res)
+            setTables((res.tables || []).filter((t) => t.addable > 0).map((t) => t.name))
+            return
+          } catch (e: any) {
+            if (e?.response?.status !== 404) throw e
+          }
+        }
         const { data } = await api.get(`/cdc-sync/tasks/${f.parent_id}/add-table/available-tables`)
         setTables(data.data || [])
+        setBatchAvail({
+          tables: [],
+          parents: {},
+          in_flight: data.in_flight || [],
+          stale: data.stale || [],
+          failed: [],
+          total: 1,
+        })
       } else {
         const { data } = await api.get(
           `/migration/instances/${f.source_instance_id}/databases/${encodeURIComponent(f.source_db)}/tables`,
@@ -1580,14 +1649,14 @@ export default function CdcCreate() {
             ? '/cdc-sync/tasks/batch-alter-schema/precheck'
             : '/cdc-sync/tasks/batch-add-table/precheck'
         const { data: pre } = await api
-          .post(prePath, { ...body, parent_ids: f.parent_ids })
+          .post(prePath, { ...body, parent_ids: f.parent_ids }, { timeout: 90000 })
           .catch(() => ({ data: {} as any }))
         if (pre.data?.failed) message.warning(`批量预检：${pre.data.failed} 个父任务未通过，仍将提交可通过的任务`)
         const path =
           f.task_type === 'alter_schema' ? '/cdc-sync/tasks/batch-alter-schema' : '/cdc-sync/tasks/batch-add-table'
         const label = f.task_type === 'alter_schema' ? '加列' : '加表'
         try {
-          const { data } = await api.post(path, { ...body, parent_ids: f.parent_ids })
+          const { data } = await api.post(path, { ...body, parent_ids: f.parent_ids }, { timeout: 120000 })
           clearOnSubmitSuccess()
           const created = data.data?.created || 0
           const skipped = data.data?.skipped || 0
@@ -2862,10 +2931,25 @@ export default function CdcCreate() {
                       render: (_: any, row: any) => row.tables_to_add.length,
                     },
                     {
-                      title: '跳过已同步',
+                      title: '跳过',
                       width: 100,
-                      render: (_: any, row: any) =>
-                        row.skipped ? <Tag color="default">全部跳过</Tag> : row.skipped_tables.length,
+                      render: (_: any, row: any) => {
+                        const n = row.skipped_tables.length + row.missing_tables.length
+                        const tip = [
+                          row.skipped_tables.length ? `已同步：${row.skipped_tables.join('、')}` : '',
+                          row.missing_tables.length ? `该库不存在：${row.missing_tables.join('、')}` : '',
+                        ]
+                          .filter(Boolean)
+                          .join('\n')
+                        const body = row.skipped ? <Tag color="default">全部跳过</Tag> : n
+                        return tip ? (
+                          <Tooltip title={<span style={{ whiteSpace: 'pre-line' }}>{tip}</span>}>
+                            <span>{body}</span>
+                          </Tooltip>
+                        ) : (
+                          body
+                        )
+                      },
                     },
                   ]}
                 />
@@ -2874,7 +2958,7 @@ export default function CdcCreate() {
             <Card size="small" className="cdc-card small" title={<span className="card-title">源端 / 目标端</span>}>
               <Descriptions column={2} bordered size="small">
                 <Descriptions.Item label="PG 实例">
-                  {endpointLabel(sourceInst, form.source_host, form.source_port, true)}
+                  {sourceEndpointView}
                 </Descriptions.Item>
                 <Descriptions.Item label="StarRocks 实例">
                   {form.target_instance_id || form.target_host
@@ -3142,10 +3226,9 @@ export default function CdcCreate() {
                   title: '源端',
                   ellipsis: true,
                   render: (_: any, row: any) => {
-                    const host = row.source_host || instances.find((i) => i.id === row.source_instance_id)?.host
-                    const port = row.source_port || instances.find((i) => i.id === row.source_instance_id)?.port
-                    const ep = host ? `${host}${port ? `:${port}` : ''}` : ''
-                    return ep ? `${ep} / ${row.source_db || '—'}` : row.source_db || '—'
+                    const inst = instances.find((i) => i.id === row.source_instance_id) || row.source_instance
+                    const ep = sourceEndpointLabel(inst, { source_host: row.source_host, source_port: row.source_port })
+                    return ep && ep !== '—' ? `${ep} / ${row.source_db || '—'}` : row.source_db || '—'
                   },
                 },
                 { title: '目标端', ellipsis: true, render: (_: any, row: any) => row.target_db || '—' },
@@ -3177,7 +3260,7 @@ export default function CdcCreate() {
                   {selectedParents.length > 1 ? '按各父任务自动使用' : form.publication_name || '—'}
                 </Descriptions.Item>
                 <Descriptions.Item label="源端实例">
-                  {endpointLabel(sourceInst, form.source_host, form.source_port, true)}
+                  {sourceEndpointView}
                 </Descriptions.Item>
                 <Descriptions.Item label="目标端实例">
                   {endpointLabel(targetInst, form.target_host, form.target_port, true)}
@@ -3197,8 +3280,17 @@ export default function CdcCreate() {
                   showIcon
                   className="mb"
                   message={`已选 ${selectedParents.length} 个父任务`}
-                  description="表结构须与代表任务库一致；提交时按每个父任务分别跳过已同步表，并使用各自的 Publication / Connector，共享一张工单。"
+                  description="可选表按每个父任务分别计算；提交时按父任务跳过已同步表和该库不存在的表，并使用各自的 Publication / Connector，共享一张工单。"
                 />
+                {selectedSourceInstances.length > 1 && (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    className="mb"
+                    message={`已选父任务分布在 ${selectedSourceInstances.length} 个源实例`}
+                    description={`${selectedSourceInstances.join('、')}。可选表已按每个任务分别计算；请确认确实要跨环境一起加表。`}
+                  />
+                )}
                 <Card size="small" className="cdc-card small mb" title={<span className="card-title">已选父任务</span>}>
                   <ResponsiveTable
                     size="small"
@@ -3275,6 +3367,51 @@ export default function CdcCreate() {
                     </Button>
                   </div>
                   {tableHint && <Alert type="info" showIcon className="mb" message={tableHint} />}
+                  <div className="muted mb">
+                    代表任务：{parentName} / {sourceEndpointView} / {form.source_db || '—'}
+                  </div>
+                  {!!batchAvail?.stale?.length && (
+                    <Alert
+                      type="warning"
+                      showIcon
+                      className="mb"
+                      message="平台记录已加、但源库 publication 缺失的表，已恢复为可选（可重新加）"
+                      description={
+                        <ul style={{ margin: 0, paddingLeft: 18 }}>
+                          {summarizeOccupancy(batchAvail.stale).map((line) => (
+                            <li key={line}>{line}</li>
+                          ))}
+                        </ul>
+                      }
+                    />
+                  )}
+                  {!!batchAvail?.in_flight?.length && (
+                    <Alert
+                      type="info"
+                      showIcon
+                      className="mb"
+                      message="以下表被未完成的加表任务占用，暂不可选；到列表驳回/删除该任务后再加，或在原任务上重试"
+                      description={
+                        <ul style={{ margin: 0, paddingLeft: 18 }}>
+                          {summarizeOccupancy(batchAvail.in_flight).map((line) => (
+                            <li key={line}>{line}</li>
+                          ))}
+                        </ul>
+                      }
+                    />
+                  )}
+                  {!!batchAvail?.failed?.length && (
+                    <Alert
+                      type="error"
+                      showIcon
+                      className="mb"
+                      message={`${batchAvail.failed.length} 个父任务未能拉取源表`}
+                      description={batchAvail.failed
+                        .slice(0, 8)
+                        .map((f) => `${f.name || f.parent_id}：${f.message}`)
+                        .join('；')}
+                    />
+                  )}
                   <CdcSourceTableList
                     groups={visibleShardGroups}
                     singles={visibleSingleTables}
@@ -3283,6 +3420,7 @@ export default function CdcCreate() {
                         <Checkbox checked={isGroupSelected(g)} onChange={(e) => toggleGroup(g, e.target.checked)}>
                           <span className="src-name">{g.targetTable || g.base}</span>
                           <Tag color="warning">分表 {g.members.length}</Tag>
+                          {addableTag(g.members)}
                         </Checkbox>
                         <Button type="link" className="expand-btn" onClick={() => toggleExpand(g.base)}>
                           {expandedGroups.has(g.base) ? '收起' : '展开'}
@@ -3311,6 +3449,8 @@ export default function CdcCreate() {
                             {t}
                             {syncedAll ? (
                               <Tag>全部任务已同步</Tag>
+                            ) : batchAvailByTable.size ? (
+                              addableTag([t])
                             ) : cnt ? (
                               <Tag color="blue">已在 {cnt} 个任务同步</Tag>
                             ) : null}

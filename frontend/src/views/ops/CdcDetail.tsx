@@ -160,8 +160,8 @@ export default function CdcDetail() {
   const pending = task.approval_status === 'pending' || task.status === 'pending'
   const errorStep = pipeline.error_step || extra.error_step || ''
   const sourceScopeLabel = formatSourceScopeLabel(task.source_db, extra.source_db_prefix, extra.source_db_names)
-  const source = instances.find((i) => i.id === task.source_instance_id)
-  const target = instances.find((i) => i.id === task.target_instance_id)
+  const source = instances.find((i) => i.id === task.source_instance_id) || task.source_instance
+  const target = instances.find((i) => i.id === task.target_instance_id) || task.target_instance
   const reviewerOptions = useMemo(() => {
     const set = new Set(defaultReviewers)
     for (const a of source?.approvers || []) if (a) set.add(a)

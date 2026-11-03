@@ -64,7 +64,7 @@ func (h *CDCHandler) SchemaDiff(c *gin.Context) {
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
-	srcInst, _ := resolveInstanceInTenant(h.Store, c, init.SourceID)
+	srcInst, _ := resolveTaskInstance(h.Store, c, init, init.SourceID)
 	if srcInst == nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "源端实例不存在"})
 		return
@@ -82,7 +82,7 @@ func (h *CDCHandler) SchemaDiff(c *gin.Context) {
 		return nil, fmt.Errorf("目标端未连接")
 	}
 	if init.TargetID != "" && init.TargetDB != "" {
-		if tgt, _ := resolveInstanceInTenant(h.Store, c, init.TargetID); tgt != nil {
+		if tgt, _ := resolveTaskInstance(h.Store, c, init, init.TargetID); tgt != nil {
 			if db, oerr := dbmig.OpenInstance(ctx, tgt, h.Secret, init.TargetDB); oerr == nil {
 				srDB = db
 				srQuery = func(target string) ([]string, error) {
@@ -228,7 +228,14 @@ func (h *CDCHandler) BatchAddTablePrecheck(c *gin.Context) {
 	}
 	items := make([]gin.H, 0, len(ids))
 	okN, skipN, failN := 0, 0, 0
-	for _, id := range ids {
+	resolved := make([]*store.CDCTask, len(ids))
+	for i, id := range ids {
+		if p, _ := h.Store.GetCDCInTenant(id, effectiveListTenantID(h.Store, c)); p != nil && p.TaskType == "init" && p.Status == store.StatusRunning {
+			resolved[i] = p
+		}
+	}
+	states := h.parentTableStates(c.Request.Context(), resolved)
+	for idx, id := range ids {
 		item := gin.H{"parent_id": id}
 		checks := make([]gin.H, 0, 4)
 		addCheck := func(code, name, level, status, msg string) {
@@ -282,18 +289,25 @@ func (h *CDCHandler) BatchAddTablePrecheck(c *gin.Context) {
 			continue
 		}
 		addCheck("source_instance", "源端实例", "required", "passed", p.SourceID)
-		synced := h.listOccupiedSourceTables(p)
-		kept := subtractFold(newTables, synced)
-		skipped := subtractFold(newTables, kept)
-		if len(skipped) > 0 {
-			addCheck("already_synced", "已同步表", "warning", "warning", "将跳过: "+cdc.JoinSample(skipped, 20))
+		kept, already, missing := states[idx].splitAddTables(newTables)
+		skipped := append(append([]string{}, already...), missing...)
+		if len(already) > 0 {
+			addCheck("already_synced", "已同步表", "warning", "warning", "将跳过: "+cdc.JoinSample(already, 20))
 		}
+		if len(missing) > 0 {
+			addCheck("missing_tables", "该库不存在", "warning", "warning", "将跳过: "+cdc.JoinSample(missing, 20))
+		}
+		item["missing_tables"] = missing
 		if len(kept) == 0 {
-			addCheck("tables_to_add", "待加表", "required", "passed", "所选表均已在该任务同步")
+			msg := "所选表均已在该任务同步"
+			if len(missing) > 0 {
+				msg = "所选表均已同步或该库不存在"
+			}
+			addCheck("tables_to_add", "待加表", "required", "passed", msg)
 			item["ok"] = true
 			item["ready"] = true
 			item["skipped"] = true
-			item["message"] = "所选表均已在该任务同步"
+			item["message"] = msg
 			item["skipped_tables"] = skipped
 			item["checks"] = checks
 			skipN++
@@ -353,13 +367,20 @@ func (h *CDCHandler) BatchAddTable(c *gin.Context) {
 	okN, skipN, failN := 0, 0, 0
 	var shared *store.Issue
 	needApproval := h.cdcApprovalRequired("add_table")
-	for _, p := range parents {
-		synced := h.listOccupiedSourceTables(p)
-		kept := subtractFold(newTables, synced)
+	states := h.parentTableStates(c.Request.Context(), parents)
+	c.Set(ctxCDCAddTablesPrefiltered, true)
+	for idx, p := range parents {
+		kept, _, missing := states[idx].splitAddTables(newTables)
 		item := gin.H{"parent_id": p.ID, "parent_name": p.Name}
+		if len(missing) > 0 {
+			item["missing_tables"] = missing
+		}
 		if len(kept) == 0 {
 			item["skipped"] = true
 			item["message"] = "所选表均已在该任务同步"
+			if len(missing) > 0 {
+				item["message"] = "所选表均已同步或该库不存在"
+			}
 			skipN++
 			items = append(items, item)
 			continue
@@ -725,4 +746,3 @@ func uniqueNonEmpty(in []string) []string {
 	}
 	return out
 }
-

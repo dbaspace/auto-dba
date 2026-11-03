@@ -1,10 +1,13 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
+	"time"
 
 	"auto-dba/internal/cdc"
+	"auto-dba/internal/dbmig"
 	"auto-dba/internal/store"
 )
 
@@ -94,6 +97,223 @@ func (h *CDCHandler) listOccupiedSourceTables(initTask *store.CDCTask) []string 
 		}
 	}
 	return out
+}
+
+type cdcOccupancyEntry struct {
+	Table      string `json:"table"`
+	ByTaskID   string `json:"by_task_id,omitempty"`
+	ByTaskName string `json:"by_task_name,omitempty"`
+	Status     string `json:"status,omitempty"`
+}
+
+// cdcOccupancy 核对源库 publication 后的占用口径。
+// Tables：仍占用的表；InFlight：进行中子任务占用；Stale：平台记录已加、publication 缺失（不占用，可重新加）。
+type cdcOccupancy struct {
+	Tables      []string
+	InFlight    []cdcOccupancyEntry
+	Stale       []cdcOccupancyEntry
+	LiveChecked bool
+}
+
+// cdcChildInFlight 子任务尚未走完编排（待审批/审批中/编排中），其表始终占用，避免重复提交。
+func cdcChildInFlight(t *store.CDCTask) bool {
+	if strings.EqualFold(strings.TrimSpace(t.ApprovalStatus), store.StatusPending) {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(t.Status)) {
+	case "", store.StatusPending, store.StatusApproved, store.StatusScheduled, store.StatusPreChecking,
+		store.StatusInit, store.StatusReinitializing:
+		return true
+	case store.StatusRunning:
+		return cdc.ParseTaskExtra(t.Description)["pipeline_status"] != "running"
+	}
+	return false
+}
+
+func bareTableKey(name string) string {
+	n := strings.ToLower(strings.TrimSpace(name))
+	if i := strings.LastIndex(n, "."); i >= 0 {
+		n = n[i+1:]
+	}
+	return n
+}
+
+// computeCDCOccupancy liveOK=false 时与 listOccupiedSourceTables 一致。
+func computeCDCOccupancy(initTask *store.CDCTask, children []store.CDCTask, live map[string]struct{}, liveOK bool) cdcOccupancy {
+	out := cdcOccupancy{LiveChecked: liveOK}
+	if initTask == nil {
+		return out
+	}
+	seen := map[string]struct{}{}
+	add := func(n string) {
+		k := strings.ToLower(strings.TrimSpace(n))
+		if k == "" {
+			return
+		}
+		if _, ok := seen[k]; ok {
+			return
+		}
+		seen[k] = struct{}{}
+		out.Tables = append(out.Tables, strings.TrimSpace(n))
+	}
+	inLive := func(n string) bool {
+		if !liveOK {
+			return true
+		}
+		_, ok := live[bareTableKey(n)]
+		return ok
+	}
+	for _, t := range sourceTablesFromCDCDesc(initTask.Description) {
+		if inLive(t) {
+			add(t)
+		} else {
+			out.Stale = append(out.Stale, cdcOccupancyEntry{Table: t, ByTaskID: initTask.ID, ByTaskName: initTask.Name, Status: initTask.Status})
+		}
+	}
+	for i := range children {
+		ch := &children[i]
+		if cdcOccupancyReleased(ch) {
+			continue
+		}
+		inflight := cdcChildInFlight(ch)
+		for _, t := range sourceTablesFromCDCDesc(ch.Description) {
+			entry := cdcOccupancyEntry{Table: t, ByTaskID: ch.ID, ByTaskName: ch.Name, Status: ch.Status}
+			switch {
+			case inflight:
+				add(t)
+				out.InFlight = append(out.InFlight, entry)
+			case inLive(t):
+				add(t)
+			default:
+				out.Stale = append(out.Stale, entry)
+			}
+		}
+	}
+	// 同一张表若已被其它记录确认占用，不再算作 stale
+	stale := out.Stale[:0]
+	for _, e := range out.Stale {
+		if _, ok := seen[strings.ToLower(strings.TrimSpace(e.Table))]; !ok {
+			stale = append(stale, e)
+		}
+	}
+	out.Stale = stale
+	return out
+}
+
+// livePublicationTables 读父任务各分库 publication 的实际成员（表名小写、去 schema）。任一分库失败返回 false。
+func (h *CDCHandler) livePublicationTables(ctx context.Context, initTask *store.CDCTask) (map[string]struct{}, bool) {
+	if h == nil || h.Store == nil || initTask == nil {
+		return nil, false
+	}
+	extra := cdc.ParseTaskExtra(initTask.Description)
+	pub := strings.TrimSpace(extra["publication_name"])
+	inst, err := h.Store.GetInstance(initTask.SourceID)
+	if err != nil || inst == nil || pub == "" {
+		return nil, false
+	}
+	inst = cdc.TaskSourceInstance(inst, extra)
+	bindings := cdc.ResolveOrBuildShardBindings(extra, initTask.SourceDB, pub, extra["slot_name"], extra["connector_name"])
+	if len(bindings) == 0 {
+		bindings = []cdc.ShardDbBinding{{DbName: initTask.SourceDB, PublicationName: pub}}
+	}
+	live := map[string]struct{}{}
+	for _, b := range bindings {
+		bp := firstNonEmpty(b.PublicationName, pub)
+		dbName := firstNonEmpty(b.DbName, initTask.SourceDB)
+		names, ok := func() ([]string, bool) {
+			cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+			db, err := dbmig.OpenInstance(cctx, inst, h.Secret, dbName)
+			if err != nil {
+				return nil, false
+			}
+			defer db.Close()
+			names, err := cdc.ListPublicationTables(cctx, db, bp)
+			return names, err == nil
+		}()
+		if !ok {
+			return nil, false
+		}
+		for _, n := range names {
+			live[bareTableKey(n)] = struct{}{}
+		}
+	}
+	return live, true
+}
+
+// effectiveOccupancy 占用核对源库 publication；连不上或无 publication 时回退原口径。
+func (h *CDCHandler) effectiveOccupancy(ctx context.Context, initTask *store.CDCTask) cdcOccupancy {
+	if initTask == nil {
+		return cdcOccupancy{}
+	}
+	var children []store.CDCTask
+	if h != nil && h.Store != nil {
+		children, _ = h.Store.ListCDCByParentID(initTask.ID, "add_table")
+	}
+	live, ok := h.livePublicationTables(ctx, initTask)
+	return computeCDCOccupancy(initTask, children, live, ok)
+}
+
+func (h *CDCHandler) effectiveOccupiedSourceTables(ctx context.Context, initTask *store.CDCTask) []string {
+	return h.effectiveOccupancy(ctx, initTask).Tables
+}
+
+// ctxCDCAddTablesPrefiltered 批量加表已按父任务算好待加表，prepareCDCCreate 不再重复核对占用。
+const ctxCDCAddTablesPrefiltered = "cdc_add_tables_prefiltered"
+
+type cdcParentTableState struct {
+	Occupied []string
+	// Existing 仅单库父任务可核对（分库模式只能连代表库，不据此跳过）
+	Existing      []string
+	ExistsChecked bool
+}
+
+// parentTableStates 并发计算各父任务的占用与源库现有表；parents 须已按租户解析。
+func (h *CDCHandler) parentTableStates(ctx context.Context, parents []*store.CDCTask) []cdcParentTableState {
+	out := make([]cdcParentTableState, len(parents))
+	runBounded(len(parents), cdcBatchConcurrency, func(i int) {
+		p := parents[i]
+		if p == nil {
+			return
+		}
+		out[i].Occupied = h.effectiveOccupiedSourceTables(ctx, p)
+		if cdc.ShardModeActive(cdc.ParseTaskExtra(p.Description)) || h.Store == nil {
+			return
+		}
+		inst, _ := h.Store.GetInstance(p.SourceID)
+		if inst == nil {
+			return
+		}
+		cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		if names, err := h.listSourceSchemaTables(cctx, inst, p); err == nil {
+			out[i].Existing = names
+			out[i].ExistsChecked = true
+		}
+	})
+	return out
+}
+
+// splitAddTables 返回待加、已占用、该库不存在三组表。
+func (st cdcParentTableState) splitAddTables(want []string) (kept, occupied, missing []string) {
+	kept = subtractFold(want, st.Occupied)
+	occupied = subtractFold(want, kept)
+	if st.ExistsChecked {
+		have := map[string]struct{}{}
+		for _, n := range st.Existing {
+			have[bareTableKey(n)] = struct{}{}
+		}
+		var next []string
+		for _, t := range kept {
+			if _, ok := have[bareTableKey(t)]; ok {
+				next = append(next, t)
+			} else {
+				missing = append(missing, t)
+			}
+		}
+		kept = next
+	}
+	return kept, occupied, missing
 }
 
 func rewriteCDCTaskTables(desc string, keep []string) string {

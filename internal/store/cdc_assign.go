@@ -127,27 +127,3 @@ func (d *DB) CDCTaskTenantIDs(ids []string) (map[string]string, error) {
 	}
 	return out, nil
 }
-
-// InstanceVisibleToTenant 目标租户能否看到实例：归属、实例上有本租户登记库，或租户级实例授权。
-func (d *DB) InstanceVisibleToTenant(instanceID, tenantID string) (bool, error) {
-	instanceID = strings.TrimSpace(instanceID)
-	tenantID = strings.TrimSpace(tenantID)
-	if instanceID == "" || tenantID == "" {
-		return true, nil
-	}
-	it, err := d.GetInstance(instanceID)
-	if err != nil || it == nil {
-		return false, err
-	}
-	if strings.TrimSpace(it.TenantID) == tenantID {
-		return true, nil
-	}
-	n, err := d.CountDatabasesOnInstanceInTenant(instanceID, tenantID)
-	if err != nil {
-		return false, err
-	}
-	if n > 0 {
-		return true, nil
-	}
-	return d.HasResourceGrant(tenantID, "", "instance", instanceID)
-}

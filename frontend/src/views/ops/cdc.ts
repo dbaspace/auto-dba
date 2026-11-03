@@ -1009,6 +1009,48 @@ export function nextAddTableParentIds(currentIds: string[], rowId: string, check
   return [...cur, id]
 }
 
+export type CdcOccupancyEntry = {
+  parent_id?: string
+  parent_name?: string
+  source_db?: string
+  table: string
+  by_task_id?: string
+  by_task_name?: string
+  status?: string
+}
+
+/** POST /cdc-sync/tasks/batch-add-table/available-tables 返回 */
+export type BatchAvailableTables = {
+  tables: { name: string; addable: number; exists: number }[]
+  parents: Record<string, { exists: string[]; exists_checked: boolean; occupied: string[] }>
+  in_flight: CdcOccupancyEntry[]
+  stale: CdcOccupancyEntry[]
+  failed: { parent_id: string; name?: string; message: string }[]
+  total: number
+}
+
+/** 占用提示：同一任务的多张表合并成一行。 */
+export function summarizeOccupancy(entries: CdcOccupancyEntry[], limit = 8): string[] {
+  const byTask = new Map<string, { label: string; tables: string[] }>()
+  for (const e of entries || []) {
+    const key = `${e.parent_id || ''}|${e.by_task_id || ''}`
+    let g = byTask.get(key)
+    if (!g) {
+      const who = e.by_task_name || e.by_task_id || '—'
+      const where = e.parent_name && e.parent_name !== e.by_task_name ? `${e.parent_name} · ` : ''
+      g = { label: `${where}${who}${e.status ? `（${e.status}）` : ''}`, tables: [] }
+      byTask.set(key, g)
+    }
+    g.tables.push(e.table)
+  }
+  const lines = [...byTask.values()].map((g) => {
+    const shown = g.tables.slice(0, 4).join('、')
+    return `${g.label}：${shown}${g.tables.length > 4 ? ` 等 ${g.tables.length} 张` : ''}`
+  })
+  if (lines.length > limit) return [...lines.slice(0, limit), `… 另有 ${lines.length - limit} 个任务`]
+  return lines
+}
+
 export type BatchAddTablePlanRow = {
   parent_id: string
   parent_name: string
@@ -1016,13 +1058,21 @@ export type BatchAddTablePlanRow = {
   child_name: string
   tables_to_add: string[]
   skipped_tables: string[]
+  /** 该父任务源库不存在的表（仅在已核对 existing_tables 时） */
+  missing_tables: string[]
   skipped: boolean
   publication_name: string
   connector_name: string
   slot_name: string
 }
 
-/** 确认页批量提交计划：按父任务跳过已同步表并生成子任务名。 */
+function bareTableKey(name: string): string {
+  const n = String(name || '').trim().toLowerCase()
+  const i = n.lastIndexOf('.')
+  return i >= 0 ? n.slice(i + 1) : n
+}
+
+/** 确认页批量提交计划：按父任务跳过已同步表、该库不存在的表（传入 existing_tables 时）并生成子任务名。 */
 export function buildBatchAddTablePlan(opts: {
   parents: any[]
   tables: string[]
@@ -1034,7 +1084,12 @@ export function buildBatchAddTablePlan(opts: {
   return (opts.parents || []).map((p) => {
     const synced = Array.isArray(p?.synced_tables) ? p.synced_tables.map(String) : parentTablesOf(p)
     const syncedSet = new Set(synced.map((t: string) => String(t).toLowerCase()))
-    const tablesToAdd = tables.filter((t) => !syncedSet.has(t.toLowerCase()))
+    const existing: Set<string> | null = Array.isArray(p?.existing_tables)
+      ? new Set(p.existing_tables.map((t: string) => bareTableKey(t)))
+      : null
+    const notSynced = tables.filter((t) => !syncedSet.has(t.toLowerCase()))
+    const tablesToAdd = existing ? notSynced.filter((t) => existing.has(bareTableKey(t))) : notSynced
+    const missing = existing ? notSynced.filter((t) => !existing.has(bareTableKey(t))) : []
     const skipped = tables.filter((t) => syncedSet.has(t.toLowerCase()))
     let childName = base || `${p.name || p.id}_加表`
     if (multi && base) childName = `${base}_${p.name || p.id}`
@@ -1047,6 +1102,7 @@ export function buildBatchAddTablePlan(opts: {
       child_name: childName,
       tables_to_add: tablesToAdd,
       skipped_tables: skipped,
+      missing_tables: missing,
       skipped: tablesToAdd.length === 0,
       publication_name: String(extra.publication_name || '').trim(),
       connector_name: String(extra.connector_name || '').trim(),

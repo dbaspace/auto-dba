@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
+	"auto-dba/internal/middleware"
 	"auto-dba/internal/store"
 )
 
@@ -100,11 +101,30 @@ func TestAssignCDCTaskTenantMovesTree(t *testing.T) {
 		t.Fatalf("again=%+v err=%v", again, err)
 	}
 
-	h := &CDCHandler{Store: db}
-	if w := h.cdcAssignVisibilityWarning(root.ID, toID); !strings.Contains(w, "源端实例") {
-		t.Fatalf("warning = %q", w)
+	other := &store.Instance{TenantID: fromID, Name: "cdcasg-other-" + suf, DBType: "postgres", DomainName: "cdcasg-o-" + suf + ".example", Host: "cdcasg-o-" + suf + ".example", Port: 5432}
+	if err := db.CreateInstance(other); err != nil {
+		t.Fatal(err)
 	}
-	if w := h.cdcAssignVisibilityWarning(root.ID, fromID); w != "" {
-		t.Fatalf("owner tenant should see instance, warning = %q", w)
+	t.Cleanup(func() { _, _ = db.Exec(`DELETE FROM tbl_instances WHERE id=?`, other.ID) })
+
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+	c.Set(middleware.CtxTenantID, toID)
+	c.Set(middleware.CtxUserID, "u-"+suf)
+	moved, _ := db.GetCDCInTenant(root.ID, toID)
+	if it, err := resolveTaskInstance(db, c, moved, inst.ID); err != nil || it == nil || it.ID != inst.ID {
+		t.Fatalf("task's own source instance should resolve, it=%v err=%v", it, err)
+	}
+	if it, _ := resolveInstanceInTenant(db, c, inst.ID); it != nil {
+		t.Fatal("instance catalog must stay hidden from target tenant")
+	}
+	if it, _ := resolveTaskInstance(db, c, moved, other.ID); it != nil {
+		t.Fatal("other instance must not resolve via task")
+	}
+	list := []store.CDCTask{*moved}
+	(&CDCHandler{Store: db}).annotateCDCInstances(list)
+	if list[0].SourceInstance == nil || list[0].SourceInstance.Name != inst.Name {
+		t.Fatalf("source brief = %+v", list[0].SourceInstance)
 	}
 }

@@ -203,8 +203,8 @@ export default function CdcList() {
     localStorage.setItem(COL_STORE, JSON.stringify(arr))
   }
 
-  function instOf(id: string) {
-    return instMap.get(id)
+  function instOf(id: string, brief?: any) {
+    return instMap.get(id) || brief
   }
   function extraOf(row: any) {
     if (row?._extra) return row._extra
@@ -221,7 +221,7 @@ export default function CdcList() {
     return syncTableCountView(extraOf(row))
   }
   function rowEnv(row: any) {
-    return extraOf(row).env || instEnv(instOf(row.source_instance_id))
+    return extraOf(row).env || instEnv(instOf(row.source_instance_id, row.source_instance))
   }
   function isPending(row: any) {
     return row.approval_status === 'pending' || row.status === 'pending'
@@ -636,7 +636,7 @@ export default function CdcList() {
         const extra = extraOf(row)
         return (
           <div style={{ lineHeight: 1.4 }}>
-            <div>{sourceEndpointLabel(instOf(row.source_instance_id), extra)}</div>
+            <div>{sourceEndpointLabel(instOf(row.source_instance_id, row.source_instance), extra)}</div>
             <div style={{ color: '#8c8c8c', fontSize: 12 }}>{sourceScopeOf(row)}</div>
           </div>
         )
@@ -651,7 +651,7 @@ export default function CdcList() {
       ellipsis: true,
       render: (_: any, row: any) => {
         const extra = extraOf(row)
-        const addr = endpointLabel(instOf(row.target_instance_id), extra.target_host, extra.target_port)
+        const addr = endpointLabel(instOf(row.target_instance_id, row.target_instance), extra.target_host, extra.target_port)
         return (
           <div style={{ lineHeight: 1.4 }}>
             <div>{row.target_instance_id || extra.target_host ? addr : '未配置'}</div>

@@ -143,6 +143,16 @@ func resolveInstanceInTenant(db *store.DB, c *gin.Context, instanceID string) (*
 	return db.GetInstance(instanceID)
 }
 
+// resolveTaskInstance 任务已按租户取到时，放行该任务自身的源/目标实例（划拨任务不要求实例归属）。
+// task 必须来自 GetCDCInTenant / resolveInitTask 等租户内查询；其它实例 ID 仍走 resolveInstanceInTenant。
+func resolveTaskInstance(db *store.DB, c *gin.Context, task *store.CDCTask, instanceID string) (*store.Instance, error) {
+	id := strings.TrimSpace(instanceID)
+	if task != nil && id != "" && (id == strings.TrimSpace(task.SourceID) || id == strings.TrimSpace(task.TargetID)) {
+		return db.GetInstance(id)
+	}
+	return resolveInstanceInTenant(db, c, id)
+}
+
 func resolveParentInstance(db *store.DB, c *gin.Context, rec *store.Database) (*store.Instance, error) {
 	if rec == nil {
 		return nil, nil

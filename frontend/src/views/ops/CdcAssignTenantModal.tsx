@@ -39,13 +39,11 @@ export default function CdcAssignTenantModal({ rows, tenants, defaultTenantId, o
       if (ids.length === 1) {
         const { data } = await api.post(`/cdc-sync/tasks/${ids[0]}/assign-tenant`, { tenant_id: tid })
         message.success(`已划拨到 ${label}（含子任务共 ${Number(data?.moved || 0)} 条变更）`)
-        if (data?.warning) message.warning(String(data.warning), 8)
       } else {
         const { data } = await api.post('/cdc-sync/tasks/assign-tenant', { tenant_id: tid, ids })
         const okCount = Number(data?.ok_count || 0)
         const failed: { id?: string; name?: string; message?: string }[] = data?.failed || []
-        const warnings: { id?: string; name?: string; message?: string }[] = data?.warnings || []
-        if (!failed.length && !warnings.length) {
+        if (!failed.length) {
           message.success(`已划拨 ${okCount} 个任务到 ${label}`)
         } else {
           Modal.warning({
@@ -56,11 +54,6 @@ export default function CdcAssignTenantModal({ rows, tenants, defaultTenantId, o
                 {failed.map((f) => (
                   <li key={'f' + f.id}>
                     {f.name || f.id}：{f.message || '失败'}
-                  </li>
-                ))}
-                {warnings.map((w) => (
-                  <li key={'w' + w.id} style={{ color: '#ad6800' }}>
-                    {w.name || w.id}：{w.message}
                   </li>
                 ))}
               </ul>
@@ -87,7 +80,7 @@ export default function CdcAssignTenantModal({ rows, tenants, defaultTenantId, o
       onOk={() => void submit()}
       destroyOnClose
     >
-      <p style={{ marginBottom: 8 }}>将连同新增表、移除表、源表加列等子任务一起划拨；工单记录仍留在原租户，链路运行不受影响。</p>
+      <p style={{ marginBottom: 8 }}>将连同新增表、移除表、源表加列等子任务一起划拨；不改源/目标实例归属，目标租户可按任务使用其实例。工单记录仍留在原租户，链路运行不受影响。</p>
       <ul style={{ margin: '0 0 12px', paddingLeft: 18, maxHeight: 160, overflow: 'auto' }}>
         {rows.map((r) => (
           <li key={r.id}>

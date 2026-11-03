@@ -74,6 +74,7 @@ func (h *CDCHandler) List(c *gin.Context) {
 	if audit {
 		h.annotateCDCTenants(list)
 	}
+	h.annotateCDCInstances(list)
 	c.JSON(http.StatusOK, gin.H{"data": list, "audit_scope": audit})
 }
 
@@ -89,6 +90,9 @@ func (h *CDCHandler) Get(c *gin.Context) {
 	if ok, _ := cdc.ReinitEligibleStatus(t); ok {
 		t.CanReinit = true
 	}
+	one := []store.CDCTask{*t}
+	h.annotateCDCInstances(one)
+	t.SourceInstance, t.TargetInstance = one[0].SourceInstance, one[0].TargetInstance
 	c.JSON(http.StatusOK, gin.H{"data": t})
 }
 
@@ -589,11 +593,15 @@ func (h *CDCHandler) prepareCDCCreate(c *gin.Context, t *store.CDCTask) error {
 	if t.Name == "" || t.SourceID == "" {
 		return fmt.Errorf("name/source_instance_id 必填")
 	}
-	if it, err := resolveInstanceInTenant(h.Store, c, t.SourceID); err != nil || it == nil {
+	var parentTask *store.CDCTask
+	if t.TaskType != "init" && t.ParentID != "" {
+		parentTask, _ = h.Store.GetCDCInTenant(t.ParentID, tid)
+	}
+	if it, err := resolveTaskInstance(h.Store, c, parentTask, t.SourceID); err != nil || it == nil {
 		return fmt.Errorf("源实例不存在")
 	}
 	if t.TargetID != "" {
-		if it, err := resolveInstanceInTenant(h.Store, c, t.TargetID); err != nil || it == nil {
+		if it, err := resolveTaskInstance(h.Store, c, parentTask, t.TargetID); err != nil || it == nil {
 			return fmt.Errorf("目标实例不存在")
 		}
 	}
@@ -645,7 +653,11 @@ func (h *CDCHandler) prepareCDCCreate(c *gin.Context, t *store.CDCTask) error {
 	}
 	if t.TaskType == "add_table" && t.ParentID != "" {
 		parent, _ := h.Store.GetCDCInTenant(t.ParentID, tid)
-		occupied := h.listOccupiedSourceTables(parent)
+		var occupied []string
+		// 批量加表已按父任务并发核对过占用；逐个子任务再连源库会让请求超时
+		if !c.GetBool(ctxCDCAddTablesPrefiltered) {
+			occupied = h.effectiveOccupiedSourceTables(c.Request.Context(), parent)
+		}
 		want := extraCSVTables(t.Description)
 		if len(want) == 0 {
 			want = sourceTablesFromCDCDesc(t.Description)

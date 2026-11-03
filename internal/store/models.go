@@ -226,6 +226,30 @@ type CDCTask struct {
 	// 展示用（非表字段）：Connector 在 Connect 上 NOT_FOUND 且状态允许时可重新初始化
 	CanReinit        bool `json:"can_reinit,omitempty"`
 	ConnectorMissing bool `json:"connector_missing,omitempty"`
+	// 展示用：任务的源/目标实例摘要（不含账号密码），划拨后目标租户看不到实例列表时兜底
+	SourceInstance *InstanceBrief `json:"source_instance,omitempty"`
+	TargetInstance *InstanceBrief `json:"target_instance,omitempty"`
+}
+
+type InstanceBrief struct {
+	ID         string   `json:"id"`
+	Name       string   `json:"name"`
+	Host       string   `json:"host"`
+	Port       int      `json:"port"`
+	DomainName string   `json:"domain_name"`
+	Domains    []string `json:"domains"`
+	DBType     string   `json:"db_type,omitempty"`
+	IDC        string   `json:"idc,omitempty"`
+}
+
+func BriefOfInstance(it *Instance) *InstanceBrief {
+	if it == nil {
+		return nil
+	}
+	return &InstanceBrief{
+		ID: it.ID, Name: it.Name, Host: it.Host, Port: it.Port,
+		DomainName: it.DomainName, Domains: it.Domains, DBType: it.DBType, IDC: it.IDC,
+	}
 }
 
 type SyncSlot struct {

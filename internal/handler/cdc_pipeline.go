@@ -90,7 +90,7 @@ func (h *CDCHandler) Tables(c *gin.Context) {
 	rlByTable := map[string]cdc.PipelineRoutineLoad{}
 	if t.TargetID != "" && t.TargetDB != "" {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 6*time.Second)
-		if inst, err := resolveInstanceInTenant(h.Store, c, t.TargetID); err == nil && inst != nil {
+		if inst, err := resolveTaskInstance(h.Store, c, t, t.TargetID); err == nil && inst != nil {
 			if db, err := dbmig.OpenInstance(ctx, inst, h.Secret, t.TargetDB); err == nil {
 				targets := make([]string, 0, len(maps)+len(tables))
 				if len(maps) > 0 {

@@ -12,6 +12,7 @@ import (
 
 	"auto-dba/internal/cdc"
 	"auto-dba/internal/dbmig"
+	"auto-dba/internal/store"
 )
 
 type cdcPrecheckItem struct {
@@ -84,7 +85,19 @@ func (h *CDCHandler) Precheck(c *gin.Context) {
 	}
 	add(cdcPrecheckItem{Code: "request", Name: "请求", Level: "required", Status: "passed", Message: "任务类型 " + taskType})
 
-	src, _ := resolveInstanceInTenant(h.Store, c, srcID)
+	var parentTask *store.CDCTask
+	if taskType != "init" {
+		pid := firstNonEmpty(pick("parent_id"), pick("parent_task_id"))
+		if pid == "" {
+			if ids := jsonAnyStringSlice(raw["parent_ids"]); len(ids) > 0 {
+				pid = ids[0]
+			}
+		}
+		if pid != "" {
+			parentTask, _ = h.Store.GetCDCInTenant(pid, effectiveListTenantID(h.Store, c))
+		}
+	}
+	src, _ := resolveTaskInstance(h.Store, c, parentTask, srcID)
 	if src == nil {
 		add(cdcPrecheckItem{Code: "source_instance", Name: "源端实例", Level: "required", Status: "failed", Message: "源端实例未登记"})
 	} else {
@@ -197,7 +210,7 @@ func (h *CDCHandler) Precheck(c *gin.Context) {
 		add(cdcPrecheckItem{Code: "target_instance", Name: "目标端实例", Level: "required", Status: "failed", Message: "自动建表开启时必须选择目标端 StarRocks 实例"})
 	} else if dstID == "" {
 		add(cdcPrecheckItem{Code: "target_instance", Name: "目标端实例", Level: "info", Status: "passed", Message: "未填写（手动 DDL）"})
-	} else if dst, _ := resolveInstanceInTenant(h.Store, c, dstID); dst == nil {
+	} else if dst, _ := resolveTaskInstance(h.Store, c, parentTask, dstID); dst == nil {
 		add(cdcPrecheckItem{Code: "target_instance", Name: "目标端实例", Level: "required", Status: "failed", Message: "目标端实例未登记"})
 	} else {
 		add(cdcPrecheckItem{Code: "target_instance", Name: "目标端实例", Level: "required", Status: "passed", Message: dst.Name})
@@ -330,7 +343,7 @@ func (h *CDCHandler) Precheck(c *gin.Context) {
 			} else {
 				add(cdcPrecheckItem{Code: "parent_pipeline", Name: "父任务链路", Level: "required", Status: "passed", Message: pe["publication_name"] + " / " + pe["connector_name"]})
 			}
-			synced := h.listOccupiedSourceTables(parent)
+			synced := h.effectiveOccupiedSourceTables(ctx, parent)
 			skip := subtractFold(tables, synced)
 			if len(synced) > 0 && len(skip) < len(tables) {
 				already := subtractFold(tables, skip)
