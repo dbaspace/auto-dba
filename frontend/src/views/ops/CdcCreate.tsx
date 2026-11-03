@@ -2823,7 +2823,18 @@ export default function CdcCreate() {
               </Descriptions>
             </Card>
             {batchAddTablePlan.length > 0 && (
-              <Card size="small" className="cdc-card small" title={<span className="card-title">批量提交计划</span>}>
+              <Card
+                size="small"
+                className="cdc-card small"
+                title={<span className="card-title">批量提交计划</span>}
+              >
+                <Alert
+                  type="info"
+                  showIcon
+                  className="mb"
+                  message="链路名按各父任务自动使用"
+                  description="每个子任务会继承对应父任务的 Publication / Slot / Connector，不会串用代表任务的链路名。"
+                />
                 <ResponsiveTable
                   size="small"
                   rowKey="parent_id"
@@ -2833,6 +2844,18 @@ export default function CdcCreate() {
                     { title: '父任务', dataIndex: 'parent_name', ellipsis: true },
                     { title: '源库', dataIndex: 'source_db', width: 120 },
                     { title: '子任务名', dataIndex: 'child_name', ellipsis: true },
+                    {
+                      title: 'Publication',
+                      dataIndex: 'publication_name',
+                      ellipsis: true,
+                      render: (v: string) => v || '—',
+                    },
+                    {
+                      title: 'Connector',
+                      dataIndex: 'connector_name',
+                      ellipsis: true,
+                      render: (v: string) => v || '—',
+                    },
                     {
                       title: '待加表',
                       width: 80,
@@ -3150,7 +3173,9 @@ export default function CdcCreate() {
               <Descriptions column={2} bordered size="small">
                 <Descriptions.Item label="代表任务">{parentName}</Descriptions.Item>
                 <Descriptions.Item label="已选父任务数">{selectedParents.length}</Descriptions.Item>
-                <Descriptions.Item label="Publication">{form.publication_name || '—'}</Descriptions.Item>
+                <Descriptions.Item label="Publication">
+                  {selectedParents.length > 1 ? '按各父任务自动使用' : form.publication_name || '—'}
+                </Descriptions.Item>
                 <Descriptions.Item label="源端实例">
                   {endpointLabel(sourceInst, form.source_host, form.source_port, true)}
                 </Descriptions.Item>
@@ -3172,7 +3197,7 @@ export default function CdcCreate() {
                   showIcon
                   className="mb"
                   message={`已选 ${selectedParents.length} 个父任务`}
-                  description="表结构须与代表任务库一致；提交时按每个父任务分别跳过已同步表，共享一张工单。"
+                  description="表结构须与代表任务库一致；提交时按每个父任务分别跳过已同步表，并使用各自的 Publication / Connector，共享一张工单。"
                 />
                 <Card size="small" className="cdc-card small mb" title={<span className="card-title">已选父任务</span>}>
                   <ResponsiveTable
@@ -3184,6 +3209,12 @@ export default function CdcCreate() {
                       { title: '任务名称', dataIndex: 'name', ellipsis: true },
                       { title: '源库', dataIndex: 'source_db', width: 140 },
                       { title: '目标库', dataIndex: 'target_db', width: 140 },
+                      {
+                        title: 'Publication',
+                        ellipsis: true,
+                        render: (_: any, row: any) =>
+                          decodeCdcExtra(row?.description).extra.publication_name || '—',
+                      },
                       {
                         title: '已同步',
                         width: 80,

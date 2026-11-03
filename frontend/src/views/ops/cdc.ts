@@ -982,6 +982,9 @@ export type BatchAddTablePlanRow = {
   tables_to_add: string[]
   skipped_tables: string[]
   skipped: boolean
+  publication_name: string
+  connector_name: string
+  slot_name: string
 }
 
 /** 确认页批量提交计划：按父任务跳过已同步表并生成子任务名。 */
@@ -1001,6 +1004,7 @@ export function buildBatchAddTablePlan(opts: {
     let childName = base || `${p.name || p.id}_加表`
     if (multi && base) childName = `${base}_${p.name || p.id}`
     else if (multi && !base) childName = `${p.name || p.id}_加表`
+    const extra = decodeCdcExtra(p?.description).extra
     return {
       parent_id: String(p.id || ''),
       parent_name: String(p.name || p.id || ''),
@@ -1009,6 +1013,9 @@ export function buildBatchAddTablePlan(opts: {
       tables_to_add: tablesToAdd,
       skipped_tables: skipped,
       skipped: tablesToAdd.length === 0,
+      publication_name: String(extra.publication_name || '').trim(),
+      connector_name: String(extra.connector_name || '').trim(),
+      slot_name: String(extra.slot_name || '').trim(),
     }
   })
 }

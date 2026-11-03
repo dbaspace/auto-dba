@@ -137,3 +137,22 @@ func rewriteCDCTaskTables(desc string, keep []string) string {
 	}
 	return encodeCDCExtraJSON(text, extra)
 }
+
+// overlayParentPipelineExtra 用父任务链路身份覆盖子任务 description，
+// 避免批量加表时表单里第一个父任务的 publication/slot/connector 串到其它分库子任务。
+func overlayParentPipelineExtra(childDesc, parentDesc string) string {
+	text, extra := splitCDCDescMap(childDesc)
+	if extra == nil {
+		extra = map[string]any{}
+	}
+	pe := cdc.ParseTaskExtra(parentDesc)
+	for _, k := range []string{
+		"publication_name", "slot_name", "connector_name", "topic_prefix",
+		"connector_id", "connect_base_url", "env", "source_schema", "kafka_bootstrap_servers",
+	} {
+		if v := strings.TrimSpace(pe[k]); v != "" {
+			extra[k] = v
+		}
+	}
+	return encodeCDCExtraJSON(text, extra)
+}

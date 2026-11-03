@@ -74,6 +74,7 @@ func (o *Orchestrator) applyAddTable(ctx context.Context, t *store.CDCTask, from
 				merged[k] = v
 			}
 		}
+		inheritParentCDCNames(merged, parentExtra)
 		if err := o.stepKafka(ctx, t, merged); err != nil {
 			extra["error_step"] = "kafka"
 			o.appendLog(t, "ERROR", "kafka", err.Error())
@@ -159,10 +160,8 @@ func (o *Orchestrator) stepAddTablePG(ctx context.Context, t, parent *store.CDCT
 	if err != nil || inst == nil {
 		return fmt.Errorf("源端实例不存在")
 	}
-	schema := defaultStr(extra["source_schema"], defaultStr(parentExtra["source_schema"], "public"))
-	pub := defaultStr(extra["publication_name"], parentExtra["publication_name"])
-	slot := defaultStr(extra["slot_name"], parentExtra["slot_name"])
-	connector := defaultStr(extra["connector_name"], parentExtra["connector_name"])
+	schema := defaultStr(parentExtra["source_schema"], defaultStr(extra["source_schema"], "public"))
+	pub, slot, connector, _ := childPipelineNames(extra, parentExtra)
 	bindings := ResolveOrBuildShardBindings(parentExtra, parent.SourceDB, pub, slot, connector)
 	if len(bindings) == 0 {
 		bindings = []ShardDbBinding{{DbName: parent.SourceDB, PublicationName: pub, SlotName: slot, ConnectorName: connector}}
@@ -200,15 +199,13 @@ func (o *Orchestrator) stepExecuteSnapshot(ctx context.Context, t, parent *store
 		o.appendLog(t, "INFO", "debezium", "snapshot signal already sent (id="+signalID+")")
 		return nil
 	}
-	schema := defaultStr(extra["source_schema"], defaultStr(parentExtra["source_schema"], "public"))
+	schema := defaultStr(parentExtra["source_schema"], defaultStr(extra["source_schema"], "public"))
 	signalTable := ResolveSignalTable(parentExtra)
 	inst, err := o.Store.GetInstance(parent.SourceID)
 	if err != nil || inst == nil {
 		return fmt.Errorf("源端实例不存在")
 	}
-	pub := defaultStr(extra["publication_name"], parentExtra["publication_name"])
-	slot := defaultStr(extra["slot_name"], parentExtra["slot_name"])
-	connector := defaultStr(extra["connector_name"], parentExtra["connector_name"])
+	pub, slot, connector, _ := childPipelineNames(extra, parentExtra)
 	bindings := ResolveOrBuildShardBindings(parentExtra, parent.SourceDB, pub, slot, connector)
 	if len(bindings) == 0 {
 		bindings = []ShardDbBinding{{DbName: parent.SourceDB, PublicationName: pub}}
@@ -254,19 +251,29 @@ func (o *Orchestrator) stepExecuteSnapshot(ctx context.Context, t, parent *store
 }
 
 func (o *Orchestrator) stepAddTableDebezium(ctx context.Context, t, parent *store.CDCTask, extra, parentExtra map[string]string, tables []string) error {
-	schema := defaultStr(extra["source_schema"], defaultStr(parentExtra["source_schema"], "public"))
-	pub := defaultStr(extra["publication_name"], parentExtra["publication_name"])
-	slot := defaultStr(extra["slot_name"], parentExtra["slot_name"])
-	connector := defaultStr(extra["connector_name"], parentExtra["connector_name"])
+	schema := defaultStr(parentExtra["source_schema"], defaultStr(extra["source_schema"], "public"))
+	pub, slot, connector, _ := childPipelineNames(extra, parentExtra)
 	bindings := ResolveOrBuildShardBindings(parentExtra, parent.SourceDB, pub, slot, connector)
 	if len(bindings) == 0 {
 		bindings = []ShardDbBinding{{DbName: parent.SourceDB, PublicationName: pub, SlotName: slot, ConnectorName: connector}}
 	}
+	maps := ParseMappingsJSON(extra["mappings"])
 	for _, b := range bindings {
 		name := defaultStr(b.ConnectorName, connector)
 		base := o.persistConnectBase(parentExtra)
 		if name == "" || base == "" {
 			o.appendLog(t, "INFO", "debezium", "跳过 connector 更新 name="+name)
+			continue
+		}
+		dbMaps := make([]TableMapping, 0, len(maps))
+		for _, m := range maps {
+			if MappingAppliesToDB(m, b.DbName) {
+				dbMaps = append(dbMaps, m)
+			}
+		}
+		dbTables := TablesForShardDB(maps, tables, b.DbName)
+		if len(dbMaps) == 0 && len(dbTables) == 0 {
+			o.appendLog(t, "INFO", "debezium", fmt.Sprintf("分库 %s 无映射表，跳过 connector=%s", b.DbName, name))
 			continue
 		}
 		cfg, err := o.ConnectorConfig(ctx, parentExtra, name)
@@ -276,19 +283,53 @@ func (o *Orchestrator) stepAddTableDebezium(ctx context.Context, t, parent *stor
 		if cfg == nil {
 			cfg = CurrentConfigFromExtra(parentExtra)
 		}
-		maps := ParseMappingsJSON(extra["mappings"])
-		changed := MergeAddTableConnectorConfig(cfg, schema, tables, maps)
+		before := cloneStringMap(cfg)
+		changed := MergeAddTableConnectorConfig(cfg, schema, dbTables, dbMaps)
 		if !changed {
-			o.appendLog(t, "INFO", "debezium", "include.list/transforms 无变化，跳过 PUT connector="+name)
+			o.appendLog(t, "INFO", "debezium", fmt.Sprintf("include.list/transforms 无变化，跳过 PUT db=%s connector=%s", b.DbName, name))
 			continue
 		}
 		if err := o.PutConnectorConfig(ctx, parentExtra, name, cfg); err != nil {
 			return err
 		}
-		o.appendLog(t, "INFO", "debezium", "include.list/transforms delta 已 PUT connector="+name+" include="+cfg["table.include.list"]+" transforms="+cfg["transforms"])
+		addedInclude, shardRouters := describeAddTableConnectorDelta(before, cfg, dbMaps)
+		msg := fmt.Sprintf("db=%s connector=%s 新增 include=%s 分表路由=%s",
+			b.DbName, name, JoinSample(addedInclude, 20), JoinSample(shardRouters, 20))
+		o.appendLogFull(t, "", "INFO", "debezium", msg, MarshalConfigMap(cfg), "")
+		if o.Store != nil {
+			_, _ = SaveConnectorConfigVersionIfChanged(o.Store, VersionTaskID(t), before, VersionSourceAddTable, "", "")
+		}
 		o.restartConnectorBestEffort(ctx, t, parentExtra, name)
 	}
 	return nil
+}
+
+// describeAddTableConnectorDelta 汇总本次相对 before 新增的 include 项，以及映射中的分表路由逻辑名。
+func describeAddTableConnectorDelta(before, after map[string]string, maps []TableMapping) (addedInclude, shardRouters []string) {
+	beforeSet := map[string]struct{}{}
+	for _, t := range SplitTableIncludeList(before["table.include.list"]) {
+		beforeSet[strings.ToLower(t)] = struct{}{}
+	}
+	for _, t := range SplitTableIncludeList(after["table.include.list"]) {
+		if _, ok := beforeSet[strings.ToLower(t)]; ok {
+			continue
+		}
+		addedInclude = append(addedInclude, t)
+	}
+	_, shards := SplitMappings(maps, nil)
+	seen := map[string]struct{}{}
+	for _, sg := range shards {
+		n := sanitizeIdent(sg.LogicalName)
+		if n == "" {
+			continue
+		}
+		if _, ok := seen[n]; ok {
+			continue
+		}
+		seen[n] = struct{}{}
+		shardRouters = append(shardRouters, n)
+	}
+	return addedInclude, shardRouters
 }
 
 // restartConnectorBestEffort 用于 PUT config 之后：Connect 已因 task config 变化重建 Task，这里失败只告警。
@@ -403,8 +444,8 @@ func (o *Orchestrator) applyAlterSchema(ctx context.Context, t *store.CDCTask) e
 	if brokers == "" {
 		brokers = o.resolveKafkaBrokers(extra)
 	}
-	prefix := defaultStr(extra["topic_prefix"], parentExtra["topic_prefix"])
-	schema := defaultStr(extra["source_schema"], defaultStr(parentExtra["source_schema"], "public"))
+	_, _, _, prefix := childPipelineNames(extra, parentExtra)
+	schema := defaultStr(parentExtra["source_schema"], defaultStr(extra["source_schema"], "public"))
 	conc := extraAtoi(parentExtra["routine_load_parallelism"], 3)
 	for _, item := range items {
 		srCols, _ := ListSRColumns(ctx, db, targetDB, item.TargetTable)
@@ -520,10 +561,8 @@ func (o *Orchestrator) applyRemoveTable(ctx context.Context, t *store.CDCTask) e
 	if err != nil || inst == nil {
 		return fmt.Errorf("源端实例不存在")
 	}
-	schema := defaultStr(extra["source_schema"], defaultStr(parentExtra["source_schema"], "public"))
-	pub := defaultStr(extra["publication_name"], parentExtra["publication_name"])
-	slot := defaultStr(extra["slot_name"], parentExtra["slot_name"])
-	connector := defaultStr(extra["connector_name"], parentExtra["connector_name"])
+	schema := defaultStr(parentExtra["source_schema"], defaultStr(extra["source_schema"], "public"))
+	pub, slot, connector, _ := childPipelineNames(extra, parentExtra)
 	bindings := ResolveOrBuildShardBindings(parentExtra, parent.SourceDB, pub, slot, connector)
 	if len(bindings) == 0 {
 		bindings = []ShardDbBinding{{DbName: parent.SourceDB, PublicationName: pub, SlotName: slot, ConnectorName: connector}}
@@ -579,11 +618,33 @@ func inheritParentCDCNames(extra, parentExtra map[string]string) {
 	if extra == nil || parentExtra == nil {
 		return
 	}
-	for _, k := range []string{"publication_name", "slot_name", "connector_name", "topic_prefix", "source_schema", "debezium_mode", "message_schema_mode", "connector_id", "connect_base_url", "shard_db", "source_db_names", "source_db_prefix", "source_scope_mode", "shard_db_bindings", "auto_create_table"} {
+	// 链路身份字段：父任务为准（覆盖子任务里可能串用的其它父任务名）。
+	for _, k := range []string{"publication_name", "slot_name", "connector_name", "topic_prefix", "connector_id", "connect_base_url"} {
+		if v := strings.TrimSpace(parentExtra[k]); v != "" {
+			extra[k] = v
+		}
+	}
+	// 其余字段：仅子任务为空时继承。
+	for _, k := range []string{"source_schema", "debezium_mode", "message_schema_mode", "shard_db", "source_db_names", "source_db_prefix", "source_scope_mode", "shard_db_bindings", "auto_create_table", "env", "kafka_bootstrap_servers"} {
 		if strings.TrimSpace(extra[k]) == "" && strings.TrimSpace(parentExtra[k]) != "" {
 			extra[k] = parentExtra[k]
 		}
 	}
+}
+
+// childPipelineNames 子任务编排时链路身份以父任务为准，避免批量加表串用第一个父任务的 publication/slot/connector。
+func childPipelineNames(extra, parentExtra map[string]string) (pub, slot, connector, topic string) {
+	if parentExtra == nil {
+		parentExtra = map[string]string{}
+	}
+	if extra == nil {
+		extra = map[string]string{}
+	}
+	pub = defaultStr(parentExtra["publication_name"], extra["publication_name"])
+	slot = defaultStr(parentExtra["slot_name"], extra["slot_name"])
+	connector = defaultStr(parentExtra["connector_name"], extra["connector_name"])
+	topic = defaultStr(parentExtra["topic_prefix"], extra["topic_prefix"])
+	return
 }
 
 func mergeTablesIntoParent(parent *store.CDCTask, parentExtra map[string]string, tables []string, mappingsJSON string) {

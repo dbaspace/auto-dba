@@ -579,6 +579,8 @@ func (h *CDCHandler) prepareCDCCreate(c *gin.Context, t *store.CDCTask) error {
 		if t.TargetDB == "" {
 			t.TargetDB = parent.TargetDB
 		}
+		// 批量加表表单会带上第一个父任务的链路名；创建时一律改写为当前父任务的链路身份。
+		t.Description = overlayParentPipelineExtra(t.Description, parent.Description)
 	}
 	if t.Name == "" || t.SourceID == "" {
 		return fmt.Errorf("name/source_instance_id 必填")

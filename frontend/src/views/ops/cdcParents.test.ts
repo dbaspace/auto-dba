@@ -60,4 +60,29 @@ describe('buildBatchAddTablePlan', () => {
     expect(plan[0].skipped).toBe(true)
     expect(plan[0].tables_to_add).toEqual([])
   })
+
+  it('exposes each parent pipeline name', () => {
+    const plan = buildBatchAddTablePlan({
+      parents: [
+        {
+          id: 'p7',
+          name: 'ai_beijing_db_bill_7',
+          source_db: 'db_bill_7',
+          description: '-- auto-dba-cdc:{"publication_name":"ai_beijing_db_bill_7","connector_name":"ai_beijing_db_bill_7","slot_name":"slot_ai_beijing_db_bill_7"}',
+        },
+        {
+          id: 'p29',
+          name: 'ai_beijing_db_bill_29',
+          source_db: 'db_bill_29',
+          description: '-- auto-dba-cdc:{"publication_name":"ai_beijing_db_bill_29","connector_name":"ai_beijing_db_bill_29","slot_name":"slot_ai_beijing_db_bill_29"}',
+        },
+      ],
+      tables: ['orders'],
+    })
+    expect(plan[0].publication_name).toBe('ai_beijing_db_bill_7')
+    expect(plan[0].connector_name).toBe('ai_beijing_db_bill_7')
+    expect(plan[1].publication_name).toBe('ai_beijing_db_bill_29')
+    expect(plan[1].connector_name).toBe('ai_beijing_db_bill_29')
+    expect(plan[1].slot_name).toBe('slot_ai_beijing_db_bill_29')
+  })
 })
