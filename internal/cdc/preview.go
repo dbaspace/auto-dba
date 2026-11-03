@@ -157,13 +157,12 @@ func MergeParentConnectorPreview(base map[string]string, schema string, tables [
 	for k, v := range base {
 		cfg[k] = v
 	}
-	plain, shards := SplitMappings(mappings, tables)
-	added := SplitTableIncludeList(buildTableIncludeListWithShards(schema, plain, shards))
-	cfg["table.include.list"] = MergeTableIncludeList(cfg["table.include.list"], schema, added)
+	_ = MergeAddTableConnectorConfig(cfg, schema, tables, mappings)
 	cfg = MaskConfigMap(cfg)
 	return PreviewResult{
 		Notes: []string{
-			"在父任务 connector 配置上追加本次新增表的 table.include.list。",
+			"在父任务 connector 配置上追加本次新增表的 table.include.list（分表组用 regex）。",
+			"分表组同时写入 ByLogicalTableRouter，并把逻辑名加入 transforms 链。",
 			"保留原 slot.name 与 publication.name，提交后写入父 connector。",
 		},
 		PublicationName: cfg["publication.name"],

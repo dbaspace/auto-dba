@@ -276,17 +276,16 @@ func (o *Orchestrator) stepAddTableDebezium(ctx context.Context, t, parent *stor
 		if cfg == nil {
 			cfg = CurrentConfigFromExtra(parentExtra)
 		}
-		prev := cfg["table.include.list"]
-		next := MergeTableIncludeList(prev, schema, tables)
-		if next == prev {
-			o.appendLog(t, "INFO", "debezium", "include.list 无变化，跳过 PUT connector="+name)
+		maps := ParseMappingsJSON(extra["mappings"])
+		changed := MergeAddTableConnectorConfig(cfg, schema, tables, maps)
+		if !changed {
+			o.appendLog(t, "INFO", "debezium", "include.list/transforms 无变化，跳过 PUT connector="+name)
 			continue
 		}
-		cfg["table.include.list"] = next
 		if err := o.PutConnectorConfig(ctx, parentExtra, name, cfg); err != nil {
 			return err
 		}
-		o.appendLog(t, "INFO", "debezium", "include.list delta 已 PUT connector="+name)
+		o.appendLog(t, "INFO", "debezium", "include.list/transforms delta 已 PUT connector="+name+" include="+cfg["table.include.list"]+" transforms="+cfg["transforms"])
 		o.restartConnectorBestEffort(ctx, t, parentExtra, name)
 	}
 	return nil

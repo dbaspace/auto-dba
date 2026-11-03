@@ -194,6 +194,52 @@ func MergeTableIncludeList(current, schema string, tables []string) string {
 	return strings.Join(list, ",")
 }
 
+// MergeAddTableConnectorConfig 将加表 mappings 合并进父 Connector 配置：
+// 分表组写入 regex include.list + ByLogicalTableRouter（transforms 链必须含逻辑名）；
+// 普通表追加字面表名。返回是否有实质变更。
+func MergeAddTableConnectorConfig(cfg map[string]string, schema string, tables []string, mappings []TableMapping) bool {
+	if cfg == nil {
+		return false
+	}
+	plain, shards := SplitMappings(mappings, tables)
+	beforeInclude := cfg["table.include.list"]
+	beforeTransforms := cfg["transforms"]
+	beforeFP := shardRouterFingerprint(cfg, shards)
+
+	added := SplitTableIncludeList(buildTableIncludeListWithShards(schema, plain, shards))
+	cfg["table.include.list"] = MergeTableIncludeList(beforeInclude, schema, added)
+	if len(shards) > 0 {
+		applyShardRouterTransforms(cfg, shards)
+	}
+	return cfg["table.include.list"] != beforeInclude ||
+		cfg["transforms"] != beforeTransforms ||
+		shardRouterFingerprint(cfg, shards) != beforeFP
+}
+
+func shardRouterFingerprint(cfg map[string]string, shards []ShardGroup) string {
+	if cfg == nil || len(shards) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, sg := range shards {
+		name := sanitizeIdent(sg.LogicalName)
+		if name == "" {
+			continue
+		}
+		b.WriteString(name)
+		b.WriteByte('=')
+		b.WriteString(cfg["transforms."+name+".type"])
+		b.WriteByte('|')
+		b.WriteString(cfg["transforms."+name+".topic.regex"])
+		b.WriteByte('|')
+		b.WriteString(cfg["transforms."+name+".topic.replacement"])
+		b.WriteByte('|')
+		b.WriteString(cfg["transforms."+name+".key.field.name"])
+		b.WriteByte(';')
+	}
+	return b.String()
+}
+
 func RemoveFromTableIncludeList(current, schema string, tables []string) string {
 	drop := map[string]struct{}{}
 	for _, t := range tables {
