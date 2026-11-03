@@ -178,6 +178,210 @@ func (d *DB) ListGrantedDatabases(toTenantID, toUserID, instanceID, q string) ([
 	return out, nil
 }
 
+// OwnerTenantsViaInstanceAccess 返回：通过 instance/domain grant 或本租拥有域名，
+// 在指定实例上可见的「库归属租户」集合（key=tenant_id）。
+// instanceID 为空时聚合所有可达实例上的归属租户（用于 GET /databases 全量合并）。
+func (d *DB) OwnerTenantsViaInstanceAccess(toTenantID, toUserID, instanceID string) (map[string]struct{}, error) {
+	toTenantID = strings.TrimSpace(toTenantID)
+	instanceID = strings.TrimSpace(instanceID)
+	if toTenantID == "" {
+		return map[string]struct{}{}, nil
+	}
+	owners := map[string]struct{}{}
+	add := func(tid string) {
+		tid = strings.TrimSpace(tid)
+		// 本租自有库仍走 ListDatabasesInTenant + VisibleTo，避免展开路径绕过 private ACL
+		if tid == "" || tid == toTenantID {
+			return
+		}
+		owners[tid] = struct{}{}
+	}
+
+	gs, err := d.ListTenantGrantsTo(toTenantID, toUserID)
+	if err != nil {
+		return nil, err
+	}
+	for _, g := range gs {
+		from := strings.TrimSpace(g.FromTenantID)
+		switch g.ResourceType {
+		case "instance":
+			if instanceID != "" && strings.TrimSpace(g.ResourceID) != instanceID {
+				continue
+			}
+			inst, err := d.GetInstance(g.ResourceID)
+			if err != nil || inst == nil {
+				continue
+			}
+			if from != strings.TrimSpace(inst.TenantID) {
+				continue
+			}
+			add(from)
+		case "domain":
+			ad, err := d.GetAccessDomain(g.ResourceID)
+			if err != nil || ad == nil {
+				continue
+			}
+			if instanceID != "" && strings.TrimSpace(ad.InstanceID) != instanceID {
+				continue
+			}
+			if from != strings.TrimSpace(ad.TenantID) {
+				continue
+			}
+			add(from)
+		}
+	}
+
+	// 本租拥有该实例下任一域名 → 可见实例归属租户下的库（只划拨域名、库仍在实例租户）
+	owned, err := d.ListAccessDomainsInTenant(toTenantID, "", "", "")
+	if err != nil {
+		return nil, err
+	}
+	seenInst := map[string]struct{}{}
+	for _, ad := range owned {
+		iid := strings.TrimSpace(ad.InstanceID)
+		if iid == "" {
+			continue
+		}
+		if instanceID != "" && iid != instanceID {
+			continue
+		}
+		if _, ok := seenInst[iid]; ok {
+			continue
+		}
+		seenInst[iid] = struct{}{}
+		inst, err := d.GetInstance(iid)
+		if err != nil || inst == nil {
+			continue
+		}
+		add(inst.TenantID)
+	}
+	return owners, nil
+}
+
+// ListDatabasesViaInstanceAccess 按 instance/domain grant 与本租域名展开授权方（或实例归属）已登记库。
+// 不再二次 VisibleTo，与 ListGrantedDatabases 一致。
+func (d *DB) ListDatabasesViaInstanceAccess(toTenantID, toUserID, instanceID, q string) ([]Database, error) {
+	toTenantID = strings.TrimSpace(toTenantID)
+	instanceID = strings.TrimSpace(instanceID)
+	q = strings.TrimSpace(q)
+	if toTenantID == "" {
+		return nil, nil
+	}
+
+	// instance_id → 可见归属租户
+	ownersByInst := map[string]map[string]struct{}{}
+	ensure := func(iid string) map[string]struct{} {
+		m := ownersByInst[iid]
+		if m == nil {
+			m = map[string]struct{}{}
+			ownersByInst[iid] = m
+		}
+		return m
+	}
+	addOwner := func(iid, tid string) {
+		iid = strings.TrimSpace(iid)
+		tid = strings.TrimSpace(tid)
+		// 本租自有库仍走 ListDatabasesInTenant + VisibleTo，避免展开路径绕过 private ACL
+		if iid == "" || tid == "" || tid == toTenantID {
+			return
+		}
+		if instanceID != "" && iid != instanceID {
+			return
+		}
+		ensure(iid)[tid] = struct{}{}
+	}
+
+	gs, err := d.ListTenantGrantsTo(toTenantID, toUserID)
+	if err != nil {
+		return nil, err
+	}
+	for _, g := range gs {
+		from := strings.TrimSpace(g.FromTenantID)
+		switch g.ResourceType {
+		case "instance":
+			iid := strings.TrimSpace(g.ResourceID)
+			inst, err := d.GetInstance(iid)
+			if err != nil || inst == nil {
+				continue
+			}
+			if from != strings.TrimSpace(inst.TenantID) {
+				continue
+			}
+			addOwner(iid, from)
+		case "domain":
+			ad, err := d.GetAccessDomain(g.ResourceID)
+			if err != nil || ad == nil {
+				continue
+			}
+			if from != strings.TrimSpace(ad.TenantID) {
+				continue
+			}
+			addOwner(ad.InstanceID, from)
+		}
+	}
+
+	owned, err := d.ListAccessDomainsInTenant(toTenantID, "", "", "")
+	if err != nil {
+		return nil, err
+	}
+	seenInst := map[string]struct{}{}
+	for _, ad := range owned {
+		iid := strings.TrimSpace(ad.InstanceID)
+		if iid == "" {
+			continue
+		}
+		if instanceID != "" && iid != instanceID {
+			continue
+		}
+		if _, ok := seenInst[iid]; ok {
+			continue
+		}
+		seenInst[iid] = struct{}{}
+		inst, err := d.GetInstance(iid)
+		if err != nil || inst == nil {
+			continue
+		}
+		addOwner(iid, inst.TenantID)
+	}
+
+	var out []Database
+	seen := map[string]struct{}{}
+	for iid, owners := range ownersByInst {
+		for owner := range owners {
+			list, err := d.ListDatabasesInTenant(owner, iid, q)
+			if err != nil {
+				return nil, err
+			}
+			for _, it := range list {
+				if _, ok := seen[it.ID]; ok {
+					continue
+				}
+				seen[it.ID] = struct{}{}
+				out = append(out, it)
+			}
+		}
+	}
+	return out, nil
+}
+
+// DatabaseVisibleViaInstanceAccess 异租库是否因 instance/domain grant 或本租域名展开而可见。
+func (d *DB) DatabaseVisibleViaInstanceAccess(toTenantID, toUserID string, db *Database) (bool, error) {
+	if db == nil {
+		return false, nil
+	}
+	dbTid := strings.TrimSpace(db.TenantID)
+	iid := strings.TrimSpace(db.InstanceID)
+	if dbTid == "" || iid == "" {
+		return false, nil
+	}
+	owners, err := d.OwnerTenantsViaInstanceAccess(toTenantID, toUserID, iid)
+	if err != nil {
+		return false, err
+	}
+	_, ok := owners[dbTid]
+	return ok, nil
+}
+
 func (d *DB) FindDatabase(instanceID, dbName string) (*Database, error) {
 	it, err := scanDatabase(d.QueryRow(
 		`SELECT `+databaseCols+` FROM tbl_databases WHERE instance_id=? AND db_name=?`,

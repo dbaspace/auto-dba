@@ -146,7 +146,13 @@ func (h *TicketHandler) canActOnTarget(tenantID, instanceID, dbName, userID stri
 			return false, targetActAllow, "", err
 		}
 		if !ok {
-			return false, targetActDenyDBNotRegistered, "库未登记，请先在「配置 → 已登记库」中登记 " + dbName, nil
+			via, verr := h.Store.DatabaseVisibleViaInstanceAccess(tid, userID, dbEnt)
+			if verr != nil {
+				return false, targetActAllow, "", verr
+			}
+			if !via {
+				return false, targetActDenyDBNotRegistered, "库未登记，请先在「配置 → 已登记库」中登记 " + dbName, nil
+			}
 		}
 	}
 	return true, targetActAllow, "", nil
@@ -292,10 +298,17 @@ func (h *TicketHandler) ListInstanceDatabases(c *gin.Context) {
 		return
 	}
 	list = store.FilterVisibleDatabasesByTenant(list, viewerForRequest(h.Store, c))
-	// 与 DatabaseHandler.List 对齐：合并 to_tenant / to_user 授权库（不再二次 VisibleTo）
-	extra, gerr := h.Store.ListGrantedDatabases(middleware.TenantID(c), middleware.UserID(c), instID, q)
+	// 与 DatabaseHandler.List 对齐：合并 database grant，以及 domain/instance grant（或本租域名）展开的归属库
+	viewerTid := middleware.TenantID(c)
+	uid := middleware.UserID(c)
+	extra, gerr := h.Store.ListGrantedDatabases(viewerTid, uid, instID, q)
 	if gerr != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": gerr.Error()})
+		return
+	}
+	viaAccess, aerr := h.Store.ListDatabasesViaInstanceAccess(viewerTid, uid, instID, q)
+	if aerr != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": aerr.Error()})
 		return
 	}
 	seen := map[string]struct{}{}
@@ -306,6 +319,14 @@ func (h *TicketHandler) ListInstanceDatabases(c *gin.Context) {
 		if _, ok := seen[it.ID]; ok {
 			continue
 		}
+		seen[it.ID] = struct{}{}
+		list = append(list, it)
+	}
+	for _, it := range viaAccess {
+		if _, ok := seen[it.ID]; ok {
+			continue
+		}
+		seen[it.ID] = struct{}{}
 		list = append(list, it)
 	}
 	if list == nil {

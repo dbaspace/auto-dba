@@ -166,3 +166,114 @@ func TestGrantedDatabaseVisibleInInstanceAndTicketLists(t *testing.T) {
 		}
 	}
 }
+
+// TestDomainGrantExpandsTicketDatabases 仅 domain grant 时工单选库应展开授权方已登记库。
+func TestDomainGrantExpandsTicketDatabases(t *testing.T) {
+	dsn := testingDSN(t)
+	if dsn == "" {
+		t.Skip("set AUTO_DBA_TEST_DSN or config dsn")
+	}
+	db, err := store.Open("postgres", dsn)
+	if err != nil {
+		if strings.Contains(err.Error(), "must be owner") {
+			t.Skip(err.Error())
+		}
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	suf := strings.ReplaceAll(time.Now().Format("150405.000"), ".", "") + uuid.NewString()[:6]
+	now := time.Now().UTC().Format(time.RFC3339)
+	fromID := "tenant-dgv-from-" + suf
+	viewerTenID := "tenant-dgv-view-" + suf
+	for _, row := range []struct{ id, code, name string }{
+		{fromID, "gf" + suf[:10], "from-" + suf},
+		{viewerTenID, "gv" + suf[:10], "view-" + suf},
+	} {
+		if _, err := db.Exec(`INSERT INTO tbl_tenants(id, code, name, status, created_at, updated_at) VALUES(?,?,?,?,?,?)
+			ON CONFLICT (id) DO NOTHING`, row.id, row.code, row.name, store.TenantStatusActive, now, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	role := mustTestRole(t, db)
+	u := &store.User{Username: "dgv-" + suf, DisplayName: "dgv", Role: "developer", RoleID: role.ID}
+	if err := db.CreateUser(u, "x"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertTenantMember(&store.TenantMember{
+		TenantID: viewerTenID, UserID: u.ID, RoleIDs: []string{role.ID}, Status: store.MemberStatusActive,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	inst := &store.Instance{
+		TenantID: fromID, Name: "dgv-i-" + suf, DomainName: "dgv-" + suf + ".local",
+		Port: 5432, DBType: "postgres", Host: "127.0.0.1", IDC: "idc-dgv-" + suf[:6],
+	}
+	if err := db.CreateInstance(inst); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SyncAccessDomainsFromInstance(inst); err != nil {
+		t.Fatal(err)
+	}
+	ad, err := db.GetAccessDomainByDomainType(inst.DomainName, "postgres")
+	if err != nil || ad == nil {
+		t.Fatalf("access domain: %v %#v", err, ad)
+	}
+	if err := db.AssignAccessDomainTenant(ad.ID, fromID); err != nil {
+		t.Fatal(err)
+	}
+	rec := &store.Database{TenantID: fromID, InstanceID: inst.ID, DBName: "db_dgv_" + suf[:8], Visibility: "private"}
+	if err := db.CreateDatabase(rec); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CreateTenantGrant(&store.TenantGrant{
+		FromTenantID: fromID, ToUserID: u.ID, ResourceType: "domain", ResourceID: ad.ID,
+		Permission: "read", CreatedBy: "test",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() {
+		_, _ = db.Exec(`DELETE FROM tbl_tenant_grants WHERE resource_id IN (?,?) OR to_user_id=?`, ad.ID, rec.ID, u.ID)
+		_, _ = db.Exec(`DELETE FROM tbl_access_domains WHERE id=?`, ad.ID)
+		_, _ = db.Exec(`DELETE FROM tbl_databases WHERE id=?`, rec.ID)
+		_, _ = db.Exec(`DELETE FROM tbl_instances WHERE id=?`, inst.ID)
+		_, _ = db.Exec(`DELETE FROM tbl_tenant_members WHERE user_id=?`, u.ID)
+		_, _ = db.Exec(`DELETE FROM tbl_user_roles WHERE user_id=?`, u.ID)
+		_, _ = db.Exec(`DELETE FROM tbl_users WHERE id=?`, u.ID)
+		_, _ = db.Exec(`DELETE FROM tbl_tenants WHERE id IN (?,?)`, fromID, viewerTenID)
+	})
+
+	gin.SetMode(gin.TestMode)
+	h := &TicketHandler{Store: db}
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/tickets/instances/"+inst.ID+"/databases", nil)
+	c.Params = gin.Params{{Key: "instance_id", Value: inst.ID}}
+	c.Set(middleware.CtxUserID, u.ID)
+	c.Set(middleware.CtxUsername, u.Username)
+	c.Set(middleware.CtxTenantID, viewerTenID)
+	c.Set(middleware.CtxRole, "developer")
+	h.ListInstanceDatabases(c)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ticket dbs code=%d body=%s", w.Code, w.Body.String())
+	}
+	var out struct {
+		Data []store.Database `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, d := range out.Data {
+		if d.ID == rec.ID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("ticket databases missing domain-expanded db %s; got %d rows", rec.ID, len(out.Data))
+	}
+}

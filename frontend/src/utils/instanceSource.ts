@@ -126,12 +126,42 @@ export function sourceSecondaryLabel(row: DomainSource) {
   return row.name || ''
 }
 
-/** 库记录是否绑定了指定域名（大小写不敏感） */
+/** 库自身绑定的域名：domains 数组 + tags 中 domain=；均无则视为未绑定 */
+export function dbBoundDomains(db: any): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  const add = (raw: unknown) => {
+    const v = String(raw || '').trim()
+    if (!v) return
+    const k = domainKey(v)
+    if (!k || seen.has(k)) return
+    seen.add(k)
+    out.push(v)
+  }
+  if (Array.isArray(db?.domains)) {
+    for (const d of db.domains) add(d)
+  }
+  if (Array.isArray(db?.tags)) {
+    for (const raw of db.tags) {
+      const t = String(raw || '').trim()
+      const i = t.indexOf('=')
+      if (i <= 0) continue
+      if (t.slice(0, i).trim().toLowerCase() === 'domain') add(t.slice(i + 1))
+    }
+  }
+  return out
+}
+
+/**
+ * 库记录是否匹配指定域名（大小写不敏感）。
+ * 未绑定任何域名时视为匹配（与后端提交校验：空 domains 放行一致）。
+ */
 export function dbHasDomain(db: any, domain: string): boolean {
   const want = domainKey(domain)
   if (!want) return false
-  const list = Array.isArray(db?.domains) ? db.domains : []
-  return list.some((d: unknown) => domainKey(String(d)) === want)
+  const list = dbBoundDomains(db)
+  if (!list.length) return true
+  return list.some((d) => domainKey(d) === want)
 }
 
 export function filterDbsByDomain(dbs: any[], domain: string): any[] {

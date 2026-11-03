@@ -1445,9 +1445,17 @@ func (h *DatabaseHandler) List(c *gin.Context) {
 	}
 	list = store.FilterVisibleDatabasesByTenant(list, viewerForRequest(h.Store, c))
 	if !auditing || forceTenant {
-		extra, gerr := h.Store.ListGrantedDatabases(tid, middleware.UserID(c), c.Query("instance_id"), c.Query("q"))
+		instQ := c.Query("instance_id")
+		q := c.Query("q")
+		uid := middleware.UserID(c)
+		extra, gerr := h.Store.ListGrantedDatabases(tid, uid, instQ, q)
 		if gerr != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"message": gerr.Error()})
+			return
+		}
+		viaAccess, aerr := h.Store.ListDatabasesViaInstanceAccess(tid, uid, instQ, q)
+		if aerr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": aerr.Error()})
 			return
 		}
 		seen := map[string]struct{}{}
@@ -1458,6 +1466,14 @@ func (h *DatabaseHandler) List(c *gin.Context) {
 			if _, ok := seen[it.ID]; ok {
 				continue
 			}
+			seen[it.ID] = struct{}{}
+			list = append(list, it)
+		}
+		for _, it := range viaAccess {
+			if _, ok := seen[it.ID]; ok {
+				continue
+			}
+			seen[it.ID] = struct{}{}
 			list = append(list, it)
 		}
 	}
