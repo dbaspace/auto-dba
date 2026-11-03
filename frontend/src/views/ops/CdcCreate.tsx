@@ -941,11 +941,72 @@ export default function CdcCreate() {
 
   function addableTag(names: string[]) {
     const total = batchAvail?.total || 0
-    if (total <= 1 || !batchAvailByTable.size) return null
-    let addable = 0
-    for (const n of names) addable = Math.max(addable, batchAvailByTable.get(String(n).toLowerCase())?.addable || 0)
-    if (addable >= total) return null
-    return <Tag color="blue">可加 {addable}/{total}</Tag>
+    const failedN = batchAvail?.failed?.length || 0
+    const checked = Math.max(0, total - failedN)
+    if (total <= 1 || !batchAvailByTable.size || checked <= 0) return null
+    let addable = Number.POSITIVE_INFINITY
+    let exists = Number.POSITIVE_INFINITY
+    for (const n of names) {
+      const row = batchAvailByTable.get(String(n).toLowerCase())
+      addable = Math.min(addable, row?.addable ?? 0)
+      exists = Math.min(exists, row?.exists ?? 0)
+    }
+    if (!Number.isFinite(addable)) addable = 0
+    if (!Number.isFinite(exists)) exists = 0
+    if (addable >= checked) return null
+    const tip = (
+      <div>
+        <div>分母是父任务数，不是分表片数。</div>
+        <div>
+          源库有表 {exists} · 可加 {addable} · 拉取失败 {failedN} · 已选父任务 {total}
+        </div>
+      </div>
+    )
+    return (
+      <Tooltip title={tip}>
+        <Tag color="blue">
+          可加 {addable}/{checked} 父
+        </Tag>
+      </Tooltip>
+    )
+  }
+
+  function renderBatchFailedAlert() {
+    const failed = batchAvail?.failed || []
+    if (!failed.length) return null
+    const byMsg = new Map<string, { message: string; names: string[] }>()
+    for (const f of failed) {
+      const msg = String(f.message || '未知错误')
+      let g = byMsg.get(msg)
+      if (!g) {
+        g = { message: msg, names: [] }
+        byMsg.set(msg, g)
+      }
+      g.names.push(f.name || f.parent_id)
+    }
+    const groups = [...byMsg.values()]
+    const upgrade = groups.some(
+      (g) => g.message.includes('重新下发') || g.message.includes('元数据接口') || g.message.includes('版本过旧'),
+    )
+    return (
+      <Alert
+        type={upgrade ? 'warning' : 'error'}
+        showIcon
+        className="mb"
+        message={upgrade ? `需升级 SQL 执行器（${failed.length} 个父任务未能拉取源表）` : `${failed.length} 个父任务未能拉取源表`}
+        description={
+          <ul style={{ margin: 0, paddingLeft: 18 }}>
+            {groups.slice(0, 6).map((g) => (
+              <li key={g.message}>
+                共 {g.names.length} 个父任务：{g.message}
+                {g.names.length <= 3 ? `（${g.names.join('、')}）` : ''}
+              </li>
+            ))}
+            {groups.length > 6 ? <li>…其余 {groups.length - 6} 类错误已省略</li> : null}
+          </ul>
+        }
+      />
+    )
   }
 
   function clearPickedTables() {
@@ -3400,18 +3461,7 @@ export default function CdcCreate() {
                       }
                     />
                   )}
-                  {!!batchAvail?.failed?.length && (
-                    <Alert
-                      type="error"
-                      showIcon
-                      className="mb"
-                      message={`${batchAvail.failed.length} 个父任务未能拉取源表`}
-                      description={batchAvail.failed
-                        .slice(0, 8)
-                        .map((f) => `${f.name || f.parent_id}：${f.message}`)
-                        .join('；')}
-                    />
-                  )}
+                  {renderBatchFailedAlert()}
                   <CdcSourceTableList
                     groups={visibleShardGroups}
                     singles={visibleSingleTables}

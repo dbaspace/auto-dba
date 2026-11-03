@@ -3,6 +3,8 @@ package handler
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -249,8 +251,17 @@ func (h *CDCHandler) fillSourceMetaRemote(ctx context.Context, exec *sqlexec.Exe
 	}
 	resp, err := sqlexec.FetchMeta(ctx, exec.BaseURL, exec.Username, exec.Password, req)
 	if err != nil {
+		execName := strings.TrimSpace(exec.Name)
+		if execName == "" {
+			execName = exec.ID
+		}
+		reason := err.Error()
+		if errors.Is(err, sqlexec.ErrMetaUnsupported) {
+			reason = sqlexec.ErrMetaUnsupported.Error()
+		}
+		msg := fmt.Sprintf("执行器「%s」元数据查询失败：%s", execName, reason)
 		for _, i := range idxs {
-			out[i] = cdcSourceMeta{Error: "执行器元数据查询失败: " + err.Error(), Tables: []string{}, Live: map[string]struct{}{}, ViaAgent: true}
+			out[i] = cdcSourceMeta{Error: msg, Tables: []string{}, Live: map[string]struct{}{}, ViaAgent: true}
 		}
 		return
 	}

@@ -301,7 +301,7 @@ DBA 域配置管理门面：统一目录（含 SR/部署/代理/账号/CDC）、
 | 系统通知 | `/config/system-notice` | 平台级登录弹框：标题/正文、启停、展示模式（每次登录 / 仅一次 / 版本变更时）；用户可确认不再提示（按模式与版本）。可开启「发版冻结」拦截工单类提交并展示自定义提示 |
 | 区域管理 | `/config/regions` | 机房或区域，并可绑定环境 |
 | 环境管理 | `/config/environments` | 生产、测试等环境 |
-| 执行器 | `/config/sql-executors` | 从平台 Agent 下发成功的记录登记 SQL 执行器并绑定环境，地址自动带出，本页不填账号密码。可停止远端进程、重新下发；删除默认先停远端。`ticket_local_idc` 中的环境在本进程直连，其余已绑定环境把 DDL/DML/DQL 导出下发到执行器（DQL 走 `/v1/sql/export-jobs`）；CDC 加表可选表可走同步 `/v1/sql/meta`（只读目录，不影响 jobs/export）。一体包、后端包与 Docker 镜像均含 `deploy/sql-agent/bin/sql-agent`；海外就近须用含 meta 的版本重下发 |
+| 执行器 | `/config/sql-executors` | 从平台 Agent 下发成功的记录登记 SQL 执行器并绑定环境，地址自动带出，本页不填账号密码。可停止远端进程、重新下发；删除默认先停远端。`ticket_local_idc` 中的环境在本进程直连，其余已绑定环境把 DDL/DML/DQL 导出下发到执行器（DQL 走 `/v1/sql/export-jobs`）；CDC 加表可选表可走同步 `/v1/sql/meta`（只读目录，不影响 jobs/export）。一体包、后端包与 Docker 镜像均含 `deploy/sql-agent/bin/sql-agent`；海外就近须用含 meta 的版本重下发。旧执行器缺 `/v1/sql/meta` 时提示升级而非「没有这个任务」；批量「可加 N/M 父」表示父任务覆盖（非分表片数） |
 | 云账号 | `/config/cloud-accounts` | 登记云厂商密钥，供云资源同步与变更 |
 | 连接器 | `/config/connectors` | CDC、迁移等外部组件的连接信息。可按环境、Kafka 地址、Debezium 地址筛选 |
 | 平台 Agent | `/config/agents` | 平台级执行面登记 / 下发；备份、RDB、高可用按归属引用 |

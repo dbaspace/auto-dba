@@ -1,0 +1,24 @@
+---
+description: 重新打包/发版时必须一并构建并打入全部平台 Agent；用户无需每次口头强调
+alwaysApply: true
+---
+
+# 发版与打包：Agent 必打
+
+用户只说「更新文档、重新打包、本地提交、打 release」或「提交到 GitHub」时，**默认**按下列执行，**不要**再追问是否打包 Agent，也**不要**等用户单独说「sql-agent / node-agent 要重打」。
+
+## 必做
+
+- 使用项目脚本完整打包（如 `STAMP=vX.Y.Z ./scripts/pack_release.sh all` 或用户指定的 backend/frontend/docker 变体）。该脚本会调用 `build_agents`，**必须成功**构建并打入：
+  - `deploy/node-agent/bin/node-agent`
+  - `deploy/db-agent/bin/db-agent`
+  - `deploy/backup-agent/bin/platform-agent`（及兼容的 `backup-agent`）
+  - `deploy/sql-agent/bin/sql-agent`
+- 发版说明（changelog）若涉及执行器/Agent 行为变更，写明「须用本版包重下发对应 Agent」；未改 Agent 协议时也保证包内二进制为本次构建产物。
+- 本地提交时：若本次改了某 Agent 源码（如 `deploy/sql-agent/main.go`），**同步提交**对应 `deploy/*/bin/*` 制品；未改源码、仅打包刷新的其它 Agent 二进制可按仓库既有习惯决定是否入库，但 **dist 发布包内必须含全部最新 Agent**。
+
+## 不要
+
+- 不要跳过 `build_agents` 或用手搓残缺包（缺 sql-agent / node-agent 等）。
+- 不要把「打包 Agent」当成可选附加步骤；它是「重新打包 / 打 release」的固定含义。
+- 远程 push / GitHub Release 仍仅在用户明确要求时执行（与既有发版约定一致）。

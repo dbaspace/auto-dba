@@ -3,6 +3,7 @@ import { Alert, Button, Checkbox, Form, Input, InputNumber, Modal, Select, Space
 import type { ColumnsType } from 'antd/es/table'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import api from '../../api/request'
+import { useAppSelector } from '../../store'
 import '../backup/backup.css'
 
 const DEPLOY_POLL_MS = 2000
@@ -73,6 +74,8 @@ export default function PlatformAgent() {
   const [depForm] = Form.useForm()
   const [sqlForm] = Form.useForm()
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const activeKey = useAppSelector((s) => s.tabs.activeKey)
+  const tabActive = activeKey.split('?')[0] === '/config/agents'
   const agGroups: string[] = Form.useWatch('enabled_groups', agForm) || []
   const depGroups: string[] = Form.useWatch('enabled_groups', depForm) || []
   const agNeedBackup = agGroups.includes('backup')
@@ -91,14 +94,18 @@ export default function PlatformAgent() {
     setDeployBusy(false)
   }
 
-  async function loadDeploys() {
-    const [{ data }, sqlList, envRes] = await Promise.all([
-      api.get('/platform/agents/deploys', { params: { limit: 50 } }),
+  async function refreshDeployList() {
+    const { data } = await api.get('/platform/agents/deploys', { params: { limit: 50 } })
+    const list = data.data || []
+    setDeploys(list)
+    return list as any[]
+  }
+
+  async function loadFormCatalog() {
+    const [sqlList, envRes] = await Promise.all([
       api.get('/platform/agents/sql-executors').catch(() => ({ data: { data: [] } })),
       api.get('/environments').catch(() => ({ data: { data: [] } })),
     ])
-    const list = data.data || []
-    setDeploys(list)
     setSqlExecs(sqlList.data.data || [])
     setEnvOptions(
       (envRes.data.data || []).map((e: any) => ({
@@ -106,7 +113,11 @@ export default function PlatformAgent() {
         label: e.name ? `${e.name}（${e.code}）` : e.code,
       })),
     )
-    return list as any[]
+  }
+
+  async function loadDeploys() {
+    const [list] = await Promise.all([refreshDeployList(), loadFormCatalog()])
+    return list
   }
 
   async function refreshAgentStatus(list?: any[]) {
@@ -171,7 +182,7 @@ export default function PlatformAgent() {
     stopPoll()
     pollRef.current = setInterval(async () => {
       try {
-        const list = await loadDeploys()
+        const list = await refreshDeployList()
         const busy = list.some((d) => d.status === 'pending' || d.status === 'running')
         if (deployId) {
           const cur = list.find((d) => d.id === deployId)
@@ -196,9 +207,16 @@ export default function PlatformAgent() {
   }
 
   useEffect(() => {
+    if (!tabActive) {
+      stopPoll()
+      return
+    }
     const busy = deploys.some((d) => d.status === 'pending' || d.status === 'running')
-    if (busy && !pollRef.current) startPoll()
-  }, [deploys])
+    if (busy && !pollRef.current) {
+      void refreshDeployList().catch(() => {})
+      startPoll()
+    }
+  }, [deploys, tabActive])
 
   async function saveAgent() {
     const v = await agForm.validateFields()
@@ -665,6 +683,7 @@ export default function PlatformAgent() {
               escalate: false,
               env_codes: [],
             })
+            void loadFormCatalog().catch(() => {})
             setSqlOpen(true)
           }}
         >

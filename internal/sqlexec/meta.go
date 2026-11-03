@@ -3,6 +3,7 @@ package sqlexec
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -10,6 +11,9 @@ import (
 
 	"auto-dba/internal/dbmig"
 )
+
+// ErrMetaUnsupported 表示执行器没有 /v1/sql/meta（版本过旧），与 jobs 的 ErrJobNotFound 区分。
+var ErrMetaUnsupported = errors.New("执行器版本过旧，不支持元数据接口 /v1/sql/meta；请到「配置 → 执行器」用当前平台安装包重新下发 sql-agent 后再试")
 
 // MetaRequest 同步只读元数据：同实例下多库一次拉取 schema 表与 publication 成员。
 type MetaRequest struct {
@@ -37,9 +41,13 @@ type MetaResponse struct {
 const metaMaxDatabases = 128
 
 // FetchMeta 调用执行器同步元数据接口（跨库批量，超时放宽到 90s）。
+// 旧执行器无此路由时返回 404，映射为 ErrMetaUnsupported（不套用 ErrJobNotFound）。
 func FetchMeta(ctx context.Context, baseURL, user, pass string, req MetaRequest) (MetaResponse, error) {
 	var out MetaResponse
 	err := callWithTimeout(ctx, 90*time.Second, http.MethodPost, strings.TrimRight(baseURL, "/")+"/v1/sql/meta", user, pass, req, &out)
+	if err != nil && errors.Is(err, ErrJobNotFound) {
+		return out, ErrMetaUnsupported
+	}
 	return out, err
 }
 

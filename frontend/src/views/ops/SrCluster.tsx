@@ -1103,7 +1103,7 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
       void pollChange(changeDetail.id).then((ch) => {
         if (ch && ch.status !== 'running' && ch.status !== 'pending') {
           void loadChanges(selected?.id)
-          if (selected?.id && ch.type === 'stop_node') {
+          if (selected?.id && (ch.type === 'stop_node' || ch.type === 'start_node')) {
             void reloadClusterDetail(selected.id)
             void loadNodeLive(selected.id)
           }
@@ -1997,18 +1997,13 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                                     const res = await api.post(
                                       `/sr-cluster/clusters/${selected.id}/nodes/${row.id}/${running ? 'stop' : 'start'}`,
                                     )
-                                    if (running) {
-                                      message.success('已提交停止')
-                                      const cid = selected.id
-                                      const changeId = res.data?.data?.change_id as string | undefined
-                                      await reloadClusterDetail(cid)
-                                      void loadNodeLive(cid)
-                                      loadClusters()
-                                      if (changeId) void pollChange(changeId)
-                                    } else {
-                                      message.success('已提交启动')
-                                      afterChange(res.data?.data?.change_id)
-                                    }
+                                    message.success(running ? '已提交停止' : '已提交启动')
+                                    const cid = selected.id
+                                    const changeId = res.data?.data?.change_id as string | undefined
+                                    await reloadClusterDetail(cid)
+                                    void loadNodeLive(cid)
+                                    loadClusters()
+                                    if (changeId) void pollChange(changeId)
                                   } catch (e: any) {
                                     message.error(e?.response?.data?.message || e.message || (running ? '停止失败' : '启动失败'))
                                   }
