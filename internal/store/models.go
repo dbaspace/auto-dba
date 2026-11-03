@@ -222,6 +222,7 @@ type CDCTask struct {
 	Description    string `json:"description,omitempty"`
 	CreatedAt      string `json:"created_at"`
 	UpdatedAt      string `json:"updated_at"`
+	TenantName     string `json:"tenant_name,omitempty"`
 	// 展示用（非表字段）：Connector 在 Connect 上 NOT_FOUND 且状态允许时可重新初始化
 	CanReinit        bool `json:"can_reinit,omitempty"`
 	ConnectorMissing bool `json:"connector_missing,omitempty"`

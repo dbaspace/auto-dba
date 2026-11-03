@@ -36,6 +36,8 @@ import { usePermission } from '../../hooks/usePermission'
 import { navigateToWorkOrderCreate } from '../../utils/workOrderDraft'
 import CdcReinitModal from './CdcReinitModal'
 import CdcReinitBatchModal from './CdcReinitBatchModal'
+import CdcAssignTenantModal from './CdcAssignTenantModal'
+import { useAppSelector } from '../../store'
 import {
   approvalText,
   decodeCdcExtra,
@@ -163,6 +165,12 @@ export default function CdcList() {
   const [reinitTask, setReinitTask] = useState<any>(null)
   const [batchOpen, setBatchOpen] = useState(false)
   const { isAdmin } = usePermission()
+  const user = useAppSelector((s) => s.auth.user)
+  const impersonating = Boolean((user as { impersonating?: boolean })?.impersonating)
+  const currentTenantId = String((user as { current_tenant?: { id?: string } })?.current_tenant?.id || '')
+  const [tenants, setTenants] = useState<{ id: string; name?: string; code?: string }[]>([])
+  const [selectedKeys, setSelectedKeys] = useState<React.Key[]>([])
+  const [assignRows, setAssignRows] = useState<any[]>([])
   const probeGenRef = useRef(0)
   const probeAbortRef = useRef<AbortController | null>(null)
   const lastManualRefreshRef = useRef(0)
@@ -362,6 +370,7 @@ export default function CdcList() {
       }))
       // 不带 _pipeline：清空探测缓存，配合 probeEpoch 强制重探当前页
       setAllRows(rows)
+      setSelectedKeys([])
       setProbeEpoch((n) => n + 1)
       void loadSideData()
       void loadDriftCache()
@@ -475,6 +484,24 @@ export default function CdcList() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  useEffect(() => {
+    if (!impersonating) return
+    api
+      .get('/tenants', { silent: true })
+      .then(({ data }) => setTenants((data.data || []).filter((t: { status?: string }) => t.status !== 'disabled')))
+      .catch(() => setTenants([]))
+  }, [impersonating])
+
+  function openAssign() {
+    const keys = new Set(selectedKeys.map(String))
+    const rows = allRows.filter((r) => keys.has(String(r.id)) && r.task_type === 'init')
+    if (!rows.length) {
+      message.warning('请先勾选初始化任务')
+      return
+    }
+    setAssignRows(rows)
+  }
+
   const pageProbeKey = useMemo(
     () =>
       pageRows
@@ -563,6 +590,15 @@ export default function CdcList() {
           </a>
         )
       },
+    })
+  }
+  if (impersonating) {
+    columns.push({
+      title: '归属租户',
+      key: 'tenant',
+      width: 140,
+      ellipsis: true,
+      render: (_: any, row: any) => row.tenant_name || row.tenant_id || '—',
     })
   }
   if (colOn('type')) {
@@ -835,6 +871,11 @@ export default function CdcList() {
           CDC 同步任务
         </Title>
         <Space>
+          {impersonating && (
+            <Button disabled={!selectedKeys.length} onClick={openAssign}>
+              划拨到租户{selectedKeys.length ? `（${selectedKeys.length}）` : ''}
+            </Button>
+          )}
           {isAdmin && (
             <Button icon={<SyncOutlined />} onClick={() => setBatchOpen(true)}>
               按 Debezium 服务重新初始化
@@ -968,6 +1009,16 @@ export default function CdcList() {
         loading={loading}
         columns={columns}
         dataSource={pageRows}
+        rowSelection={
+          impersonating
+            ? {
+                selectedRowKeys: selectedKeys,
+                preserveSelectedRowKeys: true,
+                onChange: (keys) => setSelectedKeys(keys),
+                getCheckboxProps: (r: any) => ({ disabled: r.task_type !== 'init' }),
+              }
+            : undefined
+        }
         scroll={{ x: scrollX }}
         locale={{ emptyText }}
         style={{ marginTop: 12 }}
@@ -991,6 +1042,16 @@ export default function CdcList() {
         onSubmitted={() => void refreshTasks()}
       />
       <CdcReinitBatchModal open={batchOpen} onClose={() => setBatchOpen(false)} onSubmitted={() => void refreshTasks()} />
+      <CdcAssignTenantModal
+        rows={assignRows}
+        tenants={tenants}
+        defaultTenantId={currentTenantId}
+        onClose={() => setAssignRows([])}
+        onDone={() => {
+          setAssignRows([])
+          void load({ force: true })
+        }}
+      />
     </div>
   )
 }

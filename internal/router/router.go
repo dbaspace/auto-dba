@@ -599,6 +599,8 @@ func Init(e *gin.Engine, d Deps) {
 	cdc.GET("/instances", d.CDC.ListInstances)
 	cdc.GET("/instances/:id/databases/:db/tables/:table/columns", d.CDC.TableColumns)
 	cdc.POST("/instances/:id/columns/batch", d.CDC.BatchColumns)
+	cdc.POST("/tasks/assign-tenant", requireURN(store.URNTenantsImpersonate), d.CDC.AssignTenantBatch)
+	cdc.POST("/tasks/:id/assign-tenant", requireURN(store.URNTenantsImpersonate), d.CDC.AssignTenant)
 	cdc.POST("/tasks/precheck", d.CDC.Precheck)
 	cdc.POST("/tasks/debezium-preview", d.CDC.DebeziumPreview)
 	cdc.POST("/tasks/preview-target-sql", d.CDC.PreviewTargetSQL)

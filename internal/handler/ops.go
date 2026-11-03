@@ -70,7 +70,11 @@ func (h *CDCHandler) List(c *gin.Context) {
 			list[i].CanReinit = true
 		}
 	}
-	c.JSON(http.StatusOK, gin.H{"data": list})
+	audit := auditScope(h.Store, c)
+	if audit {
+		h.annotateCDCTenants(list)
+	}
+	c.JSON(http.StatusOK, gin.H{"data": list, "audit_scope": audit})
 }
 
 func (h *CDCHandler) Get(c *gin.Context) {
