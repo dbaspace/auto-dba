@@ -380,6 +380,7 @@ func (o *Orchestrator) stepMySQL(ctx context.Context, t *store.CDCTask, extra ma
 	if err != nil || inst == nil {
 		return fmt.Errorf("源端实例不存在")
 	}
+	inst = TaskSourceInstance(inst, extra)
 	connector := extra["connector_name"]
 	if extra["topic_prefix"] == "" || connector == "" {
 		_, _, topic := defaultTaskNames(extra["env"], t.SourceDB, t.Name)
@@ -477,6 +478,7 @@ func (o *Orchestrator) stepPG(ctx context.Context, t *store.CDCTask, extra map[s
 	if err != nil || inst == nil {
 		return fmt.Errorf("源端实例不存在")
 	}
+	inst = TaskSourceInstance(inst, extra)
 	schema := extra["source_schema"]
 	if schema == "" {
 		schema = "public"
@@ -754,6 +756,7 @@ func PreviewTargetSQLItems(ctx context.Context, st *store.DB, secret string, t *
 	if err != nil || inst == nil {
 		return nil, fmt.Errorf("源端实例不存在")
 	}
+	inst = TaskSourceInstance(inst, extra)
 	db, err := dbmig.OpenInstance(ctx, inst, secret, t.SourceDB)
 	if err != nil {
 		return nil, err

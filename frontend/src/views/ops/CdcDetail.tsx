@@ -50,6 +50,8 @@ import {
   formatLogTime,
   formatSourceScopeLabel,
   endpointLabel,
+  effectiveSourceEndpoint,
+  sourceEndpointLabel,
   isValidCdcTaskID,
   keyModelLabel,
   LOG_STEP_OPTIONS,
@@ -112,7 +114,7 @@ export default function CdcDetail() {
   const [repairOpen, setRepairOpen] = useState(false)
   const [repairHost, setRepairHost] = useState('')
   const [repairPort, setRepairPort] = useState<number>(5432)
-  const [repairOthers, setRepairOthers] = useState(true)
+  const [repairOthers, setRepairOthers] = useState(false)
   const [repairing, setRepairing] = useState(false)
   const [tableRows, setTableRows] = useState<any[]>([])
   const [tableQ, setTableQ] = useState('')
@@ -782,11 +784,10 @@ export default function CdcDetail() {
   }
 
   function openRepairSource() {
-    const host = String(source?.host || source?.domain_name || extra.source_host || '').trim()
-    const port = Number(source?.port || extra.source_port || 5432)
+    const { host, port } = effectiveSourceEndpoint(extra, source)
     setRepairHost(host)
     setRepairPort(port > 0 ? port : 5432)
-    setRepairOthers(true)
+    setRepairOthers(false)
     setRepairOpen(true)
   }
 
@@ -1244,7 +1245,7 @@ export default function CdcDetail() {
                   label: '源端 PostgreSQL',
                   children: (
                     <div>
-                      <div>{endpointLabel(source, extra.source_host, extra.source_port, true)}</div>
+                      <div>{sourceEndpointLabel(source, extra, true)}</div>
                       {isInit && !pending ? (
                         <Button type="link" size="small" style={{ padding: 0, height: 'auto' }} onClick={openRepairSource}>
                           修复源端
@@ -1805,9 +1806,9 @@ export default function CdcDetail() {
         destroyOnClose
       >
         <p>
-          当前实例地址：{endpointLabel(source, extra.source_host, extra.source_port, true)}
+          当前生效地址：{sourceEndpointLabel(source, extra, true)}
         </p>
-        {connectorEndpoint() && connectorEndpoint() !== `${String(source?.host || source?.domain_name || '')}:${source?.port || ''}` ? (
+        {connectorEndpoint() && connectorEndpoint() !== sourceEndpointLabel(null, extra) ? (
           <p>Connector 上的地址：{connectorEndpoint()}</p>
         ) : null}
         <p style={{ color: '#8c8c8c', fontSize: 12 }}>
@@ -1834,7 +1835,7 @@ export default function CdcDetail() {
           <InputNumber min={1} max={65535} value={repairPort} onChange={(v) => setRepairPort(Number(v || 0))} style={{ width: 160 }} />
         </div>
         <Checkbox checked={repairOthers} onChange={(e) => setRepairOthers(e.target.checked)}>
-          一并修复同源端其它运行中的初始化任务
+          一并修复同实例、当前地址相同的其它运行中初始化任务
         </Checkbox>
       </Modal>
 

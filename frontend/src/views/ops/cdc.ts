@@ -307,6 +307,41 @@ export function endpointLabel(instance: any, host: any, port: any, withName = fa
   return `${label}（${raw}）`
 }
 
+function debeziumConfigOf(extra: any): Record<string, any> | null {
+  let cfg = extra?.debezium_config
+  if (typeof cfg === 'string') {
+    try {
+      cfg = JSON.parse(cfg)
+    } catch {
+      return null
+    }
+  }
+  return cfg && typeof cfg === 'object' ? cfg : null
+}
+
+/** 任务实际使用的源端地址：任务 source_host > Debezium database.hostname > 实例 host。 */
+export function effectiveSourceEndpoint(extra: any, instance: any): { host: string; port: number } {
+  let host = String(extra?.source_host || '').trim()
+  let port = Number(extra?.source_port || 0)
+  if (!host) {
+    const cfg = debeziumConfigOf(extra)
+    host = String(cfg?.['database.hostname'] || '').trim()
+    const p = Number(cfg?.['database.port'] || 0)
+    if (p > 0) port = p
+  }
+  if (!host) host = String(instance?.host || instance?.domain_name || '').trim()
+  if (!(port > 0)) port = Number(instance?.port || 0)
+  return { host, port: port > 0 ? port : 0 }
+}
+
+/** 源端只展示生效地址；withName 时带实例名。 */
+export function sourceEndpointLabel(instance: any, extra: any, withName = false): string {
+  const { host, port } = effectiveSourceEndpoint(extra, instance)
+  const addr = extraEndpoint(host, port)
+  if (withName && instance?.name) return addr ? `${instance.name} — ${addr}` : instance.name
+  return addr || instance?.name || '—'
+}
+
 export function instEnv(i: any): string {
   return i?.idc || i?.env || i?.env_code || ''
 }

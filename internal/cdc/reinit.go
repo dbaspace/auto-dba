@@ -176,12 +176,13 @@ func BuildTaskConnectorPlans(st *store.DB, secretKey string, t *store.CDCTask, e
 		}
 		extra["source_engine"] = srcEng
 	}
+	pgHost, pgPort := EffectiveSourceEndpoint(extra, inst)
 	return buildConnectorPlans(connectorPlanInput{
 		Extra:        extra,
 		SourceDB:     t.SourceDB,
 		SourceEngine: srcEng,
-		PGHost:       defaultStr(strings.TrimSpace(inst.Host), strings.TrimSpace(inst.DomainName)),
-		PGPort:       inst.Port,
+		PGHost:       pgHost,
+		PGPort:       pgPort,
 		PGUser:       inst.Username,
 		PGPassword:   pwd,
 		SnapshotMode: snapshotMode,
@@ -468,6 +469,7 @@ func (res *ReinitPreviewResult) warn(code, msg string) {
 
 func (o *Orchestrator) previewPG(ctx context.Context, t *store.CDCTask, extra map[string]string, plans []ConnectorPlan, res *ReinitPreviewResult) {
 	inst, _ := o.Store.GetInstance(t.SourceID)
+	inst = TaskSourceInstance(inst, extra)
 	schema := defaultStr(extra["source_schema"], "public")
 	for _, p := range plans {
 		if inst == nil {
@@ -662,6 +664,7 @@ func (o *Orchestrator) reinitPG(ctx context.Context, t *store.CDCTask, extra map
 	if err != nil || inst == nil {
 		return fmt.Errorf("源端实例不存在")
 	}
+	inst = TaskSourceInstance(inst, extra)
 	schema := defaultStr(extra["source_schema"], "public")
 	signalTable := ResolveSignalTable(extra)
 	for _, p := range plans {

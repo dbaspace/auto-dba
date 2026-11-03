@@ -139,6 +139,7 @@ func ScanSchemaAlerts(ctx context.Context, st *store.DB, secret string, init *st
 		return out, nil
 	}
 	srcInst, _ := st.GetInstance(init.SourceID)
+	srcInst = TaskSourceInstance(srcInst, extra)
 	if srcInst == nil {
 		out.State = SchemaAlertError
 		out.Message = "源端实例不存在"

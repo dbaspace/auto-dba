@@ -61,14 +61,8 @@ func (h *CDCHandler) InitList(c *gin.Context) {
 		if synced == 0 {
 			synced = counts["source"]
 		}
-		sourceHost, sourcePort := "", 0
-		if inst, _ := h.Store.GetInstance(t.SourceID); inst != nil {
-			sourceHost = strings.TrimSpace(inst.Host)
-			if sourceHost == "" {
-				sourceHost = strings.TrimSpace(inst.DomainName)
-			}
-			sourcePort = inst.Port
-		}
+		inst, _ := h.Store.GetInstance(t.SourceID)
+		sourceHost, sourcePort := cdc.EffectiveSourceEndpoint(extra, inst)
 		out = append(out, gin.H{
 			"id": t.ID, "name": t.Name, "status": t.Status, "task_type": t.TaskType,
 			"source_instance_id": t.SourceID, "target_instance_id": t.TargetID,
@@ -118,13 +112,14 @@ func (h *CDCHandler) AvailableTables(c *gin.Context) {
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
 	defer cancel()
-	db, err := dbmig.OpenInstance(ctx, inst, h.Secret, init.SourceDB)
+	initExtra := cdc.ParseTaskExtra(init.Description)
+	db, err := dbmig.OpenInstance(ctx, cdc.TaskSourceInstance(inst, initExtra), h.Secret, init.SourceDB)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
 	defer db.Close()
-	schema := cdc.ParseTaskExtra(init.Description)["source_schema"]
+	schema := initExtra["source_schema"]
 	if schema == "" {
 		schema = "public"
 	}
@@ -175,7 +170,7 @@ func (h *CDCHandler) Publication(c *gin.Context) {
 	if inst != nil && pub != "" {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 12*time.Second)
 		defer cancel()
-		if db, oerr := dbmig.OpenInstance(ctx, inst, h.Secret, init.SourceDB); oerr == nil {
+		if db, oerr := dbmig.OpenInstance(ctx, cdc.TaskSourceInstance(inst, extra), h.Secret, init.SourceDB); oerr == nil {
 			if names, lerr := cdc.ListPublicationTables(ctx, db, pub); lerr == nil {
 				live = names
 			} else {

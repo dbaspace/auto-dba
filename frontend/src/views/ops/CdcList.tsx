@@ -41,6 +41,7 @@ import {
   decodeCdcExtra,
   endpointLabel,
   envTagColor,
+  sourceEndpointLabel,
   formatSourceScopeLabel,
   instEnv,
   isCdcManualDDL,
@@ -599,7 +600,7 @@ export default function CdcList() {
         const extra = extraOf(row)
         return (
           <div style={{ lineHeight: 1.4 }}>
-            <div>{endpointLabel(instOf(row.source_instance_id), extra.source_host, extra.source_port)}</div>
+            <div>{sourceEndpointLabel(instOf(row.source_instance_id), extra)}</div>
             <div style={{ color: '#8c8c8c', fontSize: 12 }}>{sourceScopeOf(row)}</div>
           </div>
         )

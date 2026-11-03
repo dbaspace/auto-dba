@@ -160,6 +160,7 @@ func (o *Orchestrator) stepAddTablePG(ctx context.Context, t, parent *store.CDCT
 	if err != nil || inst == nil {
 		return fmt.Errorf("源端实例不存在")
 	}
+	inst = TaskSourceInstance(inst, parentExtra)
 	schema := defaultStr(parentExtra["source_schema"], defaultStr(extra["source_schema"], "public"))
 	pub, slot, connector, _ := childPipelineNames(extra, parentExtra)
 	bindings := ResolveOrBuildShardBindings(parentExtra, parent.SourceDB, pub, slot, connector)
@@ -205,6 +206,7 @@ func (o *Orchestrator) stepExecuteSnapshot(ctx context.Context, t, parent *store
 	if err != nil || inst == nil {
 		return fmt.Errorf("源端实例不存在")
 	}
+	inst = TaskSourceInstance(inst, parentExtra)
 	pub, slot, connector, _ := childPipelineNames(extra, parentExtra)
 	bindings := ResolveOrBuildShardBindings(parentExtra, parent.SourceDB, pub, slot, connector)
 	if len(bindings) == 0 {
@@ -514,6 +516,7 @@ func (o *Orchestrator) CleanupTaskResources(ctx context.Context, t *store.CDCTas
 		bindings = []ShardDbBinding{{DbName: t.SourceDB, PublicationName: pub, SlotName: slot, ConnectorName: connector}}
 	}
 	inst, _ := o.Store.GetInstance(t.SourceID)
+	inst = TaskSourceInstance(inst, extra)
 	var last error
 	for _, b := range bindings {
 		name := defaultStr(b.ConnectorName, connector)
@@ -561,6 +564,7 @@ func (o *Orchestrator) applyRemoveTable(ctx context.Context, t *store.CDCTask) e
 	if err != nil || inst == nil {
 		return fmt.Errorf("源端实例不存在")
 	}
+	inst = TaskSourceInstance(inst, parentExtra)
 	schema := defaultStr(parentExtra["source_schema"], defaultStr(extra["source_schema"], "public"))
 	pub, slot, connector, _ := childPipelineNames(extra, parentExtra)
 	bindings := ResolveOrBuildShardBindings(parentExtra, parent.SourceDB, pub, slot, connector)

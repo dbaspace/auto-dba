@@ -87,8 +87,8 @@ func AggregatePipelineStatus(ctx context.Context, st *store.DB, secret string, o
 	var slotInfo *PipelineSlot
 	pgHost, pgPort := "", 0
 	if inst, _ := st.GetInstance(t.SourceID); inst != nil && strings.TrimSpace(t.SourceID) != "" {
-		pgHost = defaultStr(strings.TrimSpace(inst.Host), strings.TrimSpace(inst.DomainName))
-		pgPort = inst.Port
+		inst = TaskSourceInstance(inst, extra)
+		pgHost, pgPort = inst.Host, inst.Port
 		totalTables := 0
 		allExist := true
 		checked := 0

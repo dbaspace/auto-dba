@@ -14,27 +14,48 @@ import (
 	"auto-dba/internal/store"
 )
 
-func mergeInstanceSourceHost(inst *store.Instance, host string, port int) {
+// mergeInstanceSourceHost 只把新域名登记到实例 Domains；实例 Host/Port 由同实例其它库共用，不能被单个任务改写。
+func mergeInstanceSourceHost(inst *store.Instance, host string) bool {
 	if inst == nil {
-		return
+		return false
 	}
 	host = strings.TrimSpace(host)
-	if host == "" {
-		return
-	}
-	inst.Host = host
-	if port > 0 {
-		inst.Port = port
-	}
-	if strings.EqualFold(strings.TrimSpace(inst.DomainName), host) {
-		return
+	if host == "" || strings.EqualFold(strings.TrimSpace(inst.Host), host) || strings.EqualFold(strings.TrimSpace(inst.DomainName), host) {
+		return false
 	}
 	for _, d := range inst.Domains {
 		if strings.EqualFold(strings.TrimSpace(d), host) {
-			return
+			return false
 		}
 	}
 	inst.Domains = append(inst.Domains, host)
+	return true
+}
+
+func cdcEffectiveSourceHost(t *store.CDCTask, inst *store.Instance) string {
+	if t == nil {
+		return ""
+	}
+	host, _ := cdc.EffectiveSourceEndpoint(cdcExtraMap(t.Description), inst)
+	return strings.TrimSpace(host)
+}
+
+// repairSourceSiblings 同实例、修复前生效地址相同的其它运行中初始化任务。
+func repairSourceSiblings(root *store.CDCTask, list []store.CDCTask, inst *store.Instance, beforeHost string) []*store.CDCTask {
+	var out []*store.CDCTask
+	if root == nil || strings.TrimSpace(beforeHost) == "" {
+		return out
+	}
+	for i := range list {
+		if list[i].ID == root.ID || list[i].SourceID != root.SourceID {
+			continue
+		}
+		if !strings.EqualFold(cdcEffectiveSourceHost(&list[i], inst), beforeHost) {
+			continue
+		}
+		out = append(out, &list[i])
+	}
+	return out
 }
 
 func (h *CDCHandler) RepairSource(c *gin.Context) {
@@ -75,10 +96,8 @@ func (h *CDCHandler) RepairSource(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "源端实例不存在"})
 		return
 	}
-	repairOthers := true
-	if req.RepairOthers != nil {
-		repairOthers = *req.RepairOthers
-	}
+	repairOthers := req.RepairOthers != nil && *req.RepairOthers
+	beforeHost := cdcEffectiveSourceHost(root, inst)
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 90*time.Second)
 	defer cancel()
 	probe := *inst
@@ -91,10 +110,20 @@ func (h *CDCHandler) RepairSource(c *gin.Context) {
 	}
 	db.Close()
 
-	mergeInstanceSourceHost(inst, host, req.Port)
-	if err := h.Store.UpdateInstance(inst); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": "更新实例地址失败: " + err.Error()})
-		return
+	var others []store.CDCTask
+	if repairOthers {
+		if others, err = h.Store.ListCDCInTenant(effectiveListTenantID(h.Store, c), store.StatusRunning, "init"); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+			return
+		}
+	}
+	targets := append([]*store.CDCTask{root}, repairSourceSiblings(root, others, inst, beforeHost)...)
+
+	if mergeInstanceSourceHost(inst, host) {
+		if err := h.Store.UpdateInstance(inst); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": "登记实例域名失败: " + err.Error()})
+			return
+		}
 	}
 	if _, err := h.Store.SyncAccessDomainsFromInstance(inst); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "同步访问域名失败: " + err.Error()})
@@ -102,20 +131,6 @@ func (h *CDCHandler) RepairSource(c *gin.Context) {
 	}
 
 	op, ip := cdcRequestActor(c)
-	targets := []*store.CDCTask{root}
-	if repairOthers {
-		list, err := h.Store.ListCDCInTenant(effectiveListTenantID(h.Store, c), store.StatusRunning, "init")
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
-			return
-		}
-		for i := range list {
-			if list[i].ID == root.ID || list[i].SourceID != root.SourceID {
-				continue
-			}
-			targets = append(targets, &list[i])
-		}
-	}
 	var warnings []string
 	for _, task := range targets {
 		if w := h.applySourceEndpoint(ctx, task, host, req.Port, op, ip); w != "" {

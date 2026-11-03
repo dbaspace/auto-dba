@@ -69,7 +69,7 @@ func (h *CDCHandler) SchemaDiff(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "源端实例不存在"})
 		return
 	}
-	pgDB, err := dbmig.OpenInstance(ctx, srcInst, h.Secret, init.SourceDB)
+	pgDB, err := dbmig.OpenInstance(ctx, cdc.TaskSourceInstance(srcInst, extra), h.Secret, init.SourceDB)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "连接源端失败: " + err.Error()})
 		return
