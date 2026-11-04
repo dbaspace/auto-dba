@@ -27,13 +27,13 @@ KeePlus（进程 `auto-dba`）支持多种打包方式。**构建在有 Node 18+
 
 一体包与后端包解压后工作目录须为**包根**（存在 `deploy/node-agent/bin/node-agent`、`deploy/sql-agent/bin/sql-agent` 等），集群部署和 SQL 执行器 SSH 下发无需再本机构建。
 
-可选环境变量：`GOOS` `GOARCH`（默认 `linux`/`amd64`）、`STAMP`（默认时间戳；发版用 `STAMP=v1.12.74`）、`IMAGE_TAG`、`SKIP_PNPM_INSTALL=1`（已有 `node_modules` 时）。
+可选环境变量：`GOOS` `GOARCH`（默认 `linux`/`amd64`）、`STAMP`（默认时间戳；发版用 `STAMP=v1.12.75`）、`IMAGE_TAG`、`SKIP_PNPM_INSTALL=1`（已有 `node_modules` 时）。
 
 ```bash
-STAMP=v1.12.74 ./scripts/pack_release.sh all
-STAMP=v1.12.74 ./scripts/pack_release.sh backend
-STAMP=v1.12.74 ./scripts/pack_release.sh frontend
-IMAGE_TAG=auto-dba:v1.12.74 ./scripts/pack_release.sh docker
+STAMP=v1.12.75 ./scripts/pack_release.sh all
+STAMP=v1.12.75 ./scripts/pack_release.sh backend
+STAMP=v1.12.75 ./scripts/pack_release.sh frontend
+IMAGE_TAG=auto-dba:v1.12.75 ./scripts/pack_release.sh docker
 ```
 
 ## 发布到 GitHub Release（固定流程）
@@ -46,13 +46,13 @@ IMAGE_TAG=auto-dba:v1.12.74 ./scripts/pack_release.sh docker
 # 已 push 的提交 + 写好 docs/changelog-vX.Y.Z.md 后：
 
 # 推荐：打包 + 打 tag + 创建 Release（一体包）
-PACK=1 ./scripts/publish_github_release.sh v1.12.74
+PACK=1 ./scripts/publish_github_release.sh v1.12.75
 
-# 已有 dist/*-v1.12.74.tgz 时只发版
-./scripts/publish_github_release.sh v1.12.74
+# 已有 dist/*-v1.12.75.tgz 时只发版
+./scripts/publish_github_release.sh v1.12.75
 
 # 发版前顺带删若干旧 Release（不删受仓库 Rules 保护的 tag）
-DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12.74
+DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12.75
 ```
 
 前提：本机能 `git push origin HEAD`；已安装 `gh`。若 Keychain 无凭据，先手动 push 一次或导出 `GH_TOKEN=...`。
@@ -61,7 +61,8 @@ DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12
 
 | 版本 | 要点 |
 |------|------|
-| [v1.12.74](changelog-v1.12.74.md) | **当前推荐**。批量加表「可加」展示缺表/占用源库明细 |
+| [v1.12.75](changelog-v1.12.75.md) | **当前推荐**。批量加表对齐 tables、创建 0 明细、meta 合并减负 |
+| [v1.12.74](changelog-v1.12.74.md) | 批量加表「可加」展示缺表/占用源库明细 |
 | [v1.12.73](changelog-v1.12.73.md) | 旧 sql-agent 缺 meta 提示修正；可加标签父任务口径；平台 Agent 后台轮询减负 |
 | [v1.12.72](changelog-v1.12.72.md) | CDC 加表下一步性能；sql-agent `/v1/sql/meta` 就近拉表 |
 | [v1.12.71](changelog-v1.12.71.md) | 划拨后按任务用源实例；加表核对 publication、批量可选表 |

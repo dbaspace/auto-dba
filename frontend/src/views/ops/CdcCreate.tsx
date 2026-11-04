@@ -396,6 +396,11 @@ export default function CdcCreate() {
     })
   }, [form.task_type, form.tables, form.name, selectedParents, syncedByParent])
 
+  const batchPlanAllSkipped =
+    batchAddTablePlan.length > 0 && batchAddTablePlan.every((r) => r.skipped)
+  const batchPlanCreateCount = batchAddTablePlan.filter((r) => !r.skipped).length
+  const batchPlanSkipCount = batchAddTablePlan.length - batchPlanCreateCount
+
   const batchAvailByTable = useMemo(() => {
     const m = new Map<string, BatchAvailableTables['tables'][number]>()
     for (const t of batchAvail?.tables || []) m.set(String(t.name).toLowerCase(), t)
@@ -939,13 +944,30 @@ export default function CdcCreate() {
     }
   }
 
-  function mergeParentRefs(lists: (BatchParentTableRef[] | undefined)[]): BatchParentTableRef[] {
+  function resolveParentRefs(ids: string[] | undefined, legacy?: BatchParentTableRef[]): BatchParentTableRef[] {
+    const m = new Map<string, BatchParentTableRef>()
+    for (const r of legacy || []) {
+      const id = String(r.parent_id || '')
+      if (!id || m.has(id)) continue
+      m.set(id, r)
+    }
+    const parents = batchAvail?.parents || {}
+    for (const id of ids || []) {
+      if (!id || m.has(id)) continue
+      const p = parents[id]
+      m.set(id, { parent_id: id, name: p?.name, source_db: p?.source_db })
+    }
+    return [...m.values()].sort((a, b) =>
+      String(a.source_db || a.name || a.parent_id).localeCompare(String(b.source_db || b.name || b.parent_id)),
+    )
+  }
+
+  function mergeParentRefLists(lists: BatchParentTableRef[][]): BatchParentTableRef[] {
     const m = new Map<string, BatchParentTableRef>()
     for (const list of lists) {
-      for (const r of list || []) {
-        const id = String(r.parent_id || '')
-        if (!id || m.has(id)) continue
-        m.set(id, r)
+      for (const r of list) {
+        if (!r.parent_id || m.has(r.parent_id)) continue
+        m.set(r.parent_id, r)
       }
     }
     return [...m.values()].sort((a, b) =>
@@ -967,20 +989,20 @@ export default function CdcCreate() {
     if (total <= 1 || !batchAvailByTable.size || checked <= 0) return null
     let addable = Number.POSITIVE_INFINITY
     let exists = Number.POSITIVE_INFINITY
-    const missLists: (BatchParentTableRef[] | undefined)[] = []
-    const occLists: (BatchParentTableRef[] | undefined)[] = []
+    const missLists: BatchParentTableRef[][] = []
+    const occLists: BatchParentTableRef[][] = []
     for (const n of names) {
       const row = batchAvailByTable.get(String(n).toLowerCase())
       addable = Math.min(addable, row?.addable ?? 0)
       exists = Math.min(exists, row?.exists ?? 0)
-      missLists.push(row?.missing)
-      occLists.push(row?.occupied)
+      missLists.push(resolveParentRefs(row?.missing_parent_ids, row?.missing))
+      occLists.push(resolveParentRefs(row?.occupied_parent_ids, row?.occupied))
     }
     if (!Number.isFinite(addable)) addable = 0
     if (!Number.isFinite(exists)) exists = 0
     if (addable >= checked) return null
-    const missing = mergeParentRefs(missLists)
-    const occupied = mergeParentRefs(occLists)
+    const missing = mergeParentRefLists(missLists)
+    const occupied = mergeParentRefLists(occLists)
     const showN = 12
     const tip = (
       <div style={{ maxWidth: 360 }}>
@@ -1768,9 +1790,37 @@ export default function CdcCreate() {
         const label = f.task_type === 'alter_schema' ? '加列' : '加表'
         try {
           const { data } = await api.post(path, { ...body, parent_ids: f.parent_ids }, { timeout: 120000 })
+          const created = Number(data.data?.created || 0)
+          const skipped = Number(data.data?.skipped || 0)
+          const failed = Number(data.data?.failed || 0)
+          const items: { parent_name?: string; parent_id?: string; message?: string; skipped?: boolean; ok?: boolean }[] =
+            data.data?.items || []
+          if (created <= 0) {
+            const lines = items
+              .filter((it) => it.skipped || it.ok === false)
+              .map((it) => `${it.parent_name || it.parent_id || '—'}：${it.message || (it.skipped ? '已跳过' : '失败')}`)
+            Modal.warning({
+              title: `未创建任何${label}任务`,
+              width: 560,
+              content: (
+                <div>
+                  <p>
+                    创建 0 条，跳过 {skipped} 个{failed ? `，失败 ${failed} 个` : ''}。请返回选表或检查占用/源库是否有表。
+                  </p>
+                  {lines.length ? (
+                    <ul style={{ paddingLeft: 18, margin: 0, maxHeight: 280, overflow: 'auto' }}>
+                      {lines.slice(0, 16).map((line) => (
+                        <li key={line}>{line}</li>
+                      ))}
+                      {lines.length > 16 ? <li>…等共 {lines.length} 条</li> : null}
+                    </ul>
+                  ) : null}
+                </div>
+              ),
+            })
+            return
+          }
           clearOnSubmitSuccess()
-          const created = data.data?.created || 0
-          const skipped = data.data?.skipped || 0
           message.success(`已提交 ${created} 条${label}任务${skipped ? `，跳过 ${skipped} 个` : ''}`)
           goList({ tab: 'pending' })
           return
@@ -1811,8 +1861,10 @@ export default function CdcCreate() {
                 </div>
               ),
             })
-          } else {
+          } else if (created > 0) {
             message.success(`已提交 ${created} 条${label}任务（batch 404 降级）`)
+          } else {
+            message.warning(`未创建任何${label}任务（batch 404 降级后全部失败）`)
           }
           if (created > 0) goList({ tab: 'pending' })
           return
@@ -1822,6 +1874,9 @@ export default function CdcCreate() {
       clearOnSubmitSuccess()
       message.success('已提交审批，通过后自动执行')
       goList({ tab: 'pending' })
+    } catch (e: any) {
+      if (e?.errorFields) return
+      message.error(e?.response?.data?.message || e?.message || '提交失败')
     } finally {
       setSubmitting(false)
     }
@@ -3015,6 +3070,22 @@ export default function CdcCreate() {
                   message="链路名按各父任务自动使用"
                   description="每个子任务会继承对应父任务的 Publication / Slot / Connector，不会串用代表任务的链路名。"
                 />
+                {batchPlanAllSkipped ? (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    className="mb"
+                    message="所有父任务均无待加表"
+                    description="所选表在各父任务上均已同步或该库不存在，请返回「选择新增表」调整后再提交。"
+                  />
+                ) : batchPlanSkipCount > 0 ? (
+                  <Alert
+                    type="info"
+                    showIcon
+                    className="mb"
+                    message={`将创建 ${batchPlanCreateCount} 个、跳过 ${batchPlanSkipCount} 个父任务`}
+                  />
+                ) : null}
                 <ResponsiveTable
                   size="small"
                   rowKey="parent_id"
@@ -3854,13 +3925,21 @@ export default function CdcCreate() {
           {mode === 'init' && <Button onClick={() => saveDraft()}>保存草稿</Button>}
           {step > 0 && <Button onClick={prev}>上一步</Button>}
           {step < steps.length - 1 ? (
-            <Button type="primary" disabled={nextDisabled} onClick={next}>
+            <Button type="primary" loading={loadingTables} disabled={nextDisabled} onClick={next}>
               下一步
             </Button>
           ) : mode === 'alter_schema' && form.alter_schema_exec_mode === 'sql_only' ? (
             <Button onClick={() => goList()}>返回列表</Button>
           ) : (
-            <Button type="primary" loading={submitting} disabled={!form.reviewer} onClick={submit}>
+            <Button
+              type="primary"
+              loading={submitting}
+              disabled={
+                !form.reviewer ||
+                ((form.task_type === 'add_table' || form.task_type === 'alter_schema') && batchPlanAllSkipped)
+              }
+              onClick={submit}
+            >
               {mode === 'init' ? '确认创建' : '确认提交'}
             </Button>
           )}

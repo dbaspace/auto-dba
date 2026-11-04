@@ -112,6 +112,48 @@ func TestParentTableStateSplitAddTables(t *testing.T) {
 	}
 }
 
+func TestResolveBatchWantTablesPrefersRaw(t *testing.T) {
+	raw := map[string]any{"tables": []any{"a", "b"}}
+	got := resolveBatchWantTables(raw, "")
+	if len(got) != 2 || got[0] != "a" || got[1] != "b" {
+		t.Fatalf("got %v", got)
+	}
+	desc := encodeCDCExtraJSON("", map[string]any{"tables": []string{"x", "y"}})
+	got = resolveBatchWantTables(map[string]any{}, desc)
+	if len(got) != 2 || got[0] != "x" {
+		t.Fatalf("fallback got %v", got)
+	}
+	if len(resolveBatchWantTables(map[string]any{}, "")) != 0 {
+		t.Fatal("empty should stay empty")
+	}
+}
+
+func TestBatchAddSkipMessage(t *testing.T) {
+	if batchAddSkipMessage(nil) != "所选表均已在该任务同步" {
+		t.Fatal("occupied-only message")
+	}
+	if batchAddSkipMessage([]string{"t1"}) != "所选表均已同步或该库不存在" {
+		t.Fatal("missing message")
+	}
+}
+
+func TestCdcMetaRemoteGroupKeyMergesSameHost(t *testing.T) {
+	instA := &store.Instance{ID: "i1", Host: "pg.bill.sea.example", Port: 5432, Username: "u"}
+	instB := &store.Instance{ID: "i2", Host: "pg.bill.sea.example", Port: 5432, Username: "u"}
+	initA := &store.CDCTask{ID: "t1", SourceDB: "db_bill_0"}
+	initB := &store.CDCTask{ID: "t2", SourceDB: "db_bill_1"}
+	k1 := cdcMetaRemoteGroupKey("exec1", initA, instA)
+	k2 := cdcMetaRemoteGroupKey("exec1", initB, instB)
+	if k1 != k2 {
+		t.Fatalf("same host should merge: %q vs %q", k1, k2)
+	}
+	instC := &store.Instance{ID: "i3", Host: "other.example", Port: 5432, Username: "u"}
+	k3 := cdcMetaRemoteGroupKey("exec1", initA, instC)
+	if k1 == k3 {
+		t.Fatal("different host must not merge")
+	}
+}
+
 func TestBuildBatchAvailTableAggsMissingAndOccupied(t *testing.T) {
 	snaps := []batchAvailParentSnap{
 		{
@@ -138,18 +180,18 @@ func TestBuildBatchAvailTableAggsMissingAndOccupied(t *testing.T) {
 	if a == nil || a.Exists != 2 || a.Addable != 1 {
 		t.Fatalf("tbl_a exists=%d addable=%d", a.Exists, a.Addable)
 	}
-	if len(a.Missing) != 1 || a.Missing[0].SourceDB != "db_bill_3" {
-		t.Fatalf("tbl_a missing=%v", a.Missing)
+	if len(a.MissingParentIDs) != 1 || a.MissingParentIDs[0] != "p3" {
+		t.Fatalf("tbl_a missing=%v", a.MissingParentIDs)
 	}
-	if len(a.Occupied) != 1 || a.Occupied[0].ParentID != "p2" {
-		t.Fatalf("tbl_a occupied=%v", a.Occupied)
+	if len(a.OccupiedParentIDs) != 1 || a.OccupiedParentIDs[0] != "p2" {
+		t.Fatalf("tbl_a occupied=%v", a.OccupiedParentIDs)
 	}
 	b := agg["tbl_b"]
 	if b == nil || b.Exists != 1 || b.Addable != 1 {
 		t.Fatalf("tbl_b exists=%d addable=%d", b.Exists, b.Addable)
 	}
-	if len(b.Missing) != 2 {
-		t.Fatalf("tbl_b missing want 2 got %v", b.Missing)
+	if len(b.MissingParentIDs) != 2 {
+		t.Fatalf("tbl_b missing want 2 got %v", b.MissingParentIDs)
 	}
 }
 

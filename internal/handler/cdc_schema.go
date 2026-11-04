@@ -329,6 +329,22 @@ func (h *CDCHandler) BatchAddTablePrecheck(c *gin.Context) {
 	})
 }
 
+// resolveBatchWantTables 与预检一致：优先请求体 tables，再回落 Description。
+func resolveBatchWantTables(raw map[string]any, desc string) []string {
+	want := jsonAnyStringSlice(raw["tables"])
+	if len(want) == 0 {
+		want = extraCSVTables(desc)
+	}
+	return want
+}
+
+func batchAddSkipMessage(missing []string) string {
+	if len(missing) > 0 {
+		return "所选表均已同步或该库不存在"
+	}
+	return "所选表均已在该任务同步"
+}
+
 func (h *CDCHandler) BatchAddTable(c *gin.Context) {
 	var raw map[string]any
 	if err := c.ShouldBindJSON(&raw); err != nil {
@@ -362,7 +378,11 @@ func (h *CDCHandler) BatchAddTable(c *gin.Context) {
 	if base.Name == "" {
 		base.Name = parents[0].Name + "_加表"
 	}
-	newTables := extraCSVTables(base.Description)
+	newTables := resolveBatchWantTables(raw, base.Description)
+	if len(newTables) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "未选择待加表"})
+		return
+	}
 	items := make([]gin.H, 0, len(parents))
 	okN, skipN, failN := 0, 0, 0
 	var shared *store.Issue
@@ -377,10 +397,7 @@ func (h *CDCHandler) BatchAddTable(c *gin.Context) {
 		}
 		if len(kept) == 0 {
 			item["skipped"] = true
-			item["message"] = "所选表均已在该任务同步"
-			if len(missing) > 0 {
-				item["message"] = "所选表均已同步或该库不存在"
-			}
+			item["message"] = batchAddSkipMessage(missing)
 			skipN++
 			items = append(items, item)
 			continue
@@ -548,12 +565,16 @@ func (h *CDCHandler) BatchAlterSchema(c *gin.Context) {
 	if base.Name == "" {
 		base.Name = parents[0].Name + "_加列"
 	}
-	wanted := extraCSVTables(base.Description)
+	wanted := resolveBatchWantTables(raw, base.Description)
 	alterItems := parseAlterSchemaTargets(base.Description)
 	if len(wanted) == 0 {
 		for _, it := range alterItems {
 			wanted = append(wanted, it)
 		}
+	}
+	if len(wanted) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "未选择待加列目标表"})
+		return
 	}
 	items := make([]gin.H, 0, len(parents))
 	okN, skipN, failN := 0, 0, 0

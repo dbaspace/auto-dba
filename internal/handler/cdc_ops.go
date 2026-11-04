@@ -204,14 +204,15 @@ type batchAvailParentSnap struct {
 }
 
 type batchAvailTableAgg struct {
-	Name     string
-	Addable  int
-	Exists   int
-	Missing  []cdcParentTableRef
-	Occupied []cdcParentTableRef
+	Name               string
+	Addable            int
+	Exists             int
+	MissingParentIDs   []string
+	OccupiedParentIDs  []string
 }
 
 // buildBatchAvailTableAggs 两遍聚合：先收集各父 SourceDB 表集合与全局表名，再按表归类有表/可加/缺表/占用。
+// 缺表/占用只记 parent_id，展示字段由响应里的 parents 字典解析，避免包体膨胀。
 func buildBatchAvailTableAggs(snaps []batchAvailParentSnap) (order []string, agg map[string]*batchAvailTableAgg) {
 	agg = map[string]*batchAvailTableAgg{}
 	seen := map[string]struct{}{}
@@ -226,20 +227,21 @@ func buildBatchAvailTableAggs(snaps []batchAvailParentSnap) (order []string, agg
 	}
 	sort.Strings(order)
 	for _, k := range order {
-		agg[k] = &batchAvailTableAgg{Name: k, Missing: []cdcParentTableRef{}, Occupied: []cdcParentTableRef{}}
+		agg[k] = &batchAvailTableAgg{Name: k, MissingParentIDs: []string{}, OccupiedParentIDs: []string{}}
 	}
 	for _, s := range snaps {
+		pid := s.Ref.ParentID
 		for _, k := range order {
 			a := agg[k]
 			if _, ok := s.TableSet[k]; !ok {
-				a.Missing = append(a.Missing, s.Ref)
+				a.MissingParentIDs = append(a.MissingParentIDs, pid)
 				continue
 			}
 			a.Exists++
 			if _, ok := s.AvailSet[k]; ok {
 				a.Addable++
 			} else {
-				a.Occupied = append(a.Occupied, s.Ref)
+				a.OccupiedParentIDs = append(a.OccupiedParentIDs, pid)
 			}
 		}
 	}
@@ -361,13 +363,18 @@ func (h *CDCHandler) AvailableTablesBatch(c *gin.Context) {
 	tables := make([]gin.H, 0, len(order))
 	for _, k := range order {
 		a := agg[k]
-		tables = append(tables, gin.H{
-			"name":     a.Name,
-			"addable":  a.Addable,
-			"exists":   a.Exists,
-			"missing":  a.Missing,
-			"occupied": a.Occupied,
-		})
+		row := gin.H{
+			"name":    a.Name,
+			"addable": a.Addable,
+			"exists":  a.Exists,
+		}
+		if len(a.MissingParentIDs) > 0 {
+			row["missing_parent_ids"] = a.MissingParentIDs
+		}
+		if len(a.OccupiedParentIDs) > 0 {
+			row["occupied_parent_ids"] = a.OccupiedParentIDs
+		}
+		tables = append(tables, row)
 	}
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{
 		"tables":    tables,

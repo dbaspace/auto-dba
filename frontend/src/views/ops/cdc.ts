@@ -1019,19 +1019,22 @@ export type CdcOccupancyEntry = {
   status?: string
 }
 
-/** 批量可选表：某父任务及其 SourceDB 引用（缺表/占用明细） */
+/** 批量可选表：某父任务及其 SourceDB 引用（由 parents 字典解析后用于展示） */
 export type BatchParentTableRef = {
   parent_id: string
   name?: string
   source_db?: string
 }
 
-/** POST /cdc-sync/tasks/batch-add-table/available-tables 返回（瘦身：无全量 exists/occupied，含缺表/占用父侧名单） */
+/** POST /cdc-sync/tasks/batch-add-table/available-tables 返回（瘦身：缺表/占用只回 parent_id 列表） */
 export type BatchAvailableTables = {
   tables: {
     name: string
     addable: number
     exists: number
+    missing_parent_ids?: string[]
+    occupied_parent_ids?: string[]
+    /** @deprecated v1.12.74 对象列表，兼容旧响应 */
     missing?: BatchParentTableRef[]
     occupied?: BatchParentTableRef[]
   }[]

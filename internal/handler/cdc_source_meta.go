@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -151,6 +152,21 @@ func (h *CDCHandler) loadSourceMetaLocal(ctx context.Context, inst *store.Instan
 	return out
 }
 
+// cdcMetaRemoteGroupKey 同执行器 + 同 PG 地址（host/port/user）合并为一次 FetchMeta，避免 64 实例拆成 64 次。
+func cdcMetaRemoteGroupKey(execID string, init *store.CDCTask, inst *store.Instance) string {
+	extra := cdc.ParseTaskExtra(init.Description)
+	src := cdc.TaskSourceInstance(inst, extra)
+	host := strings.TrimSpace(src.Host)
+	if host == "" {
+		host = strings.TrimSpace(src.DomainName)
+	}
+	port := src.Port
+	if port <= 0 {
+		port = 5432
+	}
+	return execID + "|" + strings.ToLower(host) + "|" + strconv.Itoa(port) + "|" + strings.TrimSpace(src.Username)
+}
+
 // loadSourceMetaForParents 按实例 idc 分流：本机 / sql-agent / missing。
 func (h *CDCHandler) loadSourceMetaForParents(ctx context.Context, jobs []cdcMetaJob) []cdcSourceMeta {
 	out := make([]cdcSourceMeta, len(jobs))
@@ -163,7 +179,7 @@ func (h *CDCHandler) loadSourceMetaForParents(ctx context.Context, jobs []cdcMet
 		exec *sqlexec.Executor
 		idxs []int
 	}
-	remote := map[string]*remoteGroup{} // execID|instID
+	remote := map[string]*remoteGroup{} // execID|host|port|user
 	var localIdx []int
 
 	for i, j := range jobs {
@@ -179,7 +195,7 @@ func (h *CDCHandler) loadSourceMetaForParents(ctx context.Context, jobs []cdcMet
 				Tables: []string{}, Live: map[string]struct{}{},
 			}
 		case sqlexec.ModeRemote:
-			key := dec.Executor.ID + "|" + j.Inst.ID
+			key := cdcMetaRemoteGroupKey(dec.Executor.ID, j.Init, j.Inst)
 			g := remote[key]
 			if g == nil {
 				g = &remoteGroup{exec: dec.Executor}
