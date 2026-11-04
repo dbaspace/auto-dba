@@ -230,7 +230,7 @@ func (h *CDCHandler) BatchAddTablePrecheck(c *gin.Context) {
 	okN, skipN, failN := 0, 0, 0
 	resolved := make([]*store.CDCTask, len(ids))
 	for i, id := range ids {
-		if p, _ := h.Store.GetCDCInTenant(id, effectiveListTenantID(h.Store, c)); p != nil && p.TaskType == "init" && p.Status == store.StatusRunning {
+		if p := h.loadVisibleCDCInit(c, id); p != nil && p.TaskType == "init" && p.Status == store.StatusRunning {
 			resolved[i] = p
 		}
 	}
@@ -241,7 +241,7 @@ func (h *CDCHandler) BatchAddTablePrecheck(c *gin.Context) {
 		addCheck := func(code, name, level, status, msg string) {
 			checks = append(checks, gin.H{"code": code, "name": name, "level": level, "status": status, "message": msg})
 		}
-		p, _ := h.Store.GetCDCInTenant(id, effectiveListTenantID(h.Store, c))
+		p := h.loadVisibleCDCInit(c, id)
 		if p == nil || p.TaskType != "init" {
 			addCheck("parent_task", "父任务", "required", "failed", "不是初始化任务")
 			item["ok"] = false
@@ -362,7 +362,7 @@ func (h *CDCHandler) BatchAddTable(c *gin.Context) {
 	}
 	parents := make([]*store.CDCTask, 0, len(ids))
 	for _, id := range ids {
-		p, _ := h.Store.GetCDCInTenant(id, effectiveListTenantID(h.Store, c))
+		p := h.loadVisibleCDCInit(c, id)
 		if p == nil || p.TaskType != "init" {
 			c.JSON(http.StatusBadRequest, gin.H{"message": "parent " + id + " 不是初始化任务"})
 			return
@@ -491,7 +491,7 @@ func (h *CDCHandler) BatchAlterSchemaPrecheck(c *gin.Context) {
 		addCheck := func(code, name, level, status, msg string) {
 			checks = append(checks, gin.H{"code": code, "name": name, "level": level, "status": status, "message": msg})
 		}
-		p, _ := h.Store.GetCDCInTenant(id, effectiveListTenantID(h.Store, c))
+		p := h.loadVisibleCDCInit(c, id)
 		if p == nil || p.TaskType != "init" {
 			addCheck("parent_task", "父任务", "required", "failed", "不是初始化任务")
 			item["ok"] = false
@@ -548,7 +548,7 @@ func (h *CDCHandler) BatchAlterSchema(c *gin.Context) {
 	}
 	parents := make([]*store.CDCTask, 0, len(ids))
 	for _, id := range ids {
-		p, _ := h.Store.GetCDCInTenant(id, effectiveListTenantID(h.Store, c))
+		p := h.loadVisibleCDCInit(c, id)
 		if p == nil || p.TaskType != "init" {
 			c.JSON(http.StatusBadRequest, gin.H{"message": "parent " + id + " 不是初始化任务"})
 			return

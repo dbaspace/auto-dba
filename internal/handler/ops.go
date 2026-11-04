@@ -558,8 +558,6 @@ func (h *CDCHandler) Create(c *gin.Context) {
 
 func (h *CDCHandler) prepareCDCCreate(c *gin.Context, t *store.CDCTask) error {
 	tid := middleware.TenantID(c)
-	// 与列表/BatchAddTable 同范围：平台审计时为空串（全平台可见），避免父任务按 JWT 租户查不到被误报「不是 init」。
-	listTid := effectiveListTenantID(h.Store, c)
 	if t.TaskType == "" {
 		t.TaskType = "init"
 	}
@@ -568,7 +566,7 @@ func (h *CDCHandler) prepareCDCCreate(c *gin.Context, t *store.CDCTask) error {
 		if t.ParentID == "" {
 			return fmt.Errorf("%s 必须指定 parent_id", t.TaskType)
 		}
-		parent, _ := h.Store.GetCDCInTenant(t.ParentID, listTid)
+		parent := h.loadVisibleCDCInit(c, t.ParentID)
 		if parent == nil {
 			return fmt.Errorf("%s 父任务不存在", t.TaskType)
 		}
@@ -607,7 +605,7 @@ func (h *CDCHandler) prepareCDCCreate(c *gin.Context, t *store.CDCTask) error {
 		return fmt.Errorf("name/source_instance_id 必填")
 	}
 	if t.TaskType != "init" && t.ParentID != "" && parentTask == nil {
-		parentTask, _ = h.Store.GetCDCInTenant(t.ParentID, listTid)
+		parentTask = h.loadVisibleCDCInit(c, t.ParentID)
 	}
 	if it, err := resolveTaskInstance(h.Store, c, parentTask, t.SourceID); err != nil || it == nil {
 		return fmt.Errorf("源实例不存在")
@@ -691,18 +689,20 @@ func (h *CDCHandler) createSharedCDCIssue(c *gin.Context, t *store.CDCTask, revi
 	if len(reviewerRaw) > 0 {
 		preferred = strings.TrimSpace(reviewerRaw[0])
 	}
-	// 加表/加列等子任务已继承父任务租户；审批人与工单跟任务租户，不用审计 JWT 租户。
+	// 加表/加列等子任务已继承父任务租户；工单仍挂任务租户。审核人按任务租户、已授权资源归属租户或超级用户解析。
 	issueTid := strings.TrimSpace(t.TenantID)
 	if issueTid == "" {
 		issueTid = middleware.TenantID(c)
 	}
-	reviewer, err := resolveTenantAssignee(h.Store, issueTid, preferred)
+	reviewer, err := h.resolveCDCChildReviewer(t, preferred)
 	if err != nil {
 		return nil, err
 	}
 	th := &TicketHandler{Store: h.Store}
-	if approvers := th.resolveApprovers(t.SourceID, t.SourceDB); len(approvers) > 0 && !usernameInList(reviewer, approvers) {
-		return nil, fmt.Errorf("审核人不在实例/库审批人名单中")
+	if !h.cdcSuperReviewer(reviewer) {
+		if approvers := th.resolveApprovers(t.SourceID, t.SourceDB); len(approvers) > 0 && !usernameInList(reviewer, approvers) {
+			return nil, fmt.Errorf("审核人不在实例/库审批人名单中")
+		}
 	}
 	if t.ID == "" {
 		t.ID = uuid.NewString()

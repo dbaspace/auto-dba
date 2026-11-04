@@ -36,6 +36,18 @@ func (h *CDCHandler) InitList(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
+	if extra := h.cdcInitParentsViaGrant(c); len(extra) > 0 {
+		have := map[string]struct{}{}
+		for i := range list {
+			have[list[i].ID] = struct{}{}
+		}
+		for _, t := range extra {
+			if _, ok := have[t.ID]; ok {
+				continue
+			}
+			list = append(list, t)
+		}
+	}
 	out := make([]gin.H, 0)
 	for _, t := range list {
 		if t.Status != store.StatusRunning && t.Status != store.StatusPaused && t.Status != store.StatusInit {
@@ -204,11 +216,11 @@ type batchAvailParentSnap struct {
 }
 
 type batchAvailTableAgg struct {
-	Name               string
-	Addable            int
-	Exists             int
-	MissingParentIDs   []string
-	OccupiedParentIDs  []string
+	Name              string
+	Addable           int
+	Exists            int
+	MissingParentIDs  []string
+	OccupiedParentIDs []string
 }
 
 // buildBatchAvailTableAggs 两遍聚合：先收集各父 SourceDB 表集合与全局表名，再按表归类有表/可加/缺表/占用。
