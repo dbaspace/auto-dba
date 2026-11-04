@@ -143,10 +143,11 @@ export default function CdcDetail() {
   const [diffReviewer, setDiffReviewer] = useState('')
   const [diffSubmitting, setDiffSubmitting] = useState(false)
   const [defaultReviewers, setDefaultReviewers] = useState<string[]>([])
-  const [sourceDbApprovers, setSourceDbApprovers] = useState<string[]>([])
+  const [approvalIssue, setApprovalIssue] = useState<{ id: string; status: string } | null>(null)
   const [migrateSQL, setMigrateSQL] = useState('')
   const [diffOffset, setDiffOffset] = useState('OFFSET_BEGINNING')
   const [reinitOpen, setReinitOpen] = useState(false)
+  const [parentSourceExtra, setParentSourceExtra] = useState<any>(null)
 
   const pollRef = useRef<number>(0)
   const tabRef = useRef(tab)
@@ -157,26 +158,32 @@ export default function CdcDetail() {
 
   const extra = useMemo(() => decodeCdcExtra(task.description).extra, [task])
   const note = useMemo(() => decodeCdcExtra(task.description).text, [task])
+  // 子任务未落 source_host 时，展示用父任务生效源端（与加表向导一致）
+  const sourceExtra = useMemo(() => {
+    if (extra?.source_host || !parentSourceExtra) return extra
+    return {
+      ...extra,
+      source_host: parentSourceExtra.source_host,
+      source_port: parentSourceExtra.source_port,
+      debezium_config: extra.debezium_config || parentSourceExtra.debezium_config,
+    }
+  }, [extra, parentSourceExtra])
   const pending = task.approval_status === 'pending' || task.status === 'pending'
   const errorStep = pipeline.error_step || extra.error_step || ''
   const sourceScopeLabel = formatSourceScopeLabel(task.source_db, extra.source_db_prefix, extra.source_db_names)
   const source = instances.find((i) => i.id === task.source_instance_id) || task.source_instance
   const target = instances.find((i) => i.id === task.target_instance_id) || task.target_instance
-  const reviewerOptions = useMemo(() => {
-    const set = new Set(defaultReviewers)
-    for (const a of source?.approvers || []) if (a) set.add(a)
-    for (const a of sourceDbApprovers) if (a) set.add(a)
-    return [...set]
-  }, [defaultReviewers, source, sourceDbApprovers])
+  const reviewerOptions = useMemo(() => defaultReviewers, [defaultReviewers])
+  const issueReady = approvalIssue?.status === 'pending' && !!approvalIssue.id
   const isInit = task.task_type === 'init'
   const countView = syncTableCountView(extra)
   const workerURL = connectorWorkerURL(extra, {})
   const createdBy = createdByOf(task, extra)
   const assignedTo = assignedToOf(task, extra)
   const me = currentUsername()
-  const isApprover = pending && task.issue_id && (!assignedTo || sameUser(me, assignedTo))
-  const isCreatorOnly = pending && task.issue_id && sameUser(me, createdBy) && !isApprover
-  const showApprovalBar = pending && task.issue_id && (isApprover || isCreatorOnly || !me)
+  const isApprover = pending && issueReady && (!assignedTo || sameUser(me, assignedTo))
+  const isCreatorOnly = pending && issueReady && sameUser(me, createdBy) && !isApprover
+  const showApprovalBar = pending && issueReady && (isApprover || isCreatorOnly || !me)
   const isDeleteApproval = task.task_type === 'delete_task'
   const tableDriftCount = Number(schemaAlerts?.drift_table_count || 0)
   const schemaHasDrift = schemaAlerts?.state === 'WARN' || schemaAlerts?.state === 'ERROR'
@@ -522,20 +529,26 @@ export default function CdcDetail() {
         .then((res) => setInstances(res.data.data || []))
         .catch(() => {})
       void api
-        .get('/global-args')
+        .get('/cdc-sync/reviewers')
         .then((res) => {
-          const args = res.data.data || []
-          const set = new Set<string>()
-          String(args.find((a: any) => a.key === 'sync_default_approver')?.value || '')
-            .split(/[,，\s]+/)
-            .map((s: string) => s.trim())
-            .filter(Boolean)
-            .forEach((u: string) => set.add(u))
-          setDefaultReviewers([...set])
+          const names = (res.data.data || []).map((s: any) => String(s || '').trim()).filter(Boolean)
+          setDefaultReviewers(names)
         })
-        .catch(() => {})
+        .catch(() => setDefaultReviewers([]))
       void loadPipelineStatus(tid)
       if (t0.task_type === 'init' || t0.parent_id) void loadSchemaAlerts(false)
+      const childExtra = decodeCdcExtra(t0.description).extra
+      if (t0.task_type !== 'init' && t0.parent_id && !childExtra.source_host) {
+        void api
+          .get(`/cdc-sync/tasks/${t0.parent_id}`)
+          .then((res) => {
+            const pe = decodeCdcExtra(res.data?.data?.description).extra
+            setParentSourceExtra(pe || null)
+          })
+          .catch(() => setParentSourceExtra(null))
+      } else {
+        setParentSourceExtra(null)
+      }
     } catch {
       setLoading(false)
     }
@@ -578,28 +591,27 @@ export default function CdcDetail() {
   }, [id])
 
   useEffect(() => {
-    const sid = String(task.source_instance_id || '').trim()
-    const dbName = String(task.source_db || '').trim()
-    if (!sid || !dbName) {
-      setSourceDbApprovers([])
+    if (!pending || !isValidCdcTaskID(task.id)) {
+      setApprovalIssue(null)
       return
     }
     let cancelled = false
-    api
-      .get('/databases', { params: { instance_id: sid } })
-      .then((res) => {
+    void api
+      .post(`/cdc-sync/tasks/${task.id}/resolve-approval-issue`, {}, { silent: true })
+      .then(({ data }) => {
         if (cancelled) return
-        const dbs = res.data.data || []
-        const db = dbs.find((d: any) => d.db_name === dbName || d.name === dbName)
-        setSourceDbApprovers((db?.approvers || []).filter(Boolean))
+        const id = String(data?.data?.issue_id || '')
+        const status = String(data?.data?.issue_status || '')
+        setApprovalIssue({ id, status })
+        if (id && id !== task.issue_id) setTask((prev: any) => ({ ...prev, issue_id: id }))
       })
       .catch(() => {
-        if (!cancelled) setSourceDbApprovers([])
+        if (!cancelled) setApprovalIssue({ id: '', status: '' })
       })
     return () => {
       cancelled = true
     }
-  }, [task.source_instance_id, task.source_db])
+  }, [pending, task.id, task.issue_id])
 
   async function refreshPipeline() {
     const tid = taskID()
@@ -784,7 +796,7 @@ export default function CdcDetail() {
   }
 
   function openRepairSource() {
-    const { host, port } = effectiveSourceEndpoint(extra, source)
+    const { host, port } = effectiveSourceEndpoint(sourceExtra, source)
     setRepairHost(host)
     setRepairPort(port > 0 ? port : 5432)
     setRepairOthers(false)
@@ -820,10 +832,14 @@ export default function CdcDetail() {
   }
 
   async function approveTicket() {
-    if (!task.issue_id) return
+    const issueID = approvalIssue?.status === 'pending' ? approvalIssue.id : ''
+    if (!issueID) {
+      message.warning('关联工单不是待审批')
+      return
+    }
     setApproving(true)
     try {
-      await api.put(`/tickets/${task.issue_id}/approve`, { comment: approveComment || undefined })
+      await api.put(`/tickets/${issueID}/approve`, { comment: approveComment || undefined })
       message.success(isDeleteApproval ? '删除审批已通过，任务已清理' : '已通过审批')
       setApproveOpen(false)
       if (isDeleteApproval) {
@@ -840,14 +856,18 @@ export default function CdcDetail() {
   }
 
   async function rejectTicket() {
-    if (!task.issue_id) return
+    const issueID = approvalIssue?.status === 'pending' ? approvalIssue.id : ''
+    if (!issueID) {
+      message.warning('关联工单不是待审批')
+      return
+    }
     if (!String(rejectComment || '').trim()) {
       message.warning(isCreatorOnly ? '请填写撤回原因' : '请填写驳回意见')
       return
     }
     setApproving(true)
     try {
-      await api.put(`/tickets/${task.issue_id}/reject`, { reason: rejectComment.trim() })
+      await api.put(`/tickets/${issueID}/reject`, { reason: rejectComment.trim() })
       message.success('操作成功')
       setRejectOpen(false)
       backToCdcList({ tab: 'approval_result' })
@@ -1118,14 +1138,17 @@ export default function CdcDetail() {
           description={
             <span>
               审批通过后才会开始编排同步链路。
-              {task.issue_id && (
-                <Button type="link" onClick={() => navigate('/ops/tickets/' + task.issue_id)}>
-                  查看工单 #{task.issue_id}
+              {(approvalIssue?.id || task.issue_id) && (
+                <Button type="link" onClick={() => navigate('/ops/tickets/' + (approvalIssue?.id || task.issue_id))}>
+                  查看工单 #{approvalIssue?.id || task.issue_id}
                 </Button>
               )}
             </span>
           }
         />
+      )}
+      {pending && approvalIssue && !issueReady && (
+        <Alert type="error" showIcon className="cdc-banner" message="关联工单不是待审批" description="工作台中的待审批工单可以审核。此任务没有挂到那张待审批工单。" />
       )}
       {(errorStep || extra.error_message) && task.status !== 'reinitializing' && (
         <Alert
@@ -1245,7 +1268,7 @@ export default function CdcDetail() {
                   label: '源端 PostgreSQL',
                   children: (
                     <div>
-                      <div>{sourceEndpointLabel(source, extra, true)}</div>
+                      <div>{sourceEndpointLabel(source, sourceExtra, true)}</div>
                       {isInit && !pending ? (
                         <Button type="link" size="small" style={{ padding: 0, height: 'auto' }} onClick={openRepairSource}>
                           修复源端
@@ -1282,7 +1305,12 @@ export default function CdcDetail() {
                     </Tag>
                   ),
                 },
-                { label: '快照模式', children: extra.snapshot_mode || 'initial' },
+                {
+                  label: '快照模式',
+                  children:
+                    extra.snapshot_mode ||
+                    (task.task_type === 'add_table' ? 'never' : 'initial'),
+                },
                 { label: '过滤删除事件', children: extra.filter_delete_events !== false ? '开启' : '关闭' },
                 { label: '表模型', children: keyModelLabel(extra.table_model || extra.key_model) },
                 {
@@ -1806,9 +1834,9 @@ export default function CdcDetail() {
         destroyOnClose
       >
         <p>
-          当前生效地址：{sourceEndpointLabel(source, extra, true)}
+          当前生效地址：{sourceEndpointLabel(source, sourceExtra, true)}
         </p>
-        {connectorEndpoint() && connectorEndpoint() !== sourceEndpointLabel(null, extra) ? (
+        {connectorEndpoint() && connectorEndpoint() !== sourceEndpointLabel(null, sourceExtra) ? (
           <p>Connector 上的地址：{connectorEndpoint()}</p>
         ) : null}
         <p style={{ color: '#8c8c8c', fontSize: 12 }}>

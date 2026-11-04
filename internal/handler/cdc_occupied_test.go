@@ -251,6 +251,8 @@ func TestOverlayParentPipelineExtraOverridesWrongChildNames(t *testing.T) {
 		"env":                     "beijing",
 		"source_schema":           "public",
 		"kafka_bootstrap_servers": "kafka:9092",
+		"source_host":             "pg.bill.example",
+		"source_port":             5433,
 	})
 	out := overlayParentPipelineExtra(child, parent)
 	extra := mustParseCDCExtra(out)
@@ -272,10 +274,27 @@ func TestOverlayParentPipelineExtraOverridesWrongChildNames(t *testing.T) {
 	if extra["connector_id"] != "conn-1" {
 		t.Fatalf("connector_id=%v", extra["connector_id"])
 	}
+	if extra["source_host"] != "pg.bill.example" {
+		t.Fatalf("source_host=%v", extra["source_host"])
+	}
+	if fmt.Sprint(extra["source_port"]) != "5433" {
+		t.Fatalf("source_port=%v", extra["source_port"])
+	}
 	// tables 仍保留子任务自身的待加表
 	tables, _ := extra["tables"].([]any)
 	if len(tables) != 1 || tables[0] != "orders" {
 		t.Fatalf("tables=%v", extra["tables"])
+	}
+
+	// 仅有 Debezium hostname 时也写入子任务，不回落到实例 host
+	parentDz := encodeCDCExtraJSON("", map[string]any{
+		"publication_name": "pub_a",
+		"debezium_config":  map[string]any{"database.hostname": "pg.dbz.example", "database.port": "6432"},
+	})
+	outDz := overlayParentPipelineExtra(encodeCDCExtraJSON("", map[string]any{"tables": []string{"t1"}}), parentDz)
+	exDz := mustParseCDCExtra(outDz)
+	if exDz["source_host"] != "pg.dbz.example" {
+		t.Fatalf("dz source_host=%v", exDz["source_host"])
 	}
 }
 

@@ -15,7 +15,6 @@ import {
   parseSourceKey,
   sourceKey,
   sourcePrimaryLabel,
-  sourceSecondaryLabel,
   sourcesFromAccessDomains,
   type AccessDomainRow,
   type DomainSource,
@@ -406,14 +405,10 @@ export default function DclGrants() {
               options={sourceOptions.map((s) => ({
                 value: s.key,
                 label: sourcePrimaryLabel(s),
-                secondary: sourceSecondaryLabel(s),
               }))}
               optionRender={(opt) => (
                 <div className="ds-opt">
                   <span>{(opt.data as any).label}</span>
-                  {(opt.data as any).secondary ? (
-                    <span className="muted">{(opt.data as any).secondary}</span>
-                  ) : null}
                 </div>
               )}
             />

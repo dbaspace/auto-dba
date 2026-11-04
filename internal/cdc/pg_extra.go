@@ -7,16 +7,27 @@ import (
 	"strings"
 )
 
+// replicaIdentityFullStmt 生成 ALTER TABLE … REPLICA IDENTITY FULL（含 schema 限定）。
+func replicaIdentityFullStmt(schema, table string) (stmt, sch, tb string) {
+	sch, tb = SplitSchemaTable(schema, table)
+	if tb == "" {
+		return "", sch, ""
+	}
+	return fmt.Sprintf(`ALTER TABLE %s REPLICA IDENTITY FULL`, quotePGIdent(sch+"."+tb)), sch, tb
+}
+
 func SetReplicaIdentityFull(ctx context.Context, db *sql.DB, schema string, tables []string) error {
+	if len(tables) == 0 {
+		return nil
+	}
 	if db == nil {
 		return fmt.Errorf("db nil")
 	}
 	for _, t := range tables {
-		sch, tb := SplitSchemaTable(schema, t)
+		stmt, sch, tb := replicaIdentityFullStmt(schema, t)
 		if tb == "" {
 			continue
 		}
-		stmt := fmt.Sprintf(`ALTER TABLE %s REPLICA IDENTITY FULL`, quotePGIdent(sch+"."+tb))
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("REPLICA IDENTITY FULL %s.%s: %w", sch, tb, err)
 		}

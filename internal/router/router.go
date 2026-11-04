@@ -596,6 +596,7 @@ func Init(e *gin.Engine, d Deps) {
 	}
 
 	cdc := secured.Group("/cdc-sync")
+	cdc.GET("/reviewers", d.CDC.Reviewers)
 	cdc.GET("/instances", d.CDC.ListInstances)
 	cdc.GET("/instances/:id/databases/:db/tables/:table/columns", d.CDC.TableColumns)
 	cdc.POST("/instances/:id/columns/batch", d.CDC.BatchColumns)
@@ -629,6 +630,7 @@ func Init(e *gin.Engine, d Deps) {
 	cdc.GET("/tasks/:id/add-table/available-tables", d.CDC.AvailableTables)
 	cdc.POST("/tasks/:id/delete", d.CDC.RequestDelete)
 	cdc.GET("/tasks", d.CDC.List)
+	cdc.POST("/tasks/:id/resolve-approval-issue", d.CDC.ResolveApprovalIssue)
 	cdc.GET("/tasks/:id", d.CDC.Get)
 	cdc.GET("/tasks/:id/status", d.CDC.Status)
 	cdc.GET("/tasks/:id/tables", d.CDC.Tables)

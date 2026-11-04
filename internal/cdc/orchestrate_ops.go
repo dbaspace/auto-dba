@@ -62,7 +62,7 @@ func (o *Orchestrator) applyAddTable(ctx context.Context, t *store.CDCTask, from
 			_ = o.Store.UpdateCDCStatus(t.ID, store.StatusFailed, t.ApprovalStatus)
 			return err
 		}
-		o.appendLog(t, "INFO", "pg", "ALTER PUBLICATION ADD 完成")
+		o.appendLog(t, "INFO", "pg", "ALTER PUBLICATION ADD 完成；已对本次加入的表设置 REPLICA IDENTITY FULL")
 	}
 	if fromStep == "" || fromStep == "pg" || fromStep == "kafka" {
 		merged := map[string]string{}
@@ -178,19 +178,26 @@ func (o *Orchestrator) stepAddTablePG(ctx context.Context, t, parent *store.CDCT
 		if len(dbTables) == 0 {
 			return nil
 		}
-		if err := o.ensurePublicationAndSlot(ctx, inst, b.DbName, schema, b.PublicationName, b.SlotName, dbTables, true); err != nil {
+		riTables, err := o.ensurePublicationAndSlot(ctx, inst, b.DbName, schema, b.PublicationName, b.SlotName, dbTables, true)
+		if err != nil {
 			return fmt.Errorf("分库 %s: %w", b.DbName, err)
 		}
 		if err := o.ensureSignalOnDB(ctx, inst, b.DbName, b.PublicationName, signalTable); err != nil {
 			return fmt.Errorf("分库 %s signal: %w", b.DbName, err)
 		}
-		o.appendLog(t, "INFO", "pg", "ADD TABLE db="+b.DbName+" pub="+b.PublicationName)
+		msg := "ADD TABLE db=" + b.DbName + " pub=" + b.PublicationName
+		if len(riTables) > 0 {
+			msg += " REPLICA IDENTITY FULL=" + JoinSample(riTables, 20)
+		} else {
+			msg += "（表已在 publication，跳过）"
+		}
+		o.appendLog(t, "INFO", "pg", msg)
 		return nil
 	})
 }
 
 func (o *Orchestrator) stepExecuteSnapshot(ctx context.Context, t, parent *store.CDCTask, extra, parentExtra map[string]string) error {
-	maps := FilterInitializationMappings(ParseMappingsJSON(extra["mappings"]))
+	maps := SnapshotMappingsForAddTable(t.TaskType, extra)
 	if len(maps) == 0 {
 		o.appendLog(t, "INFO", "debezium", "无 initialization 映射，跳过 execute-snapshot")
 		return nil

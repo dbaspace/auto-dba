@@ -25,6 +25,14 @@ const me: any = (() => {
   }
 })()
 
+function cdcTicketReason(description: any): string {
+  const raw = String(description || '')
+  const mark = '-- auto-dba-cdc:'
+  const i = raw.indexOf(mark)
+  if (i < 0) return raw.trim()
+  return raw.slice(0, i).trim()
+}
+
 function fmtTime(v: any): string {
   if (!v) return '-'
   const d = new Date(v)
@@ -318,8 +326,10 @@ export default function TicketDetail() {
       ]
     }
     const isResourceApply = it.issue_type === 'resource_apply'
+    const reason =
+      it.issue_type === 'cdc_sync' ? cdcTicketReason(it.description) : it.description || resourceApplyExtra?.reason || '-'
     const fields: ApplyField[] = [
-      { key: 'reason', label: '原因', value: it.description || resourceApplyExtra?.reason || '-' },
+      { key: 'reason', label: '原因', value: reason },
     ]
     if (it.issue_type === 'dns_change') {
       const p = payloadRows(it.sql_content || '')

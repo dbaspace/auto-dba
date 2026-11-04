@@ -29,7 +29,7 @@ func TestEffectiveSourceEndpointPriority(t *testing.T) {
 	}
 }
 
-func TestTaskSourceInstanceOnlyOverridesWithTaskHost(t *testing.T) {
+func TestTaskSourceInstanceUsesEffectiveEndpoint(t *testing.T) {
 	inst := &store.Instance{ID: "i1", Host: "pg.member.example", Port: 5432, Username: "u"}
 	got := TaskSourceInstance(inst, map[string]string{"source_host": "pg.bill.example", "source_port": "5433"})
 	if got.Host != "pg.bill.example" || got.Port != 5433 || got.Username != "u" {
@@ -38,9 +38,13 @@ func TestTaskSourceInstanceOnlyOverridesWithTaskHost(t *testing.T) {
 	if inst.Host != "pg.member.example" || inst.Port != 5432 {
 		t.Fatalf("original mutated: %#v", inst)
 	}
-	same := TaskSourceInstance(inst, map[string]string{"debezium_config": `{"database.hostname":"pg.dbz.example"}`})
+	fromDz := TaskSourceInstance(inst, map[string]string{"debezium_config": `{"database.hostname":"pg.dbz.example","database.port":"6432"}`})
+	if fromDz.Host != "pg.dbz.example" || fromDz.Port != 6432 {
+		t.Fatalf("debezium hostname should override, got %s:%d", fromDz.Host, fromDz.Port)
+	}
+	same := TaskSourceInstance(inst, map[string]string{})
 	if same.Host != "pg.member.example" {
-		t.Fatalf("unrepaired task must keep instance host, got %s", same.Host)
+		t.Fatalf("empty extra keeps instance host, got %s", same.Host)
 	}
 	if TaskSourceInstance(nil, nil) != nil {
 		t.Fatal("nil inst")

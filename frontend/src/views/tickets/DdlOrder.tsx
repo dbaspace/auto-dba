@@ -28,7 +28,6 @@ import {
   filterDbsByDomain,
   parseSourceKey,
   sourcePrimaryLabel,
-  sourceSecondaryLabel,
   sourcesFromAccessDomains,
   type AccessDomainRow,
   type DomainSource,
@@ -917,7 +916,6 @@ export default function DdlOrder() {
                   value: s.key,
                   label: sourcePrimaryLabel(s),
                   optlabel: sourcePrimaryLabel(s),
-                  secondary: sourceSecondaryLabel(s),
                 }))}
                 optionRender={(opt) => {
                   const value = String(opt.value ?? '')
@@ -925,9 +923,6 @@ export default function DdlOrder() {
                     <div className="ds-opt">
                       <Checkbox className="ds-opt-check" checked={selectedDsKeys.has(value)} />
                       <span className="ds-opt-main">{(opt.data as any).optlabel}</span>
-                      {(opt.data as any).secondary ? (
-                        <span className="muted">{(opt.data as any).secondary}</span>
-                      ) : null}
                     </div>
                   )
                 }}

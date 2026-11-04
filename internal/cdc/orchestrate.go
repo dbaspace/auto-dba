@@ -523,7 +523,8 @@ func (o *Orchestrator) stepPG(ctx context.Context, t *store.CDCTask, extra map[s
 			o.appendLog(t, "INFO", "pg", "分库 "+b.DbName+" 无映射表，跳过")
 			return nil
 		}
-		if err := o.ensurePublicationAndSlot(ctx, inst, b.DbName, schema, b.PublicationName, b.SlotName, dbTables, false); err != nil {
+		riTables, err := o.ensurePublicationAndSlot(ctx, inst, b.DbName, schema, b.PublicationName, b.SlotName, dbTables, false)
+		if err != nil {
 			return fmt.Errorf("分库 %s: %w", b.DbName, err)
 		}
 		if err := o.ensureSignalOnDB(ctx, inst, b.DbName, b.PublicationName, signalTable); err != nil {
@@ -532,45 +533,57 @@ func (o *Orchestrator) stepPG(ctx context.Context, t *store.CDCTask, extra map[s
 		_ = o.Store.UpsertSlotMeta(&store.SyncSlot{
 			Host: inst.Host, Port: inst.Port, SlotName: b.SlotName, Database: b.DbName, Active: true, Plugin: "pgoutput",
 		})
-		o.appendLog(t, "INFO", "pg", "publication="+b.PublicationName+" slot="+b.SlotName+" db="+b.DbName)
+		msg := "publication=" + b.PublicationName + " slot=" + b.SlotName + " db=" + b.DbName
+		if len(riTables) > 0 {
+			msg += " REPLICA IDENTITY FULL=" + JoinSample(riTables, 20)
+		}
+		o.appendLog(t, "INFO", "pg", msg)
 		return nil
 	})
 }
 
-func (o *Orchestrator) ensurePublicationAndSlot(ctx context.Context, inst *store.Instance, dbName, schema, pub, slot string, tables []string, addOnly bool) error {
+// ensurePublicationAndSlot 创建或补齐 publication/slot，并对本次加入 publication 的表设置 REPLICA IDENTITY FULL。
+// 返回实际执行了 REPLICA IDENTITY FULL 的表名列表。
+func (o *Orchestrator) ensurePublicationAndSlot(ctx context.Context, inst *store.Instance, dbName, schema, pub, slot string, tables []string, addOnly bool) ([]string, error) {
 	db, err := dbmig.OpenInstance(ctx, inst, o.Secret, dbName)
 	if err != nil {
-		return fmt.Errorf("连接源端失败: %w", err)
+		return nil, fmt.Errorf("连接源端失败: %w", err)
 	}
 	defer db.Close()
 	applyPGOrchestrationTimeouts(db)
 	qTables := qualifyPGTables(schema, tables)
 	if len(qTables) == 0 {
-		return fmt.Errorf("未指定同步表")
+		return nil, fmt.Errorf("未指定同步表")
 	}
 	if addOnly {
 		have, herr := ListPublicationTables(ctx, db, pub)
 		if herr != nil {
-			return fmt.Errorf("查询 publication 成员失败: %w", herr)
+			return nil, fmt.Errorf("查询 publication 成员失败: %w", herr)
 		}
 		missing := missingPublicationTables(schema, tables, have)
 		if len(missing) == 0 {
-			return nil
+			return nil, nil
 		}
 		pubSQL := fmt.Sprintf(`ALTER PUBLICATION %s ADD TABLE %s`, quotePGIdent(pub), strings.Join(qualifyPGTables(schema, missing), ", "))
 		if _, err := db.ExecContext(ctx, pubSQL); err != nil {
-			return fmt.Errorf("ALTER PUBLICATION 失败: %w", err)
+			return nil, fmt.Errorf("ALTER PUBLICATION 失败: %w", err)
 		}
-		return nil
+		if err := SetReplicaIdentityFull(ctx, db, schema, missing); err != nil {
+			return nil, err
+		}
+		return missing, nil
 	}
 	pubSQL := fmt.Sprintf(`CREATE PUBLICATION %s FOR TABLE %s`, quotePGIdent(pub), strings.Join(qTables, ", "))
 	if _, err := db.ExecContext(ctx, pubSQL); err != nil && !strings.Contains(strings.ToLower(err.Error()), "already exists") {
-		return fmt.Errorf("创建 publication 失败: %w", err)
+		return nil, fmt.Errorf("创建 publication 失败: %w", err)
+	}
+	if err := SetReplicaIdentityFull(ctx, db, schema, tables); err != nil {
+		return nil, err
 	}
 	if err := createLogicalSlot(ctx, db, slot); err != nil {
-		return err
+		return nil, err
 	}
-	return nil
+	return append([]string(nil), tables...), nil
 }
 
 func (o *Orchestrator) dropPublicationTables(ctx context.Context, inst *store.Instance, dbName, schema, pub string, tables []string) error {

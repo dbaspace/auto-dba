@@ -2,6 +2,7 @@ package handler
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -163,134 +164,145 @@ func cdcTaskCoveredByGrants(db *store.DB, t *store.CDCTask, gs []store.TenantGra
 	return false
 }
 
-func cdcDefaultApproverNames(db *store.DB) []string {
-	if db == nil {
-		return nil
-	}
-	raw, _ := db.GetGlobalArg("sync_default_approver")
-	return splitApproverNames(raw)
-}
+const cdcReviewerDenied = "CDC 审核人须为 admin、全局审核白名单或 dba 租户用户"
 
-func splitApproverNames(raw string) []string {
-	var out []string
-	for _, p := range strings.FieldsFunc(raw, func(r rune) bool {
-		return r == ',' || r == '，' || r == ' ' || r == '\n' || r == '\t'
-	}) {
-		if s := strings.TrimSpace(p); s != "" {
-			out = append(out, s)
-		}
-	}
-	return out
-}
-
-// cdcSuperReviewer 平台管理员、sync_default_approver、dba 租户活跃成员。不要求加入业务租户，也不受实例/库审批人名单拦截。
-func (h *CDCHandler) cdcSuperReviewer(username string) bool {
+// cdcReviewerInPool 平台管理员、issue_global_approver_whitelist、dba 租户活跃成员。不要求加入 CDC 任务租户。
+func (h *CDCHandler) cdcReviewerInPool(username string) bool {
 	username = strings.TrimSpace(username)
 	if username == "" || h == nil || h.Store == nil {
 		return false
 	}
-	if u, _ := h.Store.GetUserByUsername(username); u != nil {
-		if ok, _ := h.Store.UserIsPlatformAdmin(u.ID); ok {
+	u, _ := h.Store.GetUserByUsername(username)
+	if u != nil && u.IsLoginBlocked() {
+		return false
+	}
+	if h.Store.IsGlobalApprover(username) {
+		return true
+	}
+	if u == nil {
+		return false
+	}
+	if ok, _ := h.Store.UserIsPlatformAdmin(u.ID); ok {
+		return true
+	}
+	if t, _ := h.Store.GetTenantByCode(store.DBATenantCode); t != nil {
+		if ok, _ := h.Store.IsActiveTenantMember(t.ID, u.ID); ok {
 			return true
 		}
-		if t, _ := h.Store.GetTenantByCode(store.DBATenantCode); t != nil {
-			if ok, _ := h.Store.IsActiveTenantMember(t.ID, u.ID); ok {
-				return true
-			}
-		}
 	}
-	return usernameInList(username, cdcDefaultApproverNames(h.Store))
+	return false
 }
 
-// resolveCDCChildReviewer 加表/加列审核人：任务租户成员、已授权资源归属租户成员，或超级用户。
+// cdcSuperReviewer 与审核人池相同：不受实例/库审批人名单拦截。
+func (h *CDCHandler) cdcSuperReviewer(username string) bool {
+	return h.cdcReviewerInPool(username)
+}
+
+// listCDCReviewerUsernames 下拉名单：平台管理员、全局审核白名单、dba 租户活跃成员。
+func (h *CDCHandler) listCDCReviewerUsernames() ([]string, error) {
+	if h == nil || h.Store == nil {
+		return nil, nil
+	}
+	var groups [][]string
+	users, err := h.Store.ListUsers()
+	if err != nil {
+		return nil, err
+	}
+	var admins []string
+	for i := range users {
+		u := &users[i]
+		if u.IsLoginBlocked() || strings.TrimSpace(u.Username) == "" {
+			continue
+		}
+		ok, err := h.Store.UserIsPlatformAdmin(u.ID)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			admins = append(admins, u.Username)
+		}
+	}
+	groups = append(groups, admins)
+	raw, err := h.Store.GetGlobalArg(store.ArgIssueGlobalApproverWhitelist)
+	if err != nil {
+		return nil, err
+	}
+	var whitelist []string
+	for _, name := range store.ParseApproverWhitelist(raw) {
+		if h.cdcReviewerInPool(name) {
+			whitelist = append(whitelist, name)
+		}
+	}
+	groups = append(groups, whitelist)
+	tenants, err := h.Store.ListTenants()
+	if err != nil {
+		return nil, err
+	}
+	seenTID := map[string]struct{}{}
+	for i := range tenants {
+		t := &tenants[i]
+		if !isDBATenant(t.ID, t.Code) {
+			continue
+		}
+		if _, ok := seenTID[t.ID]; ok {
+			continue
+		}
+		seenTID[t.ID] = struct{}{}
+		names, err := listTenantMemberUsernames(h.Store, t.ID)
+		if err != nil {
+			return nil, err
+		}
+		var active []string
+		for _, name := range names {
+			if h.cdcReviewerInPool(name) {
+				active = append(active, name)
+			}
+		}
+		groups = append(groups, active)
+	}
+	return store.ExpandApproverNames(flattenNameGroups(groups...)), nil
+}
+
+func flattenNameGroups(groups ...[]string) []string {
+	var out []string
+	for _, g := range groups {
+		out = append(out, g...)
+	}
+	return out
+}
+
+// Reviewers GET /cdc-sync/reviewers — CDC 建单审核人候选。
+func (h *CDCHandler) Reviewers(c *gin.Context) {
+	names, err := h.listCDCReviewerUsernames()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	if names == nil {
+		names = []string{}
+	}
+	c.JSON(http.StatusOK, gin.H{"data": names})
+}
+
+// resolveCDCChildReviewer 只接受审核人池，不接受登记库/实例审批人，也不接受任务租户普通成员。
 func (h *CDCHandler) resolveCDCChildReviewer(t *store.CDCTask, preferred string) (string, error) {
+	_ = t
 	preferred = strings.TrimSpace(preferred)
 	if i := strings.IndexAny(preferred, ",，"); i >= 0 {
 		preferred = strings.TrimSpace(preferred[:i])
 	}
 	if preferred == "" {
-		names := cdcDefaultApproverNames(h.Store)
+		names, err := h.listCDCReviewerUsernames()
+		if err != nil {
+			return "", err
+		}
 		if len(names) == 0 {
-			return "", errCDCReviewerRequired()
+			return "", fmt.Errorf("%s", cdcReviewerDenied)
 		}
 		preferred = names[0]
 	}
-	if h.cdcReviewerAllowed(t, preferred) {
+	if h.cdcReviewerInPool(preferred) {
 		return preferred, nil
 	}
-	return "", errCDCReviewerNotMember(preferred)
-}
-
-func errCDCReviewerRequired() error {
-	return fmt.Errorf("审批人必填，或配置全局参数 sync_default_approver（且须为本租户成员）")
-}
-
-func errCDCReviewerNotMember(name string) error {
-	return fmt.Errorf("用户 %s 不是该租户的活跃成员", name)
-}
-
-func (h *CDCHandler) cdcReviewerAllowed(t *store.CDCTask, username string) bool {
-	username = strings.TrimSpace(username)
-	if username == "" || h == nil || h.Store == nil {
-		return false
-	}
-	if h.cdcSuperReviewer(username) {
-		return true
-	}
-	u, err := h.Store.GetUserByUsername(username)
-	if err != nil || u == nil {
-		return false
-	}
-	taskTid := ""
-	if t != nil {
-		taskTid = strings.TrimSpace(t.TenantID)
-	}
-	if taskTid != "" {
-		if ok, _ := h.Store.IsActiveTenantMember(taskTid, u.ID); ok {
-			return true
-		}
-	}
-	return h.cdcReviewerOwnsGrantedSource(t, u.ID)
-}
-
-// cdcReviewerOwnsGrantedSource 审核人是源库/域名/实例归属租户的活跃成员，且该资源已授权给任务租户。
-func (h *CDCHandler) cdcReviewerOwnsGrantedSource(t *store.CDCTask, userID string) bool {
-	if t == nil || strings.TrimSpace(userID) == "" {
-		return false
-	}
-	taskTid := strings.TrimSpace(t.TenantID)
-	if taskTid == "" {
-		return false
-	}
-	allow := func(ownerTid, resourceType, resourceID string) bool {
-		ownerTid = strings.TrimSpace(ownerTid)
-		if ownerTid == "" || ownerTid == taskTid {
-			return false
-		}
-		ok, err := h.Store.IsActiveTenantMember(ownerTid, userID)
-		if err != nil || !ok {
-			return false
-		}
-		granted, err := h.Store.HasResourceGrant(taskTid, cdcGrantProbeUser, resourceType, resourceID)
-		return err == nil && granted
-	}
-	if db, _ := h.Store.FindDatabase(t.SourceID, t.SourceDB); db != nil && allow(db.TenantID, "database", db.ID) {
-		return true
-	}
-	if inst, _ := h.Store.GetInstance(t.SourceID); inst != nil && allow(inst.TenantID, "instance", inst.ID) {
-		return true
-	}
-	ads, err := h.Store.ListAccessDomains("", "", t.SourceID)
-	if err != nil {
-		return false
-	}
-	for i := range ads {
-		if strings.TrimSpace(ads[i].InstanceID) != strings.TrimSpace(t.SourceID) {
-			continue
-		}
-		if allow(ads[i].TenantID, "domain", ads[i].ID) {
-			return true
-		}
-	}
-	return false
+	return "", fmt.Errorf("%s", cdcReviewerDenied)
 }

@@ -254,7 +254,6 @@ export default function CdcCreate() {
   const [parentTasks, setParentTasks] = useState<any[]>([])
   const [sourceDbs, setSourceDbs] = useState<string[]>([])
   const [tables, setTables] = useState<string[]>([])
-  const [registeredDbs, setRegisteredDbs] = useState<any[]>([])
   const [defaultReviewers, setDefaultReviewers] = useState<string[]>([])
   const [mappings, setMappings] = useState<CdcMapping[]>([])
   const [groupShards, setGroupShards] = useState(true)
@@ -534,13 +533,7 @@ export default function CdcCreate() {
   const selectedConnector = connectors.find((c) => c.id === form.connector_id)
   const connectorKafkaHost = normalizeKafkaBootstrap(selectedConnector?.kafka_host)
 
-  const reviewerOptions = useMemo(() => {
-    const set = new Set(defaultReviewers)
-    for (const a of sourceInst?.approvers || []) if (a) set.add(a)
-    const db = registeredDbs.find((d) => d.db_name === form.source_db)
-    for (const a of db?.approvers || []) if (a) set.add(a)
-    return [...set]
-  }, [defaultReviewers, sourceInst, registeredDbs, form.source_db])
+  const reviewerOptions = useMemo(() => defaultReviewers, [defaultReviewers])
 
   const filteredTables = useMemo(() => {
     const q = tableQ.trim().toLowerCase()
@@ -914,7 +907,6 @@ export default function CdcCreate() {
     const id = instId ?? formRef.current.source_instance_id
     if (!id) {
       setSourceDbs([])
-      setRegisteredDbs([])
       return
     }
     setLoadingDbs(true)
@@ -923,7 +915,6 @@ export default function CdcCreate() {
         api.get(`/instances/${id}/databases`).catch(() => ({ data: { data: [] } })),
         api.get('/databases', { params: { instance_id: id } }).catch(() => ({ data: { data: [] } })),
       ])
-      setRegisteredDbs(reg.data.data || [])
       let dbs = (live.data.data || [])
         .filter((d: any) => !d.system)
         .map((d: any) => d.name || d.db_name)
@@ -938,7 +929,6 @@ export default function CdcCreate() {
       )
     } catch {
       setSourceDbs([])
-      setRegisteredDbs([])
     } finally {
       setLoadingDbs(false)
     }
@@ -1973,13 +1963,14 @@ export default function CdcCreate() {
     const type = String(searchParams.get('type') || 'init')
     resetMode(type)
     void (async () => {
-      const [instRes, connRes, taskRes, argRes] = await Promise.all([
+      const [instRes, connRes, taskRes, argRes, reviewerRes] = await Promise.all([
         api.get('/cdc-sync/instances').catch(() => api.get('/instances')),
         api.get('/connectors').catch(() => ({ data: { data: [] } })),
         api
           .get('/cdc-sync/tasks/init-list')
           .catch(() => api.get('/cdc-sync/tasks', { params: { task_type: 'init' } })),
         api.get('/global-args').catch(() => ({ data: { data: [] } })),
+        api.get('/cdc-sync/reviewers').catch(() => ({ data: { data: [] } })),
       ])
       const loadedInstances = instRes.data.data || []
       instancesReady.current = true
@@ -2000,13 +1991,8 @@ export default function CdcCreate() {
         sr_auto_buckets: infra.sr_auto_buckets,
         sr_replication_num: infra.sr_replication_num,
       })
-      const set = new Set<string>()
-      String(args.find((a: any) => a.key === 'sync_default_approver')?.value || '')
-        .split(/[,，\s]+/)
-        .map((s) => s.trim())
-        .filter(Boolean)
-        .forEach((u) => set.add(u))
-      setDefaultReviewers([...set])
+      const reviewers = (reviewerRes.data?.data || []).map((s: any) => String(s || '').trim()).filter(Boolean)
+      setDefaultReviewers(reviewers)
 
       const preParent = String(searchParams.get('parent_id') || '').trim()
       if (preParent && inits.some((t: any) => t.id === preParent)) {
@@ -3188,7 +3174,15 @@ export default function CdcCreate() {
                   <Descriptions.Item label="Debezium 模式">
                     {form.debezium_mode === 'before_after' ? 'Before + After' : '仅 After（推荐）'}
                   </Descriptions.Item>
-                  <Descriptions.Item label="同步模式">{snapshotLabel(form.snapshot_mode)}</Descriptions.Item>
+                  <Descriptions.Item label="同步模式">
+                    {snapshotLabel(
+                      form.task_type === 'add_table'
+                        ? mappings.some((m) => normalizeSyncTableMode(m.sync_table_mode) === 'initialization')
+                          ? 'initial'
+                          : 'never'
+                        : form.snapshot_mode,
+                    )}
+                  </Descriptions.Item>
                   <Descriptions.Item label="过滤删除事件">
                     {form.filter_delete_events ? '开启' : '关闭'}
                   </Descriptions.Item>

@@ -440,17 +440,16 @@ func (h *CDCHandler) TableColumns(c *gin.Context) {
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
 	defer cancel()
-	sqlDB, err := dbmig.OpenInstance(ctx, inst, h.Secret, dbName)
+	schema := strings.TrimSpace(c.DefaultQuery("schema", "public"))
+	table := c.Param("table")
+	got, err := h.loadCDCColumns(ctx, inst, dbName, schema, []string{table})
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
-	defer sqlDB.Close()
-	schema := strings.TrimSpace(c.DefaultQuery("schema", "public"))
-	cols, err := cdc.ListPGColumns(ctx, sqlDB, schema, c.Param("table"))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
-		return
+	cols := got[table]
+	if cols == nil {
+		cols = []cdc.ColumnInfo{}
 	}
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{"columns": cols}})
 }
@@ -476,15 +475,14 @@ func (h *CDCHandler) BatchColumns(c *gin.Context) {
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 45*time.Second)
 	defer cancel()
-	sqlDB, err := dbmig.OpenInstance(ctx, inst, h.Secret, dbName)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
-		return
-	}
-	defer sqlDB.Close()
 	schema := strings.TrimSpace(req.Schema)
 	if schema == "" {
 		schema = "public"
+	}
+	got, err := h.loadCDCColumns(ctx, inst, dbName, schema, req.Tables)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
 	}
 	tables := map[string][]cdc.ColumnInfo{}
 	for _, name := range req.Tables {
@@ -492,10 +490,9 @@ func (h *CDCHandler) BatchColumns(c *gin.Context) {
 		if name == "" {
 			continue
 		}
-		cols, cerr := cdc.ListPGColumns(ctx, sqlDB, schema, name)
-		if cerr != nil {
-			tables[name] = []cdc.ColumnInfo{}
-			continue
+		cols := got[name]
+		if cols == nil {
+			cols = []cdc.ColumnInfo{}
 		}
 		tables[name] = cols
 	}

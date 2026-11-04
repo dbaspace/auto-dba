@@ -319,6 +319,7 @@ func rewriteCDCTaskTables(desc string, keep []string) string {
 
 // overlayParentPipelineExtra 用父任务链路身份覆盖子任务 description，
 // 避免批量加表时表单里第一个父任务的 publication/slot/connector 串到其它分库子任务。
+// 同时写入父任务生效源端（source_host / Debezium hostname），不把实例默认 host 写进子任务。
 func overlayParentPipelineExtra(childDesc, parentDesc string) string {
 	text, extra := splitCDCDescMap(childDesc)
 	if extra == nil {
@@ -331,6 +332,13 @@ func overlayParentPipelineExtra(childDesc, parentDesc string) string {
 	} {
 		if v := strings.TrimSpace(pe[k]); v != "" {
 			extra[k] = v
+		}
+	}
+	// nil 实例：只取父任务 source_host 或 debezium database.hostname，不回落到实例 host。
+	if host, port := cdc.EffectiveSourceEndpoint(pe, nil); host != "" {
+		extra["source_host"] = host
+		if port > 0 {
+			extra["source_port"] = port
 		}
 	}
 	return encodeCDCExtraJSON(text, extra)

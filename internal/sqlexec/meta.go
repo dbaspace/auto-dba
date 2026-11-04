@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"auto-dba/internal/cdc"
 	"auto-dba/internal/dbmig"
 )
 
@@ -25,13 +26,32 @@ type MetaDB struct {
 	DBName          string `json:"db_name"`
 	Schema          string `json:"schema"`
 	PublicationName string `json:"publication_name"`
+	// ColumnTables 非空时只查这些表的列，不扫全库表名。旧执行器忽略该字段。
+	ColumnTables []string `json:"column_tables,omitempty"`
+}
+
+// MetaColumn 与 cdc.ColumnInfo 对齐，供执行器回传。
+type MetaColumn struct {
+	Name         string `json:"name"`
+	DataType     string `json:"data_type"`
+	IsNullable   *bool  `json:"is_nullable"`
+	IsPrimaryKey bool   `json:"is_primary_key"`
+	Comment      string `json:"comment"`
+}
+
+type MetaTableColumns struct {
+	Table   string       `json:"table"`
+	Columns []MetaColumn `json:"columns"`
 }
 
 type MetaDBResult struct {
-	DBName            string   `json:"db_name"`
-	Tables            []string `json:"tables"`
-	PublicationTables []string `json:"publication_tables"`
-	Error             string   `json:"error,omitempty"`
+	DBName            string             `json:"db_name"`
+	Tables            []string           `json:"tables"`
+	PublicationTables []string           `json:"publication_tables"`
+	ColumnTables      []MetaTableColumns `json:"column_tables,omitempty"`
+	// ColumnsReady 为 true 表示本执行器识别并执行了 column_tables。旧执行器没有该字段。
+	ColumnsReady bool   `json:"columns_ready,omitempty"`
+	Error        string `json:"error,omitempty"`
 }
 
 type MetaResponse struct {
@@ -92,6 +112,20 @@ func RunMeta(ctx context.Context, req MetaRequest) (MetaResponse, error) {
 		if schema == "" {
 			schema = "public"
 		}
+		if len(item.ColumnTables) > 0 {
+			got, cerr := cdc.ListPGColumnsMany(cctx, db, schema, item.ColumnTables)
+			db.Close()
+			cancel()
+			res.ColumnsReady = true
+			if cerr != nil {
+				res.Error = cerr.Error()
+				out.Results = append(out.Results, res)
+				continue
+			}
+			res.ColumnTables = metaColumnsFrom(item.ColumnTables, got)
+			out.Results = append(out.Results, res)
+			continue
+		}
 		tables, terr := listBaseTables(cctx, db, schema)
 		if terr != nil {
 			db.Close()
@@ -117,6 +151,31 @@ func RunMeta(ctx context.Context, req MetaRequest) (MetaResponse, error) {
 		out.Results = append(out.Results, res)
 	}
 	return out, nil
+}
+
+func metaColumnsFrom(keys []string, got map[string][]cdc.ColumnInfo) []MetaTableColumns {
+	out := make([]MetaTableColumns, 0, len(keys))
+	seen := map[string]struct{}{}
+	for _, key := range keys {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		cols := got[key]
+		row := MetaTableColumns{Table: key, Columns: make([]MetaColumn, 0, len(cols))}
+		for _, c := range cols {
+			nullable := c.IsNullable
+			row.Columns = append(row.Columns, MetaColumn{
+				Name: c.Name, DataType: c.DataType, IsNullable: nullable, IsPrimaryKey: c.IsPrimaryKey, Comment: c.Comment,
+			})
+		}
+		out = append(out, row)
+	}
+	return out
 }
 
 func listBaseTables(ctx context.Context, db *sql.DB, schema string) ([]string, error) {

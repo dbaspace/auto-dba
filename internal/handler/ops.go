@@ -87,6 +87,9 @@ func (h *CDCHandler) Get(c *gin.Context) {
 	// 对齐 List：详情 Get 不同步探 Connect；can_reinit 按状态规则。
 	// connector_missing 仍由 reinit preview / candidates 的 AnnotateReinit 负责。
 	t.Description = normalizeCDCDescription(t.Description)
+	if t.ApprovalStatus == store.StatusPending || t.Status == store.StatusPending {
+		h.reconcileCDCApprovalIssue(t)
+	}
 	if ok, _ := cdc.ReinitEligibleStatus(t); ok {
 		t.CanReinit = true
 	}
@@ -689,7 +692,7 @@ func (h *CDCHandler) createSharedCDCIssue(c *gin.Context, t *store.CDCTask, revi
 	if len(reviewerRaw) > 0 {
 		preferred = strings.TrimSpace(reviewerRaw[0])
 	}
-	// 加表/加列等子任务已继承父任务租户；工单仍挂任务租户。审核人按任务租户、已授权资源归属租户或超级用户解析。
+	// 加表/加列等子任务已继承父任务租户；工单仍挂任务租户。审核人只接受 admin、全局审核白名单或 dba 租户用户。
 	issueTid := strings.TrimSpace(t.TenantID)
 	if issueTid == "" {
 		issueTid = middleware.TenantID(c)
@@ -698,22 +701,17 @@ func (h *CDCHandler) createSharedCDCIssue(c *gin.Context, t *store.CDCTask, revi
 	if err != nil {
 		return nil, err
 	}
-	th := &TicketHandler{Store: h.Store}
-	if !h.cdcSuperReviewer(reviewer) {
-		if approvers := th.resolveApprovers(t.SourceID, t.SourceDB); len(approvers) > 0 && !usernameInList(reviewer, approvers) {
-			return nil, fmt.Errorf("审核人不在实例/库审批人名单中")
-		}
-	}
 	if t.ID == "" {
 		t.ID = uuid.NewString()
 	}
+	reason, _ := splitCDCDescMap(t.Description)
 	issue := &store.Issue{
 		IssueType:   store.IssueTypeCDC,
 		Type:        store.IssueTypeCDC,
 		InstanceID:  t.SourceID,
 		DBName:      t.SourceDB,
 		SQLContent:  fmt.Sprintf("cdc_sync %s %s %s", t.TaskType, t.ID, t.Name),
-		Description: t.Description,
+		Description: strings.TrimSpace(reason),
 		Submitter:   middleware.Username(c),
 		AssignedTo:  reviewer,
 		TenantID:    issueTid,
@@ -762,6 +760,9 @@ func (h *CDCHandler) persistCDCTaskShared(c *gin.Context, t *store.CDCTask, shar
 				return nil, err
 			}
 			shared = issue
+		}
+		if shared.Status != "" && shared.Status != store.StatusPending {
+			return nil, fmt.Errorf("CDC 工单未处于待审批")
 		}
 		t.ApprovalStatus = store.StatusPending
 		t.Status = store.StatusPending

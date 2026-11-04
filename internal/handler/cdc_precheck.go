@@ -262,8 +262,10 @@ func (h *CDCHandler) Precheck(c *gin.Context) {
 	if len(maps) == 0 && extra != nil {
 		maps = cdcMappingsFromAny(extra["mappings"])
 	}
-	if initMaps := cdc.FilterInitializationMappings(maps); taskType == "add_table" && len(initMaps) > 0 {
-		add(cdcPrecheckItem{Code: "debezium_signal", Name: "初始化信号表", Level: "required", Status: "passed", Message: fmt.Sprintf("%d 组 initialization 映射将写入 execute-snapshot", len(initMaps))})
+	if snapMaps := cdc.SnapshotMappingsForAddTable(taskType, map[string]string{
+		"mappings": mustJSON(maps), "snapshot_mode": jsonAnyString(raw["snapshot_mode"]),
+	}); taskType == "add_table" && len(snapMaps) > 0 {
+		add(cdcPrecheckItem{Code: "debezium_signal", Name: "初始化信号表", Level: "required", Status: "passed", Message: fmt.Sprintf("%d 组映射将写入 execute-snapshot", len(snapMaps))})
 	}
 
 	dpOn := jsonAnyBool(raw["sr_dynamic_partition_enable"])

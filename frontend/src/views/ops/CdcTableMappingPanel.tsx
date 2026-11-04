@@ -218,12 +218,15 @@ export default function CdcTableMappingPanel({
     setCache((prev) => ({ ...prev, [m.key]: { loading: true, columns: existing?.columns || [], error: '' } }))
     try {
       let cols: MappingColumn[] = []
-      if (m.is_shard_group && m.source_tables.length > 1) {
+      const rep = m.source_tables?.[0]
+      if (force && m.is_shard_group && m.source_tables.length > 1) {
         const map = await fetchBatch(m.source_tables)
         cols = intersectCols(m.source_tables.map((t) => map.get(t) || []).filter((g) => g.length))
-        if (!cols.length && m.source_tables[0]) cols = await fetchOne(m.source_tables[0])
-      } else {
-        cols = await fetchOne(m.source_tables[0])
+        if (!cols.length && rep) cols = await fetchOne(rep)
+      } else if (rep) {
+        const map = await fetchBatch([rep])
+        cols = map.get(rep) || []
+        if (!cols.length) cols = await fetchOne(rep)
       }
       setCache((prev) => ({ ...prev, [m.key]: { loading: false, columns: cols, error: '' } }))
       if (!pkApplied.current.has(m.key) && !(m.key_columns || []).length) {
@@ -345,10 +348,70 @@ export default function CdcTableMappingPanel({
     patch(m.key, { shard_keys: [...set] })
   }
 
-  // 展开时自动加载字段
+  const mappingsRef = useRef(mappings)
+  mappingsRef.current = mappings
+
+  // 勾选变化后防抖一次批量拉代表表字段；分表组默认不拉全部成员
+  useEffect(() => {
+    if (!instanceId || !dbName) return
+    const timer = window.setTimeout(() => {
+      const need = mappingsRef.current.filter((m) => {
+        const hit = cacheRef.current[m.key]
+        if (hit && !hit.error && (hit.columns || []).length) return false
+        return !!m.source_tables?.[0]
+      })
+      if (!need.length) return
+      need.forEach((m) => {
+        setCache((prev) => ({
+          ...prev,
+          [m.key]: { loading: true, columns: prev[m.key]?.columns || [], error: '' },
+        }))
+      })
+      const tables = [...new Set(need.map((m) => m.source_tables[0]))]
+      void fetchBatch(tables)
+        .then((map) => {
+          const cacheUpdate: Record<string, CacheEntry> = {}
+          const pkByKey = new Map<string, string[]>()
+          for (const m of need) {
+            const cols = map.get(m.source_tables[0]) || []
+            cacheUpdate[m.key] = { loading: false, columns: cols, error: '' }
+            if (!pkApplied.current.has(m.key) && !(m.key_columns || []).length) {
+              const pks = cols.filter((c) => c.is_primary_key).map((c) => c.name)
+              if (pks.length) {
+                pkApplied.current.add(m.key)
+                pkByKey.set(m.key, pks)
+              }
+            }
+          }
+          setCache((prev) => ({ ...prev, ...cacheUpdate }))
+          if (pkByKey.size) {
+            onChange(
+              mappingsRef.current.map((m) => {
+                const pks = pkByKey.get(m.key)
+                if (!pks || m.key_columns?.length) return m
+                return { ...m, key_columns: pks }
+              }),
+            )
+          }
+        })
+        .catch((e: any) => {
+          const msg = e?.response?.data?.message || e?.message || '字段加载失败'
+          setCache((prev) => {
+            const next = { ...prev }
+            for (const m of need) next[m.key] = { loading: false, columns: [], error: msg }
+            return next
+          })
+        })
+    }, 300)
+    return () => window.clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instanceId, dbName, schema, mappings.map((m) => `${m.key}:${m.source_tables?.[0] || ''}`).join('|')])
+
+  // 展开时若缓存还没有，只拉代表表
   useEffect(() => {
     mappings.forEach((m) => {
-      if (expanded.has(m.key) && !cacheRef.current[m.key]) void loadColumns(m)
+      const hit = cacheRef.current[m.key]
+      if (expanded.has(m.key) && !hit) void loadColumns(m)
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expanded, mappings.map((m) => m.key).join(',')])

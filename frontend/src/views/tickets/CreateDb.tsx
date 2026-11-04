@@ -9,7 +9,6 @@ import { formatSqlContent } from '../../utils/formatSql'
 import {
   parseSourceKey,
   sourcePrimaryLabel,
-  sourceSecondaryLabel,
   sourcesFromAccessDomains,
   type AccessDomainRow,
   type DomainSource,
@@ -456,9 +455,6 @@ export default function CreateDb() {
                   return (
                     <div className="ds-opt">
                       <span>{s ? sourcePrimaryLabel(s) : opt.label}</span>
-                      {s && sourceSecondaryLabel(s) ? (
-                        <span className="muted">{sourceSecondaryLabel(s)}</span>
-                      ) : null}
                     </div>
                   )
                 }}

@@ -22,7 +22,6 @@ import {
   parseSourceKey,
   sourceKey,
   sourcePrimaryLabel,
-  sourceSecondaryLabel,
   sourcesFromAccessDomains,
   type AccessDomainRow,
   type DomainSource,
@@ -681,12 +680,10 @@ export default function DmlOrder() {
                   value: i.key,
                   label: sourcePrimaryLabel(i),
                   optlabel: sourcePrimaryLabel(i),
-                  secondary: sourceSecondaryLabel(i),
                 }))}
                 optionRender={(opt) => (
                   <div className="ds-opt">
                     <span>{(opt.data as any).optlabel}</span>
-                    <span className="muted">{(opt.data as any).secondary}</span>
                   </div>
                 )}
               />

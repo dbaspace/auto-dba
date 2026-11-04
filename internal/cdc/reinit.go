@@ -700,7 +700,10 @@ func (o *Orchestrator) reinitPGBinding(ctx context.Context, t *store.CDCTask, in
 		if _, err := db.ExecContext(ctx, fmt.Sprintf(`CREATE PUBLICATION %s FOR TABLE %s`, quotePGIdent(p.PublicationName), strings.Join(q, ", "))); err != nil {
 			return fmt.Errorf("创建 publication 失败: %w", err)
 		}
-		o.reinitLog(t, "INFO", fmt.Sprintf("publication %s（%s）已创建", p.PublicationName, p.DbName), op)
+		if err := SetReplicaIdentityFull(ctx, db, schema, p.Tables); err != nil {
+			return err
+		}
+		o.reinitLog(t, "INFO", fmt.Sprintf("publication %s（%s）已创建；REPLICA IDENTITY FULL：%s", p.PublicationName, p.DbName, JoinSample(p.Tables, 20)), op)
 	} else {
 		have, _ := ListPublicationTables(ctx, db, p.PublicationName)
 		if missing := missingPublicationTables(schema, p.Tables, have); len(missing) > 0 {
@@ -708,7 +711,10 @@ func (o *Orchestrator) reinitPGBinding(ctx context.Context, t *store.CDCTask, in
 			if _, err := db.ExecContext(ctx, stmt); err != nil {
 				return fmt.Errorf("publication 补表失败: %w", err)
 			}
-			o.reinitLog(t, "INFO", fmt.Sprintf("publication %s（%s）已补表：%s", p.PublicationName, p.DbName, strings.Join(missing, ",")), op)
+			if err := SetReplicaIdentityFull(ctx, db, schema, missing); err != nil {
+				return err
+			}
+			o.reinitLog(t, "INFO", fmt.Sprintf("publication %s（%s）已补表并设置 REPLICA IDENTITY FULL：%s", p.PublicationName, p.DbName, strings.Join(missing, ",")), op)
 		} else {
 			o.reinitLog(t, "INFO", fmt.Sprintf("publication %s（%s）已存在且表齐全，跳过", p.PublicationName, p.DbName), op)
 		}

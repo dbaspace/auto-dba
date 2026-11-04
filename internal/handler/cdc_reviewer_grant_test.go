@@ -38,10 +38,12 @@ func TestBatchAddTable_GrantReviewers(t *testing.T) {
 
 	prevApproval, _ := db.GetGlobalArg("sync_approval_enabled")
 	prevDefault, _ := db.GetGlobalArg("sync_default_approver")
+	prevWL, _ := db.GetGlobalArg(store.ArgIssueGlobalApproverWhitelist)
 	_ = db.SetGlobalArg("sync_approval_enabled", "true", "test")
 	t.Cleanup(func() {
 		_ = db.SetGlobalArg("sync_approval_enabled", prevApproval, "test")
 		_ = db.SetGlobalArg("sync_default_approver", prevDefault, "test")
+		_ = db.SetGlobalArg(store.ArgIssueGlobalApproverWhitelist, prevWL, "test")
 	})
 
 	suf := strings.ReplaceAll(uuid.NewString()[:8], "-", "")
@@ -179,32 +181,18 @@ func TestBatchAddTable_GrantReviewers(t *testing.T) {
 			t.Fatalf("issue missing: %+v", got)
 		}
 		issue, _ := db.GetIssue(got.IssueID)
-		if issue == nil || issue.AssignedTo != reviewer || issue.TenantID != bigID {
+		if issue == nil || issue.AssignedTo != reviewer || issue.TenantID != bigID || issue.Status != store.StatusPending {
 			t.Fatalf("issue=%+v", issue)
 		}
-	}
-
-	t.Run("admin skips approver list", func(t *testing.T) {
-		code, out := call(thirdID, admin.ID, admin.Username, admin.Username, true, "tbl_admin")
-		assertCreated(t, code, out, admin.Username)
-	})
-	t.Run("order member via grant", func(t *testing.T) {
-		code, out := call(orderID, orderUser.ID, orderUser.Username, orderUser.Username, false, "tbl_order")
-		assertCreated(t, code, out, orderUser.Username)
-	})
-	t.Run("default approver is super", func(t *testing.T) {
-		if err := db.SetGlobalArg("sync_default_approver", defUser.Username, "test"); err != nil {
-			t.Fatal(err)
+		if strings.Contains(issue.Description, "-- auto-dba-cdc:") {
+			t.Fatalf("description has cdc config: %s", issue.Description)
 		}
-		code, out := call(bigID, admin.ID, admin.Username, defUser.Username, true, "tbl_def")
-		assertCreated(t, code, out, defUser.Username)
-	})
-	t.Run("dba tenant member is super", func(t *testing.T) {
-		code, out := call(bigID, admin.ID, admin.Username, dbaUser.Username, true, "tbl_dba")
-		assertCreated(t, code, out, dbaUser.Username)
-	})
-	t.Run("bigdata member still needs approver list", func(t *testing.T) {
-		code, out := call(bigID, bigUser.ID, bigUser.Username, bigUser.Username, false, "tbl_big")
+		if parent.IssueID != "" && got.IssueID == parent.IssueID {
+			t.Fatal("child reused parent issue")
+		}
+	}
+	assertFailed := func(t *testing.T, code int, out map[string]any) {
+		t.Helper()
 		if code != http.StatusOK {
 			t.Fatalf("code=%d out=%v", code, out)
 		}
@@ -215,9 +203,33 @@ func TestBatchAddTable_GrantReviewers(t *testing.T) {
 		items, _ := data["items"].([]any)
 		item, _ := items[0].(map[string]any)
 		msg, _ := item["message"].(string)
-		if !strings.Contains(msg, "审批人名单") {
+		if !strings.Contains(msg, "CDC 审核人须为") {
 			t.Fatalf("message=%s", msg)
 		}
+	}
+
+	t.Run("admin skips approver list", func(t *testing.T) {
+		code, out := call(thirdID, admin.ID, admin.Username, admin.Username, true, "tbl_admin")
+		assertCreated(t, code, out, admin.Username)
+	})
+	t.Run("db approver is not a cdc reviewer", func(t *testing.T) {
+		code, out := call(bigID, admin.ID, admin.Username, orderUser.Username, true, "tbl_order")
+		assertFailed(t, code, out)
+	})
+	t.Run("whitelist user", func(t *testing.T) {
+		if err := db.SetGlobalArg(store.ArgIssueGlobalApproverWhitelist, defUser.Username, "test"); err != nil {
+			t.Fatal(err)
+		}
+		code, out := call(bigID, admin.ID, admin.Username, defUser.Username, true, "tbl_def")
+		assertCreated(t, code, out, defUser.Username)
+	})
+	t.Run("dba tenant member is super", func(t *testing.T) {
+		code, out := call(bigID, admin.ID, admin.Username, dbaUser.Username, true, "tbl_dba")
+		assertCreated(t, code, out, dbaUser.Username)
+	})
+	t.Run("task tenant member is not enough", func(t *testing.T) {
+		code, out := call(bigID, bigUser.ID, bigUser.Username, bigUser.Username, false, "tbl_big")
+		assertFailed(t, code, out)
 	})
 	t.Run("unrelated tenant cannot see parent", func(t *testing.T) {
 		code, out := call(thirdID, thirdUser.ID, thirdUser.Username, thirdUser.Username, false, "tbl_x")

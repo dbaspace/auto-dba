@@ -384,7 +384,13 @@ export function extraPayload(deps: PayloadDeps): Record<string, any> {
     connector_id: form.connector_id,
     message_schema_mode: form.message_schema_mode,
     debezium_mode: form.debezium_mode,
-    snapshot_mode: form.snapshot_mode,
+    // 加表：快照模式跟映射「同步模式」走，避免表单默认 initial 冒充用户选了初始化
+    snapshot_mode:
+      form.task_type === 'add_table'
+        ? mappings.some((m) => normalizeSyncTableMode(m.sync_table_mode) === 'initialization')
+          ? 'initial'
+          : 'never'
+        : form.snapshot_mode,
     filter_delete_events: form.filter_delete_events,
     kafka_bootstrap_servers: normalizeKafkaBootstrap(form.kafka_bootstrap_servers),
     routine_load_parallelism: positiveInt(form.routine_load_parallelism, infraDefaults.routine_load_parallelism),

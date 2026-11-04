@@ -32,21 +32,19 @@ func EffectiveSourceEndpoint(extra map[string]string, inst *store.Instance) (str
 	return host, port
 }
 
-// TaskSourceInstance 返回按任务 source_host/source_port 覆盖 Host/Port 的实例副本，用于 CDC 源端连接；
-// 未修复过源端的任务原样使用实例地址。
+// TaskSourceInstance 返回按任务生效源端地址覆盖 Host/Port 的实例副本，用于 CDC 源端连接。
+// 生效顺序与 EffectiveSourceEndpoint 一致：source_host > Debezium database.hostname > 实例 host。
 func TaskSourceInstance(inst *store.Instance, extra map[string]string) *store.Instance {
 	if inst == nil {
 		return nil
 	}
 	cp := *inst
-	if extra == nil {
-		return &cp
-	}
-	if host := strings.TrimSpace(extra["source_host"]); host != "" {
+	host, port := EffectiveSourceEndpoint(extra, inst)
+	if host != "" {
 		cp.Host = host
-		if port, _ := strconv.Atoi(strings.TrimSpace(extra["source_port"])); port > 0 {
-			cp.Port = port
-		}
+	}
+	if port > 0 {
+		cp.Port = port
 	}
 	return &cp
 }

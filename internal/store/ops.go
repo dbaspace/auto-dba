@@ -142,6 +142,18 @@ func (d *DB) ListCDCByParentID(parentID, taskType string) ([]CDCTask, error) {
 	return out, rows.Err()
 }
 
+func (d *DB) UpdateCDCIssueID(id, issueID string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := d.Exec(`UPDATE tbl_cdc_tasks SET issue_id=?, updated_at=? WHERE id=?`, strings.TrimSpace(issueID), now, id)
+	return err
+}
+
+func (d *DB) UpdateCDCTargetID(id, targetID string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := d.Exec(`UPDATE tbl_cdc_tasks SET target_instance_id=?, updated_at=? WHERE id=?`, strings.TrimSpace(targetID), now, id)
+	return err
+}
+
 func (d *DB) UpdateCDCStatus(id, status, approval string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := d.Exec(`UPDATE tbl_cdc_tasks SET status=?, approval_status=?, updated_at=? WHERE id=?`, status, approval, now, id)

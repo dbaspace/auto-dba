@@ -33,6 +33,33 @@ func FilterInitializationMappings(maps []TableMapping) []TableMapping {
 	return out
 }
 
+// SnapshotMappingsForAddTable 决定加表任务要写入 execute-snapshot 的映射：
+// 优先用 sync_table_mode=initialization；否则在 snapshot_mode 为 initial/空（详情默认显示 initial）时对本任务全部映射写信号；
+// snapshot_mode=never 且无 initialization 映射时跳过。
+func SnapshotMappingsForAddTable(taskType string, extra map[string]string) []TableMapping {
+	if extra == nil {
+		extra = map[string]string{}
+	}
+	maps := ParseMappingsJSON(extra["mappings"])
+	initMaps := FilterInitializationMappings(maps)
+	if len(initMaps) > 0 {
+		return initMaps
+	}
+	if strings.TrimSpace(taskType) != "add_table" {
+		return nil
+	}
+	mode := strings.ToLower(strings.TrimSpace(extra["snapshot_mode"]))
+	if mode == "never" {
+		return nil
+	}
+	switch mode {
+	case "", "initial", SyncTableModeInitialization, "init":
+		return maps
+	default:
+		return nil
+	}
+}
+
 func BuildSnapshotDataCollections(schema string, maps []TableMapping) []string {
 	schema = defaultStr(schema, "public")
 	seen := map[string]struct{}{}

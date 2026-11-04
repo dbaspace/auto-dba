@@ -153,25 +153,21 @@ func ScanSchemaAlerts(ctx context.Context, st *store.DB, secret string, init *st
 	}
 	defer pgDB.Close()
 	schema := defaultStr(extra["source_schema"], "public")
-	var srQuery func(target string) ([]string, error)
-	if strings.TrimSpace(init.TargetID) != "" {
-		if tgt, _ := st.GetInstance(init.TargetID); tgt != nil {
-			if srDB, serr := dbmig.OpenInstance(ctx, tgt, secret, init.TargetDB); serr == nil {
-				defer srDB.Close()
-				srQuery = func(target string) ([]string, error) {
-					return ListSRColumns(ctx, srDB, init.TargetDB, target)
-				}
-			} else {
-				out.State = SchemaAlertError
-				out.Message = serr.Error()
-				return out, nil
-			}
-		}
-	}
-	if srQuery == nil {
+	tgt, terr := ResolveTaskTargetInstance(st, init, extra)
+	if terr != "" {
 		out.State = SchemaAlertError
-		out.Message = "目标端未配置"
+		out.Message = terr
 		return out, nil
+	}
+	srDB, serr := dbmig.OpenInstance(ctx, tgt, secret, init.TargetDB)
+	if serr != nil {
+		out.State = SchemaAlertError
+		out.Message = serr.Error()
+		return out, nil
+	}
+	defer srDB.Close()
+	srQuery := func(target string) ([]string, error) {
+		return ListSRColumns(ctx, srDB, init.TargetDB, target)
 	}
 	items := make([]SchemaAlertItem, 0, len(targets))
 	for _, it := range targets {

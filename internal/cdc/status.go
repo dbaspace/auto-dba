@@ -219,12 +219,17 @@ func AggregatePipelineStatus(ctx context.Context, st *store.DB, secret string, o
 
 	sr := &PipelineStarRocks{State: "SKIPPED", Message: "未配置目标端"}
 	rls := []PipelineRoutineLoad{}
-	if extra["auto_create_table"] == "false" || strings.TrimSpace(t.TargetID) == "" {
+	if extra["auto_create_table"] == "false" {
 		sr.State = "SKIPPED"
 		sr.Message = "手动 DDL 或未配置目标端"
-	} else if inst, _ := st.GetInstance(t.TargetID); inst == nil {
-		sr.State = "UNREACHABLE"
-		sr.Message = "目标实例不存在"
+	} else if inst, terr := ResolveTaskTargetInstance(st, t, extra); terr != "" {
+		if terr == "目标端未配置" {
+			sr.State = "SKIPPED"
+			sr.Message = "手动 DDL 或未配置目标端"
+		} else {
+			sr.State = "UNREACHABLE"
+			sr.Message = terr
+		}
 	} else if db, err := dbmig.OpenInstance(ctx, inst, secret, t.TargetDB); err != nil {
 		sr.State = "UNREACHABLE"
 		sr.Message = err.Error()
