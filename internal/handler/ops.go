@@ -558,22 +558,25 @@ func (h *CDCHandler) Create(c *gin.Context) {
 
 func (h *CDCHandler) prepareCDCCreate(c *gin.Context, t *store.CDCTask) error {
 	tid := middleware.TenantID(c)
+	// 与列表/BatchAddTable 同范围：平台审计时为空串（全平台可见），避免父任务按 JWT 租户查不到被误报「不是 init」。
+	listTid := effectiveListTenantID(h.Store, c)
 	if t.TaskType == "" {
 		t.TaskType = "init"
 	}
+	var parentTask *store.CDCTask
 	if t.TaskType == "add_table" || t.TaskType == "alter_schema" || t.TaskType == "remove_table" || t.TaskType == "delete_task" {
 		if t.ParentID == "" {
 			return fmt.Errorf("%s 必须指定 parent_id", t.TaskType)
 		}
-		parent, _ := h.Store.GetCDCInTenant(t.ParentID, tid)
-		if parent == nil || parent.TaskType != "init" {
+		parent, _ := h.Store.GetCDCInTenant(t.ParentID, listTid)
+		if parent == nil {
+			return fmt.Errorf("%s 父任务不存在", t.TaskType)
+		}
+		if parent.TaskType != "init" {
 			return fmt.Errorf("%s 要求 parent 为初始化任务", t.TaskType)
 		}
 		if t.TaskType == "add_table" && parent.Status != store.StatusRunning {
 			return fmt.Errorf("add_table 要求 parent 为 running 的 init 任务")
-		}
-		if t.TaskType == "delete_task" && parent.TaskType != "init" {
-			return fmt.Errorf("delete_task 要求 parent 为初始化任务")
 		}
 		if t.SourceID == "" {
 			t.SourceID = parent.SourceID
@@ -587,15 +590,24 @@ func (h *CDCHandler) prepareCDCCreate(c *gin.Context, t *store.CDCTask) error {
 		if t.TargetDB == "" {
 			t.TargetDB = parent.TargetDB
 		}
+		// GetCDC 不扫 tenant_id；用行上租户挂子任务，避免审计会话用 JWT 租户盖掉。
+		pt := strings.TrimSpace(parent.TenantID)
+		if pt == "" {
+			pt = h.Store.RowTenantID("tbl_cdc_tasks", parent.ID)
+		}
+		if pt != "" {
+			parent.TenantID = pt
+			t.TenantID = pt
+		}
 		// 批量加表表单会带上第一个父任务的链路名；创建时一律改写为当前父任务的链路身份。
 		t.Description = overlayParentPipelineExtra(t.Description, parent.Description)
+		parentTask = parent
 	}
 	if t.Name == "" || t.SourceID == "" {
 		return fmt.Errorf("name/source_instance_id 必填")
 	}
-	var parentTask *store.CDCTask
-	if t.TaskType != "init" && t.ParentID != "" {
-		parentTask, _ = h.Store.GetCDCInTenant(t.ParentID, tid)
+	if t.TaskType != "init" && t.ParentID != "" && parentTask == nil {
+		parentTask, _ = h.Store.GetCDCInTenant(t.ParentID, listTid)
 	}
 	if it, err := resolveTaskInstance(h.Store, c, parentTask, t.SourceID); err != nil || it == nil {
 		return fmt.Errorf("源实例不存在")
@@ -643,20 +655,17 @@ func (h *CDCHandler) prepareCDCCreate(c *gin.Context, t *store.CDCTask) error {
 	extra := cdc.ParseTaskExtra(t.Description)
 	maps := cdc.ParseMappingsJSON(extra["mappings"])
 	taskDBs := cdc.ResolveShardDBs(extra, t.SourceDB)
-	if t.TaskType != "init" && t.ParentID != "" {
-		if parent, _ := h.Store.GetCDCInTenant(t.ParentID, tid); parent != nil {
-			taskDBs = cdc.ResolveShardDBs(cdc.ParseTaskExtra(parent.Description), parent.SourceDB)
-		}
+	if parentTask != nil {
+		taskDBs = cdc.ResolveShardDBs(cdc.ParseTaskExtra(parentTask.Description), parentTask.SourceDB)
 	}
 	if err := cdc.ValidateMappingShardScopes(maps, taskDBs); err != nil {
 		return err
 	}
-	if t.TaskType == "add_table" && t.ParentID != "" {
-		parent, _ := h.Store.GetCDCInTenant(t.ParentID, tid)
+	if t.TaskType == "add_table" && parentTask != nil {
 		var occupied []string
 		// 批量加表已按父任务并发核对过占用；逐个子任务再连源库会让请求超时
 		if !c.GetBool(ctxCDCAddTablesPrefiltered) {
-			occupied = h.effectiveOccupiedSourceTables(c.Request.Context(), parent)
+			occupied = h.effectiveOccupiedSourceTables(c.Request.Context(), parentTask)
 		}
 		want := extraCSVTables(t.Description)
 		if len(want) == 0 {
@@ -682,7 +691,12 @@ func (h *CDCHandler) createSharedCDCIssue(c *gin.Context, t *store.CDCTask, revi
 	if len(reviewerRaw) > 0 {
 		preferred = strings.TrimSpace(reviewerRaw[0])
 	}
-	reviewer, err := resolveTenantAssignee(h.Store, middleware.TenantID(c), preferred)
+	// 加表/加列等子任务已继承父任务租户；审批人与工单跟任务租户，不用审计 JWT 租户。
+	issueTid := strings.TrimSpace(t.TenantID)
+	if issueTid == "" {
+		issueTid = middleware.TenantID(c)
+	}
+	reviewer, err := resolveTenantAssignee(h.Store, issueTid, preferred)
 	if err != nil {
 		return nil, err
 	}
@@ -702,12 +716,15 @@ func (h *CDCHandler) createSharedCDCIssue(c *gin.Context, t *store.CDCTask, revi
 		Description: t.Description,
 		Submitter:   middleware.Username(c),
 		AssignedTo:  reviewer,
+		TenantID:    issueTid,
 	}
-	stampTenantID(c, func(tid string) {
-		if issue != nil {
-			issue.TenantID = tid
-		}
-	})
+	if issue.TenantID == "" {
+		stampTenantID(c, func(tid string) {
+			if issue != nil {
+				issue.TenantID = tid
+			}
+		})
+	}
 	if err := h.Store.CreateIssue(issue); err != nil {
 		return nil, err
 	}
@@ -757,7 +774,9 @@ func (h *CDCHandler) persistCDCTaskShared(c *gin.Context, t *store.CDCTask, shar
 		t.ApprovalStatus = store.StatusApproved
 		t.Status = store.StatusInit
 	}
-	stampTenantID(c, func(tid string) { t.TenantID = tid })
+	if strings.TrimSpace(t.TenantID) == "" {
+		stampTenantID(c, func(tid string) { t.TenantID = tid })
+	}
 	if err := h.Store.CreateCDC(t); err != nil {
 		return nil, err
 	}
