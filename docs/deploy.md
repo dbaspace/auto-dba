@@ -27,13 +27,13 @@ KeePlus（进程 `auto-dba`）支持多种打包方式。**构建在有 Node 18+
 
 一体包与后端包解压后工作目录须为**包根**（存在 `deploy/node-agent/bin/node-agent`、`deploy/sql-agent/bin/sql-agent` 等），集群部署和 SQL 执行器 SSH 下发无需再本机构建。
 
-可选环境变量：`GOOS` `GOARCH`（默认 `linux`/`amd64`）、`STAMP`（默认时间戳；发版用 `STAMP=v1.12.78`）、`IMAGE_TAG`、`SKIP_PNPM_INSTALL=1`（已有 `node_modules` 时）。
+可选环境变量：`GOOS` `GOARCH`（默认 `linux`/`amd64`）、`STAMP`（默认时间戳；发版用 `STAMP=v1.12.79`）、`IMAGE_TAG`、`SKIP_PNPM_INSTALL=1`（已有 `node_modules` 时）。
 
 ```bash
-STAMP=v1.12.78 ./scripts/pack_release.sh all
-STAMP=v1.12.78 ./scripts/pack_release.sh backend
-STAMP=v1.12.78 ./scripts/pack_release.sh frontend
-IMAGE_TAG=auto-dba:v1.12.78 ./scripts/pack_release.sh docker
+STAMP=v1.12.79 ./scripts/pack_release.sh all
+STAMP=v1.12.79 ./scripts/pack_release.sh backend
+STAMP=v1.12.79 ./scripts/pack_release.sh frontend
+IMAGE_TAG=auto-dba:v1.12.79 ./scripts/pack_release.sh docker
 ```
 
 ## 发布到 GitHub Release（固定流程）
@@ -46,13 +46,13 @@ IMAGE_TAG=auto-dba:v1.12.78 ./scripts/pack_release.sh docker
 # 已 push 的提交 + 写好 docs/changelog-vX.Y.Z.md 后：
 
 # 推荐：打包 + 打 tag + 创建 Release（一体包）
-PACK=1 ./scripts/publish_github_release.sh v1.12.78
+PACK=1 ./scripts/publish_github_release.sh v1.12.79
 
-# 已有 dist/*-v1.12.78.tgz 时只发版
-./scripts/publish_github_release.sh v1.12.78
+# 已有 dist/*-v1.12.79.tgz 时只发版
+./scripts/publish_github_release.sh v1.12.79
 
 # 发版前顺带删若干旧 Release（不删受仓库 Rules 保护的 tag）
-DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12.78
+DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12.79
 ```
 
 前提：本机能 `git push origin HEAD`；已安装 `gh`。若 Keychain 无凭据，先手动 push 一次或导出 `GH_TOKEN=...`。
@@ -61,7 +61,8 @@ DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12
 
 | 版本 | 要点 |
 |------|------|
-| [v1.12.78](changelog-v1.12.78.md) | **当前推荐**。CDC 审核人收窄、加表源端域名/初始化信号/REPLICA IDENTITY、巡检认目标端；工单数据源只显示地址。须重下发 sql-agent |
+| [v1.12.79](changelog-v1.12.79.md) | **当前推荐**。DDL 筛选不再清掉已选数据源；DML 矮屏时提交按钮固定在左侧栏底 |
+| [v1.12.78](changelog-v1.12.78.md) | CDC 审核人收窄、加表源端域名/初始化信号/REPLICA IDENTITY、巡检认目标端；工单数据源只显示地址。须重下发 sql-agent |
 | [v1.12.77](changelog-v1.12.77.md) | 加表审核人支持已授权资源归属租户与超级用户 |
 | [v1.12.76](changelog-v1.12.76.md) | 审计会话加表按列表范围认父任务，子任务继承父租户 |
 | [v1.12.75](changelog-v1.12.75.md) | 批量加表对齐 tables、创建 0 明细、meta 合并减负 |

@@ -885,9 +885,14 @@ export default function DdlOrder() {
                         onChange={(e) => setDsSearch(e.target.value)}
                         onMouseDown={(e) => e.stopPropagation()}
                         onClick={(e) => e.stopPropagation()}
+                        onKeyDown={(e) => e.stopPropagation()}
                       />
                     </div>
-                    <div className="ds-select-match-bar" onMouseDown={(e) => e.preventDefault()}>
+                    <div
+                      className="ds-select-match-bar"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onKeyDown={(e) => e.stopPropagation()}
+                    >
                       <Checkbox
                         checked={matchedAllChecked}
                         indeterminate={matchedIndeterminate}

@@ -34,6 +34,35 @@
   gap: 8px;
   margin: 12px 0;
 }
+.dml-order .order-aside {
+  overflow: hidden;
+}
+@media (max-width: 1100px) {
+  .dml-order .order-aside {
+    height: 38%;
+    min-height: 0;
+  }
+}
+.dml-order .order-aside > form {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.dml-order .ticket-form-scroll {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
+}
+.dml-order .ticket-form-actions {
+  flex-shrink: 0;
+  background: var(--app-content-bg, #fff);
+}
+.dml-order .ticket-form-actions .ant-form-item {
+  margin-bottom: 8px;
+}
+.dml-order .ticket-form-actions .draft-item {
+  margin-bottom: 0;
+}
 .aside-actions {
   margin-bottom: 8px;
   margin-top: 8px;

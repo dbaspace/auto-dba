@@ -345,7 +345,8 @@ html[data-color-mode='dark'] .page-card {
 
 html[data-color-mode='dark'] .order-aside,
 html[data-color-mode='dark'] .order-main,
-html[data-color-mode='dark'] .order-aside .aside-actions {
+html[data-color-mode='dark'] .order-aside .aside-actions,
+html[data-color-mode='dark'] .dml-order .ticket-form-actions {
   background: var(--app-content-bg) !important;
   border-color: var(--app-border) !important;
   color: var(--app-text);

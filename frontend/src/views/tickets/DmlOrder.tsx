@@ -622,13 +622,14 @@ export default function DmlOrder() {
   ]
 
   return (
-    <div className="order-page">
+    <div className="order-page dml-order">
       {ticketFreeze.enabled ? (
         <Alert type="warning" showIcon style={{ marginBottom: 12 }} message={ticketFreeze.message} />
       ) : null}
       <div className="order-split">
         <aside className="order-aside">
           <Form form={antdForm} layout="vertical" initialValues={form} onSubmitCapture={(e) => e.preventDefault()}>
+            <div className="ticket-form-scroll">
             <Form.Item label="环境" name="env" rules={[{ required: true, message: '请选择环境' }]}>
               <Select
                 showSearch
@@ -746,12 +747,14 @@ export default function DmlOrder() {
                 }
               />
             </Form.Item>
+            </div>
 
+            <div className="ticket-form-actions">
             <p className="hint">提交后超过 8 小时未审核完成，系统将自动取消。</p>
             {statementCount > 0 ? (
               <p className="hint">将按 {statementCount} 条语句执行（按分号拆分）</p>
             ) : null}
-            <Form.Item className="aside-actions">
+            <Form.Item>
               <Tooltip
                 title={
                   ticketFreeze.enabled
@@ -775,11 +778,12 @@ export default function DmlOrder() {
                 </span>
               </Tooltip>
             </Form.Item>
-            <Form.Item className="aside-actions draft-item">
+            <Form.Item className="draft-item">
               <Button style={{ width: '100%' }} onClick={() => saveDraft()}>
                 保存草稿
               </Button>
             </Form.Item>
+            </div>
           </Form>
         </aside>
 
