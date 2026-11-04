@@ -202,11 +202,7 @@ export default function DdlOrder() {
   const matchedDataSources = useMemo(() => {
     const q = dsSearch.trim().toLowerCase()
     if (!q) return dataSourceOptions
-    return dataSourceOptions.filter((s) => {
-      const domain = String(s.domain || '').toLowerCase()
-      const name = String(s.name || '').toLowerCase()
-      return domain.includes(q) || name.includes(q)
-    })
+    return dataSourceOptions.filter((s) => String(s.domain || '').toLowerCase().includes(q))
   }, [dataSourceOptions, dsSearch])
 
   const selectedDsKeys = useMemo(() => new Set(form.data_source_ids || []), [form.data_source_ids])
@@ -881,7 +877,7 @@ export default function DdlOrder() {
                         ref={dsFilterInputRef}
                         allowClear
                         value={dsSearch}
-                        placeholder="输入关键字过滤域名或实例名"
+                        placeholder="输入关键字过滤域名"
                         onChange={(e) => setDsSearch(e.target.value)}
                         onMouseDown={(e) => e.stopPropagation()}
                         onClick={(e) => e.stopPropagation()}
