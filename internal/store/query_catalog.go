@@ -2,6 +2,7 @@ package store
 
 import (
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -51,48 +52,77 @@ func (d *DB) ListQueryCatalog(tenantID, userID, username, jwtRole string) ([]Que
 	if tenantID == "" {
 		return []QueryCatalogDB{}, []QueryCatalogInstance{}, nil
 	}
-	owned, err := d.listCatalogRows(` FROM tbl_databases d
-		JOIN tbl_instances i ON i.id = d.instance_id
-		WHERE COALESCE(d.tenant_id,'')=?`+catalogEngineSQL, tenantID)
-	if err != nil {
-		return nil, nil, err
-	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	grantArgs := []any{tenantID, userID, now}
-	dbGrants, err := d.listCatalogRows(` FROM tbl_tenant_grants g
+	var owned, dbGrants, instGrants, domainGrants, viaDomain []catalogRow
+	var viewer Viewer
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var firstErr error
+	run := func(fn func() error) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := fn(); err != nil {
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = err
+				}
+				mu.Unlock()
+			}
+		}()
+	}
+	run(func() error {
+		rows, err := d.listCatalogRows(` FROM tbl_databases d
+		JOIN tbl_instances i ON i.id = d.instance_id
+		WHERE d.tenant_id=?`+catalogEngineSQL, tenantID)
+		owned = rows
+		return err
+	})
+	run(func() error {
+		rows, err := d.listCatalogRows(` FROM tbl_tenant_grants g
 		JOIN tbl_databases d ON d.id = g.resource_id AND COALESCE(d.tenant_id,'') = g.from_tenant_id
 		JOIN tbl_instances i ON i.id = d.instance_id
-		WHERE g.resource_type='database' AND (g.to_tenant_id=? OR g.to_user_id=?)`+catalogGrantAliveSQL+catalogEngineSQL, grantArgs...)
-	if err != nil {
-		return nil, nil, err
-	}
-	instGrants, err := d.listCatalogRows(` FROM tbl_tenant_grants g
+		WHERE g.resource_type='database' AND (g.to_tenant_id=? OR g.to_user_id=?)`+catalogGrantAliveSQL+catalogEngineSQL, tenantID, userID, now)
+		dbGrants = rows
+		return err
+	})
+	run(func() error {
+		rows, err := d.listCatalogRows(` FROM tbl_tenant_grants g
 		JOIN tbl_instances i ON i.id = g.resource_id AND COALESCE(i.tenant_id,'') = g.from_tenant_id
 		JOIN tbl_databases d ON d.instance_id = i.id AND COALESCE(d.tenant_id,'') = g.from_tenant_id
 		WHERE g.resource_type='instance' AND (g.to_tenant_id=? OR g.to_user_id=?)
 		  AND g.from_tenant_id <> ?`+catalogGrantAliveSQL+catalogEngineSQL, tenantID, userID, tenantID, now)
-	if err != nil {
-		return nil, nil, err
-	}
-	domainGrants, err := d.listCatalogRows(` FROM tbl_tenant_grants g
+		instGrants = rows
+		return err
+	})
+	run(func() error {
+		rows, err := d.listCatalogRows(` FROM tbl_tenant_grants g
 		JOIN tbl_access_domains ad ON ad.id = g.resource_id AND COALESCE(ad.tenant_id,'') = g.from_tenant_id
 		JOIN tbl_instances i ON i.id = ad.instance_id
 		JOIN tbl_databases d ON d.instance_id = ad.instance_id AND COALESCE(d.tenant_id,'') = g.from_tenant_id
 		WHERE g.resource_type='domain' AND (g.to_tenant_id=? OR g.to_user_id=?)
 		  AND g.from_tenant_id <> ?`+catalogGrantAliveSQL+catalogEngineSQL, tenantID, userID, tenantID, now)
-	if err != nil {
-		return nil, nil, err
-	}
-	viaDomain, err := d.listCatalogRows(` FROM tbl_access_domains ad
+		domainGrants = rows
+		return err
+	})
+	run(func() error {
+		rows, err := d.listCatalogRows(` FROM tbl_access_domains ad
 		JOIN tbl_instances i ON i.id = ad.instance_id
 		JOIN tbl_databases d ON d.instance_id = ad.instance_id
 		WHERE COALESCE(ad.tenant_id,'')=?
 		  AND COALESCE(d.tenant_id,'') <> ''
 		  AND COALESCE(d.tenant_id,'') <> ?`+catalogEngineSQL, tenantID, tenantID)
-	if err != nil {
-		return nil, nil, err
+		viaDomain = rows
+		return err
+	})
+	run(func() error {
+		viewer = d.ViewerOfInTenant(username, jwtRole, tenantID)
+		return nil
+	})
+	wg.Wait()
+	if firstErr != nil {
+		return nil, nil, firstErr
 	}
-	viewer := d.ViewerOfInTenant(username, jwtRole, tenantID)
 	dbs, insts := mergeQueryCatalog(owned, viewer, dbGrants, instGrants, domainGrants, viaDomain)
 	return dbs, insts, nil
 }

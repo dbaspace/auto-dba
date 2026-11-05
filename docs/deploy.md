@@ -27,13 +27,13 @@ KeePlus（进程 `auto-dba`）支持多种打包方式。**构建在有 Node 18+
 
 一体包与后端包解压后工作目录须为**包根**（存在 `deploy/node-agent/bin/node-agent`、`deploy/sql-agent/bin/sql-agent` 等），集群部署和 SQL 执行器 SSH 下发无需再本机构建。
 
-可选环境变量：`GOOS` `GOARCH`（默认 `linux`/`amd64`）、`STAMP`（默认时间戳；发版用 `STAMP=v1.12.84`）、`IMAGE_TAG`、`SKIP_PNPM_INSTALL=1`（已有 `node_modules` 时）。
+可选环境变量：`GOOS` `GOARCH`（默认 `linux`/`amd64`）、`STAMP`（默认时间戳；发版用 `STAMP=v1.12.85`）、`IMAGE_TAG`、`SKIP_PNPM_INSTALL=1`（已有 `node_modules` 时）。
 
 ```bash
-STAMP=v1.12.84 ./scripts/pack_release.sh all
-STAMP=v1.12.84 ./scripts/pack_release.sh backend
-STAMP=v1.12.84 ./scripts/pack_release.sh frontend
-IMAGE_TAG=auto-dba:v1.12.84 ./scripts/pack_release.sh docker
+STAMP=v1.12.85 ./scripts/pack_release.sh all
+STAMP=v1.12.85 ./scripts/pack_release.sh backend
+STAMP=v1.12.85 ./scripts/pack_release.sh frontend
+IMAGE_TAG=auto-dba:v1.12.85 ./scripts/pack_release.sh docker
 ```
 
 ## 发布到 GitHub Release（固定流程）
@@ -46,13 +46,13 @@ IMAGE_TAG=auto-dba:v1.12.84 ./scripts/pack_release.sh docker
 # 已 push 的提交 + 写好 docs/changelog-vX.Y.Z.md 后：
 
 # 推荐：打包 + 打 tag + 创建 Release（一体包）
-PACK=1 ./scripts/publish_github_release.sh v1.12.84
+PACK=1 ./scripts/publish_github_release.sh v1.12.85
 
-# 已有 dist/*-v1.12.84.tgz 时只发版
-./scripts/publish_github_release.sh v1.12.84
+# 已有 dist/*-v1.12.85.tgz 时只发版
+./scripts/publish_github_release.sh v1.12.85
 
 # 发版前顺带删若干旧 Release（不删受仓库 Rules 保护的 tag）
-DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12.84
+DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12.85
 ```
 
 前提：本机能 `git push origin HEAD`；已安装 `gh`。若 Keychain 无凭据，先手动 push 一次或导出 `GH_TOKEN=...`。
@@ -61,7 +61,8 @@ DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12
 
 | 版本 | 要点 |
 |------|------|
-| [v1.12.84](changelog-v1.12.84.md) | **当前推荐**。登录日志内网地址优先用本机上报，没有上报时回退请求里的内网地址 |
+| [v1.12.85](changelog-v1.12.85.md) | **当前推荐**。查询页铺满屏幕，同名结果列分开显示，库目录预取并建租户索引 |
+| [v1.12.84](changelog-v1.12.84.md) | 登录日志内网地址优先用本机上报，没有上报时回退请求里的内网地址 |
 | [v1.12.83](changelog-v1.12.83.md) | 登录日志分开记录公网地址和内网地址 |
 | [v1.12.82](changelog-v1.12.82.md) | 查询运行按本次选区、搜索框不再被清掉、打开收藏后再运行有反馈 |
 | [v1.12.81](changelog-v1.12.81.md) | 查询收藏与选中执行、云账号多地域、CDC 分库初始化 |

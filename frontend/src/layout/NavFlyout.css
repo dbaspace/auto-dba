@@ -376,6 +376,12 @@ html[data-color-mode='dark'] .app-sider-top-item:hover {
   pointer-events: auto;
 }
 
+/* 数据库查询铺满页签，外层不滚动，避免库页签被顶部页签盖住 */
+.app-tab-panel:has(.query-page) {
+  padding: 0;
+  overflow: hidden;
+}
+
 /* 海豚管理全幅嵌入：去掉 Tab 内边距，避免环境浮层相对灰边偏高 */
 .app-tab-panel:has(.dolphin-ops-page) {
   padding: 0 !important;

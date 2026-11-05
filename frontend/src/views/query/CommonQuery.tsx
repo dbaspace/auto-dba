@@ -42,7 +42,7 @@ import {
 import axios from 'axios'
 import api from '../../api/request'
 import { useAppSelector } from '../../store'
-import { readQueryTreeCache, writeQueryTreeCache } from './queryTreeCache'
+import { prefetchQueryCatalog, readQueryTreeCache, refreshQueryCatalog } from './queryTreeCache'
 import DbTypeIcon from '../../components/DbTypeIcon'
 import SqlEditor from '../../components/SqlEditor'
 import { formatSqlContent } from '../../utils/formatSql'
@@ -156,6 +156,10 @@ function cellText(v: any): string {
   if (v === null || v === undefined) return 'NULL'
   if (typeof v === 'object') return JSON.stringify(v)
   return String(v)
+}
+
+function resultCellKey(index: number) {
+  return `c${index}`
 }
 
 function fmtTime(ts: any): string {
@@ -740,8 +744,8 @@ export default function CommonQuery() {
     if (!res) return []
     return (res.rows || []).map((row, ri) => {
       const obj: Record<string, any> = { __k: ri }
-      ;(res.columns || []).forEach((c, i) => {
-        obj[c] = cellText(row[i])
+      ;(res.columns || []).forEach((_, i) => {
+        obj[resultCellKey(i)] = cellText(row[i])
       })
       return obj
     })
@@ -1520,36 +1524,25 @@ export default function CommonQuery() {
   }
 
   const loadTree = useCallback(async () => {
-    setCatalogReady(false)
     const hit = readQueryTreeCache(tenantId)
     if (hit) {
       setDatabases(hit.databases)
       setInstances(hit.instances)
       setEnvOptions(hit.envOptions)
       setCatalogReady(true)
-      return
+    } else {
+      setCatalogReady(false)
+      setTreeLoading(true)
     }
-    setTreeLoading(true)
     try {
-      const { data } = await api.get('/query/catalog')
-      const payload = data.data || {}
-      const instList: any[] = payload.instances || []
-      const instById: Record<string, any> = {}
-      for (const i of instList) instById[i.id] = i
-      const dbs = (payload.databases || []).filter((db: any) => {
-        const t = normalizeType(instById[db.instance_id]?.db_type)
-        return t !== 'kafka' && t !== 'redis'
-      })
-      const envSet = new Set<string>()
-      for (const db of dbs) {
-        const env = resolveDbEnv(db, instById[db.instance_id])
-        if (env) envSet.add(env)
+      const entry = hit
+        ? await refreshQueryCatalog(tenantId)
+        : await prefetchQueryCatalog(tenantId)
+      if (entry) {
+        setDatabases(entry.databases)
+        setInstances(entry.instances)
+        setEnvOptions(entry.envOptions)
       }
-      const envOptions = [...envSet].sort(cmpName)
-      setDatabases(dbs)
-      setInstances(instList)
-      setEnvOptions(envOptions)
-      writeQueryTreeCache({ tenantId, databases: dbs, instances: instList, envOptions })
     } finally {
       setTreeLoading(false)
       setCatalogReady(true)
@@ -2050,10 +2043,10 @@ export default function CommonQuery() {
                               return <span className="result-rowno">{start + index + 1}</span>
                             },
                           },
-                          ...(activeResult.columns || []).map((col) => ({
+                          ...(activeResult.columns || []).map((col, i) => ({
                             title: col,
-                            dataIndex: col,
-                            key: col,
+                            dataIndex: resultCellKey(i),
+                            key: resultCellKey(i),
                             width: 120,
                             ellipsis: true,
                           })),

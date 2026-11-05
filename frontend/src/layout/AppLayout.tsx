@@ -30,6 +30,7 @@ import AppearancePopover from './AppearancePopover'
 import { TabPagePanel } from '../router/appPages'
 import { shouldRemountOnTabActivate } from '../hooks/useReloadOnTabActive'
 import { readSiderCollapsed, writeSiderCollapsed } from '../theme/appearance'
+import { prefetchQueryCatalog } from '../views/query/queryTreeCache'
 import './NavFlyout.css'
 
 /** 列表/详情：非 active 懒挂载（切回即重挂载刷新）；查询/表单：首次激活后后台保活 */
@@ -110,6 +111,11 @@ export default function AppLayout() {
     (activeTab?.path || location.pathname) === '/ops/nacos'
 
   useIdleLogout(user?.login_idle_timeout_min as number | undefined)
+
+  useEffect(() => {
+    if (!tenantId) return
+    void prefetchQueryCatalog(tenantId)
+  }, [tenantId])
 
   const path = location.pathname
   const search = location.search || ''

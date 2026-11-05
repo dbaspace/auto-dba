@@ -409,6 +409,9 @@ func (d *DB) ensureDatabaseMetaColumns() error {
 			}
 		}
 	}
+	if _, err := d.db.Exec(`CREATE INDEX IF NOT EXISTS idx_databases_tenant ON tbl_databases(tenant_id)`); err != nil {
+		return err
+	}
 	return d.ensureConnectorsTable()
 }
 
