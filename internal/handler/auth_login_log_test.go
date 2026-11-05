@@ -89,19 +89,55 @@ func TestReportedPublicIPOverridesLAN(t *testing.T) {
 
 	ip, lan := loginLogAddrs(newCtx("10.10.102.163", "1.2.3.4"))
 	if ip != "1.2.3.4" || lan != "10.10.102.163" {
-		t.Fatalf("reported public got ip=%q lan=%q", ip, lan)
+		t.Fatalf("reported public keeps request lan got ip=%q lan=%q", ip, lan)
 	}
 	ip, lan = loginLogAddrs(newCtx("10.10.102.163", "10.1.1.1"))
 	if ip != "" || lan != "10.10.102.163" {
-		t.Fatalf("reported lan ignored got ip=%q lan=%q", ip, lan)
+		t.Fatalf("private public report ignored got ip=%q lan=%q", ip, lan)
 	}
 	ip, lan = loginLogAddrs(newCtx("61.49.49.50", "203.0.113.8"))
 	if ip != "203.0.113.8" || lan != "" {
 		t.Fatalf("reported overrides gateway got ip=%q lan=%q", ip, lan)
 	}
-	ip, lan = loginLogAddrs(newCtx("10.1.2.3, 61.49.49.50", ""))
-	if ip != "61.49.49.50" || lan != "10.1.2.3" {
-		t.Fatalf("no report keeps request public got ip=%q lan=%q", ip, lan)
+	ip, lan = loginLogAddrs(newCtx("10.110.16.33, 61.49.49.50", ""))
+	if ip != "61.49.49.50" || lan != "10.110.16.33" {
+		t.Fatalf("no report keeps request lan got ip=%q lan=%q", ip, lan)
+	}
+}
+
+func TestReportedLanIPOverridesProxy(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	newCtx := func(xff, reportedLan string) *gin.Context {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		req := httptest.NewRequest("POST", "/api/v1/auth/login", nil)
+		if xff != "" {
+			req.Header.Set("X-Forwarded-For", xff)
+		}
+		req.RemoteAddr = "10.110.16.33:8800"
+		c.Request = req
+		setReportedLanIP(c, reportedLan)
+		return c
+	}
+
+	ip, lan := loginLogAddrs(newCtx("10.110.16.33, 61.49.49.50", "10.10.102.163"))
+	if ip != "61.49.49.50" || lan != "10.10.102.163" {
+		t.Fatalf("reported lan overrides ingress got ip=%q lan=%q", ip, lan)
+	}
+	ip, lan = loginLogAddrs(newCtx("10.110.16.33, 61.49.49.50", "61.49.49.50"))
+	if ip != "61.49.49.50" || lan != "10.110.16.33" {
+		t.Fatalf("public lan dropped got ip=%q lan=%q", ip, lan)
+	}
+	ip, lan = loginLogAddrs(newCtx("10.110.16.33, 61.49.49.50", "127.0.0.1"))
+	if ip != "61.49.49.50" || lan != "10.110.16.33" {
+		t.Fatalf("loopback lan dropped got ip=%q lan=%q", ip, lan)
+	}
+	ip, lan = loginLogAddrs(newCtx("10.110.16.33, 61.49.49.50", "169.254.1.1"))
+	if ip != "61.49.49.50" || lan != "10.110.16.33" {
+		t.Fatalf("link-local lan dropped got ip=%q lan=%q", ip, lan)
+	}
+	if got := sanitizeLanIP("10.10.102.163:1234"); got != "10.10.102.163" {
+		t.Fatalf("strip port got %q", got)
 	}
 }
 

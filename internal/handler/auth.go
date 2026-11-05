@@ -39,6 +39,7 @@ type loginReq struct {
 	CaptchaCode string `json:"captcha_code"`
 	TenantID    string `json:"tenant_id"`
 	PublicIP    string `json:"public_ip"`
+	LanIP       string `json:"lan_ip"`
 }
 
 func ldapErrorMessage(err error) string {
@@ -207,6 +208,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	req.Username = strings.TrimSpace(req.Username)
 	req.AuthMode = strings.ToLower(strings.TrimSpace(req.AuthMode))
 	setReportedPublicIP(c, req.PublicIP)
+	setReportedLanIP(c, req.LanIP)
 	autoTry := req.AuthMode == "" || req.AuthMode == "auto"
 	forceSSO := req.AuthMode == "sso"
 	forceLDAP := req.AuthMode == "ldap"
@@ -689,7 +691,7 @@ func (h *AuthHandler) SSOStart(c *gin.Context) {
 		return
 	}
 	log.Printf("sso authorize redirect_uri=%s frontend=%s", callbackURL, frontend)
-	state := ssoauth.PutState(frontend, redirectPath, callbackURL, c.Query("public_ip"))
+	state := ssoauth.PutState(frontend, redirectPath, callbackURL, c.Query("public_ip"), c.Query("lan_ip"))
 	authURL, err := ssoauth.BuildAuthorizeURL(cfg, state, callbackURL)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": ssoErrorMessage(err)})
@@ -700,11 +702,12 @@ func (h *AuthHandler) SSOStart(c *gin.Context) {
 
 // finishSSOCodeExchange 用授权码换本地 ticket。优先使用 authorize 时写入 state 的 redirect_uri。
 func (h *AuthHandler) finishSSOCodeExchange(c *gin.Context, cfg *store.SsoConfig, code, state, expectedRedirectURI string) (ticket, frontend, redirectPath string, errMsg string, httpStatus int) {
-	frontend, redirectPath, storedCallback, publicIP, ok := ssoauth.TakeState(state)
+	frontend, redirectPath, storedCallback, publicIP, lanIP, ok := ssoauth.TakeState(state)
 	if !ok {
 		return "", "", "", "SSO state 无效或已过期（若刚重启过后端请重新从登录页发起）", http.StatusBadRequest
 	}
 	setReportedPublicIP(c, publicIP)
+	setReportedLanIP(c, lanIP)
 	if code == "" {
 		return "", "", "", "缺少授权码 code", http.StatusBadRequest
 	}
@@ -1020,13 +1023,20 @@ func (h *AuthHandler) recordLogin(c *gin.Context, username, userID, displayName 
 	}()
 }
 
-const ctxLoginPublicIP = "login_public_ip"
+const (
+	ctxLoginPublicIP = "login_public_ip"
+	ctxLoginLanIP    = "login_lan_ip"
+)
 
-// loginLogAddrs 得到登录日志的公网地址和内网地址。浏览器上报的公网地址优先。
+// loginLogAddrs 得到登录日志的公网地址和内网地址。
+// 公网地址优先用浏览器上报。内网地址优先用浏览器上报的本机地址，没有上报时用请求里的内网地址。
 func loginLogAddrs(c *gin.Context) (ip, lan string) {
 	ip, lan = loginClientAddrs(c)
 	if pub := reportedPublicIP(c); pub != "" {
 		ip = pub
+	}
+	if reported := reportedLanIP(c); reported != "" {
+		lan = reported
 	}
 	return ip, lan
 }
@@ -1047,6 +1057,33 @@ func reportedPublicIP(c *gin.Context) string {
 	v, _ := c.Get(ctxLoginPublicIP)
 	s, _ := v.(string)
 	return sanitizePublicIP(s)
+}
+
+func setReportedLanIP(c *gin.Context, raw string) {
+	if c == nil {
+		return
+	}
+	if ip := sanitizeLanIP(raw); ip != "" {
+		c.Set(ctxLoginLanIP, ip)
+	}
+}
+
+func reportedLanIP(c *gin.Context) string {
+	if c == nil {
+		return ""
+	}
+	v, _ := c.Get(ctxLoginLanIP)
+	s, _ := v.(string)
+	return sanitizeLanIP(s)
+}
+
+// sanitizeLanIP 只接受私网地址。公网、回环、链路本地和空值都丢掉。
+func sanitizeLanIP(raw string) string {
+	addr := stripPort(strings.TrimSpace(raw))
+	if addr == "" || !isPrivateIP(addr) || isLoopbackIP(addr) {
+		return ""
+	}
+	return addr
 }
 
 // sanitizePublicIP 只接受公网地址。内网、回环和空值都丢掉。

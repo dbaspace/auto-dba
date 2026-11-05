@@ -36,6 +36,75 @@ async function lookupPublicIP(echoURL: string): Promise<string> {
   }
 }
 
+function isPrivateIPv4(ip: string): boolean {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(ip)
+  if (!m) return false
+  const n = m.slice(1).map((part) => Number(part))
+  if (n.some((part) => part > 255)) return false
+  const a = n[0]
+  const b = n[1]
+  if (a === 10) return true
+  if (a === 172 && b >= 16 && b <= 31) return true
+  return a === 192 && b === 168
+}
+
+function hostCandidateAddress(candidate: RTCIceCandidate): string {
+  const typed = candidate as RTCIceCandidate & { address?: string; type?: string }
+  if (typed.type === 'host' && typed.address && !typed.address.endsWith('.local')) {
+    return typed.address
+  }
+  const raw = candidate.candidate || ''
+  const m = /([0-9]{1,3}(?:\.[0-9]{1,3}){3}) \d+ typ host/.exec(raw)
+  return m ? m[1] : ''
+}
+
+/** 用 WebRTC 收集本机 host 地址，不访问 STUN。最多等 2 秒，只返回第一个私网 IPv4。 */
+function lookupLocalIP(): Promise<string> {
+  return new Promise((resolve) => {
+    let settled = false
+    let pc: RTCPeerConnection | null = null
+    const finish = (ip: string) => {
+      if (settled) return
+      settled = true
+      window.clearTimeout(timer)
+      try { pc?.close() } catch { /* 已关闭 */ }
+      resolve(ip)
+    }
+    const timer = window.setTimeout(() => finish(''), 2000)
+    if (typeof window.RTCPeerConnection !== 'function') {
+      finish('')
+      return
+    }
+    try {
+      pc = new RTCPeerConnection({ iceServers: [] })
+    } catch {
+      finish('')
+      return
+    }
+    pc.onicecandidate = (ev) => {
+      if (!ev.candidate) {
+        finish('')
+        return
+      }
+      const addr = hostCandidateAddress(ev.candidate)
+      if (isPrivateIPv4(addr)) finish(addr)
+    }
+    try {
+      pc.createDataChannel('lan')
+      pc.createOffer()
+        .then((offer) => pc?.setLocalDescription(offer))
+        .catch(() => finish(''))
+    } catch {
+      finish('')
+    }
+  })
+}
+
+async function lookupLoginAddrs(echoURL: string): Promise<{ publicIP: string; lanIP: string }> {
+  const [publicIP, lanIP] = await Promise.all([lookupPublicIP(echoURL), lookupLocalIP()])
+  return { publicIP, lanIP }
+}
+
 const MODE_LABEL: Record<string, string> = {
   platform: '平台',
   ldap: 'LDAP',
@@ -402,8 +471,9 @@ export default function Login() {
     q.set('frontend', frontend)
     if (redirect) q.set('redirect', redirect)
     setSsoLoading(true)
-    const publicIP = await lookupPublicIP(publicIPEcho)
+    const { publicIP, lanIP } = await lookupLoginAddrs(publicIPEcho)
     if (publicIP) q.set('public_ip', publicIP)
+    if (lanIP) q.set('lan_ip', lanIP)
     window.location.href = `/api/v1/auth/sso/login?${q.toString()}`
   }
 
@@ -430,8 +500,9 @@ export default function Login() {
         password,
         auth_mode: authMode || 'platform',
       }
-      const publicIP = await lookupPublicIP(publicIPEcho)
+      const { publicIP, lanIP } = await lookupLoginAddrs(publicIPEcho)
       if (publicIP) payload.public_ip = publicIP
+      if (lanIP) payload.lan_ip = lanIP
       if (requireCaptcha) {
         payload.captcha_id = captchaId
         payload.captcha_code = captchaCode
