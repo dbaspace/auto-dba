@@ -268,6 +268,14 @@ function reorderQueryTabs(list: TabItem[], fromKey: string, toKey: string): TabI
   return next
 }
 
+function statementCount(sql: string) {
+  let n = 0
+  for (const part of sql.split(';')) {
+    if (part.trim()) n += 1
+  }
+  return n
+}
+
 function queryTabKeyAt(x: number, y: number): string | null {
   const hit = document.elementFromPoint(x, y)
   if (!hit || hit.closest('.ant-tabs-tab-remove')) return null
@@ -312,6 +320,7 @@ export default function CommonQuery() {
   }, [])
 
   const [treeLoading, setTreeLoading] = useState(false)
+  const [catalogReady, setCatalogReady] = useState(false)
   const [keyword, setKeyword] = useState('')
   const [envFilter, setEnvFilter] = useState('')
   const [envOptions, setEnvOptions] = useState<string[]>([])
@@ -326,8 +335,12 @@ export default function CommonQuery() {
   const [running, setRunning] = useState(false)
   const queryAbortRef = useRef<AbortController | null>(null)
   const sqlBoxRef = useRef<HTMLTextAreaElement | null>(null)
-  const keptSelectionRef = useRef<{ start: number; end: number; sql: string; key: string } | null>(null)
+  const clickSelectionRef = useRef<{ start: number; end: number; text: string; sql: string; key: string } | null>(null)
+  const runPointerDownRef = useRef(false)
   const selectionRestoreRef = useRef<{ start: number; end: number; sql: string } | null>(null)
+  const collapseSelectionRef = useRef(false)
+  const revealDbRef = useRef('')
+  const pendingStoreRef = useRef<{ item: FavItem | HistItem; source: 'fav' | 'hist' } | null>(null)
   const [selectionEpoch, setSelectionEpoch] = useState(0)
   const tabPointerRef = useRef<{ key: string; x: number; y: number; dragging: boolean; pointerId: number } | null>(null)
   const tabDraggedRef = useRef(false)
@@ -388,50 +401,18 @@ export default function CommonQuery() {
 
   const current = useMemo(() => tabs.find((t) => t.key === activeKey) || null, [tabs, activeKey])
 
-  useEffect(() => {
-    const el = sqlBoxRef.current
-    const sync = () => {
-      if (!el || document.activeElement !== el) return
-      if (el.selectionEnd > el.selectionStart) {
-        keptSelectionRef.current = {
-          start: el.selectionStart,
-          end: el.selectionEnd,
-          sql: el.value,
-          key: activeKey,
-        }
-      } else {
-        keptSelectionRef.current = null
-      }
-    }
-    const keepBeforeFocusMoves = () => {
-      if (!el || document.activeElement !== el) return
-      if (el.selectionEnd <= el.selectionStart) return
-      keptSelectionRef.current = {
-        start: el.selectionStart,
-        end: el.selectionEnd,
-        sql: el.value,
-        key: activeKey,
-      }
-    }
-    document.addEventListener('pointerdown', keepBeforeFocusMoves, true)
-    if (el) {
-      el.addEventListener('select', sync)
-      el.addEventListener('keyup', sync)
-      el.addEventListener('mouseup', sync)
-    }
-    return () => {
-      document.removeEventListener('pointerdown', keepBeforeFocusMoves, true)
-      if (!el) return
-      el.removeEventListener('select', sync)
-      el.removeEventListener('keyup', sync)
-      el.removeEventListener('mouseup', sync)
-    }
-  }, [activeKey, tabs.length])
-
   useLayoutEffect(() => {
-    const saved = selectionRestoreRef.current
     const el = sqlBoxRef.current
-    if (!saved || !el) return
+    if (!el) return
+    if (collapseSelectionRef.current) {
+      if (el.value !== (current?.sql || '')) return
+      collapseSelectionRef.current = false
+      const pos = el.value.length
+      el.setSelectionRange(pos, pos)
+      return
+    }
+    const saved = selectionRestoreRef.current
+    if (!saved) return
     if (saved.start < 0 || saved.end > el.value.length || el.value !== saved.sql) return
     const active = document.activeElement as HTMLElement | null
     if (active && active !== el && active !== document.body) {
@@ -440,7 +421,7 @@ export default function CommonQuery() {
     }
     el.focus()
     el.setSelectionRange(saved.start, saved.end)
-  }, [selectionEpoch])
+  }, [selectionEpoch, current?.sql, current?.key])
 
   const instMap = useMemo(() => {
     const m: Record<string, any> = {}
@@ -675,17 +656,24 @@ export default function CommonQuery() {
   useEffect(() => {
     const dbId = current?.dbId
     if (!dbId) {
+      revealDbRef.current = ''
       setSelectedKeys((prev) => (prev.length ? [] : prev))
       return
     }
     const db = databases.find((d) => d.id === dbId)
     if (!db) return
     const envName = dbEnv(db)
-    if ((envFilter && envName !== envFilter) || !matchKeyword(db)) {
-      if (envFilter && envName !== envFilter) setEnvFilter('')
-      if (!matchKeyword(db)) setKeyword('')
-      return
+    if (revealDbRef.current !== dbId) {
+      revealDbRef.current = dbId
+      const hiddenByEnv = !!(envFilter && envName !== envFilter)
+      const hiddenByKw = !matchKeyword(db)
+      if (hiddenByEnv || hiddenByKw) {
+        if (hiddenByEnv) setEnvFilter('')
+        if (hiddenByKw) setKeyword('')
+        return
+      }
     }
+    if ((envFilter && envName !== envFilter) || !matchKeyword(db)) return
     setSelectedKeys((prev) => (prev.length === 1 && prev[0] === db.id ? prev : [db.id]))
     const envKey = `env:${envName}`
     setExpandedKeys((prev) => {
@@ -1119,18 +1107,12 @@ export default function CommonQuery() {
     queryAbortRef.current?.abort()
   }
 
-  function takeSelection(sql: string, tabKey: string): { start: number; end: number; text: string } | null {
+  function liveSelection(sql: string): { start: number; end: number; text: string } | null {
     const el = sqlBoxRef.current
-    if (el && document.activeElement === el && el.value === sql && el.selectionEnd > el.selectionStart) {
-      const text = sql.slice(el.selectionStart, el.selectionEnd)
-      if (text.trim()) return { start: el.selectionStart, end: el.selectionEnd, text }
-    }
-    const kept = keptSelectionRef.current
-    if (kept && kept.key === tabKey && kept.sql === sql && kept.end > kept.start) {
-      const text = sql.slice(kept.start, kept.end)
-      if (text.trim()) return { start: kept.start, end: kept.end, text }
-    }
-    return null
+    if (!el || document.activeElement !== el || el.value !== sql || el.selectionEnd <= el.selectionStart) return null
+    const text = sql.slice(el.selectionStart, el.selectionEnd)
+    if (!text.trim()) return null
+    return { start: el.selectionStart, end: el.selectionEnd, text }
   }
 
   function rememberSelectionRestore(picked: { start: number; end: number }, sql: string) {
@@ -1138,16 +1120,41 @@ export default function CommonQuery() {
     setSelectionEpoch((n) => n + 1)
   }
 
-  async function runSQL(tab: TabItem | null = current, opt: { onlySelection?: boolean } = {}) {
-    if (!tab?.dbId) return
+  function armCollapseSelection() {
+    clickSelectionRef.current = null
+    selectionRestoreRef.current = null
+    collapseSelectionRef.current = true
+    setSelectionEpoch((n) => n + 1)
+  }
+
+  async function runSQL(tab: TabItem | null = current, opt: { onlySelection?: boolean; fromClick?: boolean } = {}) {
+    const fromClick = !!opt.fromClick
+    const clicked = fromClick ? clickSelectionRef.current : null
+    if (fromClick) clickSelectionRef.current = null
+    if (!tab?.sql?.trim()) {
+      message.warning('请先输入 SQL')
+      return
+    }
+    if (!tab.dbId) {
+      message.warning('请先选择数据库')
+      return
+    }
     if (opt.onlySelection && running) return
-    const picked = tab.sql ? takeSelection(tab.sql, tab.key) : null
-    if (opt.onlySelection && !picked) {
+    const pickedNow = fromClick
+      ? (clicked && clicked.key === tab.key && clicked.sql === tab.sql
+        ? { start: clicked.start, end: clicked.end, text: clicked.text }
+        : null)
+      : liveSelection(tab.sql)
+    if (opt.onlySelection && !pickedNow) {
       message.warning('请先选中要执行的 SQL')
       return
     }
-    const sql = (picked ? picked.text : (tab.sql || '')).trim()
-    if (!sql) return
+    const picked = (opt.onlySelection || (statementCount(tab.sql) > 1 && pickedNow)) ? pickedNow : null
+    const sql = (picked ? picked.text : tab.sql).trim()
+    if (!sql) {
+      message.warning('请先输入 SQL')
+      return
+    }
     if (picked) rememberSelectionRestore(picked, tab.sql)
     else selectionRestoreRef.current = null
     queryAbortRef.current?.abort()
@@ -1396,16 +1403,42 @@ export default function CommonQuery() {
   }
 
   function openOrSwitchDB(db: any, sql: string, favId = '') {
+    armCollapseSelection()
     const exist = tabs.find((t) => t.dbId === db.id && !t.table)
+    const cleared = {
+      sql,
+      favId,
+      result: null as TabItem['result'],
+      results: undefined as TabItem['results'],
+      resultIdx: 0,
+      error: '',
+      executedSql: '',
+    }
     if (exist) {
-      setTabs((list) => list.map((t) => (t.key === exist.key ? { ...t, sql, favId } : t)))
+      setTabs((list) => list.map((t) => (t.key === exist.key ? { ...t, ...cleared } : t)))
       setActiveKey(exist.key)
       return
     }
     openDB(db, { sql, favId })
   }
 
+  function markStoreMiss(text: string) {
+    const key = current?.key || tabs[0]?.key
+    if (!key) {
+      message.warning(text)
+      return
+    }
+    if (!current?.key) setActiveKey(key)
+    setTabs((list) => list.map((t) => (t.key === key
+      ? { ...t, result: null, results: undefined, resultIdx: 0, error: text, executedSql: '' }
+      : t)))
+  }
+
   function applyStore(item: FavItem | HistItem, source: 'fav' | 'hist') {
+    if (!catalogReady) {
+      pendingStoreRef.current = { item, source }
+      return
+    }
     const envOf = (db: any) => resolveDbEnv(db, instMap[db.instance_id])
     if (item.dbId) {
       const byId = databases.find((d) => d.id === item.dbId)
@@ -1416,12 +1449,12 @@ export default function CommonQuery() {
     }
     const name = String(item.dbName || '').trim()
     if (!name) {
-      message.warning('未找到库')
+      markStoreMiss('未找到库')
       return
     }
     const same = databases.filter((d) => d.db_name === name)
     if (!same.length) {
-      message.warning(`未找到库 ${name}`)
+      markStoreMiss(`未找到库 ${name}`)
       return
     }
     const env = String(item.env || '').trim()
@@ -1429,13 +1462,13 @@ export default function CommonQuery() {
     if (env) {
       pool = same.filter((d) => envOf(d) === env)
       if (!pool.length) {
-        message.warning(`未找到库 ${name}`)
+        markStoreMiss(`未找到库 ${name}`)
         return
       }
     } else if (source === 'hist') {
       const envs = new Set(same.map((d) => envOf(d)))
       if (envs.size > 1) {
-        message.warning(`库 ${name} 存在多个环境，无法确定要打开哪一个`)
+        markStoreMiss(`库 ${name} 存在多个环境，无法确定要打开哪一个`)
         return
       }
     } else if (current?.env) {
@@ -1450,6 +1483,14 @@ export default function CommonQuery() {
     if (pool.length > 1) message.info('同环境有多条同名库，已打开第一条')
     openOrSwitchDB(pool[0], item.sql, source === 'fav' ? item.id : '')
   }
+
+  useEffect(() => {
+    if (!catalogReady) return
+    const pending = pendingStoreRef.current
+    if (!pending) return
+    pendingStoreRef.current = null
+    applyStore(pending.item, pending.source)
+  }, [catalogReady])
 
   // drag
   const dragRef = useRef<(() => void) | null>(null)
@@ -1479,11 +1520,13 @@ export default function CommonQuery() {
   }
 
   const loadTree = useCallback(async () => {
+    setCatalogReady(false)
     const hit = readQueryTreeCache(tenantId)
     if (hit) {
       setDatabases(hit.databases)
       setInstances(hit.instances)
       setEnvOptions(hit.envOptions)
+      setCatalogReady(true)
       return
     }
     setTreeLoading(true)
@@ -1509,6 +1552,7 @@ export default function CommonQuery() {
       writeQueryTreeCache({ tenantId, databases: dbs, instances: instList, envOptions })
     } finally {
       setTreeLoading(false)
+      setCatalogReady(true)
     }
   }, [tenantId])
 
@@ -1767,14 +1811,35 @@ export default function CommonQuery() {
                 <div className="editor-col">
                   <div className="tool-bar">
                     <div className="tool-left">
-                      <Tooltip title={`${/Mac/i.test(navigator.userAgent) ? '⌘' : 'Ctrl'}+Enter 执行选中或整段；${/Mac/i.test(navigator.userAgent) ? '⌘' : 'Ctrl'}+Shift+Enter 只执行选中`}>
-                        <span>
+                      <Tooltip title={`${/Mac/i.test(navigator.userAgent) ? '⌘' : 'Ctrl'}+Enter：有多条且选中了其中一段时只执行选中，否则执行全部。${/Mac/i.test(navigator.userAgent) ? '⌘' : 'Ctrl'}+Shift+Enter 只执行选中`}>
+                        <span
+                          onPointerDown={(e) => {
+                            runPointerDownRef.current = true
+                            const tab = current
+                            const sel = tab ? liveSelection(tab.sql || '') : null
+                            clickSelectionRef.current = tab && sel
+                              ? { ...sel, sql: tab.sql || '', key: tab.key }
+                              : null
+                            const span = e.currentTarget
+                            const up = (ev: PointerEvent) => {
+                              window.removeEventListener('pointerup', up)
+                              if (!span.contains(ev.target as Node)) {
+                                runPointerDownRef.current = false
+                                clickSelectionRef.current = null
+                              }
+                            }
+                            window.addEventListener('pointerup', up)
+                          }}
+                        >
                           <Button
                             type="primary"
-                            disabled={!current?.sql?.trim()}
                             loading={running}
                             icon={<CaretRightOutlined />}
-                            onClick={() => runSQL()}
+                            onClick={() => {
+                              const fromClick = runPointerDownRef.current
+                              runPointerDownRef.current = false
+                              runSQL(current, { fromClick })
+                            }}
                           >
                             运行
                           </Button>
@@ -1822,7 +1887,7 @@ export default function CommonQuery() {
                     className="sql-box-hl"
                     spellCheck={false}
                     minRows={8}
-                    placeholder="输入 SQL，Ctrl / ⌘ + Enter 运行；选中片段则只执行选中内容"
+                    placeholder="输入 SQL，Ctrl / ⌘ + Enter 运行；有多条且选中一段时只执行选中"
                     onChange={(v) => updateCurrent({ sql: v })}
                     onKeyDown={onSqlKey}
                   />
