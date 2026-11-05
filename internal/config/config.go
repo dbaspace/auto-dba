@@ -141,7 +141,12 @@ type HTTPConfig struct {
 	WriteTimeout int    `yaml:"write_timeout"`
 	PidFile      string `yaml:"pid_file"`
 	ServeStatic  bool   `yaml:"serve_static"`
+	// PublicIPEcho 登录页用来查询当前网络公网出口的地址。
+	PublicIPEcho string `yaml:"public_ip_echo"`
 }
+
+// DefaultPublicIPEcho 未配置时使用的公网地址回显。
+const DefaultPublicIPEcho = "https://api.ipify.org?format=json"
 
 type LogConfig struct {
 	Level string `yaml:"level"`
@@ -339,6 +344,9 @@ func applyDefaults(cfg *Config, path string) {
 	if cfg.HTTP.WriteTimeout <= 0 {
 		// Copilot Cursor Agent 轮询最长约 180s，默认写超时需覆盖
 		cfg.HTTP.WriteTimeout = 200
+	}
+	if strings.TrimSpace(cfg.HTTP.PublicIPEcho) == "" {
+		cfg.HTTP.PublicIPEcho = DefaultPublicIPEcho
 	}
 	if strings.TrimSpace(cfg.DNS.NodeDB) == "" {
 		cfg.DNS.NodeDB = "auto_dba_dns"

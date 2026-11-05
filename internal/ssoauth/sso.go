@@ -36,6 +36,7 @@ type authState struct {
 	FrontendOrigin string
 	RedirectPath   string
 	CallbackURL    string // authorize 时使用的 redirect_uri，换票必须一致
+	PublicIP       string // 登录前浏览器查到的公网出口
 	ExpiresAt      time.Time
 }
 
@@ -58,7 +59,7 @@ func newOpaqueID() string {
 	return hex.EncodeToString(b[:])
 }
 
-func PutState(frontendOrigin, redirectPath, callbackURL string) string {
+func PutState(frontendOrigin, redirectPath, callbackURL, publicIP string) string {
 	id := newOpaqueID()
 	stateMu.Lock()
 	defer stateMu.Unlock()
@@ -66,27 +67,28 @@ func PutState(frontendOrigin, redirectPath, callbackURL string) string {
 		FrontendOrigin: strings.TrimRight(strings.TrimSpace(frontendOrigin), "/"),
 		RedirectPath:   strings.TrimSpace(redirectPath),
 		CallbackURL:    strings.TrimSpace(callbackURL),
+		PublicIP:       strings.TrimSpace(publicIP),
 		ExpiresAt:      time.Now().Add(10 * time.Minute),
 	}
 	return id
 }
 
-func TakeState(id string) (frontendOrigin, redirectPath, callbackURL string, ok bool) {
+func TakeState(id string) (frontendOrigin, redirectPath, callbackURL, publicIP string, ok bool) {
 	id = strings.TrimSpace(id)
 	if id == "" {
-		return "", "", "", false
+		return "", "", "", "", false
 	}
 	stateMu.Lock()
 	defer stateMu.Unlock()
 	st, exists := states[id]
 	if !exists {
-		return "", "", "", false
+		return "", "", "", "", false
 	}
 	delete(states, id)
 	if time.Now().After(st.ExpiresAt) {
-		return "", "", "", false
+		return "", "", "", "", false
 	}
-	return st.FrontendOrigin, st.RedirectPath, st.CallbackURL, true
+	return st.FrontendOrigin, st.RedirectPath, st.CallbackURL, st.PublicIP, true
 }
 
 func PutTicket(token string, userJSON []byte) string {

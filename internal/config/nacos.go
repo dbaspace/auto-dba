@@ -202,7 +202,7 @@ func nacosCacheFileName(dataID, group, namespace string) string {
 }
 
 // readLatestNacosDiskCache 在 GetConfig 失败时，复用本机其它进程留下的最近一份缓存
-//（cache 按 pid 隔离，新进程空目录会导致「server+cache 双失败」）。
+// （cache 按 pid 隔离，新进程空目录会导致「server+cache 双失败」）。
 func readLatestNacosDiskCache(nc NacosConfig) (content, path string, err error) {
 	name := nacosCacheFileName(nc.DataID, nc.Group, nc.Namespace)
 	root := nacosDiskCacheRoot()
@@ -368,6 +368,9 @@ func preserveHTTPFromLocal(dst *HTTPConfig, local HTTPConfig, remoteYAML string)
 	// bool 零值是 false：远端 http 段未写 serve_static 时 Unmarshal 会冲掉本地 true
 	if !remoteYAMLHasHTTPKey(remoteYAML, "serve_static") {
 		dst.ServeStatic = local.ServeStatic
+	}
+	if !remoteYAMLHasHTTPKey(remoteYAML, "public_ip_echo") && strings.TrimSpace(dst.PublicIPEcho) == "" {
+		dst.PublicIPEcho = local.PublicIPEcho
 	}
 }
 

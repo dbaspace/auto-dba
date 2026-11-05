@@ -540,6 +540,7 @@ type LoginLog struct {
 	Success     bool   `json:"success"`
 	Message     string `json:"message,omitempty"`
 	IP          string `json:"ip"`
+	LanIP       string `json:"lan_ip"`
 	UserAgent   string `json:"user_agent,omitempty"`
 	LoggedAt    string `json:"logged_at"`
 }

@@ -38,6 +38,7 @@ type loginReq struct {
 	CaptchaID   string `json:"captcha_id"`
 	CaptchaCode string `json:"captcha_code"`
 	TenantID    string `json:"tenant_id"`
+	PublicIP    string `json:"public_ip"`
 }
 
 func ldapErrorMessage(err error) string {
@@ -205,6 +206,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	}
 	req.Username = strings.TrimSpace(req.Username)
 	req.AuthMode = strings.ToLower(strings.TrimSpace(req.AuthMode))
+	setReportedPublicIP(c, req.PublicIP)
 	autoTry := req.AuthMode == "" || req.AuthMode == "auto"
 	forceSSO := req.AuthMode == "sso"
 	forceLDAP := req.AuthMode == "ldap"
@@ -687,7 +689,7 @@ func (h *AuthHandler) SSOStart(c *gin.Context) {
 		return
 	}
 	log.Printf("sso authorize redirect_uri=%s frontend=%s", callbackURL, frontend)
-	state := ssoauth.PutState(frontend, redirectPath, callbackURL)
+	state := ssoauth.PutState(frontend, redirectPath, callbackURL, c.Query("public_ip"))
 	authURL, err := ssoauth.BuildAuthorizeURL(cfg, state, callbackURL)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": ssoErrorMessage(err)})
@@ -698,10 +700,11 @@ func (h *AuthHandler) SSOStart(c *gin.Context) {
 
 // finishSSOCodeExchange 用授权码换本地 ticket。优先使用 authorize 时写入 state 的 redirect_uri。
 func (h *AuthHandler) finishSSOCodeExchange(c *gin.Context, cfg *store.SsoConfig, code, state, expectedRedirectURI string) (ticket, frontend, redirectPath string, errMsg string, httpStatus int) {
-	frontend, redirectPath, storedCallback, ok := ssoauth.TakeState(state)
+	frontend, redirectPath, storedCallback, publicIP, ok := ssoauth.TakeState(state)
 	if !ok {
 		return "", "", "", "SSO state 无效或已过期（若刚重启过后端请重新从登录页发起）", http.StatusBadRequest
 	}
+	setReportedPublicIP(c, publicIP)
 	if code == "" {
 		return "", "", "", "缺少授权码 code", http.StatusBadRequest
 	}
@@ -974,14 +977,24 @@ func (h *AuthHandler) Info(c *gin.Context) {
 		"sso_authorize":    ssoAuthorize,
 		"sso_login_path":   "/api/v1/auth/sso/login",
 		"sso_callback_url": ssoCallbackURL,
+		"public_ip_echo":   h.publicIPEcho(),
 	})
+}
+
+func (h *AuthHandler) publicIPEcho() string {
+	if h != nil && h.Cfg != nil {
+		if echo := strings.TrimSpace(h.Cfg.HTTP.PublicIPEcho); echo != "" {
+			return echo
+		}
+	}
+	return config.DefaultPublicIPEcho
 }
 
 func (h *AuthHandler) recordLogin(c *gin.Context, username, userID, displayName string, ok bool, msg string) {
 	if h == nil || h.Store == nil {
 		return
 	}
-	ip := clientLoginIP(c)
+	ip, lanIP := loginLogAddrs(c)
 	ua := ""
 	if c != nil && c.Request != nil {
 		ua = c.Request.UserAgent()
@@ -999,11 +1012,96 @@ func (h *AuthHandler) recordLogin(c *gin.Context, username, userID, displayName 
 			Success:     ok,
 			Message:     msg,
 			IP:          ip,
+			LanIP:       lanIP,
 			UserAgent:   ua,
 		}); err != nil {
 			log.Printf("login log: %v", err)
 		}
 	}()
+}
+
+const ctxLoginPublicIP = "login_public_ip"
+
+// loginLogAddrs 得到登录日志的公网地址和内网地址。浏览器上报的公网地址优先。
+func loginLogAddrs(c *gin.Context) (ip, lan string) {
+	ip, lan = loginClientAddrs(c)
+	if pub := reportedPublicIP(c); pub != "" {
+		ip = pub
+	}
+	return ip, lan
+}
+
+func setReportedPublicIP(c *gin.Context, raw string) {
+	if c == nil {
+		return
+	}
+	if ip := sanitizePublicIP(raw); ip != "" {
+		c.Set(ctxLoginPublicIP, ip)
+	}
+}
+
+func reportedPublicIP(c *gin.Context) string {
+	if c == nil {
+		return ""
+	}
+	v, _ := c.Get(ctxLoginPublicIP)
+	s, _ := v.(string)
+	return sanitizePublicIP(s)
+}
+
+// sanitizePublicIP 只接受公网地址。内网、回环和空值都丢掉。
+func sanitizePublicIP(raw string) string {
+	addr := stripPort(strings.TrimSpace(raw))
+	if addr == "" || !looksLikeIP(addr) || isLoopbackIP(addr) || isPrivateIP(addr) {
+		return ""
+	}
+	return addr
+}
+
+// loginClientAddrs 从本次请求的代理链拆出公网地址和内网地址。
+// 公网是第一个非内网、非回环地址；只有内网地址时公网列留空。内网没有则空。
+func loginClientAddrs(c *gin.Context) (ip, lan string) {
+	if c == nil || c.Request == nil {
+		ip = localNonLoopbackIP()
+		if isPrivateIP(ip) {
+			return "", ip
+		}
+		return ip, ""
+	}
+	var public, private string
+	for _, raw := range []string{
+		c.GetHeader("X-Forwarded-For"),
+		c.GetHeader("X-Real-IP"),
+		c.GetHeader("X-Client-IP"),
+		forwardedFor(c.GetHeader("Forwarded")),
+		c.ClientIP(),
+		c.Request.RemoteAddr,
+	} {
+		for _, part := range splitIPList(raw) {
+			addr := stripPort(part)
+			if addr == "" || !looksLikeIP(addr) || isLoopbackIP(addr) {
+				continue
+			}
+			if isPrivateIP(addr) {
+				if private == "" {
+					private = addr
+				}
+			} else if public == "" {
+				public = addr
+			}
+		}
+	}
+	if public == "" && private == "" {
+		ip = localNonLoopbackIP()
+		if isPrivateIP(ip) {
+			return "", ip
+		}
+		return ip, ""
+	}
+	if public == "" {
+		return "", private
+	}
+	return public, private
 }
 
 func clientLoginIP(c *gin.Context) string {
@@ -1076,6 +1174,11 @@ func looksLikeIP(s string) bool {
 func isLoopbackIP(s string) bool {
 	ip := net.ParseIP(s)
 	return ip != nil && ip.IsLoopback()
+}
+
+func isPrivateIP(s string) bool {
+	ip := net.ParseIP(s)
+	return ip != nil && ip.IsPrivate()
 }
 
 func localNonLoopbackIP() string {

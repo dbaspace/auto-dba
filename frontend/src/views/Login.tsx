@@ -9,6 +9,33 @@ import loginBg from '../assets/login-bg.jpg'
 import BrandMark, { BrandWordmark } from '../components/BrandMark'
 import { clearSystemNoticeDismissals } from '../utils/systemNoticeSession'
 
+const DEFAULT_PUBLIC_IP_ECHO = 'https://api.ipify.org?format=json'
+
+async function lookupPublicIP(echoURL: string): Promise<string> {
+  const url = echoURL.trim()
+  if (!url) return ''
+  const ctrl = new AbortController()
+  const timer = window.setTimeout(() => ctrl.abort(), 2000)
+  try {
+    const res = await fetch(url, { signal: ctrl.signal, cache: 'no-store', credentials: 'omit' })
+    if (!res.ok) return ''
+    const text = (await res.text()).trim()
+    if (!text) return ''
+    try {
+      const parsed = JSON.parse(text) as { ip?: string; query?: string }
+      const ip = String(parsed.ip || parsed.query || '').trim()
+      if (ip) return ip
+    } catch {
+      /* 纯文本回显 */
+    }
+    return text.split(/\s+/)[0] || ''
+  } catch {
+    return ''
+  } finally {
+    window.clearTimeout(timer)
+  }
+}
+
 const MODE_LABEL: Record<string, string> = {
   platform: '平台',
   ldap: 'LDAP',
@@ -145,6 +172,7 @@ export default function Login() {
   const [authModes, setAuthModes] = useState<string[]>(['platform'])
   const [ssoGrantMode, setSsoGrantMode] = useState('')
   const [ssoCallbackURL, setSsoCallbackURL] = useState('')
+  const [publicIPEcho, setPublicIPEcho] = useState(DEFAULT_PUBLIC_IP_ECHO)
   const [authMode, setAuthMode] = useState('platform')
   const [error, setError] = useState('')
   const [username, setUsername] = useState('')
@@ -248,6 +276,8 @@ export default function Login() {
         setSsoGrantMode(grant)
         const callbackURL = String(data.sso_callback_url || '').trim()
         setSsoCallbackURL(callbackURL)
+        const echo = String(data.public_ip_echo || '').trim()
+        if (echo) setPublicIPEcho(echo)
         const priority = Array.isArray(data.auth_priority) ? data.auth_priority : []
         let lastMode = ''
         try {
@@ -350,7 +380,7 @@ export default function Login() {
     }
   }
 
-  function startSSOAuthorize() {
+  async function startSSOAuthorize() {
     if (ssoCallbackURL && isLoopbackHostMismatch(window.location.origin, ssoCallbackURL)) {
       try {
         const cb = new URL(ssoCallbackURL)
@@ -371,6 +401,9 @@ export default function Login() {
     const q = new URLSearchParams()
     q.set('frontend', frontend)
     if (redirect) q.set('redirect', redirect)
+    setSsoLoading(true)
+    const publicIP = await lookupPublicIP(publicIPEcho)
+    if (publicIP) q.set('public_ip', publicIP)
     window.location.href = `/api/v1/auth/sso/login?${q.toString()}`
   }
 
@@ -397,6 +430,8 @@ export default function Login() {
         password,
         auth_mode: authMode || 'platform',
       }
+      const publicIP = await lookupPublicIP(publicIPEcho)
+      if (publicIP) payload.public_ip = publicIP
       if (requireCaptcha) {
         payload.captcha_id = captchaId
         payload.captcha_code = captchaCode

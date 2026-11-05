@@ -579,6 +579,12 @@ func (d *DB) ensureLoginLogsTable() error {
 	if err != nil {
 		return err
 	}
+	if err := d.ensureColumnIfMissing("tbl_login_logs", "lan_ip", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := d.relocatePrivateLoginIPs(); err != nil {
+		return err
+	}
 	if err := d.ensureUserSourceColumn(); err != nil {
 		return err
 	}

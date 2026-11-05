@@ -37,6 +37,74 @@ func TestClientLoginIPSkipsLoopback(t *testing.T) {
 	}
 }
 
+func TestLoginClientAddrsSplitsPublicAndLAN(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	newCtx := func(xff, realIP string) *gin.Context {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		req := httptest.NewRequest("POST", "/api/v1/auth/login", nil)
+		if xff != "" {
+			req.Header.Set("X-Forwarded-For", xff)
+		}
+		if realIP != "" {
+			req.Header.Set("X-Real-IP", realIP)
+		}
+		req.RemoteAddr = "127.0.0.1:8800"
+		c.Request = req
+		return c
+	}
+
+	ip, lan := loginClientAddrs(newCtx("10.1.2.3, 61.49.49.50", ""))
+	if ip != "61.49.49.50" || lan != "10.1.2.3" {
+		t.Fatalf("chain got ip=%q lan=%q", ip, lan)
+	}
+	ip, lan = loginClientAddrs(newCtx("61.49.49.50", ""))
+	if ip != "61.49.49.50" || lan != "" {
+		t.Fatalf("public only got ip=%q lan=%q", ip, lan)
+	}
+	ip, lan = loginClientAddrs(newCtx("61.49.49.50", "10.8.8.8"))
+	if ip != "61.49.49.50" || lan != "10.8.8.8" {
+		t.Fatalf("real-ip got ip=%q lan=%q", ip, lan)
+	}
+	ip, lan = loginClientAddrs(newCtx("10.10.102.163", ""))
+	if ip != "" || lan != "10.10.102.163" {
+		t.Fatalf("lan only got ip=%q lan=%q", ip, lan)
+	}
+}
+
+func TestReportedPublicIPOverridesLAN(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	newCtx := func(xff, reported string) *gin.Context {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		req := httptest.NewRequest("POST", "/api/v1/auth/login", nil)
+		if xff != "" {
+			req.Header.Set("X-Forwarded-For", xff)
+		}
+		req.RemoteAddr = "127.0.0.1:8800"
+		c.Request = req
+		setReportedPublicIP(c, reported)
+		return c
+	}
+
+	ip, lan := loginLogAddrs(newCtx("10.10.102.163", "1.2.3.4"))
+	if ip != "1.2.3.4" || lan != "10.10.102.163" {
+		t.Fatalf("reported public got ip=%q lan=%q", ip, lan)
+	}
+	ip, lan = loginLogAddrs(newCtx("10.10.102.163", "10.1.1.1"))
+	if ip != "" || lan != "10.10.102.163" {
+		t.Fatalf("reported lan ignored got ip=%q lan=%q", ip, lan)
+	}
+	ip, lan = loginLogAddrs(newCtx("61.49.49.50", "203.0.113.8"))
+	if ip != "203.0.113.8" || lan != "" {
+		t.Fatalf("reported overrides gateway got ip=%q lan=%q", ip, lan)
+	}
+	ip, lan = loginLogAddrs(newCtx("10.1.2.3, 61.49.49.50", ""))
+	if ip != "61.49.49.50" || lan != "10.1.2.3" {
+		t.Fatalf("no report keeps request public got ip=%q lan=%q", ip, lan)
+	}
+}
+
 func TestClientLoginIPPrefersForwarded(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()

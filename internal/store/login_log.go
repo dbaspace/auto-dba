@@ -1,11 +1,61 @@
 package store
 
 import (
+	"net"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+// relocatePrivateLoginIP 把误写在登录 IP 上的内网地址挪到内网 IP，并清空登录 IP。
+// 公网地址保持不动。历史记录没有保存过公网出口，这里不补写。
+func relocatePrivateLoginIP(ip, lan string) (string, string, bool) {
+	ip = strings.TrimSpace(ip)
+	lan = strings.TrimSpace(lan)
+	if !isPrivateLoginIP(ip) {
+		return ip, lan, false
+	}
+	if lan == "" {
+		lan = ip
+	}
+	return "", lan, true
+}
+
+func isPrivateLoginIP(s string) bool {
+	ip := net.ParseIP(strings.TrimSpace(s))
+	return ip != nil && ip.IsPrivate()
+}
+
+func (d *DB) relocatePrivateLoginIPs() error {
+	rows, err := d.Query(`SELECT id, ip, COALESCE(lan_ip,'') FROM tbl_login_logs WHERE TRIM(ip) <> ''`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	type fix struct{ id, lan string }
+	var pending []fix
+	for rows.Next() {
+		var id, ip, lan string
+		if err := rows.Scan(&id, &ip, &lan); err != nil {
+			return err
+		}
+		_, lan, changed := relocatePrivateLoginIP(ip, lan)
+		if !changed {
+			continue
+		}
+		pending = append(pending, fix{id: id, lan: lan})
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, it := range pending {
+		if _, err := d.Exec(`UPDATE tbl_login_logs SET ip = '', lan_ip = ? WHERE id = ?`, it.lan, it.id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 func (d *DB) CreateLoginLog(it *LoginLog) error {
 	if it == nil {
@@ -20,6 +70,7 @@ func (d *DB) CreateLoginLog(it *LoginLog) error {
 	it.Username = strings.TrimSpace(it.Username)
 	it.DisplayName = strings.TrimSpace(it.DisplayName)
 	it.IP = strings.TrimSpace(it.IP)
+	it.LanIP = strings.TrimSpace(it.LanIP)
 	it.UserAgent = strings.TrimSpace(it.UserAgent)
 	if len(it.UserAgent) > 512 {
 		it.UserAgent = it.UserAgent[:512]
@@ -29,9 +80,9 @@ func (d *DB) CreateLoginLog(it *LoginLog) error {
 		success = 1
 	}
 	_, err := d.Exec(
-		`INSERT INTO tbl_login_logs(id, user_id, username, display_name, success, message, ip, user_agent, logged_at)
-		 VALUES(?,?,?,?,?,?,?,?,?)`,
-		it.ID, it.UserID, it.Username, it.DisplayName, success, it.Message, it.IP, it.UserAgent, it.LoggedAt,
+		`INSERT INTO tbl_login_logs(id, user_id, username, display_name, success, message, ip, lan_ip, user_agent, logged_at)
+		 VALUES(?,?,?,?,?,?,?,?,?,?)`,
+		it.ID, it.UserID, it.Username, it.DisplayName, success, it.Message, it.IP, it.LanIP, it.UserAgent, it.LoggedAt,
 	)
 	return err
 }
@@ -68,7 +119,7 @@ func (d *DB) ListLoginLogs(f LoginLogFilter) ([]LoginLog, int, error) {
 	if err := d.QueryRow(`SELECT COUNT(1) FROM tbl_login_logs `+where, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	q := `SELECT id, user_id, username, display_name, success, message, ip, user_agent, logged_at
+	q := `SELECT id, user_id, username, display_name, success, message, ip, COALESCE(lan_ip,''), user_agent, logged_at
 		FROM tbl_login_logs ` + where + ` ORDER BY logged_at DESC LIMIT ? OFFSET ?`
 	args = append(args, f.PageSize, (f.Page-1)*f.PageSize)
 	rows, err := d.Query(q, args...)
@@ -80,7 +131,7 @@ func (d *DB) ListLoginLogs(f LoginLogFilter) ([]LoginLog, int, error) {
 	for rows.Next() {
 		var it LoginLog
 		var success int
-		if err := rows.Scan(&it.ID, &it.UserID, &it.Username, &it.DisplayName, &success, &it.Message, &it.IP, &it.UserAgent, &it.LoggedAt); err != nil {
+		if err := rows.Scan(&it.ID, &it.UserID, &it.Username, &it.DisplayName, &success, &it.Message, &it.IP, &it.LanIP, &it.UserAgent, &it.LoggedAt); err != nil {
 			return nil, 0, err
 		}
 		it.Success = success != 0

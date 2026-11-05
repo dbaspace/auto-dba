@@ -9,6 +9,7 @@ interface LogRow {
   username?: string
   display_name?: string
   ip?: string
+  lan_ip?: string
   success?: boolean
   message?: string
   user_agent?: string
@@ -105,6 +106,7 @@ export default function LoginLogs() {
             { title: '用户名', dataIndex: 'username', width: 140 },
             { title: '显示名', dataIndex: 'display_name', width: 140 },
             { title: '登录 IP', dataIndex: 'ip', width: 160 },
+            { title: '内网 IP', dataIndex: 'lan_ip', width: 160, render: (v) => v || '—' },
             {
               title: '结果',
               width: 90,
