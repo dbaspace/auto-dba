@@ -20,6 +20,14 @@ import ResponsiveTable from '../../components/ResponsiveTable'
 import dayjs from 'dayjs'
 import api from '../../api/request'
 import { useWorkOrderDraft } from '../../hooks/useWorkOrderDraft'
+import {
+  filterAccessDomainRows,
+  parseSourceKey,
+  sourceKey,
+  sourcePrimaryLabel,
+  sourcesFromAccessDomains,
+  type AccessDomainRow,
+} from '../../utils/instanceSource'
 import MigrationObjectSelect, { MigrationObject } from './MigrationObjectSelect'
 import './MigrationCreate.css'
 
@@ -28,11 +36,15 @@ interface MigForm {
   description: string
   db_type: string
   env: string
+  source_env: string
+  target_env: string
   start_mode: string
   scheduled_at: string
   assigned_approver: string
   source_instance_id: string
   target_instance_id: string
+  source_domain: string
+  target_domain: string
   migration_mode: string
   schema_strategy: string
   conflict_strategy: string
@@ -73,11 +85,15 @@ function emptyForm(): MigForm {
     description: '',
     db_type: 'postgres',
     env: 'test',
+    source_env: 'test',
+    target_env: 'test',
     start_mode: 'immediate',
     scheduled_at: '',
     assigned_approver: '',
     source_instance_id: '',
     target_instance_id: '',
+    source_domain: '',
+    target_domain: '',
     migration_mode: 'full_data',
     schema_strategy: 'init',
     conflict_strategy: 'abort',
@@ -92,19 +108,6 @@ function emptyForm(): MigForm {
   }
 }
 
-function matchType(a: any, b: any) {
-  const n = (t: any) => {
-    t = String(t || '').toLowerCase()
-    if (['postgresql', 'pg', 'pgsql'].includes(t)) return 'postgres'
-    if (['tidb', 'oceanbase'].includes(t)) return 'mysql'
-    return t
-  }
-  return n(a) === n(b)
-}
-function instLabel(i: any) {
-  const addr = i.host ? `${i.host}:${i.port}` : ''
-  return i.name ? `${i.name} — ${addr}` : addr
-}
 function conflictLabel(v: any) {
   return (
     ({ abort: '报错中止', skip: '跳过已存在', truncate: '先清空再写入', drop_create: '先删除再创建' } as Record<
@@ -133,6 +136,7 @@ export default function MigrationCreate() {
   const [submitting, setSubmitting] = useState(false)
   const [prechecking, setPrechecking] = useState(false)
   const [instances, setInstances] = useState<any[]>([])
+  const [accessDomains, setAccessDomains] = useState<AccessDomainRow[]>([])
   const [envOptions, setEnvOptions] = useState<string[]>(['test', 'prod'])
   const [precheckItems, setPrecheckItems] = useState<PrecheckItem[]>([])
   const [srcConn, setSrcConn] = useState<ConnResult | null>(null)
@@ -182,21 +186,81 @@ export default function MigrationCreate() {
     () => [...new Set((form.objects || []).map((o) => o.target_db_name))].join('、'),
     [form.objects],
   )
-  const sourceInst = useMemo(
-    () => instances.filter((i) => matchType(i.db_type, form.db_type)),
-    [instances, form.db_type],
+  const sourceDomainOptions = useMemo(
+    () =>
+      sourcesFromAccessDomains(
+        filterAccessDomainRows(accessDomains, { env: form.source_env, dbType: form.db_type }),
+      ),
+    [accessDomains, form.source_env, form.db_type],
   )
-  const targetInst = sourceInst
+  const targetDomainOptions = useMemo(
+    () =>
+      sourcesFromAccessDomains(
+        filterAccessDomainRows(accessDomains, { env: form.target_env, dbType: form.db_type }),
+      ),
+    [accessDomains, form.target_env, form.db_type],
+  )
+
+  function clearEndpoints() {
+    return {
+      source_instance_id: '',
+      target_instance_id: '',
+      source_domain: '',
+      target_domain: '',
+      objects: [] as MigrationObject[],
+      whole_dbs: [] as string[],
+    }
+  }
 
   function onDbTypeChange(v: string) {
-    patchForm({ source_instance_id: '', target_instance_id: '', db_type: v })
+    patchForm({ ...clearEndpoints(), db_type: v })
     setSrcConn(null)
+    setTgtConn(null)
+  }
+
+  function onSourceEnvChange(v: string) {
+    patchForm({
+      source_instance_id: '',
+      source_domain: '',
+      objects: [],
+      whole_dbs: [],
+      source_env: v,
+      env: v,
+    })
+    setSrcConn(null)
+  }
+
+  function onTargetEnvChange(v: string) {
+    patchForm({
+      target_instance_id: '',
+      target_domain: '',
+      target_env: v,
+    })
+    setTgtConn(null)
+  }
+
+  function onEndpointChange(side: 'source' | 'target', key: string) {
+    const parsed = parseSourceKey(key)
+    if (side === 'source') {
+      patchForm({
+        source_instance_id: parsed?.instance_id || '',
+        source_domain: parsed?.domain || '',
+        objects: [],
+        whole_dbs: [],
+      })
+      setSrcConn(null)
+      return
+    }
+    patchForm({
+      target_instance_id: parsed?.instance_id || '',
+      target_domain: parsed?.domain || '',
+    })
     setTgtConn(null)
   }
 
   function next() {
     if (step === 0) {
-      if (!form.name || !form.db_type || !form.env) {
+      if (!form.name || !form.db_type || !form.source_env || !form.target_env) {
         message.warning('请完善基本信息')
         return
       }
@@ -209,8 +273,11 @@ export default function MigrationCreate() {
         return
       }
     }
-    if (step === 1 && (!form.source_instance_id || !form.target_instance_id || !endpointsOk)) {
-      message.warning('请选择源/目标实例并完成连通测试')
+    if (
+      step === 1 &&
+      (!form.source_domain || !form.target_domain || !form.source_instance_id || !form.target_instance_id || !endpointsOk)
+    ) {
+      message.warning('请选择源/目标域名并完成连通测试')
       return
     }
     if (step === 3) {
@@ -229,10 +296,17 @@ export default function MigrationCreate() {
 
   async function testConn(side: 'source' | 'target') {
     const id = side === 'source' ? form.source_instance_id : form.target_instance_id
+    const domain = side === 'source' ? form.source_domain : form.target_domain
     if (side === 'source') setSrcTesting(true)
     else setTgtTesting(true)
     try {
-      const { data } = await api.get(`/migration/instances/${id}/connect`)
+      const { data } = await api.get(`/migration/instances/${id}/connect`, {
+        params: {
+          domain,
+          env: side === 'source' ? form.source_env : form.target_env,
+          db_type: form.db_type,
+        },
+      })
       if (side === 'source') setSrcConn(data)
       else setTgtConn(data)
     } finally {
@@ -248,6 +322,11 @@ export default function MigrationCreate() {
     getValues: () => ({ form: { ...formRef.current }, step: stepRef.current }),
     applyValues: (v: any) => {
       const nextForm = { ...emptyForm(), ...(v.form || v) }
+      if (!nextForm.source_env) nextForm.source_env = nextForm.env || 'test'
+      if (!nextForm.target_env) nextForm.target_env = nextForm.env || nextForm.source_env
+      nextForm.env = nextForm.source_env
+      if (!String(nextForm.source_domain || '').trim()) nextForm.source_instance_id = ''
+      if (!String(nextForm.target_domain || '').trim()) nextForm.target_instance_id = ''
       setForm(nextForm)
       if (Number.isFinite(v.step)) setStep(v.step)
     },
@@ -263,7 +342,9 @@ export default function MigrationCreate() {
       name: f.name,
       description: f.description,
       db_type: f.db_type,
-      env: f.env,
+      env: f.source_env || f.env,
+      source_env: f.source_env || f.env,
+      target_env: f.target_env || f.source_env || f.env,
       start_mode: f.start_mode,
       scheduled_at: f.scheduled_at,
       assigned_approver: f.assigned_approver,
@@ -272,6 +353,8 @@ export default function MigrationCreate() {
       assigned_to: f.assigned_approver,
       source_instance_id: f.source_instance_id,
       target_instance_id: f.target_instance_id,
+      source_domain: f.source_domain,
+      target_domain: f.target_domain,
       source_db: f.objects[0]?.source_db_name || f.source_db,
       target_db: f.objects[0]?.target_db_name || f.target_db,
       tables: f.objects.map((o) => o.source_table_name),
@@ -332,13 +415,15 @@ export default function MigrationCreate() {
 
   useEffect(() => {
     ;(async () => {
-      const [instRes, envRes, setRes, argRes] = await Promise.all([
+      const [instRes, domainRes, envRes, setRes, argRes] = await Promise.all([
         api.get('/instances'),
+        api.get('/access-domains').catch(() => ({ data: { data: [] } })),
         api.get('/environments').catch(() => ({ data: { data: [] } })),
         api.get('/migration/settings').catch(() => ({ data: { data: {} } })),
         api.get('/global-args').catch(() => ({ data: { data: [] } })),
       ])
       setInstances(instRes.data.data || [])
+      setAccessDomains(domainRes.data.data || [])
       const envs = (envRes.data.data || [])
         .map((e: any) => e.code || e.name || e.id)
         .filter(Boolean)
@@ -382,11 +467,11 @@ export default function MigrationCreate() {
   }, [])
 
   useEffect(() => {
-    if (!form.env) return
+    if (!form.source_env) return
     let cancelled = false
     ;(async () => {
       try {
-        const { data } = await api.get('/migration/settings', { params: { env: form.env } })
+        const { data } = await api.get('/migration/settings', { params: { env: form.source_env } })
         if (cancelled) return
         const row = data.data || {}
         setSettings((prev) => ({
@@ -401,41 +486,46 @@ export default function MigrationCreate() {
     return () => {
       cancelled = true
     }
-  }, [form.env])
+  }, [form.source_env])
 
   const ossReadyForEnv =
-    Boolean(settings.oss_configured) || (settings.oss_envs || []).includes(form.env)
+    Boolean(settings.oss_configured) || (settings.oss_envs || []).includes(form.source_env)
 
   return (
     <div className="mig-create">
-      <div className="ops-title">
-        <h1>新建迁移任务</h1>
-        <Button onClick={() => navigate('/ops/migration')}>返回列表</Button>
-      </div>
-      {form.env === 'prod' && (
-        <Alert
-          type="warning"
-          showIcon
-          className="mb"
-          message="当前为生产环境，请务必确认配置与审批要求。"
-        />
-      )}
-      <Steps
-        current={step}
-        className="mb"
-        labelPlacement="vertical"
-        items={[
-          { title: '基本信息' },
-          { title: '选择端点' },
-          { title: '迁移策略' },
-          { title: '选择对象' },
-          { title: '预检提交' },
-        ]}
-      />
-
+      <div className="mig-create-body">
+        <aside className="mig-steps">
+          <Steps
+            direction="vertical"
+            current={step}
+            items={[
+              { title: '基本信息' },
+              { title: '选择端点' },
+              { title: '迁移策略' },
+              { title: '选择对象' },
+              { title: '预检提交' },
+            ]}
+          />
+        </aside>
+        <div className="mig-create-main">
+          <div className="ops-title">
+            <h1>新建迁移任务</h1>
+            <Button onClick={() => navigate('/ops/migration')}>返回列表</Button>
+          </div>
+          {(form.source_env === 'prod' || form.target_env === 'prod') && (
+            <Alert
+              type="warning"
+              showIcon
+              className="mb"
+              message="源端或目标端为生产环境，请务必确认配置与审批要求。"
+            />
+          )}
       <div style={{ display: step === 3 ? 'block' : 'none' }}>
         <MigrationObjectSelect
           instanceId={form.source_instance_id}
+          domain={form.source_domain}
+          env={form.source_env}
+          dbType={form.db_type}
           objects={form.objects}
           wholeDbs={form.whole_dbs}
           onObjectsChange={(objects) => patchForm({ objects })}
@@ -473,11 +563,19 @@ export default function MigrationCreate() {
                   ]}
                 />
               </Form.Item>
-              <Form.Item label="环境" required>
+              <Form.Item label="源端环境" required>
                 <Select
                   style={{ width: '100%' }}
-                  value={form.env}
-                  onChange={(v) => patchForm({ env: v })}
+                  value={form.source_env}
+                  onChange={onSourceEnvChange}
+                  options={envOptions.map((e) => ({ label: e, value: e }))}
+                />
+              </Form.Item>
+              <Form.Item label="目标端环境" required>
+                <Select
+                  style={{ width: '100%' }}
+                  value={form.target_env}
+                  onChange={onTargetEnvChange}
                   options={envOptions.map((e) => ({ label: e, value: e }))}
                 />
               </Form.Item>
@@ -519,22 +617,24 @@ export default function MigrationCreate() {
 
           {step === 1 && (
             <>
-              <Form.Item label="源实例" required>
+              <Form.Item label="源端域名" required>
                 <Select
                   showSearch
                   optionFilterProp="label"
+                  placeholder="从域名管理选择"
                   style={{ width: '100%' }}
-                  value={form.source_instance_id || undefined}
-                  onChange={(v) => {
-                    patchForm({ source_instance_id: v })
-                    setSrcConn(null)
-                  }}
-                  options={sourceInst.map((i) => ({ value: i.id, label: instLabel(i) }))}
+                  value={
+                    form.source_instance_id && form.source_domain
+                      ? sourceKey(form.source_instance_id, form.source_domain)
+                      : undefined
+                  }
+                  onChange={(v) => onEndpointChange('source', v)}
+                  options={sourceDomainOptions.map((s) => ({ value: s.key, label: sourcePrimaryLabel(s) }))}
                 />
               </Form.Item>
               <Form.Item>
                 <Button
-                  disabled={!form.source_instance_id}
+                  disabled={!form.source_domain}
                   loading={srcTesting}
                   onClick={() => testConn('source')}
                 >
@@ -546,22 +646,24 @@ export default function MigrationCreate() {
                   </span>
                 )}
               </Form.Item>
-              <Form.Item label="目标实例" required>
+              <Form.Item label="目标端域名" required>
                 <Select
                   showSearch
                   optionFilterProp="label"
+                  placeholder="从域名管理选择"
                   style={{ width: '100%' }}
-                  value={form.target_instance_id || undefined}
-                  onChange={(v) => {
-                    patchForm({ target_instance_id: v })
-                    setTgtConn(null)
-                  }}
-                  options={targetInst.map((i) => ({ value: i.id, label: instLabel(i) }))}
+                  value={
+                    form.target_instance_id && form.target_domain
+                      ? sourceKey(form.target_instance_id, form.target_domain)
+                      : undefined
+                  }
+                  onChange={(v) => onEndpointChange('target', v)}
+                  options={targetDomainOptions.map((s) => ({ value: s.key, label: sourcePrimaryLabel(s) }))}
                 />
               </Form.Item>
               <Form.Item>
                 <Button
-                  disabled={!form.target_instance_id}
+                  disabled={!form.target_domain}
                   loading={tgtTesting}
                   onClick={() => testConn('target')}
                 >
@@ -633,8 +735,8 @@ export default function MigrationCreate() {
                       className="mt"
                       message={
                         <span>
-                          请先在 <Link to="/config/oss">配置中心 → OSS 配置</Link> 中为环境「{form.env}
-                          」配置连接信息
+                          请先在 <Link to="/config/oss">配置中心 → OSS 配置</Link> 中为源端环境「
+                          {form.source_env}」配置连接信息
                         </span>
                       }
                     />
@@ -657,8 +759,11 @@ export default function MigrationCreate() {
             <>
               <Descriptions column={2} bordered>
                 <Descriptions.Item label="任务名称">{form.name}</Descriptions.Item>
-                <Descriptions.Item label="环境">{form.env}</Descriptions.Item>
+                <Descriptions.Item label="源端环境">{form.source_env}</Descriptions.Item>
+                <Descriptions.Item label="目标端环境">{form.target_env}</Descriptions.Item>
                 <Descriptions.Item label="类型">{form.db_type}</Descriptions.Item>
+                <Descriptions.Item label="源端域名">{form.source_domain || '—'}</Descriptions.Item>
+                <Descriptions.Item label="目标端域名">{form.target_domain || '—'}</Descriptions.Item>
                 <Descriptions.Item label="启动">
                   {form.start_mode === 'scheduled' ? `定时 ${form.scheduled_at}` : '审批通过后立即执行'}
                 </Descriptions.Item>
@@ -732,6 +837,8 @@ export default function MigrationCreate() {
         )}
       </div>
       {step === 4 && <p className="hint">提交后超过 8 小时未审核完成，系统将自动取消。</p>}
+        </div>
+      </div>
     </div>
   )
 }

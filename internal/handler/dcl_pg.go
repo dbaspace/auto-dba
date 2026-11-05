@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -266,7 +267,7 @@ func buildDCLNotifyItem(inst *store.Instance, domain, grantee, password string, 
 	}
 }
 
-// executeDCLTicket 按库执行授权：PG 对齐运维模板；MySQL/SR 执行库级 GRANT。
+// executeDCLTicket 按库执行授权：PG 对齐运维模板；StarRocks 按对象类型授权并自动建账号；MySQL 执行库级 GRANT。
 func (h *TicketHandler) executeDCLTicket(ctx context.Context, it *store.Issue) error {
 	if it == nil {
 		return fmt.Errorf("工单不存在")
@@ -375,6 +376,37 @@ func (h *TicketHandler) executeDCLTicket(ctx context.Context, it *store.Issue) e
 				break
 			}
 		}
+	} else if engine == "starrocks" {
+		stmts := sqlcheck.SplitSQL(renderStarRocksDCLScript(dbs, grantee, perms))
+		if len(stmts) == 0 {
+			return h.persistExec(it, ticketexec.FailBeforeExec("无法生成授权 SQL", ticketexec.Record{
+				InstanceID: inst.ID, InstanceName: inst.Name, DB: it.DBName,
+			}))
+		}
+		t, terr := h.execTarget(inst, dbs[0], domain)
+		if terr != nil {
+			return h.persistExec(it, ticketexec.FailBeforeExec(terr.Error(), ticketexec.Record{
+				InstanceID: inst.ID, InstanceName: inst.Name, Host: resolveInstanceHost(inst, domain), DB: dbs[0],
+			}))
+		}
+		h.watchSession(it, inst, t.Host, dbs[0], &t)
+		provision, err = h.ensureSRDCLUser(ctx, t, inst, it, grantee, dbs, perms)
+		if err != nil {
+			merged.Success = false
+			merged.Message = err.Error()
+			merged.EndedAt = time.Now().UTC().Format(time.RFC3339)
+			return h.persistExec(it, merged)
+		}
+		res := ticketexec.ExecStatements(ctx, t, stmts)
+		mergeExecResult(merged, res)
+		if res == nil || !res.Success {
+			if merged.Message == "" && res != nil {
+				merged.Message = res.Message
+			}
+			if provision.Created && merged.Message != "" {
+				merged.Message = "账号已创建，授权未完成: " + merged.Message
+			}
+		}
 	} else {
 		script := renderMySQLDCLScript(dbs, grantee, perms)
 		stmts := sqlcheck.SplitSQL(script)
@@ -406,7 +438,12 @@ func (h *TicketHandler) executeDCLTicket(ctx context.Context, it *store.Issue) e
 	if err := h.persistExec(it, merged); err != nil {
 		return err
 	}
-	if merged.Success && engine == "postgres" {
+	if merged.Success && engine == "starrocks" {
+		if err := recordSRDCLAccounts(h.Store, inst, it, grantee, dbs, perms); err != nil {
+			log.Printf("dcl starrocks record accounts ticket=%s: %v", it.TicketNo, err)
+		}
+	}
+	if merged.Success && (engine == "postgres" || engine == "starrocks") {
 		item := buildDCLNotifyItem(inst, domain, grantee, provision.Password, provision.Created, dbs, perms)
 		cp := *it
 		go notify.DCLDone(h.Store, &cp, item)

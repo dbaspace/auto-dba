@@ -108,7 +108,7 @@ func TestBuildSchemaGrantSQL_PGEmptyOwner(t *testing.T) {
 
 func TestBuildSchemaGrantSQL_MySQL(t *testing.T) {
 	got := buildSchemaGrantSQL("mysql", "u", "db1", "", []string{"r", "c"})
-	if got != "GRANT SELECT, INSERT ON DATABASE db1 TO u" {
+	if got != "GRANT SELECT, INSERT ON `db1`.* TO 'u'@'%'" {
 		t.Fatalf("mysql: %s", got)
 	}
 }

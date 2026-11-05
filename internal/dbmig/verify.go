@@ -50,6 +50,8 @@ func Verify(ctx context.Context, st *store.DB, secretKey string, t *store.Migrat
 	if err != nil || tgtInst == nil {
 		return nil, fmt.Errorf("目标实例不存在")
 	}
+	srcInst = WithDialHost(srcInst, t.SourceHost)
+	tgtInst = WithDialHost(tgtInst, t.TargetHost)
 	objs := t.Objects
 	if len(objs) == 0 {
 		objs, err = st.ListMigrationObjects(t.ID)

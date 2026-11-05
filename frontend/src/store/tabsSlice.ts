@@ -58,9 +58,16 @@ function migrationDetailTitle(path: string): string {
 /** 数据查询等固定页：菜单短名会被 PAGE_ROUTES 纠正（勿作用于 /config/instances?db_type=） */
 const QUERY_TAB_ROUTE_PATHS = new Set(['/ops/redis-query', '/ops/kafka-query', '/ops/query'])
 
+/** 云资源路径用 PAGE_ROUTES 标题，盖过菜单短名（PostgreSQL → 云 PostgreSQL）。 */
+function cloudRouteTitle(path: string): string {
+  const p = normPath(path)
+  if (p !== '/ops/cloud' && !p.startsWith('/ops/cloud/')) return ''
+  return pageRouteTitle(p)
+}
+
 /**
  * 打开 Tab 时的最终标题。
- * 数据查询路径优先 PAGE_ROUTES（Redis → Redis 查询）；其余保留传入 title（如实例类型 Redis）。
+ * 数据查询、云资源路径优先 PAGE_ROUTES；其余保留传入 title（如实例类型 PostgreSQL）。
  */
 export function resolveOpenTabTitle(path: string, title: string | undefined, menus?: MenuNode[]): string {
   const p = normPath(path)
@@ -70,6 +77,8 @@ export function resolveOpenTabTitle(path: string, title: string | undefined, men
   if (cdcTitle) return cdcTitle
   const migTitle = migrationDetailTitle(p)
   if (migTitle) return migTitle
+  const cloudTitle = cloudRouteTitle(p)
+  if (cloudTitle) return cloudTitle
   const routeTitle = pageRouteTitle(p)
   const t = (title || '').trim()
   if (routeTitle && QUERY_TAB_ROUTE_PATHS.has(p)) return routeTitle
@@ -78,7 +87,7 @@ export function resolveOpenTabTitle(path: string, title: string | undefined, men
   return titleForPath(p, menus)
 }
 
-/** 恢复缓存 Tab 时校正数据查询旧短名 */
+/** 恢复缓存 Tab 时校正数据查询和云资源旧短名 */
 function normalizeCachedTabTitle(path: string, title: string, menus?: MenuNode[]): string {
   const p = normPath(path)
   const ticketTitle = ticketDetailTitle(p)
@@ -87,6 +96,8 @@ function normalizeCachedTabTitle(path: string, title: string, menus?: MenuNode[]
   if (cdcTitle) return cdcTitle
   const migTitle = migrationDetailTitle(p)
   if (migTitle) return migTitle
+  const cloudTitle = cloudRouteTitle(p)
+  if (cloudTitle) return cloudTitle
   const routeTitle = pageRouteTitle(p)
   if (routeTitle && QUERY_TAB_ROUTE_PATHS.has(p)) return routeTitle
   return clusterDeployEngineTitle(p) || title || titleForPath(p, menus)

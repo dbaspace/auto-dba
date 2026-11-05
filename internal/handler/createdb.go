@@ -166,6 +166,7 @@ func (h *CreateDBHandler) Submit(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "数据库账号必填"})
 		return
 	}
+	req.Permissions = normalizeAccountPerms(store.NormalizeReviewEngine(req.DBType), req.Permissions)
 	if len(req.Permissions) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "账号权限必填"})
 		return

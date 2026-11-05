@@ -525,6 +525,10 @@ export default function MigrationDetail() {
           <div className="sec-title">任务配置</div>
           <Descriptions column={DESC_COLS} bordered size="small" className="mb">
             <Descriptions.Item label="数据库类型">{emptyPlain(task?.db_type)}</Descriptions.Item>
+            <Descriptions.Item label="源端环境">{emptyPlain(task?.source_env || task?.env)}</Descriptions.Item>
+            <Descriptions.Item label="目标端环境">
+              {emptyPlain(task?.target_env || task?.env)}
+            </Descriptions.Item>
             <Descriptions.Item label="迁移模式">{emptyPlain(task?.migration_mode)}</Descriptions.Item>
             <Descriptions.Item label="数据中转方式">{transferText(task?.transfer_mode)}</Descriptions.Item>
             <Descriptions.Item label="迁移数据量（估算）">

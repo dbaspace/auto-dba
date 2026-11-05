@@ -106,10 +106,14 @@ Client Secret（及 LDAP Bind 密码）用字段加密密钥落库（优先 `app
 |------|------|------|
 | 同步列表 | `/ops/slots` | 采集并查看 PostgreSQL 逻辑复制槽（pid、flush LSN、按 restart_lsn 计算的滞后字节）。初始化任务优先匹配槽；批量重启跳过把 `*-add` 任务名当成 Connector。可按状态、积压、域名、任务名筛选；可刷新当前列表（不触发采集）；支持手动采集（显示进度）。平台定时任务 `sync.slots.collect` 按全局参数 `slot_monitor_collect_interval_sec`（默认 60 秒）周期采集。建 CDC 任务只登记槽名，不覆盖已采集的 LSN。采集按全局唯一的 `slot_name` 覆盖同一行的 pid、LSN、滞后（主机写法不同也不另插一行），并保留 id。**批量重启**（对齐 Hub）：提交 `items[{host,port,slot_name}]`（稳定键，兼容旧 `ids`）；确认后异步执行——先对业务库 `UPDATE tbl_heartbeat_table`，再 `POST .../connectors/{name}/tasks/0/restart`（不走 CDC 任务页的 includeTasks 全量重启）；页面显示重启进度。采集与重启互斥；操作日志写入 `tbl_sync_slot_op_logs` 持久化，同页「查看操作日志」可查看。不删除 PostgreSQL 复制槽 |
 | CDC 同步任务 | `/ops/cdc` | 创建、启动、停止同步任务，查看链路、表映射、加表与运行日志。列表 description 瘦身（`list_table_counts`）；运行中初始化任务按当前页探测链路；后台周期扫表结构差异。详情页签懒加载。Debezium 配置页查看时为「编辑」，进入编辑后提交为「保存」，切走页签保留未保存内容。加表预览在父 Connector 上追加表清单，Routine Load 名为 `rl_` 加目标表名。初始化缺 `debezium_signal` 时提交后自动创建。StarRocks 建表按 PostgreSQL 列类型映射。初始化任务可修复源端地址。Connector 缺失时可[重新初始化](cdc-reinit.md)。服务重启后，超过 5 分钟仍在编排中的任务标为失败并可重试。**新增同步表 / 源表加列**支持跨多实例一次勾选多分库 init（上限 128，可全选当前筛选）；`init-list` 支持 `env`/`q`；批量预检逐父返回 checks；确认页展示批量提交计划。已同步口径含 pending/error 子任务占用；`sync_approval_enabled=false` 时免审直跑；分表扩展复用已有目标跳过 SR/RL；batch 接口 404 时前端逐父降级创建。加表写父 Connector 时分表组用 regex `table.include.list`，并写入 `ByLogicalTableRouter`（transforms 链含逻辑名 + 四字段），与创建 init 一致。批量加表时子任务链路名按各自父任务改写/编排；Debezium 按分库过滤后再合并 include 与路由，并记配置版本。列表与详情只展示源端生效地址（任务 `source_host` > Debezium hostname > 实例 host）。修复源端只追加实例域名、不改实例 host/port；「一并修复」默认关闭，且仅覆盖同实例、修复前地址相同的运行中初始化任务。源库连接与重新初始化优先用任务 `source_host`。平台管理员在租户审计模式下可将初始化任务连同子任务划拨到指定租户；划拨不改实例归属，任务归属租户的详情、可选表、Publication、结构对比、加表提交按任务使用其源/目标实例（实例列表不变）。加表可选表按每个父任务分别计算，并核对源库 publication：记录已加但 publication 缺失的表可重新加；跨多个源实例混选时提示。多父下一步去掉重复 synced-tables 等待并瘦身响应；异地按 idc 走 sql-agent `POST /v1/sql/meta` 就近拉表（须升级执行器；无执行器不硬跨网） |
-| 数据迁移 | `/ops/migration` | 库表或整库迁移，支持对象选择、预检、执行与校验。PostgreSQL 会迁移扩展、序列、索引，外键和触发器在数据完成后创建；`GENERATED ALWAYS` 不走 COPY。详情页签显示任务名 |
+| 数据迁移 | `/ops/migration` | 库表或整库迁移，支持对象选择、预检、执行与校验。新建任务分别选择源端环境、目标端环境，地址列表按各自环境过滤；只传原来的单一环境时两端都用该环境。PostgreSQL 会迁移扩展、序列、索引，外键和触发器在数据完成后创建；`GENERATED ALWAYS` 不走 COPY。详情页签显示任务名 |
 | 表结构对比 | `/ops/migration/compare` | 同族实例异步对比结构，生成只增不删的修复 SQL |
 
-**CDC** 的链路是 PostgreSQL 逻辑复制 → Debezium / Kafka Connect → Kafka → StarRocks。一个任务内维护源表与目标表的绑定；分库分表按绑定串行处理，提交前只对代表库做表存在性预检。外部地址未配置时任务可以先落库，执行时返回「未配置」，不会中断进程。
+**CDC** 的链路是 PostgreSQL 逻辑复制 → Debezium / Kafka Connect → Kafka → StarRocks。一个任务内维护源表与目标表的绑定；提交前只对代表库做表存在性预检。外部地址未配置时任务可以先落库，执行时返回「未配置」，不会中断进程。
+
+分表不拆任务：同一条初始化任务用 `table.include.list` 正则和 `ByLogicalTableRouter`，Kafka topic 用逻辑表名一份。分库在全局参数 `sync_shard_fanout_on_approve=true`（默认）时，审批通过或免审创建后拆成每个有表的物理库一条单库 init；汇总任务状态为 `superseded`，默认列表不展示（按该状态筛选仍可看到）。各库 publication、slot、connector 各自一套，topic 与 Routine Load 共用汇总任务的 `topic_prefix`。开关为 false 时不拆任务，仍在这一条任务里按库串行建 publication、slot 和 connector。
+
+Publication 与 Debezium connector 同名。未改名时为 `rt_{环境}_{库名}`；提交前可以改 publication（写成 `srt_…` 即用该前缀），connector 与之相同。Slot 为 `slot_{环境}_{库名}_{6位}`，不跟随自定义 publication。分库时用户改的 publication 只用于代表库，其它库按各自库名生成。初始化会 `CREATE PUBLICATION` 并创建复制槽；publication 已存在且不是整库发布时再 `ALTER PUBLICATION ADD TABLE`，并对本次纳入的表设置 `REPLICA IDENTITY FULL`。整库发布（`FOR ALL TABLES`）直接失败。加表不新建 publication 和 slot，只 `ALTER PUBLICATION ADD TABLE`。
 
 **数据迁移** 可在「迁移设置」里配置审批与全局性能参数；对象存储在「配置中心 → 对象存储」维护，创建任务选择 OSS 中转时直接引用。
 

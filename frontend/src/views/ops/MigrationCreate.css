@@ -3,18 +3,99 @@
   width: 100%;
   max-width: none;
   margin: 0;
-  padding: 16px 16px 32px;
-  overflow: auto;
+  padding: 16px 20px 24px 8px;
+  overflow: visible;
   background: var(--app-content-bg, #fff);
   box-sizing: border-box;
 }
-.mig-create-inner,
-.mig-create .ops-title,
-.mig-create .white-card,
-.mig-create .mig-nav {
-  max-width: 1400px;
-  margin-left: auto;
-  margin-right: auto;
+.mig-create-body {
+  width: 100%;
+  display: flex;
+  align-items: stretch;
+  gap: 28px;
+}
+.mig-steps {
+  width: 200px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+}
+.mig-steps .ant-steps.ant-steps-vertical {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+.mig-steps .ant-steps-vertical > .ant-steps-item {
+  flex: 1 1 0;
+  min-height: 0;
+}
+.mig-steps .ant-steps-vertical > .ant-steps-item:last-child {
+  flex: 0 0 auto;
+  padding-bottom: 0;
+}
+.mig-steps .ant-steps-vertical > .ant-steps-item > .ant-steps-item-container {
+  height: 100%;
+}
+.mig-steps .ant-steps-vertical > .ant-steps-item:last-child > .ant-steps-item-container {
+  height: auto;
+  padding-bottom: 0;
+}
+.mig-steps .ant-steps-vertical > .ant-steps-item:last-child .ant-steps-item-content {
+  min-height: 32px;
+}
+.mig-steps .ant-steps-vertical > .ant-steps-item:last-child .ant-steps-item-title {
+  line-height: 32px;
+}
+.mig-steps .ant-steps-item-tail {
+  overflow: visible;
+}
+/* 连线中部向下箭头，最后一步没有下一段 */
+.mig-steps .ant-steps-vertical > .ant-steps-item:not(:last-child) .ant-steps-item-tail::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 58%;
+  z-index: 1;
+  width: 0;
+  height: 0;
+  transform: translate(-50%, -50%);
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 7px solid #bfbfbf;
+}
+.mig-steps .ant-steps-item-finish > .ant-steps-item-container > .ant-steps-item-tail::before {
+  border-top-color: #1677ff;
+}
+.mig-create-main {
+  flex: 1;
+  min-width: 0;
+  overflow: visible;
+  padding-right: 4px;
+}
+@media (max-width: 900px) {
+  .mig-create-body {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .mig-steps {
+    width: 100%;
+    height: auto;
+  }
+  .mig-steps .ant-steps.ant-steps-vertical {
+    height: auto;
+    display: block;
+  }
+  .mig-steps .ant-steps-vertical > .ant-steps-item,
+  .mig-steps .ant-steps-vertical > .ant-steps-item:last-child {
+    flex: none;
+  }
+  .mig-steps .ant-steps-vertical > .ant-steps-item > .ant-steps-item-container {
+    height: auto;
+  }
+  .mig-create-main {
+    width: 100%;
+    overflow: visible;
+  }
 }
 .mig-create .ops-title {
   display: flex;

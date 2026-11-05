@@ -128,10 +128,13 @@ func TestBuildShardBindings(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("%+v", got)
 	}
-	if got[0].PublicationName != "test_shop_000" || got[1].PublicationName != "test_shop_001" {
+	if got[0].PublicationName != "test_shop_000" || got[1].PublicationName != "rt_test_shop_001" {
 		t.Fatalf("%+v", got)
 	}
-	if got[1].ConnectorName != "test_shop_001" || !strings.HasPrefix(got[1].SlotName, "slot_test_shop_001_") {
+	if got[0].ConnectorName != "test_shop_000" {
+		t.Fatalf("rep connector=%+v", got[0])
+	}
+	if got[1].ConnectorName != "rt_test_shop_001" || !strings.HasPrefix(got[1].SlotName, "slot_test_shop_001_") {
 		t.Fatalf("other shard=%+v", got[1])
 	}
 }

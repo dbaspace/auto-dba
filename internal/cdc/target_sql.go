@@ -28,6 +28,7 @@ type TargetSQLParams struct {
 	TaskType           string
 	SQLOverrides       []SQLOverride
 	KafkaDefaultOffset string
+	ShardMergedRL      bool
 }
 
 type TargetSQLItem struct {
@@ -182,7 +183,7 @@ func BuildTargetSQLItems(p TargetSQLParams, colsByTable map[string][]pgCol, pksB
 		if strings.TrimSpace(p.KafkaDefaultOffset) != "" {
 			offset = NormalizeKafkaOffset(p.KafkaDefaultOffset)
 		}
-		rlName := RoutineLoadNameForTask(p.TaskType, p.Env, p.SourceDB, prefix, tgt)
+		rlName := cdcRoutineLoadName(p.TaskType, p.Env, p.SourceDB, prefix, tgt, p.ShardMergedRL)
 		item.Load = renderRoutineLoadSQL(db, tgt, rlName, cols, conc, p.KafkaBrokers, topics, p.DebeziumMode, offset, p.MessageSchemaMode)
 		out = append(out, item)
 	}

@@ -144,8 +144,16 @@
   align-items: center;
   gap: 4px;
   font-size: 12px;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
 }
-.tab-time { color: #9ca3af; margin-left: 4px; }
+.tab-lab.is-renaming { cursor: text; user-select: text; }
+.tab-lab.is-dragging { cursor: grabbing; }
+.tab-lab.drag-over {
+  box-shadow: inset 2px 0 0 var(--app-sider-active-color, #1677ff);
+}
+.tab-rename-input { width: 120px; }
 .tab-tag { color: #6b7280; }
 .tab-add { font-size: 18px; padding: 0 8px; }
 .editor-split {
@@ -170,6 +178,19 @@
   background: var(--app-content-bg, transparent);
 }
 .tool-left { display: flex; gap: 12px; }
+.fav-bound-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 180px;
+  color: var(--app-text, #111827);
+  font-size: 14px;
+}
+.fav-bound-name > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .db-meta {
   display: flex;
   align-items: center;

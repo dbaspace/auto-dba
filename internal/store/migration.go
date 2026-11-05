@@ -14,7 +14,8 @@ const migTaskCols = `id, name, status, source_instance_id, target_instance_id, s
 	created_at, updated_at, created_by, db_type, env, source_host, source_port, target_host, target_port,
 	migration_mode, schema_strategy, conflict_strategy, transfer_mode, start_mode, scheduled_at,
 	approval_status, assigned_approver, approved_by, approval_comment, batch_size, speed_limit,
-	total_objects, completed_objects, total_rows, completed_rows, error_message, started_at, finished_at, issue_id`
+	total_objects, completed_objects, total_rows, completed_rows, error_message, started_at, finished_at, issue_id,
+	source_env, target_env`
 
 func scanMigration(s interface{ Scan(...any) error }, t *MigrationTask) error {
 	return s.Scan(
@@ -22,8 +23,34 @@ func scanMigration(s interface{ Scan(...any) error }, t *MigrationTask) error {
 		&t.CreatedAt, &t.UpdatedAt, &t.CreatedBy, &t.DBType, &t.Env, &t.SourceHost, &t.SourcePort, &t.TargetHost, &t.TargetPort,
 		&t.MigrationMode, &t.SchemaStrategy, &t.ConflictStrategy, &t.TransferMode, &t.StartMode, &t.ScheduledAt,
 		&t.ApprovalStatus, &t.AssignedApprover, &t.ApprovedBy, &t.ApprovalComment, &t.BatchSize, &t.SpeedLimit,
-		&t.TotalObjects, &t.CompletedObjects, &t.TotalRows, &t.CompletedRows, &t.ErrorMessage, &t.StartedAt, &t.FinishedAt, &t.IssueID,
+		&t.TotalObjects, &t.CompletedObjects, &t.TotalRows, &t.CompletedRows,
+		&t.ErrorMessage, &t.StartedAt, &t.FinishedAt, &t.IssueID, &t.SourceEnv, &t.TargetEnv,
 	)
+}
+
+// NormalizeMigrationEnvs 把只带 env 的旧请求补成源端、目标端。env 固定写成源端，列表筛选仍可用。
+func NormalizeMigrationEnvs(t *MigrationTask) {
+	if t == nil {
+		return
+	}
+	src := strings.TrimSpace(t.SourceEnv)
+	tgt := strings.TrimSpace(t.TargetEnv)
+	env := strings.TrimSpace(t.Env)
+	if src == "" {
+		src = env
+	}
+	if tgt == "" {
+		tgt = env
+	}
+	if src == "" {
+		src = tgt
+	}
+	if tgt == "" {
+		tgt = src
+	}
+	t.SourceEnv = src
+	t.TargetEnv = tgt
+	t.Env = src
 }
 
 func (d *DB) CreateMigration(t *MigrationTask) error {
@@ -56,13 +83,15 @@ func (d *DB) CreateMigration(t *MigrationTask) error {
 		t.BatchSize = 1000
 	}
 	t.CreatedAt, t.UpdatedAt = now, now
+	NormalizeMigrationEnvs(t)
 	_, err := d.Exec(
-		`INSERT INTO tbl_migration_tasks(`+migTaskCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		`INSERT INTO tbl_migration_tasks(`+migTaskCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		t.ID, t.Name, t.Status, t.SourceID, t.TargetID, t.SourceDB, t.TargetDB, t.Description,
 		t.CreatedAt, t.UpdatedAt, t.CreatedBy, t.DBType, t.Env, t.SourceHost, t.SourcePort, t.TargetHost, t.TargetPort,
 		t.MigrationMode, t.SchemaStrategy, t.ConflictStrategy, t.TransferMode, t.StartMode, t.ScheduledAt,
 		t.ApprovalStatus, t.AssignedApprover, t.ApprovedBy, t.ApprovalComment, t.BatchSize, t.SpeedLimit,
 		t.TotalObjects, t.CompletedObjects, t.TotalRows, t.CompletedRows, t.ErrorMessage, t.StartedAt, t.FinishedAt, t.IssueID,
+		t.SourceEnv, t.TargetEnv,
 	)
 	if err != nil {
 		return err
@@ -205,19 +234,22 @@ func (d *DB) UpdateMigrationStatus(id, status string) error {
 
 func (d *DB) UpdateMigration(t *MigrationTask) error {
 	now := time.Now().UTC().Format(time.RFC3339)
+	NormalizeMigrationEnvs(t)
 	t.UpdatedAt = now
 	_, err := d.Exec(
 		`UPDATE tbl_migration_tasks SET name=?, status=?, source_instance_id=?, target_instance_id=?, source_db=?, target_db=?, description=?,
 			updated_at=?, created_by=?, db_type=?, env=?, source_host=?, source_port=?, target_host=?, target_port=?,
 			migration_mode=?, schema_strategy=?, conflict_strategy=?, transfer_mode=?, start_mode=?, scheduled_at=?,
 			approval_status=?, assigned_approver=?, approved_by=?, approval_comment=?, batch_size=?, speed_limit=?,
-			total_objects=?, completed_objects=?, total_rows=?, completed_rows=?, error_message=?, started_at=?, finished_at=?, issue_id=?
+			total_objects=?, completed_objects=?, total_rows=?, completed_rows=?, error_message=?, started_at=?, finished_at=?, issue_id=?,
+			source_env=?, target_env=?
 		 WHERE id=?`,
 		t.Name, t.Status, t.SourceID, t.TargetID, t.SourceDB, t.TargetDB, t.Description,
 		t.UpdatedAt, t.CreatedBy, t.DBType, t.Env, t.SourceHost, t.SourcePort, t.TargetHost, t.TargetPort,
 		t.MigrationMode, t.SchemaStrategy, t.ConflictStrategy, t.TransferMode, t.StartMode, t.ScheduledAt,
 		t.ApprovalStatus, t.AssignedApprover, t.ApprovedBy, t.ApprovalComment, t.BatchSize, t.SpeedLimit,
-		t.TotalObjects, t.CompletedObjects, t.TotalRows, t.CompletedRows, t.ErrorMessage, t.StartedAt, t.FinishedAt, t.IssueID, t.ID,
+		t.TotalObjects, t.CompletedObjects, t.TotalRows, t.CompletedRows, t.ErrorMessage, t.StartedAt, t.FinishedAt, t.IssueID,
+		t.SourceEnv, t.TargetEnv, t.ID,
 	)
 	return err
 }

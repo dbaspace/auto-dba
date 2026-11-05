@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -20,6 +21,23 @@ type CloudHandler struct {
 	Store  *store.DB
 	Secret string
 	Svc    *cloudsvc.Service
+}
+
+func normalizeCloudRegions(in []string) ([]string, error) {
+	seen := map[string]bool{}
+	var out []string
+	for _, r := range in {
+		r = strings.TrimSpace(r)
+		if r == "" || seen[r] {
+			continue
+		}
+		seen[r] = true
+		out = append(out, r)
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("请至少选择一个云地域")
+	}
+	return out, nil
 }
 
 func (h *CloudHandler) tenant(c *gin.Context) string {
@@ -91,6 +109,12 @@ func (h *CloudHandler) CreateAccount(c *gin.Context) {
 		return
 	}
 	req.TenantID = middleware.TenantID(c)
+	regions, rerr := normalizeCloudRegions(req.Regions)
+	if rerr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": rerr.Error()})
+		return
+	}
+	req.Regions = regions
 	if err := h.Store.CreateCloudAccount(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
@@ -123,7 +147,12 @@ func (h *CloudHandler) UpdateAccount(c *gin.Context) {
 	}
 	acc.Name = req.Name
 	if req.Regions != nil {
-		acc.Regions = req.Regions
+		regions, rerr := normalizeCloudRegions(req.Regions)
+		if rerr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"message": rerr.Error()})
+			return
+		}
+		acc.Regions = regions
 	}
 	if req.PlatformRegionIDs != nil {
 		acc.PlatformRegionIDs = req.PlatformRegionIDs

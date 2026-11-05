@@ -1330,6 +1330,25 @@ func (d *DB) ensurePGActivitySnapshotsTable() error {
 	return nil
 }
 
+// ensureMigrationEnvSplit 给已跳过全量迁移的库补上源端、目标端环境，并把旧任务的 env 写到两端。
+func (d *DB) ensureMigrationEnvSplit() error {
+	if err := d.ensureColumnIfMissing("tbl_migration_tasks", "source_env", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := d.ensureColumnIfMissing("tbl_migration_tasks", "target_env", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	return d.backfillMigrationEnvs()
+}
+
+func (d *DB) backfillMigrationEnvs() error {
+	if _, err := d.db.Exec(`UPDATE tbl_migration_tasks SET source_env = env WHERE COALESCE(source_env, '') = '' AND COALESCE(env, '') <> ''`); err != nil {
+		return err
+	}
+	_, err := d.db.Exec(`UPDATE tbl_migration_tasks SET target_env = env WHERE COALESCE(target_env, '') = '' AND COALESCE(env, '') <> ''`)
+	return err
+}
+
 func (d *DB) ensureMigrationSchema() error {
 	for _, spec := range []struct{ col, def string }{
 		{"created_by", "TEXT NOT NULL DEFAULT ''"},
@@ -1360,6 +1379,8 @@ func (d *DB) ensureMigrationSchema() error {
 		{"started_at", "TEXT NOT NULL DEFAULT ''"},
 		{"finished_at", "TEXT NOT NULL DEFAULT ''"},
 		{"tags", "TEXT NOT NULL DEFAULT '{}'"},
+		{"source_env", "TEXT NOT NULL DEFAULT ''"},
+		{"target_env", "TEXT NOT NULL DEFAULT ''"},
 	} {
 		var n int
 		err := d.db.QueryRow(`
@@ -1374,6 +1395,9 @@ func (d *DB) ensureMigrationSchema() error {
 				return err
 			}
 		}
+	}
+	if err := d.backfillMigrationEnvs(); err != nil {
+		return err
 	}
 	if _, err := d.db.Exec(`CREATE TABLE IF NOT EXISTS tbl_migration_objects (
 		id TEXT PRIMARY KEY,

@@ -30,7 +30,7 @@ func TestRoutineLoadNameFor_prefixRl(t *testing.T) {
 
 func TestResolveInitNaming_defaults(t *testing.T) {
 	n := ResolveInitNaming(InitNamingInput{Env: "test", SourceDB: "db_ai"})
-	if n.PublicationName != "test_db_ai" || n.ConnectorName != "test_db_ai" || n.TopicPrefix != "test_db_ai" {
+	if n.PublicationName != "rt_test_db_ai" || n.ConnectorName != "rt_test_db_ai" || n.TopicPrefix != "rt_test_db_ai" {
 		t.Fatalf("naming=%+v", n)
 	}
 	if !strings.HasPrefix(n.SlotName, "slot_test_db_ai_") {
@@ -51,7 +51,7 @@ func TestResolveInitNaming_publicationCascade(t *testing.T) {
 	if n.PublicationName != "test_db_dba" || n.ConnectorName != "test_db_dba" || n.TopicPrefix != "test_db_dba" {
 		t.Fatalf("cascade=%+v", n)
 	}
-	if !strings.HasPrefix(n.SlotName, "slot_test_db_dba_") {
+	if !strings.HasPrefix(n.SlotName, "slot_test_db_dba_000_") {
 		t.Fatalf("slot=%s", n.SlotName)
 	}
 }
@@ -65,7 +65,33 @@ func TestResolveInitNaming_explicitSlotKept(t *testing.T) {
 	if n.SlotName != "slot_custom" {
 		t.Fatalf("slot=%s", n.SlotName)
 	}
-	if n.PublicationName != "test_db_ai" {
-		t.Fatalf("pub=%s", n.PublicationName)
+	if n.PublicationName != "rt_test_db_ai" || n.ConnectorName != "rt_test_db_ai" {
+		t.Fatalf("pub=%s connector=%s", n.PublicationName, n.ConnectorName)
+	}
+}
+
+func TestResolveInitNaming_connectorFollowsPublication(t *testing.T) {
+	n := ResolveInitNaming(InitNamingInput{
+		Env:             "test",
+		SourceDB:        "db_ai",
+		PublicationName: "srt_test_db_ai",
+		ConnectorName:   "other_conn",
+		TopicPrefix:     "keep_topic",
+	})
+	if n.PublicationName != "srt_test_db_ai" || n.ConnectorName != "srt_test_db_ai" {
+		t.Fatalf("names=%+v", n)
+	}
+	if n.TopicPrefix != "keep_topic" {
+		t.Fatalf("topic=%s", n.TopicPrefix)
+	}
+	if !strings.HasPrefix(n.SlotName, "slot_test_db_ai_") {
+		t.Fatalf("slot=%s", n.SlotName)
+	}
+}
+
+func TestRoutineLoadNameForExtra_fanoutUsesSharedPrefix(t *testing.T) {
+	extra := map[string]string{"env": "test", "topic_prefix": "rt_test_shop_000", "cdc_fanout_from": "parent"}
+	if got := RoutineLoadNameForExtra("init", extra, "shop_001", "tbl_order"); got != "rl_rt_test_shop_000_tbl_order" {
+		t.Fatalf("fanout rl=%s", got)
 	}
 }

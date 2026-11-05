@@ -198,7 +198,7 @@ func TestBuildPreview_masksPassword(t *testing.T) {
 	if out.Config["database.password"] != MaskedPassword {
 		t.Fatalf("password should be masked: %q", out.Config["database.password"])
 	}
-	if out.PublicationName != "prod_order_db" || out.TopicPrefix != "prod_order_db" {
+	if out.PublicationName != "rt_prod_order_db" || out.TopicPrefix != "rt_prod_order_db" {
 		t.Fatalf("names: pub=%q slot=%q topic=%q", out.PublicationName, out.SlotName, out.TopicPrefix)
 	}
 	if !strings.HasPrefix(out.SlotName, "slot_prod_order_db_") {

@@ -26,11 +26,28 @@ func decrypt(secretKey string, inst *store.Instance) (string, error) {
 }
 
 func instHost(inst *store.Instance) string {
+	if inst == nil {
+		return ""
+	}
 	h := strings.TrimSpace(inst.Host)
 	if h == "" {
 		h = strings.TrimSpace(inst.DomainName)
 	}
 	return h
+}
+
+// WithDialHost 复制实例并把拨号地址改为 host。host 为空时原样返回，旧任务继续用实例地址。
+func WithDialHost(inst *store.Instance, host string) *store.Instance {
+	if inst == nil {
+		return nil
+	}
+	h := strings.TrimSpace(host)
+	if h == "" {
+		return inst
+	}
+	cp := *inst
+	cp.Host = h
+	return &cp
 }
 
 func Open(ctx context.Context, engine, host string, port int, user, password, dbName string) (*sql.DB, error) {

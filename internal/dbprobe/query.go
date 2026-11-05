@@ -44,6 +44,7 @@ type QueryResult struct {
 	Columns      []string `json:"columns"`
 	Rows         [][]any  `json:"rows"`
 	Truncated    bool     `json:"truncated"`
+	Notice       string   `json:"notice,omitempty"`
 	ElapsedMS    int64    `json:"elapsed_ms"`
 	Limit        int      `json:"limit,omitempty"`         // 最大查询（硬顶，文案 M）
 	AppliedLimit int      `json:"applied_limit,omitempty"` // 本语句实际 limit
@@ -222,11 +223,21 @@ func ListTables(ctx context.Context, inst *store.Instance, password, dbName stri
 	}
 }
 
+// 交互查询在库端先停，短于接口 context，避免两边同时到点变成读超时。
+const InteractiveStmtTimeout = 18 * time.Second
+
+// 单次查询结果体积上限。超过后停止继续读行。
+const maxQueryPayloadBytes = 8 << 20
+
 func ExecQuery(ctx context.Context, inst *store.Instance, password, dbName, rawSQL string, limit int) (*QueryResult, error) {
 	if err := isReadOnlyQuery(inst.DBType, rawSQL); err != nil {
 		return nil, err
 	}
-	return runQuery(ctx, inst, password, dbName, rawSQL, clampLimit(limit), 0)
+	timeout := time.Duration(0)
+	if family(inst.DBType) == "postgres" {
+		timeout = InteractiveStmtTimeout
+	}
+	return runQuery(ctx, inst, password, dbName, rawSQL, clampLimit(limit), timeout)
 }
 
 func ExecExport(ctx context.Context, inst *store.Instance, password, dbName, rawSQL string, limit int) (*QueryResult, error) {
@@ -574,7 +585,9 @@ func scanQuery(ctx context.Context, db *sql.DB, rawSQL string, limit int) (*Quer
 	if err != nil {
 		return nil, err
 	}
+	typeNames := columnTypeNames(rows)
 	out := &QueryResult{Columns: cols, Rows: [][]any{}}
+	used := 0
 	for rows.Next() {
 		if len(out.Rows) >= limit {
 			out.Truncated = true
@@ -589,23 +602,93 @@ func scanQuery(ctx context.Context, db *sql.DB, rawSQL string, limit int) (*Quer
 			return nil, err
 		}
 		row := make([]any, len(cols))
+		rowBytes := 0
 		for i, v := range vals {
-			row[i] = normalizeCell(v)
+			cell := normalizeCell(v, typeAt(typeNames, i))
+			row[i] = cell
+			rowBytes += cellSize(cell)
 		}
 		out.Rows = append(out.Rows, row)
+		used += rowBytes
+		if used > maxQueryPayloadBytes {
+			out.Truncated = true
+			out.Notice = "结果过大已截断"
+			break
+		}
 	}
 	return out, rows.Err()
 }
 
-func normalizeCell(v any) any {
+func cellSize(v any) int {
+	switch t := v.(type) {
+	case nil:
+		return 0
+	case string:
+		return len(t)
+	case []byte:
+		return len(t)
+	default:
+		return len(fmt.Sprint(t))
+	}
+}
+
+func columnTypeNames(rows *sql.Rows) []string {
+	cts, err := rows.ColumnTypes()
+	if err != nil || len(cts) == 0 {
+		return nil
+	}
+	names := make([]string, len(cts))
+	for i, ct := range cts {
+		if ct != nil {
+			names[i] = ct.DatabaseTypeName()
+		}
+	}
+	return names
+}
+
+func typeAt(names []string, i int) string {
+	if i < 0 || i >= len(names) {
+		return ""
+	}
+	return names[i]
+}
+
+func normalizeCell(v any, dbType ...string) any {
+	kind := ""
+	if len(dbType) > 0 {
+		kind = dbType[0]
+	}
 	switch t := v.(type) {
 	case nil:
 		return nil
 	case []byte:
 		return string(t)
 	case time.Time:
-		return t.Format("2006-01-02 15:04:05")
+		return FormatQueryTime(t, kind)
 	default:
 		return t
+	}
+}
+
+// FormatQueryTime 把查询单元格里的时间格式化成与老平台一致的文本。
+// timestamptz / timestamp / datetime 为 2006-01-02T15:04:05.000000Z；date 为日历日；time 只保留时分秒微秒。
+func FormatQueryTime(t time.Time, dbType string) string {
+	name := strings.ToUpper(strings.TrimSpace(dbType))
+	switch {
+	case name == "DATE":
+		return t.Format("2006-01-02")
+	case isClockType(name):
+		return t.Format("15:04:05.000000")
+	default:
+		return t.UTC().Format("2006-01-02T15:04:05.000000Z")
+	}
+}
+
+func isClockType(name string) bool {
+	switch name {
+	case "TIME", "TIMETZ", "TIME WITH TIME ZONE", "TIME WITHOUT TIME ZONE":
+		return true
+	default:
+		return false
 	}
 }

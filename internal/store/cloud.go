@@ -260,10 +260,10 @@ type CloudAccount struct {
 	TenantID          string   `json:"tenant_id"`
 	Vendor            string   `json:"vendor"`
 	Name              string   `json:"name"`
-	Regions           []string `json:"regions"`              // 云厂商地域，如 ap-beijing
-	PlatformRegionIDs []string `json:"platform_region_ids"`  // 本平台区域 id
-	EnvIDs            []string `json:"env_ids"`              // 本平台环境 id
-	SyncEngines       []string `json:"sync_engines"`         // 定时同步的引擎；空则不参与定时任务
+	Regions           []string `json:"regions"`             // 云厂商地域，如 ap-beijing
+	PlatformRegionIDs []string `json:"platform_region_ids"` // 本平台区域 id
+	EnvIDs            []string `json:"env_ids"`             // 本平台环境 id
+	SyncEngines       []string `json:"sync_engines"`        // 定时同步的引擎；空则不参与定时任务
 	Enabled           bool     `json:"enabled"`
 	HasRead           bool     `json:"has_readonly"`
 	HasOperate        bool     `json:"has_operate"`
@@ -622,32 +622,68 @@ func (d *DB) MarkMissingCloudPostgres(accountID string, seen []string) error {
 }
 
 func (d *DB) MarkMissingCloudResources(accountID, engine string, seen []string) error {
+	return d.markMissingCloudResources(accountID, engine, nil, seen, false)
+}
+
+// MarkMissingCloudResourcesInRegions 只把本次拉成功的地域里、未出现在清单中的实例标为 missing。
+func (d *DB) MarkMissingCloudResourcesInRegions(accountID, engine string, regions, seen []string) error {
+	return d.markMissingCloudResources(accountID, engine, regions, seen, true)
+}
+
+func (d *DB) markMissingCloudResources(accountID, engine string, regions, seen []string, limitRegions bool) error {
 	if engine == "" {
 		engine = "postgres"
 	}
-	rows, err := d.Query(`SELECT id, cloud_instance_id FROM tbl_cloud_instances WHERE account_id=? AND COALESCE(engine,'postgres')=?`, accountID, engine)
+	if limitRegions && len(regions) == 0 {
+		return nil
+	}
+	rows, err := d.Query(`SELECT id, cloud_instance_id, region FROM tbl_cloud_instances WHERE account_id=? AND COALESCE(engine,'postgres')=?`, accountID, engine)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
-	have := map[string]bool{}
-	for _, id := range seen {
-		have[id] = true
-	}
-	var missing []string
+	var have []cloudInstanceRef
 	for rows.Next() {
-		var id, cid string
-		if rows.Scan(&id, &cid) == nil && !have[cid] {
-			missing = append(missing, id)
+		var row cloudInstanceRef
+		if rows.Scan(&row.ID, &row.CloudID, &row.Region) == nil {
+			have = append(have, row)
 		}
 	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	for _, id := range missing {
+	for _, id := range missingCloudInstanceIDs(have, regions, seen, limitRegions) {
 		if _, err := d.Exec(`UPDATE tbl_cloud_instances SET reconcile='missing', updated_at=? WHERE id=?`, now, id); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+type cloudInstanceRef struct {
+	ID, CloudID, Region string
+}
+
+func missingCloudInstanceIDs(rows []cloudInstanceRef, regions, seen []string, limitRegions bool) []string {
+	okRegion := map[string]bool{}
+	for _, region := range regions {
+		okRegion[region] = true
+	}
+	have := map[string]bool{}
+	for _, id := range seen {
+		have[id] = true
+	}
+	var missing []string
+	for _, row := range rows {
+		if limitRegions && !okRegion[row.Region] {
+			continue
+		}
+		if !have[row.CloudID] {
+			missing = append(missing, row.ID)
+		}
+	}
+	return missing
 }
 
 func decodeAnyMap(s string) map[string]any {

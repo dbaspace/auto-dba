@@ -257,7 +257,7 @@ func (s *Service) poll(ctx context.Context, it *store.Issue, p cloud.Payload, ac
 			if eng == "" {
 				eng = cloud.EnginePostgres
 			}
-			_ = s.SyncAccountEngine(context.Background(), acc, eng)
+			_, _ = s.SyncAccountEngine(context.Background(), acc, eng)
 			return s.DB.UpdateIssueExec(it.ID, store.StatusExecuted, ticketexec.ToJSON(&ticketexec.Result{Success: true, Message: "云上任务完成 " + p.TaskID + "；登记平台实例请另提工单"}))
 		}
 		if task.Status == "failed" {

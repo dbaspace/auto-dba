@@ -6,6 +6,7 @@ import ResponsiveTable from '../../components/ResponsiveTable'
 import dayjs, { Dayjs } from 'dayjs'
 import api from '../../api/request'
 import { formatSqlContent } from '../../utils/formatSql'
+import { filterPermissions, permissionOptions } from '../../utils/dbPermissions'
 import {
   parseSourceKey,
   sourcePrimaryLabel,
@@ -42,13 +43,6 @@ function unionApproverNames(raws: string[]) {
   }
   return out
 }
-
-const permissionOps = [
-  { label: '读操作', value: 'r' },
-  { label: '写操作', value: 'c' },
-  { label: '更新操作', value: 'u' },
-  { label: '删除操作', value: 'd' },
-]
 
 const DB_TYPES = [
   { value: 'mysql', label: 'MySQL' },
@@ -177,7 +171,9 @@ export default function CreateDb() {
   }
 
   function onEnvOrTypeChange(patch: Partial<ReturnType<typeof emptyForm>>) {
-    patchForm({ ...patch, instance_ids: [] })
+    const next: Partial<ReturnType<typeof emptyForm>> = { ...patch, instance_ids: [] }
+    if (patch.instance_type !== undefined) next.permissions = filterPermissions(patch.instance_type, form.permissions)
+    patchForm(next)
     resetCheck()
   }
 
@@ -487,7 +483,8 @@ export default function CreateDb() {
                   patchForm({ permissions: v || [] })
                   resetCheck()
                 }}
-                options={permissionOps}
+                optionFilterProp="label"
+                options={permissionOptions(form.instance_type)}
               />
             </Form.Item>
             <Form.Item

@@ -166,6 +166,8 @@ func (e *Engine) execute(ctx context.Context, t *store.MigrationTask, resume boo
 	if err != nil || tgtInst == nil {
 		return fmt.Errorf("目标实例不存在")
 	}
+	srcInst = WithDialHost(srcInst, t.SourceHost)
+	tgtInst = WithDialHost(tgtInst, t.TargetHost)
 
 	objs := t.Objects
 	if len(objs) == 0 {

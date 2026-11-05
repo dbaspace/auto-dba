@@ -44,6 +44,13 @@ function endpointText(row: any) {
   const tgt = [row.target_host, row.target_port].filter(Boolean).join(':') || row.target_db || '—'
   return `${src} / ${row.source_db || '—'} → ${tgt} / ${row.target_db || '—'}`
 }
+function envText(row: any) {
+  const src = String(row?.source_env || row?.env || '').trim()
+  const tgt = String(row?.target_env || row?.env || src).trim()
+  if (!src && !tgt) return '—'
+  if (src === tgt) return src || tgt
+  return `${src} → ${tgt}`
+}
 function modeText(m: any) {
   return ({ full_data: '全量迁移', schema_only: '仅结构迁移' } as Record<string, string>)[m] || m || '—'
 }
@@ -136,6 +143,7 @@ export default function Migration() {
   const [allRows, setAllRows] = useState<any[]>([])
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
+  const [envOptions, setEnvOptions] = useState<string[]>(['test', 'prod'])
   const [filters, setFilters] = useState<Filters>({
     status: [],
     approval_status: '',
@@ -162,7 +170,11 @@ export default function Migration() {
         if (want === 'mysql' && !['mysql', 'tidb', 'oceanbase'].includes(n)) return false
         if (want === 'postgres' && !['postgres', 'postgresql', 'pg'].includes(n)) return false
       }
-      if (filters.env && r.env !== filters.env) return false
+      if (filters.env) {
+        const src = String(r.source_env || r.env || '')
+        const tgt = String(r.target_env || r.env || '')
+        if (src !== filters.env && tgt !== filters.env) return false
+      }
       if (filters.q && !String(r.name || '').toLowerCase().includes(filters.q.trim().toLowerCase())) return false
       if (filters.range && filters.range.length === 2) {
         const t = new Date(r.created_at).getTime()
@@ -226,6 +238,15 @@ export default function Migration() {
       } catch {
         /* ignore */
       }
+      try {
+        const envRes = await api.get('/environments')
+        const envs = (envRes.data.data || [])
+          .map((e: any) => e.code || e.name || e.id)
+          .filter(Boolean)
+        if (envs.length) setEnvOptions(envs)
+      } catch {
+        /* ignore */
+      }
       await load()
     })()
     const timer = window.setInterval(() => {
@@ -255,6 +276,13 @@ export default function Migration() {
       key: 'db_type',
       width: 110,
       render: (_: any, row: any) => dbTypeLabel(row.db_type),
+    },
+    {
+      title: '环境',
+      key: 'env',
+      width: 160,
+      ellipsis: true,
+      render: (_: any, row: any) => envText(row),
     },
     {
       title: '源端 → 目标端',
@@ -416,13 +444,10 @@ export default function Migration() {
           <Select
             allowClear
             placeholder="全部"
-            style={{ width: 100 }}
+            style={{ width: 140 }}
             value={filters.env || undefined}
             onChange={(v) => setFilters((f) => ({ ...f, env: v || '' }))}
-            options={[
-              { label: 'test', value: 'test' },
-              { label: 'prod', value: 'prod' },
-            ]}
+            options={envOptions.map((e) => ({ label: e, value: e }))}
           />
         </Form.Item>
         <Form.Item label="创建时间">

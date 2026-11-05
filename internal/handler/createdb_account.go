@@ -70,6 +70,9 @@ func buildCreateUserSQL(engine, username, password string) string {
 	if engine == "postgres" {
 		return fmt.Sprintf("CREATE USER %s ENCRYPTED PASSWORD %s", pgQuoteIdent(user), sqlQuoteString(password))
 	}
+	if engine == "starrocks" {
+		return buildStarRocksCreateUserSQL(user, password)
+	}
 	return fmt.Sprintf("CREATE USER %s IDENTIFIED BY %s", user, sqlQuoteString(password))
 }
 
@@ -99,8 +102,11 @@ func buildSchemaGrantSQL(engine, username, dbName, owner string, perms []string)
 		}
 		return strings.Join(stmts, ";\n")
 	}
+	if engine == "starrocks" {
+		return strings.Join(renderStarRocksGrantStatements(user, db, perms), ";\n")
+	}
 	privs := grantPrivileges(perms)
-	return fmt.Sprintf("GRANT %s ON DATABASE %s TO %s", privs, db, user)
+	return fmt.Sprintf("GRANT %s ON `%s`.* TO '%s'@'%%'", privs, strings.ReplaceAll(db, "`", "``"), strings.ReplaceAll(user, "'", "''"))
 }
 
 func alreadyExistsErr(msg string) bool {
@@ -353,11 +359,11 @@ func (h *TicketHandler) finishCreateDBAfterExec(ctx context.Context, it *store.I
 	if err := materializeCreateDBAccounts(h.Store, h.Secret, it); err != nil {
 		return err
 	}
-	warn := provisionCreateDBAccounts(ctx, h, it)
+	warn, failed := provisionCreateDBAccounts(ctx, h, it)
 	if warn != "" {
 		appendCreateDBWarn(it, h, warn)
 	}
-	if items := h.createDBNotifyItems(it); len(items) > 0 {
+	if items := h.createDBNotifyItems(it, failed); len(items) > 0 {
 		cp := *it
 		go notify.CreateDBDone(h.Store, &cp, items, warn)
 	}
@@ -365,7 +371,8 @@ func (h *TicketHandler) finishCreateDBAfterExec(ctx context.Context, it *store.I
 }
 
 // createDBNotifyItems 按实例汇总建库结果（地址/库/账号/密码），供通知申请人。
-func (h *TicketHandler) createDBNotifyItems(it *store.Issue) []notify.CreateDBNotifyItem {
+// failed 为建账号失败的实例及原因，这些实例不附带密码。
+func (h *TicketHandler) createDBNotifyItems(it *store.Issue, failed map[string]string) []notify.CreateDBNotifyItem {
 	extra := parseCreateDBExtra(it)
 	if extra == nil {
 		return nil
@@ -403,7 +410,10 @@ func (h *TicketHandler) createDBNotifyItems(it *store.Issue) []notify.CreateDBNo
 			DBNames:     names,
 			Permissions: extra.Permissions,
 		}
-		if username != "" {
+		if msg := failed[id]; username != "" && msg != "" {
+			item.Username = username
+			item.Failed = msg
+		} else if username != "" {
 			item.Username = username
 			if prev, _ := h.Store.FindAccountByInstanceUser(id, username, it.ID); prev != nil {
 				item.Reused = true
@@ -460,24 +470,29 @@ func (h *TicketHandler) maybeFinishApprovedCreateDB(ctx context.Context, it *sto
 }
 
 // provisionCreateDBAccounts 对齐 Hub：建库成功后在实例上 CREATE USER 并授权。失败不推翻工单。
-func provisionCreateDBAccounts(ctx context.Context, h *TicketHandler, it *store.Issue) string {
+// 第二个返回值为建账号失败的实例及原因（目前仅 StarRocks 填充）。
+func provisionCreateDBAccounts(ctx context.Context, h *TicketHandler, it *store.Issue) (string, map[string]string) {
+	failed := map[string]string{}
 	if h == nil || it == nil {
-		return ""
+		return "", failed
 	}
 	extra := parseCreateDBExtra(it)
 	if extra == nil || strings.TrimSpace(extra.Username) == "" {
-		return ""
+		return "", failed
 	}
 	accs, err := h.Store.ListAccountsByTicket(it.ID)
 	if err != nil {
-		return err.Error()
+		return err.Error(), failed
 	}
 	if len(accs) == 0 {
-		return ""
+		return "", failed
 	}
 	var warns []string
 	createdUser := map[string]bool{}
 	for _, acc := range accs {
+		if _, bad := failed[acc.InstanceID]; bad {
+			continue
+		}
 		inst, _ := h.Store.GetInstance(acc.InstanceID)
 		if inst == nil {
 			warns = append(warns, "实例不存在 "+acc.InstanceID)
@@ -496,6 +511,14 @@ func provisionCreateDBAccounts(ctx context.Context, h *TicketHandler, it *store.
 		}
 		admin.ConnectDB = ticketexec.AdminConnectDB(inst.DBType)
 		engine := ticketexec.EngineOf(inst.DBType)
+		if !createdUser[acc.InstanceID] && engine == "starrocks" {
+			if msg := h.ensureStarRocksCreateDBUser(ctx, admin, it, accs, acc, pwd); msg != "" {
+				failed[acc.InstanceID] = msg
+				warns = append(warns, "CREATE USER: "+msg)
+				continue
+			}
+			createdUser[acc.InstanceID] = true
+		}
 		if !createdUser[acc.InstanceID] {
 			if sql := buildCreateUserSQL(engine, acc.Username, pwd); sql != "" {
 				if err := execOKOrExists(ticketexec.ExecStatements(ctx, admin, []string{sql})); err != nil {
@@ -530,5 +553,69 @@ func provisionCreateDBAccounts(ctx context.Context, h *TicketHandler, it *store.
 			}
 		}
 	}
-	return strings.Join(warns, "；")
+	return strings.Join(warns, "；"), failed
+}
+
+func execAlreadyExists(res *ticketexec.Result) bool {
+	if res == nil {
+		return false
+	}
+	if alreadyExistsErr(res.Message) {
+		return true
+	}
+	for _, rec := range res.Records {
+		if alreadyExistsErr(rec.ErrorMessage) {
+			return true
+		}
+	}
+	return false
+}
+
+// ensureStarRocksCreateDBUser 建库工单在 StarRocks 实例上建账号。
+// 实例上已有同名用户且平台未托管密码时，清空本单账号记录中的随机密码，避免通知发出无效密码；
+// 建账号失败时删除本单在该实例上的账号记录。返回非空表示失败原因。
+func (h *TicketHandler) ensureStarRocksCreateDBUser(ctx context.Context, admin ticketexec.Target, it *store.Issue, accs []store.DBAccount, acc store.DBAccount, pwd string) string {
+	exists, err := ticketexec.StarRocksUserExists(ctx, admin, acc.Username)
+	if err != nil {
+		exists = false
+	}
+	if !exists {
+		res := ticketexec.ExecStatements(ctx, admin, []string{buildStarRocksCreateUserSQL(acc.Username, pwd)})
+		switch {
+		case res != nil && res.Success:
+			return ""
+		case execAlreadyExists(res):
+			exists = true
+		default:
+			msg := "执行失败"
+			if res != nil && res.Message != "" {
+				msg = res.Message
+			}
+			for _, a := range accs {
+				if a.InstanceID == acc.InstanceID {
+					_ = h.Store.DeleteAccount(a.ID)
+				}
+			}
+			return msg
+		}
+	}
+	if prev, _ := h.Store.FindAccountByInstanceUser(acc.InstanceID, acc.Username, it.ID); prev != nil && strings.TrimSpace(prev.Password) != "" {
+		return ""
+	}
+	for _, a := range accs {
+		if a.InstanceID != acc.InstanceID || a.Password == "" {
+			continue
+		}
+		a.Password = ""
+		a.Description = joinDesc(a.Description, "实例上已存在该账号，密码未托管")
+		_ = h.Store.UpdateAccount(&a)
+	}
+	return ""
+}
+
+func joinDesc(a, b string) string {
+	if strings.TrimSpace(a) == "" {
+		return b
+	}
+	return a + "；" + b
 }

@@ -22,7 +22,11 @@ func Precheck(ctx context.Context, st *store.DB, secretKey string, t *store.Migr
 		return items
 	}
 	if t.TransferMode == "oss" {
-		if !st.ResolveMigrationOSSConfiguredInTenant(st.TenantOfInstance(t.SourceID), t.Env) {
+		ossEnv := strings.TrimSpace(t.SourceEnv)
+		if ossEnv == "" {
+			ossEnv = strings.TrimSpace(t.Env)
+		}
+		if !st.ResolveMigrationOSSConfiguredInTenant(st.TenantOfInstance(t.SourceID), ossEnv) {
 			add("transfer_mode", "required", "failed", "请先在配置中心为该环境配置 OSS 连接信息")
 		} else {
 			add("transfer_mode", "required", "passed", "OSS 中转")
@@ -33,13 +37,15 @@ func Precheck(ctx context.Context, st *store.DB, secretKey string, t *store.Migr
 		add("source_credential", "required", "failed", "源实例未登记")
 		return items
 	}
-	add("source_credential", "required", "passed", instHost(src)+fmt.Sprintf(":%d", src.Port))
+	src = WithDialHost(src, t.SourceHost)
+	add("source_credential", "required", "passed", fmt.Sprintf("%s:%d", instHost(src), src.Port))
 	tgt, err := st.GetInstance(t.TargetID)
 	if err != nil || tgt == nil {
 		add("target_credential", "required", "failed", "目标实例未登记")
 		return items
 	}
-	add("target_credential", "required", "passed", instHost(tgt)+fmt.Sprintf(":%d", tgt.Port))
+	tgt = WithDialHost(tgt, t.TargetHost)
+	add("target_credential", "required", "passed", fmt.Sprintf("%s:%d", instHost(tgt), tgt.Port))
 
 	srcDB, err := OpenInstance(ctx, src, secretKey, firstNonEmpty(t.SourceDB, defaultDB(engine)))
 	if err != nil {

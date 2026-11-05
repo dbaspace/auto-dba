@@ -91,6 +91,9 @@ func (d *DB) ListCDCInTenant(tenantID, status, taskType string) ([]CDCTask, erro
 	if status != "" {
 		q += ` AND status=?`
 		args = append(args, status)
+	} else {
+		q += ` AND status<>?`
+		args = append(args, StatusSuperseded)
 	}
 	if taskType != "" {
 		q += ` AND task_type=?`

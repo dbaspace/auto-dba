@@ -106,9 +106,10 @@ func (h *DatabaseHandler) ListTables(c *gin.Context) {
 }
 
 type queryReq struct {
-	DatabaseID string `json:"database_id"`
-	SQL        string `json:"sql"`
-	Limit      int    `json:"limit"`
+	DatabaseID      string `json:"database_id"`
+	SQL             string `json:"sql"`
+	Limit           int    `json:"limit"`
+	ClientRequestID string `json:"client_request_id"`
 }
 
 func (h *DatabaseHandler) Query(c *gin.Context) {
@@ -137,8 +138,23 @@ func (h *DatabaseHandler) Query(c *gin.Context) {
 	if h.Store != nil && h.Store.HardenReadOnlySession() {
 		qctx = dbprobe.WithReadOnlySession(qctx)
 	}
-	ctx, cancel := context.WithTimeout(qctx, 20*time.Second)
+	ctx, cancel := context.WithTimeout(qctx, 25*time.Second)
 	defer cancel()
+
+	reqID := normalizeClientRequestID(req.ClientRequestID)
+	if reqID != "" {
+		rememberPendingQuery(reqID, pendingQuery{
+			UserID:       middleware.UserID(c),
+			Username:     middleware.Username(c),
+			DatabaseID:   rec.ID,
+			SQL:          req.SQL,
+			Target:       rec.DBName,
+			InstanceID:   inst.ID,
+			InstanceName: instanceAuditName(inst),
+			DBType:       inst.DBType,
+		})
+		defer forgetPendingQuery(reqID)
+	}
 
 	results := make([]*dbprobe.QueryResult, 0, len(stmts))
 	totalRows := 0
@@ -148,9 +164,10 @@ func (h *DatabaseHandler) Query(c *gin.Context) {
 		ens := dbprobe.EnsureQueryLimit(stmt, defLimit, maxLimit)
 		res, qerr := dbprobe.ExecQuery(ctx, inst, password, rec.DBName, ens.SQL, ens.AppliedLimit)
 		if qerr != nil {
+			msg := explainQueryErr(qerr)
 			it := &store.QueryAudit{
 				Kind: "db", Target: rec.DBName, Statement: auditSQL,
-				Success: false, Message: qerr.Error(),
+				Success: false, Message: msg, ClientRequestID: reqID,
 			}
 			fillInstanceAudit(it, inst)
 			if respondInteractiveQueryErr(c, qerr) {
@@ -159,7 +176,7 @@ func (h *DatabaseHandler) Query(c *gin.Context) {
 				return
 			}
 			recordQueryAudit(h.Store, c, it)
-			c.JSON(http.StatusBadRequest, gin.H{"message": qerr.Error()})
+			writeQueryJSON(c, http.StatusBadRequest, gin.H{"message": msg})
 			return
 		}
 		if res == nil {
@@ -185,6 +202,7 @@ func (h *DatabaseHandler) Query(c *gin.Context) {
 	it := &store.QueryAudit{
 		Kind: "db", Target: rec.DBName, Statement: auditSQL,
 		Success: true, RowCount: totalRows, ElapsedMS: totalMS,
+		ClientRequestID: reqID,
 	}
 	fillInstanceAudit(it, inst)
 	recordQueryAudit(h.Store, c, it)
@@ -193,7 +211,7 @@ func (h *DatabaseHandler) Query(c *gin.Context) {
 	if len(results) > 1 {
 		payload["results"] = results
 	}
-	c.JSON(http.StatusOK, payload)
+	writeQueryJSON(c, http.StatusOK, payload)
 }
 
 type tableInfoReq struct {

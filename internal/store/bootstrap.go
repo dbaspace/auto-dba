@@ -109,6 +109,15 @@ func (d *DB) migrateFast() error {
 			if err := d.ensureSystemNoticeTables(); err != nil {
 				return err
 			}
+			if err := d.ensureQueryFavoritesTable(); err != nil {
+				return err
+			}
+			if _, err := d.BackfillQueryFavoriteDatabaseIDs(); err != nil {
+				return err
+			}
+			if err := d.ensureMigrationEnvSplit(); err != nil {
+				return err
+			}
 			log.Printf("migrate: skip (schema_version=%s) in %s", SchemaVersion, time.Since(t0).Round(time.Millisecond))
 			return nil
 		}

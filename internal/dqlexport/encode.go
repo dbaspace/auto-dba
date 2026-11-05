@@ -166,7 +166,7 @@ func CellString(v any) string {
 	case []byte:
 		return string(t)
 	case time.Time:
-		return t.Format("2006-01-02 15:04:05")
+		return dbprobe.FormatQueryTime(t, "")
 	default:
 		return fmt.Sprint(t)
 	}

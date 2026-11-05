@@ -87,6 +87,15 @@ func (h *CDCHandler) Tables(c *gin.Context) {
 	rootExtra := cdc.ParseTaskExtra(root.Description)
 	prefix := firstNonEmpty(extra["topic_prefix"], rootExtra["topic_prefix"])
 	schema := firstNonEmpty(extra["source_schema"], rootExtra["source_schema"], "public")
+	rlExtra := map[string]string{
+		"env":               firstNonEmpty(extra["env"], rootExtra["env"]),
+		"topic_prefix":      prefix,
+		"cdc_fanout_from":   firstNonEmpty(extra["cdc_fanout_from"], rootExtra["cdc_fanout_from"]),
+		"shard_db":          firstNonEmpty(extra["shard_db"], rootExtra["shard_db"]),
+		"source_scope_mode": firstNonEmpty(extra["source_scope_mode"], rootExtra["source_scope_mode"]),
+		"source_db_names":   firstNonEmpty(extra["source_db_names"], rootExtra["source_db_names"]),
+		"representative_db": firstNonEmpty(extra["representative_db"], rootExtra["representative_db"]),
+	}
 	rlByTable := map[string]cdc.PipelineRoutineLoad{}
 	if t.TargetID != "" && t.TargetDB != "" {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 6*time.Second)
@@ -102,7 +111,7 @@ func (h *CDCHandler) Tables(c *gin.Context) {
 				} else {
 					targets = append(targets, tables...)
 				}
-				for _, rl := range cdc.ListRoutineLoadStates(ctx, db, t.TargetDB, targets, t.TaskType, firstNonEmpty(extra["env"], rootExtra["env"]), t.SourceDB, prefix) {
+				for _, rl := range cdc.ListRoutineLoadStates(ctx, db, t.TargetDB, targets, t.TaskType, rlExtra["env"], t.SourceDB, prefix, cdc.ShardMergedRL(rlExtra)) {
 					rlByTable[strings.ToLower(rl.Table)] = rl
 				}
 				_ = db.Close()
@@ -145,7 +154,7 @@ func (h *CDCHandler) Tables(c *gin.Context) {
 				"routine_load_name": firstNonEmpty(
 					rl.Name,
 					m.RoutineLoadName,
-					cdc.RoutineLoadNameForTask(t.TaskType, firstNonEmpty(extra["env"], rootExtra["env"]), t.SourceDB, prefix, tgt),
+					cdc.RoutineLoadNameForExtra(t.TaskType, rlExtra, t.SourceDB, tgt),
 				),
 				"routine_load_status": firstNonEmpty(rl.State, m.RoutineLoadStatus),
 			}
@@ -169,7 +178,7 @@ func (h *CDCHandler) Tables(c *gin.Context) {
 				"topic_names": topics,
 				"routine_load_name": firstNonEmpty(
 					rl.Name,
-					cdc.RoutineLoadNameForTask(t.TaskType, firstNonEmpty(extra["env"], rootExtra["env"]), t.SourceDB, prefix, name),
+					cdc.RoutineLoadNameForExtra(t.TaskType, rlExtra, t.SourceDB, name),
 				),
 				"routine_load_status": rl.State,
 			})

@@ -26,6 +26,7 @@ func (h *DatabaseHandler) CreateQueryFavorite(c *gin.Context) {
 		Name       string `json:"name"`
 		DatabaseID string `json:"database_id"`
 		DBName     string `json:"db_name"`
+		Env        string `json:"env"`
 		SQL        string `json:"sql"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -50,9 +51,52 @@ func (h *DatabaseHandler) CreateQueryFavorite(c *gin.Context) {
 		Name:       name,
 		DatabaseID: strings.TrimSpace(req.DatabaseID),
 		DBName:     strings.TrimSpace(req.DBName),
+		Env:        strings.TrimSpace(req.Env),
 		SQL:        sqlText,
 	}
 	if err := h.Store.CreateQueryFavorite(it); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": it})
+}
+
+func (h *DatabaseHandler) UpdateQueryFavorite(c *gin.Context) {
+	var req struct {
+		Name       string `json:"name"`
+		DatabaseID string `json:"database_id"`
+		DBName     string `json:"db_name"`
+		Env        string `json:"env"`
+		SQL        string `json:"sql"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	sqlText := strings.TrimSpace(req.SQL)
+	if sqlText == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "SQL 不能为空"})
+		return
+	}
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "请输入名称"})
+		return
+	}
+	it := &store.QueryFavorite{
+		ID:         c.Param("id"),
+		Username:   middleware.Username(c),
+		Name:       name,
+		DatabaseID: strings.TrimSpace(req.DatabaseID),
+		DBName:     strings.TrimSpace(req.DBName),
+		Env:        strings.TrimSpace(req.Env),
+		SQL:        sqlText,
+	}
+	if err := h.Store.UpdateQueryFavorite(it); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusNotFound, gin.H{"message": "收藏不存在"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}

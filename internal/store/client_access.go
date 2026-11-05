@@ -147,6 +147,7 @@ func (d *DB) ensureQueryAuditClientColumns() error {
 	for _, col := range []struct{ name, ddl string }{
 		{"client_type", `ALTER TABLE tbl_query_audits ADD COLUMN client_type TEXT NOT NULL DEFAULT ''`},
 		{"token_id", `ALTER TABLE tbl_query_audits ADD COLUMN token_id TEXT NOT NULL DEFAULT ''`},
+		{"client_request_id", `ALTER TABLE tbl_query_audits ADD COLUMN client_request_id TEXT NOT NULL DEFAULT ''`},
 	} {
 		var n int
 		err := d.db.QueryRow(`
@@ -162,7 +163,8 @@ func (d *DB) ensureQueryAuditClientColumns() error {
 			}
 		}
 	}
-	return nil
+	_, err := d.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_query_audits_client_req ON tbl_query_audits(client_request_id) WHERE client_request_id <> ''`)
+	return err
 }
 
 func NormalizeClientScopes(raw string) string {

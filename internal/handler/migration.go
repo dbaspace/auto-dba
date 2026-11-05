@@ -37,8 +37,12 @@ type migCreateReq struct {
 	Description      string                `json:"description"`
 	DBType           string                `json:"db_type"`
 	Env              string                `json:"env"`
+	SourceEnv        string                `json:"source_env"`
+	TargetEnv        string                `json:"target_env"`
 	SourceID         string                `json:"source_instance_id"`
 	TargetID         string                `json:"target_instance_id"`
+	SourceDomain     string                `json:"source_domain"`
+	TargetDomain     string                `json:"target_domain"`
 	SourceDB         string                `json:"source_db"`
 	TargetDB         string                `json:"target_db"`
 	Tables           []string              `json:"tables"`
@@ -83,18 +87,41 @@ func (h *MigrationHandler) Get(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": t})
 }
 
-// fillEndpoints 创建路径：源/目标实例须属于当前租户（或已授权）。
-func (h *MigrationHandler) fillEndpoints(c *gin.Context, t *store.MigrationTask) error {
-	if src, err := resolveInstanceInTenant(h.Store, c, t.SourceID); err != nil || src == nil {
+// applyDialDomains 校验域名属于当前租户可见的域名管理，并写入拨号地址。端口仍取绑定实例。
+func (h *MigrationHandler) applyDialDomains(c *gin.Context, t *store.MigrationTask, sourceDomain, targetDomain string) error {
+	if t == nil {
+		return errOr("任务无效")
+	}
+	store.NormalizeMigrationEnvs(t)
+	if strings.TrimSpace(t.SourceEnv) == "" || strings.TrimSpace(t.TargetEnv) == "" {
+		return errOr("请选择源端环境和目标端环境")
+	}
+	if strings.TrimSpace(sourceDomain) == "" || strings.TrimSpace(targetDomain) == "" {
+		return errOr("请从域名管理选择源端和目标端")
+	}
+	src, err := resolveInstanceInTenant(h.Store, c, t.SourceID)
+	if err != nil || src == nil {
 		return errOr("源实例不存在")
 	}
-	if tgt, err := resolveInstanceInTenant(h.Store, c, t.TargetID); err != nil || tgt == nil {
+	tgt, err := resolveInstanceInTenant(h.Store, c, t.TargetID)
+	if err != nil || tgt == nil {
 		return errOr("目标实例不存在")
 	}
-	return h.fillEndpointsRaw(t)
+	srcHost, err := h.requireVisibleDomain(c, src, sourceDomain, t.DBType, t.SourceEnv)
+	if err != nil {
+		return errOr("源端" + err.Error())
+	}
+	tgtHost, err := h.requireVisibleDomain(c, tgt, targetDomain, t.DBType, t.TargetEnv)
+	if err != nil {
+		return errOr("目标端" + err.Error())
+	}
+	t.SourceHost = srcHost
+	t.TargetHost = tgtHost
+	applyStoredEndpointHosts(t, src, tgt)
+	return nil
 }
 
-// fillEndpointsRaw 仅补全主机端口（调用方已校验任务归属）。
+// fillEndpointsRaw 仅补全空的主机和端口。已写入的域名保持不变，避免旧任务改道。
 func (h *MigrationHandler) fillEndpointsRaw(t *store.MigrationTask) error {
 	src, err := h.Store.GetInstance(t.SourceID)
 	if err != nil || src == nil {
@@ -104,20 +131,140 @@ func (h *MigrationHandler) fillEndpointsRaw(t *store.MigrationTask) error {
 	if err != nil || tgt == nil {
 		return errOr("目标实例不存在")
 	}
-	t.SourceHost = strings.TrimSpace(src.Host)
-	if t.SourceHost == "" {
-		t.SourceHost = src.DomainName
+	applyStoredEndpointHosts(t, src, tgt)
+	return nil
+}
+
+func applyStoredEndpointHosts(t *store.MigrationTask, src, tgt *store.Instance) {
+	if t == nil {
+		return
 	}
-	t.SourcePort = src.Port
-	t.TargetHost = strings.TrimSpace(tgt.Host)
-	if t.TargetHost == "" {
-		t.TargetHost = tgt.DomainName
+	if strings.TrimSpace(t.SourceHost) == "" {
+		t.SourceHost = fallbackInstanceHost(src)
 	}
-	t.TargetPort = tgt.Port
-	if t.DBType == "" {
+	if t.SourcePort == 0 && src != nil {
+		t.SourcePort = src.Port
+	}
+	if strings.TrimSpace(t.TargetHost) == "" {
+		t.TargetHost = fallbackInstanceHost(tgt)
+	}
+	if t.TargetPort == 0 && tgt != nil {
+		t.TargetPort = tgt.Port
+	}
+	if t.DBType == "" && src != nil {
 		t.DBType = store.NormalizeDBType(src.DBType)
 	}
-	return nil
+}
+
+func fallbackInstanceHost(inst *store.Instance) string {
+	if inst == nil {
+		return ""
+	}
+	h := strings.TrimSpace(inst.Host)
+	if h == "" {
+		h = strings.TrimSpace(inst.DomainName)
+	}
+	return h
+}
+
+func matchAccessDomain(rows []store.AccessDomain, instanceID, domain, dbType, env string) (string, bool) {
+	wantID := strings.TrimSpace(instanceID)
+	wantDom := normalizeDomainKey(domain)
+	wantType := store.NormalizeEngineType(dbType)
+	wantEnv := strings.TrimSpace(env)
+	if wantID == "" || wantDom == "" {
+		return "", false
+	}
+	for _, row := range rows {
+		if strings.TrimSpace(row.InstanceID) != wantID {
+			continue
+		}
+		if normalizeDomainKey(row.Domain) != wantDom {
+			continue
+		}
+		if wantType != "" && store.NormalizeEngineType(row.DBType) != wantType {
+			continue
+		}
+		if wantEnv != "" && strings.TrimSpace(row.EnvCode) != wantEnv {
+			continue
+		}
+		host := strings.TrimSpace(row.Domain)
+		if host == "" {
+			continue
+		}
+		return host, true
+	}
+	return "", false
+}
+
+func (h *MigrationHandler) visibleAccessDomains(c *gin.Context, dbType string) ([]store.AccessDomain, error) {
+	if h == nil || h.Store == nil {
+		return nil, errOr("域名管理不可用")
+	}
+	dbType = store.NormalizeEngineType(dbType)
+	if platformAdminAuditing(h.Store, c) {
+		return h.Store.ListAccessDomains(dbType, "", "")
+	}
+	tid := middleware.TenantID(c)
+	list, err := h.Store.ListAccessDomainsInTenant(tid, dbType, "", "")
+	if err != nil {
+		return nil, err
+	}
+	extra, err := h.Store.ListGrantedAccessDomains(tid, middleware.UserID(c), dbType, "", "")
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]struct{}{}
+	for _, it := range list {
+		seen[it.ID] = struct{}{}
+	}
+	for _, it := range extra {
+		if _, ok := seen[it.ID]; ok {
+			continue
+		}
+		list = append(list, it)
+	}
+	return list, nil
+}
+
+func (h *MigrationHandler) requireVisibleDomain(c *gin.Context, inst *store.Instance, domain, dbType, env string) (string, error) {
+	if inst == nil {
+		return "", errOr("实例不存在")
+	}
+	domain = strings.TrimSpace(domain)
+	if domain == "" {
+		return "", errOr("请从域名管理选择地址")
+	}
+	instType := store.NormalizeEngineType(inst.DBType)
+	wantType := store.NormalizeEngineType(dbType)
+	if wantType == "" {
+		wantType = instType
+	}
+	if instType != "" && wantType != instType {
+		return "", errOr("地址与实例类型不一致")
+	}
+	rows, err := h.visibleAccessDomains(c, wantType)
+	if err != nil {
+		return "", err
+	}
+	host, ok := matchAccessDomain(rows, inst.ID, domain, wantType, env)
+	if !ok {
+		return "", errOr("地址不在域名管理中，或与实例、类型、环境不匹配")
+	}
+	return host, nil
+}
+
+// instanceForDial 查询参数带 domain 时改用该域名拨号；未带时保持实例地址，供结构对比等旧入口使用。
+func (h *MigrationHandler) instanceForDial(c *gin.Context, inst *store.Instance) (*store.Instance, error) {
+	domain := strings.TrimSpace(c.Query("domain"))
+	if domain == "" || inst == nil {
+		return inst, nil
+	}
+	host, err := h.requireVisibleDomain(c, inst, domain, c.Query("db_type"), c.Query("env"))
+	if err != nil {
+		return nil, err
+	}
+	return dbmig.WithDialHost(inst, host), nil
 }
 
 func errOr(msg string) error {
@@ -154,12 +301,13 @@ func (h *MigrationHandler) Create(c *gin.Context) {
 	if strings.TrimSpace(req.TargetDB) == "" && len(req.WholeDBs) > 0 {
 		req.TargetDB = strings.TrimSpace(req.WholeDBs[0])
 	}
-	if strings.TrimSpace(req.Name) == "" || req.SourceID == "" || req.TargetID == "" || (req.SourceDB == "" && len(req.WholeDBs) == 0 && len(req.Objects) == 0) {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "任务名称、源/目标实例、源库必填"})
+	if strings.TrimSpace(req.Name) == "" || req.SourceID == "" || req.TargetID == "" || strings.TrimSpace(req.SourceDomain) == "" || strings.TrimSpace(req.TargetDomain) == "" || (req.SourceDB == "" && len(req.WholeDBs) == 0 && len(req.Objects) == 0) {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "任务名称、源/目标域名、源库必填"})
 		return
 	}
 	t := &store.MigrationTask{
-		Name: req.Name, Description: req.Description, DBType: store.NormalizeDBType(req.DBType), Env: req.Env,
+		Name: req.Name, Description: req.Description, DBType: store.NormalizeDBType(req.DBType),
+		Env: req.Env, SourceEnv: req.SourceEnv, TargetEnv: req.TargetEnv,
 		SourceID: req.SourceID, TargetID: req.TargetID, SourceDB: req.SourceDB, TargetDB: req.TargetDB,
 		MigrationMode: req.MigrationMode, SchemaStrategy: req.SchemaStrategy, ConflictStrategy: req.ConflictStrategy,
 		TransferMode: req.TransferMode, StartMode: req.StartMode, ScheduledAt: req.ScheduledAt,
@@ -185,7 +333,7 @@ func (h *MigrationHandler) Create(c *gin.Context) {
 	} else {
 		t.ScheduledAt = ""
 	}
-	if err := h.fillEndpoints(c, t); err != nil {
+	if err := h.applyDialDomains(c, t, req.SourceDomain, req.TargetDomain); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
@@ -232,7 +380,7 @@ func (h *MigrationHandler) Create(c *gin.Context) {
 	}
 	if len(req.WholeDBs) > 0 {
 		expandCtx, expandCancel := context.WithTimeout(c.Request.Context(), 3*time.Minute)
-		expanded, err := dbmig.ExpandWholeDBs(expandCtx, h.Store, h.Secret, t.DBType, t.SourceID, req.WholeDBs, req.WholeDBTargets, req.ExcludeTables, objs)
+		expanded, err := dbmig.ExpandWholeDBs(expandCtx, h.Store, h.Secret, t.DBType, t.SourceID, req.WholeDBs, req.WholeDBTargets, req.ExcludeTables, objs, t.SourceHost)
 		expandCancel()
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"message": "展开整库对象失败: " + err.Error()})
@@ -300,7 +448,9 @@ func (h *MigrationHandler) Create(c *gin.Context) {
 		AssignedTo:  reviewer,
 	}
 	stampTenantID(c, func(tid string) {
-		if issue != nil { issue.TenantID = tid }
+		if issue != nil {
+			issue.TenantID = tid
+		}
 	})
 	if err := h.Store.CreateIssue(issue); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
@@ -328,12 +478,25 @@ func (h *MigrationHandler) Precheck(c *gin.Context) {
 	_ = c.ShouldBindJSON(&req)
 	t := &store.MigrationTask{
 		SourceID: req.SourceID, TargetID: req.TargetID, SourceDB: req.SourceDB, TargetDB: req.TargetDB,
-		DBType: req.DBType, TransferMode: req.TransferMode, ConflictStrategy: req.ConflictStrategy,
+		DBType: req.DBType, Env: req.Env, SourceEnv: req.SourceEnv, TargetEnv: req.TargetEnv,
+		TransferMode: req.TransferMode, ConflictStrategy: req.ConflictStrategy,
 		SchemaStrategy: req.SchemaStrategy, MigrationMode: req.MigrationMode,
 	}
+	loaded := false
 	if id := c.Param("id"); id != "" && id != "precheck" {
 		if exist, _ := h.Store.GetMigrationInTenant(id, effectiveListTenantID(h.Store, c)); exist != nil {
 			t = exist
+			loaded = true
+		}
+	}
+	if !loaded {
+		if strings.TrimSpace(req.SourceDomain) == "" || strings.TrimSpace(req.TargetDomain) == "" || t.SourceID == "" || t.TargetID == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "请从域名管理选择源端和目标端"})
+			return
+		}
+		if err := h.applyDialDomains(c, t, req.SourceDomain, req.TargetDomain); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+			return
 		}
 	}
 	if t.SourceID == "" {
@@ -678,21 +841,31 @@ func (h *MigrationHandler) Connect(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"message": "实例不存在"})
 		return
 	}
+	dial, derr := h.instanceForDial(c, inst)
+	if derr != nil {
+		c.JSON(http.StatusOK, gin.H{"connected": false, "error_message": derr.Error()})
+		return
+	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 12*time.Second)
 	defer cancel()
-	db, err := dbmig.OpenInstance(ctx, inst, h.Secret, "")
+	db, err := dbmig.OpenInstance(ctx, dial, h.Secret, "")
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"connected": false, "error_message": err.Error()})
 		return
 	}
 	db.Close()
-	c.JSON(http.StatusOK, gin.H{"connected": true, "host": inst.Host, "port": inst.Port, "username": inst.Username})
+	c.JSON(http.StatusOK, gin.H{"connected": true, "host": dial.Host, "port": dial.Port, "username": dial.Username})
 }
 
 func (h *MigrationHandler) Databases(c *gin.Context) {
 	inst, err := resolveInstanceInTenant(h.Store, c, c.Param("id"))
 	if err != nil || inst == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "实例不存在"})
+		return
+	}
+	inst, err = h.instanceForDial(c, inst)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
 	plain, decErr := secret.Decrypt(h.Secret, inst.Password)
@@ -714,6 +887,11 @@ func (h *MigrationHandler) Tables(c *gin.Context) {
 	inst, err := resolveInstanceInTenant(h.Store, c, c.Param("id"))
 	if err != nil || inst == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "实例不存在"})
+		return
+	}
+	inst, err = h.instanceForDial(c, inst)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
 	plain, decErr := secret.Decrypt(h.Secret, inst.Password)
@@ -749,6 +927,11 @@ func (h *MigrationHandler) BatchTables(c *gin.Context) {
 	inst, err := resolveInstanceInTenant(h.Store, c, c.Param("id"))
 	if err != nil || inst == nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "实例不存在"})
+		return
+	}
+	inst, err = h.instanceForDial(c, inst)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
 	plain, decErr := secret.Decrypt(h.Secret, inst.Password)

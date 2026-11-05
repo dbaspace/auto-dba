@@ -18,7 +18,7 @@ type WholeDBTarget struct {
 }
 
 // ExpandWholeDBs 将整库选择在服务端展开为表级对象，避免前端传上万行。
-func ExpandWholeDBs(ctx context.Context, st *store.DB, secretKey, engine string, srcID string, whole []string, targets []WholeDBTarget, exclude []string, extra []store.MigrationObject) ([]store.MigrationObject, error) {
+func ExpandWholeDBs(ctx context.Context, st *store.DB, secretKey, engine string, srcID string, whole []string, targets []WholeDBTarget, exclude []string, extra []store.MigrationObject, srcHost string) ([]store.MigrationObject, error) {
 	engine = store.NormalizeDBType(engine)
 	tgtMap := map[string]string{}
 	for _, t := range targets {
@@ -38,6 +38,7 @@ func ExpandWholeDBs(ctx context.Context, st *store.DB, secretKey, engine string,
 	if err != nil || inst == nil {
 		return nil, fmt.Errorf("源实例不存在")
 	}
+	inst = WithDialHost(inst, srcHost)
 	plain, err := secret.Decrypt(secretKey, inst.Password)
 	if err != nil {
 		return nil, fmt.Errorf("解密实例密码失败: %w", err)

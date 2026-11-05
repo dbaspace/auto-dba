@@ -1,6 +1,7 @@
 import React, {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -14,6 +15,7 @@ import {
   Modal,
   Pagination,
   Select,
+  Space,
   Spin,
   Tabs,
   Tag,
@@ -61,6 +63,7 @@ interface QueryResult {
   columns?: string[]
   rows?: any[][]
   truncated?: boolean
+  notice?: string
   elapsed_ms?: number
   limit?: number
   applied_limit?: number
@@ -78,6 +81,11 @@ interface TabItem {
   table: string
   sql: string
   ts: number
+  favId?: string
+  /** 未收藏时的页签自定义名；空则显示库名 */
+  alias?: string
+  /** 最近一次成功执行并写出结果的语句 */
+  executedSql?: string
   result: QueryResult | null
   results?: QueryResult[]
   resultIdx?: number
@@ -89,6 +97,7 @@ interface FavItem {
   name: string
   dbId: string
   dbName: string
+  env?: string
   sql: string
   ts: number
 }
@@ -97,6 +106,8 @@ interface HistItem {
   id: string
   dbId: string
   dbName: string
+  env?: string
+  instanceId?: string
   sql: string
   ts: number
 }
@@ -216,6 +227,9 @@ function normalizeSavedTab(t: any): TabItem | null {
     table: t.table || '',
     sql: t.sql || '',
     ts: t.ts || Date.now(),
+    favId: t.favId || '',
+    alias: t.alias || '',
+    executedSql: t.executedSql || '',
     result: t.result && Array.isArray(t.result.columns) ? t.result : null,
     results: Array.isArray(t.results) ? t.results : undefined,
     resultIdx: typeof t.resultIdx === 'number' ? t.resultIdx : 0,
@@ -229,6 +243,37 @@ interface Workspace {
   leftWidth: number
   editorHeight: number
   histWidth: number
+}
+
+function findTreeNode(nodes: DataNode[] | undefined, key: React.Key): DataNode | undefined {
+  for (const n of nodes || []) {
+    if (n.key === key) return n
+    const hit = findTreeNode(n.children, key)
+    if (hit) return hit
+  }
+  return undefined
+}
+
+function reorderQueryTabs(list: TabItem[], fromKey: string, toKey: string): TabItem[] {
+  if (!fromKey || !toKey || fromKey === toKey || list.length < 2) return list
+  const fromIdx = list.findIndex((t) => t.key === fromKey)
+  const toIdx = list.findIndex((t) => t.key === toKey)
+  if (fromIdx < 0 || toIdx < 0) return list
+  const next = list.slice()
+  const [moved] = next.splice(fromIdx, 1)
+  let insertAt = next.findIndex((t) => t.key === toKey)
+  if (insertAt < 0) return list
+  if (fromIdx < toIdx) insertAt += 1
+  next.splice(insertAt, 0, moved)
+  return next
+}
+
+function queryTabKeyAt(x: number, y: number): string | null {
+  const hit = document.elementFromPoint(x, y)
+  if (!hit || hit.closest('.ant-tabs-tab-remove')) return null
+  const tab = hit.closest('.work-tabs .ant-tabs-tab')
+  const lab = tab?.querySelector('[data-tab-key]') as HTMLElement | null
+  return lab?.dataset.tabKey || null
 }
 
 function loadWorkspace(): Workspace {
@@ -281,6 +326,18 @@ export default function CommonQuery() {
   const [running, setRunning] = useState(false)
   const queryAbortRef = useRef<AbortController | null>(null)
   const sqlBoxRef = useRef<HTMLTextAreaElement | null>(null)
+  const keptSelectionRef = useRef<{ start: number; end: number; sql: string; key: string } | null>(null)
+  const selectionRestoreRef = useRef<{ start: number; end: number; sql: string } | null>(null)
+  const [selectionEpoch, setSelectionEpoch] = useState(0)
+  const tabPointerRef = useRef<{ key: string; x: number; y: number; dragging: boolean; pointerId: number } | null>(null)
+  const tabDraggedRef = useRef(false)
+  const lastTabClickRef = useRef<{ key: string; at: number } | null>(null)
+  const [dragOverKey, setDragOverKey] = useState<string | null>(null)
+  const [draggingKey, setDraggingKey] = useState<string | null>(null)
+  const [renamingKey, setRenamingKey] = useState<string | null>(null)
+  const [renameDraft, setRenameDraft] = useState('')
+  const renameLockRef = useRef(false)
+  const renameCancelRef = useRef(false)
   const resultTableWrapRef = useRef<HTMLDivElement | null>(null)
   const [resultScrollY, setResultScrollY] = useState(240)
   const [resultPageSize, setResultPageSize] = useState(() => {
@@ -316,10 +373,13 @@ export default function CommonQuery() {
   const [favorites, setFavorites] = useState<FavItem[]>(() => loadJSON<FavItem[]>(FAV_KEY, []))
   const [history, setHistory] = useState<HistItem[]>(() => loadJSON<HistItem[]>(HIST_KEY, []))
   const [favVisible, setFavVisible] = useState(false)
+  const [favMode, setFavMode] = useState<'create' | 'saveas'>('create')
   const [favName, setFavName] = useState('')
+  const [favSql, setFavSql] = useState('')
   const [favKeyword, setFavKeyword] = useState('')
   const [treeData, setTreeData] = useState<DataNode[]>([])
   const [expandedKeys, setExpandedKeys] = useState<React.Key[]>([])
+  const [selectedKeys, setSelectedKeys] = useState<React.Key[]>([])
 
   useEffect(() => {
     const tab = (location.state as { storeTab?: string } | null)?.storeTab
@@ -327,6 +387,60 @@ export default function CommonQuery() {
   }, [location.state])
 
   const current = useMemo(() => tabs.find((t) => t.key === activeKey) || null, [tabs, activeKey])
+
+  useEffect(() => {
+    const el = sqlBoxRef.current
+    const sync = () => {
+      if (!el || document.activeElement !== el) return
+      if (el.selectionEnd > el.selectionStart) {
+        keptSelectionRef.current = {
+          start: el.selectionStart,
+          end: el.selectionEnd,
+          sql: el.value,
+          key: activeKey,
+        }
+      } else {
+        keptSelectionRef.current = null
+      }
+    }
+    const keepBeforeFocusMoves = () => {
+      if (!el || document.activeElement !== el) return
+      if (el.selectionEnd <= el.selectionStart) return
+      keptSelectionRef.current = {
+        start: el.selectionStart,
+        end: el.selectionEnd,
+        sql: el.value,
+        key: activeKey,
+      }
+    }
+    document.addEventListener('pointerdown', keepBeforeFocusMoves, true)
+    if (el) {
+      el.addEventListener('select', sync)
+      el.addEventListener('keyup', sync)
+      el.addEventListener('mouseup', sync)
+    }
+    return () => {
+      document.removeEventListener('pointerdown', keepBeforeFocusMoves, true)
+      if (!el) return
+      el.removeEventListener('select', sync)
+      el.removeEventListener('keyup', sync)
+      el.removeEventListener('mouseup', sync)
+    }
+  }, [activeKey, tabs.length])
+
+  useLayoutEffect(() => {
+    const saved = selectionRestoreRef.current
+    const el = sqlBoxRef.current
+    if (!saved || !el) return
+    if (saved.start < 0 || saved.end > el.value.length || el.value !== saved.sql) return
+    const active = document.activeElement as HTMLElement | null
+    if (active && active !== el && active !== document.body) {
+      const tag = active.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || active.isContentEditable) return
+    }
+    el.focus()
+    el.setSelectionRange(saved.start, saved.end)
+  }, [selectionEpoch])
 
   const instMap = useMemo(() => {
     const m: Record<string, any> = {}
@@ -558,6 +672,56 @@ export default function CommonQuery() {
     })
   }, [buildNode, fetchTables])
 
+  useEffect(() => {
+    const dbId = current?.dbId
+    if (!dbId) {
+      setSelectedKeys((prev) => (prev.length ? [] : prev))
+      return
+    }
+    const db = databases.find((d) => d.id === dbId)
+    if (!db) return
+    const envName = dbEnv(db)
+    if ((envFilter && envName !== envFilter) || !matchKeyword(db)) {
+      if (envFilter && envName !== envFilter) setEnvFilter('')
+      if (!matchKeyword(db)) setKeyword('')
+      return
+    }
+    setSelectedKeys((prev) => (prev.length === 1 && prev[0] === db.id ? prev : [db.id]))
+    const envKey = `env:${envName}`
+    setExpandedKeys((prev) => {
+      if (prev.includes(envKey) && prev.includes(db.id)) return prev
+      return Array.from(new Set([...prev, envKey, db.id]))
+    })
+    const node = findTreeNode(treeData, db.id)
+    if (node && !node.children?.length) {
+      const inst = instMap[db.instance_id] || {}
+      void fetchTables(db.id).then(({ names, error }) => {
+        const children = !names.length
+          ? [buildNode({ id: `${db.id}__empty`, label: error || '暂无表', type: 'empty' }, true)]
+          : [...names].sort(cmpName).map((name) => buildNode({
+            id: `${db.id}__${name}`,
+            label: name,
+            type: 'table',
+            dbId: db.id,
+            table: name,
+            env: envName,
+            dbType: inst.db_type,
+          }, true))
+        updateTreeChildren(db.id, children)
+      })
+    }
+  }, [current?.dbId, databases, keyword, envFilter, treeData, dbEnv, matchKeyword, fetchTables, buildNode, instMap])
+
+  useEffect(() => {
+    if (!selectedKeys.length) return
+    const frame = requestAnimationFrame(() => {
+      const root = document.querySelector('.query-page .tree-wrap')
+      const el = root?.querySelector('.ant-tree-treenode-selected')
+      if (el instanceof HTMLElement) el.scrollIntoView({ block: 'nearest' })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [selectedKeys])
+
   function updateTreeChildren(key: React.Key, children: DataNode[]) {
     setTreeData((list) => {
       const walk = (nodes: DataNode[]): DataNode[] => nodes.map((n) => {
@@ -703,19 +867,30 @@ export default function CommonQuery() {
       const { data: histRes } = await api.get('/query/history').catch(() => ({ data: { data: [] } }))
       const remoteHist: HistItem[] = (histRes?.data || [])
         .filter((h: any) => h?.statement)
-        .map((h: any) => ({
-          id: h.id,
-          dbId: '',
-          dbName: h.target || '',
-          sql: h.statement,
-          ts: Date.parse(h.created_at) || Date.now(),
-        }))
+        .map((h: any) => {
+          const instanceId = String(h.instance_id || '')
+          const inst = instanceId ? instMap[instanceId] : undefined
+          const hits = instanceId
+            ? databases.filter((d) => d.db_name === (h.target || '') && d.instance_id === instanceId)
+            : []
+          const db = hits[0]
+          const env = db ? resolveDbEnv(db, inst) : String(inst?.idc || '').trim()
+          return {
+            id: h.id,
+            dbId: db?.id || '',
+            dbName: h.target || '',
+            env,
+            instanceId,
+            sql: h.statement,
+            ts: Date.parse(h.created_at) || Date.now(),
+          }
+        })
       if (!remoteHist.length) return
       setHistory((local) => {
         const map = new Map<string, HistItem>()
         // 服务端优先（按当前用户审计），再补本地未同步项
         for (const h of [...remoteHist, ...local]) {
-          const key = `${h.sql}|${h.dbName}`
+          const key = `${h.sql}|${h.dbName}|${h.env || ''}|${h.instanceId || ''}`
           if (!map.has(key)) map.set(key, h)
         }
         const next = Array.from(map.values()).sort((a, b) => b.ts - a.ts).slice(0, 100)
@@ -725,7 +900,7 @@ export default function CommonQuery() {
     } catch {
       /* ignore */
     }
-  }, [])
+  }, [databases, instMap])
 
   useEffect(() => {
     // 合并服务端收藏 / 历史，保留本地数据，不破坏现有能力
@@ -737,6 +912,7 @@ export default function CommonQuery() {
           name: f.name || f.db_name || '未命名',
           dbId: f.database_id || '',
           dbName: f.db_name || '',
+          env: f.env || '',
           sql: f.sql || '',
           ts: Date.parse(f.updated_at || f.created_at) || Date.now(),
         }))
@@ -784,6 +960,9 @@ export default function CommonQuery() {
           table: t.table,
           sql: t.sql,
           ts: t.ts,
+          favId: t.favId || '',
+          alias: t.alias || '',
+          executedSql: t.executedSql || '',
           error: t.error || '',
           result: t.result && (t.result.rows?.length || 0) <= 200 ? t.result : null,
         })),
@@ -815,7 +994,7 @@ export default function CommonQuery() {
     return name
   }
 
-  function newTab(db: any, opt: { sql?: string; table?: string } = {}): TabItem {
+  function newTab(db: any, opt: { sql?: string; table?: string; favId?: string } = {}): TabItem {
     const inst = instMap[db.instance_id] || {}
     return {
       key: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -828,12 +1007,13 @@ export default function CommonQuery() {
       table: opt.table || '',
       sql: opt.sql || '',
       ts: Date.now(),
+      favId: opt.favId || '',
       result: null,
       error: '',
     }
   }
 
-  function openDB(db: any, opt: { sql?: string; table?: string; run?: boolean } = {}): TabItem {
+  function openDB(db: any, opt: { sql?: string; table?: string; run?: boolean; favId?: string } = {}): TabItem {
     const exist = tabs.find((t) => t.dbId === db.id && !t.table)
     if (exist && !opt.table && opt.sql === undefined) {
       setActiveKey(exist.key)
@@ -842,7 +1022,7 @@ export default function CommonQuery() {
     const sql = opt.sql ?? (opt.table
       ? `SELECT * FROM ${quoteTable(opt.table, instMap[db.instance_id]?.db_type)} LIMIT 50;`
       : '')
-    const tab = newTab(db, { sql, table: opt.table })
+    const tab = newTab(db, { sql, table: opt.table, favId: opt.favId })
     setTabs((list) => [...list, tab])
     setActiveKey(tab.key)
     if (opt.run) runSQL(tab)
@@ -918,7 +1098,7 @@ export default function CommonQuery() {
   }
 
   function onSqlKey(e: React.KeyboardEvent) {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       runSQL()
     }
@@ -939,29 +1119,50 @@ export default function CommonQuery() {
     queryAbortRef.current?.abort()
   }
 
-  function selectedOrFullSQL(fallback: string): string {
+  function takeSelection(sql: string, tabKey: string): { start: number; end: number; text: string } | null {
     const el = sqlBoxRef.current
-    if (el && typeof el.selectionStart === 'number' && el.selectionEnd > el.selectionStart) {
-      const sel = fallback.slice(el.selectionStart, el.selectionEnd).trim()
-      if (sel) return sel
+    if (el && document.activeElement === el && el.value === sql && el.selectionEnd > el.selectionStart) {
+      const text = sql.slice(el.selectionStart, el.selectionEnd)
+      if (text.trim()) return { start: el.selectionStart, end: el.selectionEnd, text }
     }
-    return fallback
+    const kept = keptSelectionRef.current
+    if (kept && kept.key === tabKey && kept.sql === sql && kept.end > kept.start) {
+      const text = sql.slice(kept.start, kept.end)
+      if (text.trim()) return { start: kept.start, end: kept.end, text }
+    }
+    return null
   }
 
-  async function runSQL(tab: TabItem | null = current) {
-    if (!tab?.sql?.trim() || !tab.dbId) return
-    const sql = selectedOrFullSQL(tab.sql)
-    if (!sql.trim()) return
+  function rememberSelectionRestore(picked: { start: number; end: number }, sql: string) {
+    selectionRestoreRef.current = { start: picked.start, end: picked.end, sql }
+    setSelectionEpoch((n) => n + 1)
+  }
+
+  async function runSQL(tab: TabItem | null = current, opt: { onlySelection?: boolean } = {}) {
+    if (!tab?.dbId) return
+    if (opt.onlySelection && running) return
+    const picked = tab.sql ? takeSelection(tab.sql, tab.key) : null
+    if (opt.onlySelection && !picked) {
+      message.warning('请先选中要执行的 SQL')
+      return
+    }
+    const sql = (picked ? picked.text : (tab.sql || '')).trim()
+    if (!sql) return
+    if (picked) rememberSelectionRestore(picked, tab.sql)
+    else selectionRestoreRef.current = null
     queryAbortRef.current?.abort()
     const ac = new AbortController()
     queryAbortRef.current = ac
+    const clientRequestID = crypto.randomUUID()
+    const started = Date.now()
     setRunning(true)
+    if (picked) setSelectionEpoch((n) => n + 1)
     setTabs((list) => list.map((t) => (t.key === tab.key ? { ...t, error: '' } : t)))
     try {
       const { data } = await api.post(
         '/query',
-        { database_id: tab.dbId, sql },
-        { signal: ac.signal },
+        { database_id: tab.dbId, sql, client_request_id: clientRequestID },
+        { signal: ac.signal, timeout: 90000 },
       )
       if (data?.canceled) {
         message.info(data.message || '查询已终止')
@@ -972,7 +1173,7 @@ export default function CommonQuery() {
         ? data.results
         : [result]
       setTabs((list) => list.map((t) => (
-        t.key === tab.key ? { ...t, result: results[0], results, resultIdx: 0, error: '' } : t
+        t.key === tab.key ? { ...t, result: results[0], results, resultIdx: 0, error: '', executedSql: sql } : t
       )))
       pushHistory({ ...tab, sql })
       void mergeRemoteHistory()
@@ -981,11 +1182,19 @@ export default function CommonQuery() {
         message.info('查询已终止')
         return
       }
+      if (err?.code === 'ECONNABORTED') {
+        api.post(
+          '/query/client-timeout',
+          { client_request_id: clientRequestID, elapsed_ms: Date.now() - started },
+          { timeout: 8000, silent: true },
+        ).catch(() => { /* 补记失败不影响页面 */ })
+      }
       const errMsg = err.response?.data?.message || err.message || '查询失败'
       setTabs((list) => list.map((t) => (t.key === tab.key ? { ...t, result: null, results: undefined, error: errMsg } : t)))
     } finally {
       if (queryAbortRef.current === ac) queryAbortRef.current = null
       setRunning(false)
+      if (picked) setSelectionEpoch((n) => n + 1)
     }
   }
 
@@ -995,6 +1204,7 @@ export default function CommonQuery() {
       message.warning('请先选择数据库并填写 SQL')
       return
     }
+    const exportSql = tab.result && tab.executedSql?.trim() ? tab.executedSql : tab.sql
     Modal.confirm({
       title: '数据导出',
       content: '导出表数据需发起导出数据工单，是否继续？',
@@ -1002,7 +1212,7 @@ export default function CommonQuery() {
       cancelText: '取消',
       onOk: () => {
         // row_count 仅审批参考：取 SQL 中 LIMIT，勿用查询预览行数（常被 query_default_limit=1000 截断）
-        const limMatch = String(tab.sql || '').match(/\blimit\s+(\d+)(?:\s*,\s*(\d+))?/i)
+        const limMatch = String(exportSql || '').match(/\blimit\s+(\d+)(?:\s*,\s*(\d+))?/i)
         const sqlLimit = limMatch
           ? Number(limMatch[2] != null ? limMatch[2] : limMatch[1])
           : 0
@@ -1012,7 +1222,7 @@ export default function CommonQuery() {
           db_name: tab.dbName,
           env: tab.env,
           db_type: tab.dbType,
-          sql: tab.sql,
+          sql: exportSql,
           row_count: Number.isFinite(sqlLimit) && sqlLimit > 0 ? sqlLimit : 0,
           columns: tab.result?.columns || [],
         }))
@@ -1026,37 +1236,155 @@ export default function CommonQuery() {
       message.warning('请先输入 SQL')
       return
     }
-    setFavName(current.dbName || '未命名')
+    setFavMode('create')
+    setFavName('')
+    setFavSql(current.sql)
     setFavVisible(true)
   }
 
-  async function saveFavorite() {
+  function openSaveAs() {
+    if (!current?.sql?.trim()) {
+      message.warning('请先输入 SQL')
+      return
+    }
+    setFavMode('saveas')
+    setFavName('')
+    setFavSql(current.sql)
+    setFavVisible(true)
+  }
+
+  async function writeFavorite(name: string, sql: string) {
     const tab = current
     if (!tab) return
-    const name = favName.trim() || tab.dbName
-    let id = `${Date.now()}`
+    const trimmed = name.trim()
+    if (!trimmed) {
+      message.warning('请输入名称')
+      return
+    }
+    const sqlText = sql.trim()
+    if (!sqlText) {
+      message.warning('请先输入 SQL')
+      return
+    }
+    if (favMode === 'saveas') {
+      const bound = favorites.find((f) => f.id === tab.favId)
+      if (bound && bound.name.trim() === trimmed) {
+        message.warning('请换一个名称')
+        return
+      }
+    }
+    const body = {
+      name: trimmed,
+      database_id: tab.dbId,
+      db_name: tab.dbName,
+      env: tab.env || '',
+      sql: sqlText,
+    }
+    const same = favorites.filter((f) => f.name.trim() === trimmed)
+    const now = Date.now()
     try {
-      const { data } = await api.post('/query/favorites', {
-        name,
+      if (same.length) {
+        const keep = same[0]
+        await api.put(`/query/favorites/${keep.id}`, body)
+        await Promise.all(same.slice(1).map((f) => api.delete(`/query/favorites/${f.id}`).catch(() => undefined)))
+        const item: FavItem = { id: keep.id, name: trimmed, dbId: tab.dbId, dbName: tab.dbName, env: tab.env || '', sql: sqlText, ts: now }
+        const drop = new Set(same.map((f) => f.id))
+        setFavorites((list) => {
+          const next = [item, ...list.filter((f) => !drop.has(f.id))]
+          saveJSON(FAV_KEY, next)
+          return next
+        })
+        updateCurrent({ favId: keep.id })
+        message.success('已更新收藏')
+      } else {
+        let id = `${now}`
+        const { data } = await api.post('/query/favorites', body)
+        if (data?.data?.id) id = data.data.id
+        const item: FavItem = { id, name: trimmed, dbId: tab.dbId, dbName: tab.dbName, env: tab.env || '', sql: sqlText, ts: now }
+        setFavorites((list) => {
+          const next = [item, ...list]
+          saveJSON(FAV_KEY, next)
+          return next
+        })
+        updateCurrent({ favId: id })
+        message.success('已收藏')
+      }
+      setFavVisible(false)
+    } catch (e: any) {
+      message.error(e?.response?.data?.message || '保存失败')
+    }
+  }
+
+  async function updateBoundFavorite() {
+    const tab = current
+    if (!tab?.favId) {
+      message.warning('请先点「收藏」起名')
+      return
+    }
+    const fav = favorites.find((f) => f.id === tab.favId)
+    if (!fav) {
+      message.warning('请先点「收藏」起名')
+      updateCurrent({ favId: '' })
+      return
+    }
+    const sqlText = String(tab.sql || '').trim()
+    if (!sqlText) {
+      message.warning('请先输入 SQL')
+      return
+    }
+    try {
+      await api.put(`/query/favorites/${fav.id}`, {
+        name: fav.name,
         database_id: tab.dbId,
         db_name: tab.dbName,
-        sql: tab.sql,
+        env: tab.env || '',
+        sql: sqlText,
       })
-      if (data?.data?.id) id = data.data.id
-    } catch {
-      /* 服务端失败时仍写本地，不影响现有能力 */
+      setFavorites((list) => {
+        const next = list.map((f) => (f.id === fav.id
+          ? { ...f, dbId: tab.dbId, dbName: tab.dbName, env: tab.env || '', sql: sqlText, ts: Date.now() }
+          : f))
+        saveJSON(FAV_KEY, next)
+        return next
+      })
+      message.success('已更新收藏')
+    } catch (e: any) {
+      message.error(e?.response?.data?.message || '更新失败')
     }
-    setFavorites((list) => {
-      const next = [
-        { id, name, dbId: tab.dbId, dbName: tab.dbName, sql: tab.sql, ts: Date.now() },
-        ...list,
-      ]
-      saveJSON(FAV_KEY, next)
-      return next
-    })
-    setFavVisible(false)
-    message.success('已收藏')
   }
+
+  function saveFavorite() {
+    void writeFavorite(favName, favSql)
+  }
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const meta = e.metaKey || e.ctrlKey
+      if (!meta) return
+      if (e.key === 'Enter' && e.shiftKey) {
+        if (favVisible) return
+        const target = e.target as HTMLElement | null
+        const inField = !!target && target !== sqlBoxRef.current && (
+          target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable
+        )
+        if (inField) return
+        e.preventDefault()
+        if (running) return
+        void runSQL(current, { onlySelection: true })
+        return
+      }
+      if (e.key.toLowerCase() !== 's' || e.shiftKey || e.altKey) return
+      if (favVisible) return
+      const bound = current?.favId
+        ? favorites.find((f) => f.id === current.favId)
+        : undefined
+      if (!bound) return
+      e.preventDefault()
+      void updateBoundFavorite()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [favVisible, current, favorites, running])
 
   function removeFav(id: string) {
     api.delete(`/query/favorites/${id}`).catch(() => { /* ignore */ })
@@ -1067,14 +1395,60 @@ export default function CommonQuery() {
     })
   }
 
-  function applyStore(item: FavItem | HistItem) {
-    const db = databases.find((d) => d.id === item.dbId)
-    if (db) {
-      const tab = openDB(db, { sql: item.sql })
-      setTabs((list) => list.map((t) => (t.key === tab.key ? { ...t, sql: item.sql } : t)))
+  function openOrSwitchDB(db: any, sql: string, favId = '') {
+    const exist = tabs.find((t) => t.dbId === db.id && !t.table)
+    if (exist) {
+      setTabs((list) => list.map((t) => (t.key === exist.key ? { ...t, sql, favId } : t)))
+      setActiveKey(exist.key)
       return
     }
-    if (current) updateCurrent({ sql: item.sql })
+    openDB(db, { sql, favId })
+  }
+
+  function applyStore(item: FavItem | HistItem, source: 'fav' | 'hist') {
+    const envOf = (db: any) => resolveDbEnv(db, instMap[db.instance_id])
+    if (item.dbId) {
+      const byId = databases.find((d) => d.id === item.dbId)
+      if (byId) {
+        openOrSwitchDB(byId, item.sql, source === 'fav' ? item.id : '')
+        return
+      }
+    }
+    const name = String(item.dbName || '').trim()
+    if (!name) {
+      message.warning('未找到库')
+      return
+    }
+    const same = databases.filter((d) => d.db_name === name)
+    if (!same.length) {
+      message.warning(`未找到库 ${name}`)
+      return
+    }
+    const env = String(item.env || '').trim()
+    let pool = same
+    if (env) {
+      pool = same.filter((d) => envOf(d) === env)
+      if (!pool.length) {
+        message.warning(`未找到库 ${name}`)
+        return
+      }
+    } else if (source === 'hist') {
+      const envs = new Set(same.map((d) => envOf(d)))
+      if (envs.size > 1) {
+        message.warning(`库 ${name} 存在多个环境，无法确定要打开哪一个`)
+        return
+      }
+    } else if (current?.env) {
+      const prefer = same.filter((d) => envOf(d) === current.env)
+      if (prefer.length) pool = prefer
+    }
+    const instanceId = 'instanceId' in item ? item.instanceId : ''
+    if (instanceId) {
+      const byInst = pool.filter((d) => d.instance_id === instanceId)
+      if (byInst.length) pool = byInst
+    }
+    if (pool.length > 1) message.info('同环境有多条同名库，已打开第一条')
+    openOrSwitchDB(pool[0], item.sql, source === 'fav' ? item.id : '')
   }
 
   // drag
@@ -1114,15 +1488,12 @@ export default function CommonQuery() {
     }
     setTreeLoading(true)
     try {
-      const scope = { scope: 'tenant' }
-      const [dbRes, instRes] = await Promise.all([
-        api.get('/databases', { params: scope }),
-        api.get('/instances', { params: scope }),
-      ])
-      const instList: any[] = instRes.data.data || []
+      const { data } = await api.get('/query/catalog')
+      const payload = data.data || {}
+      const instList: any[] = payload.instances || []
       const instById: Record<string, any> = {}
       for (const i of instList) instById[i.id] = i
-      const dbs = (dbRes.data.data || []).filter((db: any) => {
+      const dbs = (payload.databases || []).filter((db: any) => {
         const t = normalizeType(instById[db.instance_id]?.db_type)
         return t !== 'kafka' && t !== 'redis'
       })
@@ -1146,7 +1517,98 @@ export default function CommonQuery() {
     return () => { if (dragRef.current) dragRef.current() }
   }, [loadTree])
 
+  function moveQueryTab(fromKey: string, toKey: string) {
+    setTabs((list) => reorderQueryTabs(list, fromKey, toKey))
+  }
+
+  function onTabPointerDown(e: React.PointerEvent<HTMLElement>, key: string) {
+    if (e.button !== 0 || renamingKey === key) return
+    if ((e.target as HTMLElement).closest('input, textarea')) return
+    tabPointerRef.current = { key, x: e.clientX, y: e.clientY, dragging: false, pointerId: e.pointerId }
+  }
+
+  function onTabPointerMove(e: React.PointerEvent<HTMLElement>) {
+    const p = tabPointerRef.current
+    if (!p || p.pointerId !== e.pointerId) return
+    const dist = Math.hypot(e.clientX - p.x, e.clientY - p.y)
+    if (!p.dragging && dist <= 4) return
+    if (!p.dragging) {
+      p.dragging = true
+      tabDraggedRef.current = true
+      setDraggingKey(p.key)
+      try { e.currentTarget.setPointerCapture(e.pointerId) } catch { /* 已经松开时忽略 */ }
+    }
+    const over = queryTabKeyAt(e.clientX, e.clientY)
+    const next = over && over !== p.key ? over : null
+    setDragOverKey((cur) => (cur === next ? cur : next))
+  }
+
+  function onTabPointerUp(e: React.PointerEvent<HTMLElement>) {
+    const p = tabPointerRef.current
+    if (!p || p.pointerId !== e.pointerId) return
+    tabPointerRef.current = null
+    if (p.dragging) {
+      const over = queryTabKeyAt(e.clientX, e.clientY)
+      if (over && over !== p.key) moveQueryTab(p.key, over)
+      setDragOverKey(null)
+      setDraggingKey(null)
+      window.setTimeout(() => { tabDraggedRef.current = false }, 0)
+    }
+  }
+
+  function tabLabelOf(t: TabItem): { text: string; showTag: boolean } {
+    const fav = t.favId ? favorites.find((f) => f.id === t.favId) : undefined
+    if (fav?.name) return { text: fav.name, showTag: false }
+    const alias = String(t.alias || '').trim()
+    if (alias) return { text: alias, showTag: false }
+    return { text: t.dbName, showTag: !!t.tag }
+  }
+
+  function beginRename(t: TabItem) {
+    const label = tabLabelOf(t)
+    setRenamingKey(t.key)
+    setRenameDraft(label.text)
+  }
+
+  async function commitRename(t: TabItem) {
+    if (renameCancelRef.current) {
+      renameCancelRef.current = false
+      return
+    }
+    if (renameLockRef.current || renamingKey !== t.key) return
+    renameLockRef.current = true
+    const name = renameDraft.trim()
+    const fav = t.favId ? favorites.find((f) => f.id === t.favId) : undefined
+    setRenamingKey(null)
+    try {
+      if (fav) {
+        if (!name || name === fav.name) return
+        await api.put(`/query/favorites/${fav.id}`, {
+          name,
+          database_id: t.dbId,
+          db_name: t.dbName,
+          env: t.env || '',
+          sql: fav.sql,
+        })
+        setFavorites((list) => {
+          const next = list.map((f) => (f.id === fav.id ? { ...f, name, ts: Date.now() } : f))
+          saveJSON(FAV_KEY, next)
+          return next
+        })
+        return
+      }
+      setTabs((list) => list.map((tab) => (tab.key === t.key ? { ...tab, alias: name } : tab)))
+    } catch (e: any) {
+      message.error(e?.response?.data?.message || '改名失败')
+    } finally {
+      renameLockRef.current = false
+    }
+  }
+
   const hasTreeData = treeData.length > 0
+  const boundFav = current?.favId
+    ? favorites.find((f) => f.id === current.favId)
+    : undefined
 
   return (
     <div className="query-page">
@@ -1182,6 +1644,7 @@ export default function CommonQuery() {
                 treeData={treeData}
                 loadData={onLoadData}
                 expandedKeys={expandedKeys}
+                selectedKeys={selectedKeys}
                 onExpand={(keys) => setExpandedKeys(keys)}
                 expandAction="click"
                 titleRender={renderNodeTitle}
@@ -1224,17 +1687,79 @@ export default function CommonQuery() {
                   activeKey={activeKey}
                   onChange={setActiveKey}
                   onEdit={(targetKey, action) => { if (action === 'remove') closeTab(String(targetKey)) }}
-                  items={tabs.map((t) => ({
-                    key: t.key,
-                    label: (
-                      <span className="tab-lab">
-                        <DbTypeIcon type={t.dbType} size={14} />
-                        <span>{t.dbName}</span>
-                        {t.tag ? <span className="tab-tag">[{t.tag}]</span> : null}
-                        <span className="tab-time">{fmtTime(t.ts)}</span>
-                      </span>
-                    ),
-                  }))}
+                  items={tabs.map((t) => {
+                    const label = tabLabelOf(t)
+                    const renaming = renamingKey === t.key
+                    return {
+                      key: t.key,
+                      label: (
+                        <span
+                          className={`tab-lab${dragOverKey === t.key ? ' drag-over' : ''}${renaming ? ' is-renaming' : ''}${draggingKey === t.key ? ' is-dragging' : ''}`}
+                          data-tab-key={t.key}
+                          onPointerDown={(ev) => onTabPointerDown(ev, t.key)}
+                          onPointerMove={onTabPointerMove}
+                          onPointerUp={onTabPointerUp}
+                          onPointerCancel={onTabPointerUp}
+                          onClick={(ev) => {
+                            if (tabDraggedRef.current) {
+                              ev.stopPropagation()
+                              ev.preventDefault()
+                              tabDraggedRef.current = false
+                              lastTabClickRef.current = null
+                              return
+                            }
+                            if (renaming || (ev.target as HTMLElement).closest('input, textarea')) return
+                            const now = Date.now()
+                            const prev = lastTabClickRef.current
+                            if (prev && prev.key === t.key && now - prev.at <= 500) {
+                              lastTabClickRef.current = null
+                              ev.preventDefault()
+                              ev.stopPropagation()
+                              beginRename(t)
+                              return
+                            }
+                            lastTabClickRef.current = { key: t.key, at: now }
+                          }}
+                          onDoubleClick={(ev) => {
+                            if (renaming || tabDraggedRef.current) return
+                            if ((ev.target as HTMLElement).closest('input, textarea')) return
+                            ev.preventDefault()
+                            ev.stopPropagation()
+                            beginRename(t)
+                          }}
+                        >
+                          <DbTypeIcon type={t.dbType} size={14} />
+                          {renaming ? (
+                            <Input
+                              className="tab-rename-input"
+                              size="small"
+                              autoFocus
+                              value={renameDraft}
+                              onChange={(ev) => setRenameDraft(ev.target.value)}
+                              onMouseDown={(ev) => ev.stopPropagation()}
+                              onClick={(ev) => ev.stopPropagation()}
+                              onDoubleClick={(ev) => ev.stopPropagation()}
+                              onKeyDown={(ev) => {
+                                ev.stopPropagation()
+                                if (ev.key === 'Enter') {
+                                  ev.preventDefault()
+                                  void commitRename(t)
+                                } else if (ev.key === 'Escape') {
+                                  ev.preventDefault()
+                                  renameCancelRef.current = true
+                                  setRenamingKey(null)
+                                }
+                              }}
+                              onBlur={() => { void commitRename(t) }}
+                            />
+                          ) : (
+                            <span className="tab-name">{label.text}</span>
+                          )}
+                          {label.showTag && t.tag ? <span className="tab-tag">[{t.tag}]</span> : null}
+                        </span>
+                      ),
+                    }
+                  })}
                 />
                 <Button className="tab-add" type="text" onClick={addTab}>+</Button>
               </div>
@@ -1242,15 +1767,19 @@ export default function CommonQuery() {
                 <div className="editor-col">
                   <div className="tool-bar">
                     <div className="tool-left">
-                      <Button
-                        type="primary"
-                        disabled={!current?.sql?.trim()}
-                        loading={running}
-                        icon={<CaretRightOutlined />}
-                        onClick={() => runSQL()}
-                      >
-                        运行
-                      </Button>
+                      <Tooltip title={`${/Mac/i.test(navigator.userAgent) ? '⌘' : 'Ctrl'}+Enter 执行选中或整段；${/Mac/i.test(navigator.userAgent) ? '⌘' : 'Ctrl'}+Shift+Enter 只执行选中`}>
+                        <span>
+                          <Button
+                            type="primary"
+                            disabled={!current?.sql?.trim()}
+                            loading={running}
+                            icon={<CaretRightOutlined />}
+                            onClick={() => runSQL()}
+                          >
+                            运行
+                          </Button>
+                        </span>
+                      </Tooltip>
                       <Button
                         danger
                         disabled={!running}
@@ -1261,7 +1790,20 @@ export default function CommonQuery() {
                       </Button>
                       <Button onClick={formatSQL}>格式化</Button>
                     </div>
-                    <Button icon={<StarOutlined />} onClick={openFavorite}>收藏</Button>
+                    <Space>
+                      {boundFav ? (
+                        <>
+                          <Button onClick={() => void updateBoundFavorite()}>更新收藏 ({/Mac/i.test(navigator.userAgent) ? '⌘+S' : 'Ctrl+S'})</Button>
+                          <Button onClick={openSaveAs}>另存为</Button>
+                          <span className="fav-bound-name" title={boundFav.name}>
+                            <StarOutlined />
+                            <span>{boundFav.name}</span>
+                          </span>
+                        </>
+                      ) : (
+                        <Button icon={<StarOutlined />} onClick={openFavorite}>收藏</Button>
+                      )}
+                    </Space>
                   </div>
                   <div className="db-meta">
                     <Tag color={envTagColor(current?.env)}>{current?.env || '—'}</Tag>
@@ -1307,7 +1849,7 @@ export default function CommonQuery() {
                             />
                             <div className="store-list">
                               {filteredFavs.map((item) => (
-                                <div key={item.id} className="store-item" onClick={() => applyStore(item)}>
+                                <div key={item.id} className="store-item" onClick={() => applyStore(item, 'fav')}>
                                   <div className="store-title">
                                     <span>{item.name}</span>
                                     <Button
@@ -1319,7 +1861,7 @@ export default function CommonQuery() {
                                       删除
                                     </Button>
                                   </div>
-                                  <div className="store-sub">{item.dbName} · {fmtTime(item.ts)}</div>
+                                  <div className="store-sub">{item.dbName}{item.env ? ` · ${item.env}` : ''} · {fmtTime(item.ts)}</div>
                                   <div className="store-sql">{item.sql}</div>
                                 </div>
                               ))}
@@ -1334,7 +1876,7 @@ export default function CommonQuery() {
                         children: (
                           <div className="store-list">
                             {history.map((item) => (
-                              <div key={item.id} className="store-item" onClick={() => applyStore(item)}>
+                              <div key={item.id} className="store-item" onClick={() => applyStore(item, 'hist')}>
                                 <div className="store-title">
                                   <span>{item.dbName}</span>
                                   <span className="store-sub">{fmtTime(item.ts)}</span>
@@ -1402,7 +1944,7 @@ export default function CommonQuery() {
                       <div className="result-pagination">
                         <span className="result-count">
                           共 {resultRowsFiltered.length} 条记录【最大查询{activeResult.limit || activeResult.applied_limit || '—'}条】
-                          {activeResult.truncated ? '（已达上限）' : ''}
+                          {activeResult.notice ? `（${activeResult.notice}）` : activeResult.truncated ? '（已达上限）' : ''}
                         </span>
                         <Pagination
                           size="small"
@@ -1465,15 +2007,26 @@ export default function CommonQuery() {
 
       <Modal
         open={favVisible}
-        title="收藏 SQL"
-        width={420}
+        title={favMode === 'saveas' ? '另存为' : '创建收藏'}
+        width={640}
         onCancel={() => setFavVisible(false)}
         onOk={saveFavorite}
-        okText="保存"
+        okText="确定"
         cancelText="取消"
         destroyOnClose
       >
-        <Input value={favName} placeholder="收藏名称" onChange={(e) => setFavName(e.target.value)} />
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ marginBottom: 6 }}>SQL 语句</div>
+          <Input.TextArea value={favSql} readOnly autoSize={{ minRows: 4, maxRows: 10 }} />
+        </div>
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ marginBottom: 6 }}><span style={{ color: '#ff4d4f' }}>* </span>名称</div>
+          <Input value={favName} placeholder="请输入名称" onChange={(e) => setFavName(e.target.value)} />
+        </div>
+        <div>
+          <div style={{ marginBottom: 6 }}>数据库名称</div>
+          <Input value={current?.dbName || ''} disabled />
+        </div>
       </Modal>
 
       <Modal

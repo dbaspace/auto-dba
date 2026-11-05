@@ -12,6 +12,7 @@ import { ddlProgressView } from './execProgress'
 import DnsChangeDiff, { payloadRows } from '../dns/DnsChangeDiff'
 import { countNonEmptyLines, lineVsStatementHint, shouldHintLineVsStatement } from './sqlStatementCount'
 import { envCodeForSource } from '../../utils/ticketEnv'
+import { permissionLabel } from '../../utils/dbPermissions'
 import type { AccessDomainRow } from '../../utils/instanceSource'
 import './TicketDetail.css'
 
@@ -485,11 +486,10 @@ export default function TicketDetail() {
       if (createdbExtra.username)
         fields.push({ key: 'acct', label: '数据库账号', value: createdbExtra.username })
       if (createdbExtra.permissions?.length) {
-        const map: Record<string, string> = { r: '读操作', c: '写操作', u: '更新操作', d: '删除操作' }
         fields.push({
           key: 'perms',
           label: '账号权限',
-          value: createdbExtra.permissions.map((p: string) => map[p] || p).join('， '),
+          value: createdbExtra.permissions.map((p: string) => permissionLabel(p)).join('， '),
         })
       }
     }

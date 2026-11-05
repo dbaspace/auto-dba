@@ -12,6 +12,16 @@ const vendors = [
   { value: 'aws', label: 'AWS' },
 ]
 
+const cloudRegionOptions = [
+  'ap-beijing',
+  'ap-shanghai',
+  'ap-guangzhou',
+  'ap-singapore',
+  'eu-frankfurt',
+  'na-siliconvalley',
+  'na-ashburn',
+].map((value) => ({ value, label: value }))
+
 type Opt = { id: string; code?: string; name?: string }
 
 export default function CloudAccounts() {
@@ -51,7 +61,7 @@ export default function CloudAccounts() {
   function openCreate() {
     setEditRow(null)
     form.resetFields()
-    form.setFieldsValue({ enabled: true, platform_region_ids: [], env_ids: [], sync_engines: [] })
+    form.setFieldsValue({ enabled: true, regions: [], platform_region_ids: [], env_ids: [], sync_engines: [] })
     setCreating(true)
   }
 
@@ -61,7 +71,7 @@ export default function CloudAccounts() {
     form.setFieldsValue({
       vendor: row.vendor,
       name: row.name,
-      regions: (row.regions || []).join(', '),
+      regions: row.regions || [],
       platform_region_ids: row.platform_region_ids || [],
       env_ids: row.env_ids || [],
       sync_engines: row.sync_engines || [],
@@ -129,7 +139,8 @@ export default function CloudAccounts() {
         onOk={() => form.submit()}
       >
         <Form form={form} layout="vertical" onFinish={async (v) => {
-          const regions = String(v.regions || '').split(/[,，\s]+/).map((s: string) => s.trim()).filter(Boolean)
+          const regions = (Array.isArray(v.regions) ? v.regions : String(v.regions || '').split(/[,，\s]+/))
+            .map((s: string) => String(s).trim()).filter(Boolean)
           const body = {
             name: v.name,
             regions,
@@ -161,9 +172,15 @@ export default function CloudAccounts() {
           <Form.Item
             name="regions"
             label="云地域"
-            extra="云厂商 Region，多个用逗号分隔，如 ap-beijing,ap-guangzhou；同步按此列表拉取"
+            rules={[{ required: true, message: '请至少选择一个云地域' }]}
+            extra="同一套 AK/SK 会按勾选地域并行同步。腾讯云选下列 Region，其它厂商可直接输入地域编码。"
           >
-            <Input placeholder="ap-beijing,ap-guangzhou" />
+            <Select
+              mode="tags"
+              allowClear
+              placeholder="选择或输入云地域"
+              options={cloudRegionOptions}
+            />
           </Form.Item>
           <Form.Item
             name="platform_region_ids"

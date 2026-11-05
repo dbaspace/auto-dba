@@ -279,6 +279,8 @@ type MigrationTask struct {
 	CreatedBy             string              `json:"created_by,omitempty"`
 	DBType                string              `json:"db_type,omitempty"`
 	Env                   string              `json:"env,omitempty"`
+	SourceEnv             string              `json:"source_env,omitempty"`
+	TargetEnv             string              `json:"target_env,omitempty"`
 	SourceHost            string              `json:"source_host,omitempty"`
 	SourcePort            int                 `json:"source_port,omitempty"`
 	TargetHost            string              `json:"target_host,omitempty"`
@@ -664,25 +666,26 @@ type PGLock struct {
 
 // QueryAudit 是一次交互式查询（库 / Kafka / Redis）的审计记录。
 type QueryAudit struct {
-	ID           string `json:"id"`
-	Kind         string `json:"kind"`
-	UserID       string `json:"user_id,omitempty"`
-	Username     string `json:"username"`
-	DisplayName  string `json:"display_name,omitempty"`
-	IP           string `json:"ip"`
-	UserAgent    string `json:"user_agent,omitempty"`
-	InstanceID   string `json:"instance_id,omitempty"`
-	InstanceName string `json:"instance_name,omitempty"`
-	DBType       string `json:"db_type,omitempty"`
-	Target       string `json:"target,omitempty"`
-	Statement    string `json:"statement"`
-	Success      bool   `json:"success"`
-	Message      string `json:"message,omitempty"`
-	RowCount     int    `json:"row_count"`
-	ElapsedMS    int64  `json:"elapsed_ms"`
-	ClientType   string `json:"client_type,omitempty"`
-	TokenID      string `json:"token_id,omitempty"`
-	CreatedAt    string `json:"created_at"`
+	ID              string `json:"id"`
+	Kind            string `json:"kind"`
+	UserID          string `json:"user_id,omitempty"`
+	Username        string `json:"username"`
+	DisplayName     string `json:"display_name,omitempty"`
+	IP              string `json:"ip"`
+	UserAgent       string `json:"user_agent,omitempty"`
+	InstanceID      string `json:"instance_id,omitempty"`
+	InstanceName    string `json:"instance_name,omitempty"`
+	DBType          string `json:"db_type,omitempty"`
+	Target          string `json:"target,omitempty"`
+	Statement       string `json:"statement"`
+	Success         bool   `json:"success"`
+	Message         string `json:"message,omitempty"`
+	RowCount        int    `json:"row_count"`
+	ElapsedMS       int64  `json:"elapsed_ms"`
+	ClientType      string `json:"client_type,omitempty"`
+	TokenID         string `json:"token_id,omitempty"`
+	ClientRequestID string `json:"client_request_id,omitempty"`
+	CreatedAt       string `json:"created_at"`
 }
 
 // HACluster 高可用集群登记（独立于 Instance，不改动实例表语义）
@@ -795,6 +798,7 @@ const (
 	StatusRunning        = "running"
 	StatusPaused         = "paused"
 	StatusInit           = "init"
+	StatusSuperseded     = "superseded" // 分库汇总任务已拆成单库 init，默认列表不展示
 	StatusScheduled      = "scheduled"
 	StatusCompleted      = "completed"
 	StatusPreChecking    = "pre_checking"

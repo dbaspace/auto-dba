@@ -310,10 +310,13 @@ func Init(e *gin.Engine, d Deps) {
 	secured.PUT("/databases/:id", requireURN(store.URNDatabasesEdit), d.DB.Update)
 	secured.POST("/databases/:id/assign-tenant", requireURN(store.URNTenantsImpersonate), d.DB.AssignTenant)
 	secured.DELETE("/databases/:id", requireURN(store.URNDatabasesDelete), d.DB.Delete)
+	secured.GET("/query/catalog", d.DB.QueryCatalog)
 	secured.POST("/query", d.DB.Query)
+	secured.POST("/query/client-timeout", d.DB.QueryClientTimeout)
 	secured.POST("/query/table-info", d.DB.TableInfo)
 	secured.GET("/query/favorites", d.DB.ListQueryFavorites)
 	secured.POST("/query/favorites", d.DB.CreateQueryFavorite)
+	secured.PUT("/query/favorites/:id", d.DB.UpdateQueryFavorite)
 	secured.DELETE("/query/favorites/:id", d.DB.DeleteQueryFavorite)
 	secured.GET("/query/history", d.DB.ListMyQueryHistory)
 

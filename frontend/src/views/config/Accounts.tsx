@@ -18,14 +18,8 @@ import Auth from '../../components/Auth'
 import { Perm } from '../../hooks/usePermission'
 import DbTypeIcon from '../../components/DbTypeIcon'
 import { useAppSelector } from '../../store'
+import { permissionLabel, permissionOptions } from '../../utils/dbPermissions'
 import './Accounts.css'
-
-const permissionOps = [
-  { label: '读操作', value: 'r' },
-  { label: '写操作', value: 'c' },
-  { label: '更新操作', value: 'u' },
-  { label: '删除操作', value: 'd' },
-]
 
 const defaultTabs = [
   { value: 'mysql', label: 'MySQL' },
@@ -67,8 +61,7 @@ function instLabel(i: any) {
 }
 
 function permText(list: any[]) {
-  const map = Object.fromEntries(permissionOps.map((p) => [p.value, p.label]))
-  return (list || []).map((v) => map[v] || v).join('， ') || '—'
+  return (list || []).map((v) => permissionLabel(String(v))).join('， ') || '—'
 }
 
 export default function Accounts() {
@@ -511,7 +504,14 @@ export default function Accounts() {
             label="账号权限"
             rules={[{ type: 'array', required: true, min: 1, message: '请选择账号权限' }]}
           >
-            <Select mode="multiple" style={{ width: '100%' }} options={permissionOps} />
+            <Select
+              mode="multiple"
+              style={{ width: '100%' }}
+              optionFilterProp="label"
+              options={permissionOptions(
+                String(formInstances.find((i) => i.id === form.instance_id)?.db_type || ''),
+              )}
+            />
           </Form.Item>
           <Form.Item name="description" label="描述">
             <Input.TextArea rows={2} />

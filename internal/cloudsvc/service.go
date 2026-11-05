@@ -223,13 +223,18 @@ func (s *Service) syncPicked(ctx context.Context, acc *store.CloudAccount, engin
 		return
 	}
 	for _, eng := range engines {
-		err := s.SyncAccountEngine(ctx, acc, eng)
+		partial, err := s.SyncAccountEngine(ctx, acc, eng)
 		if err == nil {
 			res.Synced++
+			res.Errors = append(res.Errors, partial...)
 			continue
 		}
 		if errors.Is(err, cloud.ErrNoKey) {
 			res.Skipped = append(res.Skipped, acc.Name+" 缺少只读密钥")
+			continue
+		}
+		if len(partial) > 0 {
+			res.Errors = append(res.Errors, partial...)
 			continue
 		}
 		res.Errors = append(res.Errors, acc.Name+"/"+eng+": "+err.Error())
@@ -237,48 +242,69 @@ func (s *Service) syncPicked(ctx context.Context, acc *store.CloudAccount, engin
 }
 
 func (s *Service) SyncAccount(ctx context.Context, account *store.CloudAccount) error {
-	return s.SyncAccountEngine(ctx, account, cloud.EnginePostgres)
+	_, err := s.SyncAccountEngine(ctx, account, cloud.EnginePostgres)
+	return err
 }
 
-func (s *Service) SyncAccountEngine(ctx context.Context, account *store.CloudAccount, engine string) error {
+func (s *Service) SyncAccountEngine(ctx context.Context, account *store.CloudAccount, engine string) ([]string, error) {
 	if account == nil {
-		return cloud.ErrNoAccount
+		return nil, cloud.ErrNoAccount
 	}
 	if engine == "" {
 		engine = cloud.EnginePostgres
 	}
 	lockKey := account.ID + ":" + engine
 	if !s.tryAccount(lockKey) {
-		return fmt.Errorf("排队中")
+		return nil, fmt.Errorf("排队中")
 	}
 	defer s.doneAccount(lockKey)
 	reader, err := cloud.GetReader(account.Vendor, engine)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	cred, err := s.Cred(account, cloud.RoleReadonly, "")
+	base, err := s.Cred(account, cloud.RoleReadonly, "")
 	if err != nil {
 		s.noteSync(account, engine, "inventory", "", err)
-		return err
+		return nil, err
 	}
-	var all []cloud.Instance
-	regions := account.Regions
+	regions := uniqueRegions(account.Regions)
 	if len(regions) == 0 {
-		regions = []string{cred.Region}
+		err = fmt.Errorf("未配置云地域")
+		s.noteSync(account, engine, "inventory", "", err)
+		return nil, err
 	}
-	for _, region := range regions {
+	pages := listRegionsParallel(ctx, regions, func(ctx context.Context, region string) ([]cloud.Instance, error) {
+		cred := base
 		cred.Region = region
 		var page []cloud.Instance
-		err = cloud.RetryRead(ctx, nil, func() error {
+		err := cloud.RetryRead(ctx, nil, func() error {
 			var e error
 			page, e = reader.ListInstances(ctx, cred)
 			return e
 		})
 		if err != nil {
-			s.noteSync(account, engine, "inventory", "", err)
-			return err
+			return nil, err
 		}
-		all = append(all, page...)
+		for i := range page {
+			page[i].Region = region
+		}
+		return page, nil
+	})
+	var all []cloud.Instance
+	var okRegions []string
+	var regionErrs []string
+	for _, page := range pages {
+		if page.Err != nil {
+			regionErrs = append(regionErrs, account.Name+"/"+engine+"/"+page.Region+": "+page.Err.Error())
+			continue
+		}
+		okRegions = append(okRegions, page.Region)
+		all = append(all, page.Items...)
+	}
+	if len(okRegions) == 0 {
+		err = fmt.Errorf("%s", strings.Join(regionErrs, "; "))
+		s.noteSync(account, engine, "inventory", "", err)
+		return regionErrs, err
 	}
 	seen := make([]string, 0, len(all))
 	for _, inst := range all {
@@ -292,18 +318,24 @@ func (s *Service) SyncAccountEngine(ctx context.Context, account *store.CloudAcc
 		}
 		s.bindPlatform(row, prev)
 		if err := s.DB.UpsertCloudInstance(row); err != nil {
-			return err
+			return regionErrs, err
 		}
 		if prev != nil && prev.Zone != "" && inst.Zone != "" && prev.Zone != inst.Zone {
 			_ = s.DB.AddCloudEvent(account.TenantID, account.Vendor, account.ID, inst.CloudID, "switchover", "主可用区从 "+prev.Zone+" 变为 "+inst.Zone, time.Now().UTC().Format(time.RFC3339))
 		}
-		s.pullEvents(ctx, reader, cred, account, inst.CloudID)
+		evCred := base
+		evCred.Region = inst.Region
+		s.pullEvents(ctx, reader, evCred, account, inst.CloudID)
 	}
-	if err := s.DB.MarkMissingCloudResources(account.ID, engine, seen); err != nil {
-		return err
+	if err := s.DB.MarkMissingCloudResourcesInRegions(account.ID, engine, okRegions, seen); err != nil {
+		return regionErrs, err
 	}
-	s.noteSync(account, engine, "inventory", "", nil)
-	return nil
+	var note error
+	if len(regionErrs) > 0 {
+		note = fmt.Errorf("%s", strings.Join(regionErrs, "; "))
+	}
+	s.noteSync(account, engine, "inventory", "", note)
+	return regionErrs, nil
 }
 
 // AssignAccount 人工指定云资源归属账号：合并同云实例在多账号下的重复行，并回写平台实例绑定。

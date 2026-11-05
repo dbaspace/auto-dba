@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { Button, Form, Input, InputNumber, Modal, Select, Space, Table, message } from 'antd'
 import { Link } from 'react-router-dom'
 import api from '../../../api/request'
@@ -79,6 +79,9 @@ export default function CloudPostgres({ engine = 'postgres' }: { engine?: string
   const [queued, setQueued] = useState(0)
   const [caps, setCaps] = useState<Record<string, Caps>>({})
   const [reconcile, setReconcile] = useState('')
+  const [keyword, setKeyword] = useState('')
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(10)
   const [open, setOpen] = useState(false)
   const [quote, setQuote] = useState<any>(null)
   const [specs, setSpecs] = useState<any[]>([])
@@ -247,6 +250,15 @@ export default function CloudPostgres({ engine = 'postgres' }: { engine?: string
     return !!c[key]
   }
 
+  useEffect(() => { setPage(1) }, [keyword, reconcile, engine])
+
+  const shown = useMemo(() => {
+    const q = keyword.trim().toLowerCase()
+    if (!q) return rows
+    return rows.filter((r) => [r.name, r.cloud_instance_id, r.account_name, r.status, r.instance_name, r.region]
+      .some((v) => String(v || '').toLowerCase().includes(q)))
+  }, [rows, keyword])
+
   const showSpec = action === 'create' || action === 'scale_spec'
   const showDisk = action === 'create' || action === 'scale_disk' || action === 'scale_spec'
 
@@ -271,14 +283,33 @@ export default function CloudPostgres({ engine = 'postgres' }: { engine?: string
         <span>排队 {queued}</span>
         <Select allowClear placeholder="对账状态" style={{ width: 160 }} value={reconcile || undefined} onChange={(v) => setReconcile(v || '')}
           options={Object.entries(reconcileLabel).map(([value, label]) => ({ value, label }))} />
+        <Input
+          allowClear
+          style={{ width: 280 }}
+          placeholder="搜索名称、云实例、账号、平台实例"
+          value={keyword}
+          onChange={(e) => setKeyword(e.target.value)}
+        />
       </Space>
       <Table
         rowKey="id"
-        dataSource={rows}
+        dataSource={shown}
         scroll={{ x: 1100 }}
+        pagination={{
+          current: page,
+          pageSize,
+          showSizeChanger: true,
+          pageSizeOptions: ['10', '20', '30', '50', '100'],
+          showTotal: (n) => `共 ${n} 条`,
+          onChange: (nextPage, nextSize) => {
+            setPage(nextSize === pageSize ? nextPage : 1)
+            setPageSize(nextSize)
+          },
+        }}
         columns={[
           { title: '名称', dataIndex: 'name' },
           { title: '云实例', dataIndex: 'cloud_instance_id' },
+          { title: '地域', dataIndex: 'region', render: (v) => v || '—' },
           {
             title: '账号',
             dataIndex: 'account_id',

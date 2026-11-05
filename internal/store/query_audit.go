@@ -1,11 +1,13 @@
 package store
 
 import (
+	"errors"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgconn"
 )
 
 const maxQueryAuditStatement = 8 * 1024
@@ -49,13 +51,38 @@ func (d *DB) CreateQueryAudit(it *QueryAudit) error {
 		`INSERT INTO tbl_query_audits(
 			id, kind, user_id, username, display_name, ip, user_agent,
 			instance_id, instance_name, db_type, target, statement,
-			success, message, row_count, elapsed_ms, client_type, token_id, created_at)
-		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			success, message, row_count, elapsed_ms, client_type, token_id, client_request_id, created_at)
+		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		it.ID, it.Kind, it.UserID, it.Username, it.DisplayName, it.IP, it.UserAgent,
 		it.InstanceID, it.InstanceName, it.DBType, it.Target, it.Statement,
-		success, it.Message, it.RowCount, it.ElapsedMS, it.ClientType, it.TokenID, it.CreatedAt,
+		success, it.Message, it.RowCount, it.ElapsedMS, it.ClientType, it.TokenID, it.ClientRequestID, it.CreatedAt,
 	)
+	if err != nil && it.ClientRequestID != "" && isUniqueViolation(err) {
+		return nil
+	}
 	return err
+}
+
+// MarkQueryClientTimeout 把同一次查询改成网络超时。只改当前用户自己的记录，说明由调用方写死。
+func (d *DB) MarkQueryClientTimeout(userID, username, clientRequestID, message string, elapsedMS int64) (int64, error) {
+	clientRequestID = strings.TrimSpace(clientRequestID)
+	if clientRequestID == "" {
+		return 0, nil
+	}
+	res, err := d.Exec(
+		`UPDATE tbl_query_audits SET success=0, message=?, elapsed_ms=?
+		 WHERE client_request_id=? AND (user_id=? OR (COALESCE(user_id,'')='' AND username=? AND username<>''))`,
+		message, elapsedMS, clientRequestID, strings.TrimSpace(userID), strings.TrimSpace(username),
+	)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
 type QueryAuditFilter struct {

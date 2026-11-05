@@ -1724,6 +1724,11 @@ func (h *DCLHandler) Submit(c *gin.Context) {
 		}
 	}
 	engine := ticketexec.EngineOf(inst.DBType)
+	req.Permissions = normalizeAccountPerms(engine, req.Permissions)
+	if len(req.Permissions) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "请选择账号权限"})
+		return
+	}
 	var sqlContent string
 	if engine == "postgres" {
 		admin, terr := th.execTarget(inst, dbs[0], domain)
@@ -1742,6 +1747,8 @@ func (h *DCLHandler) Submit(c *gin.Context) {
 			owners[name] = owner
 		}
 		sqlContent = renderPGDCLScript(dbs, grantee, owners, req.Permissions)
+	} else if engine == "starrocks" {
+		sqlContent = renderStarRocksDCLScript(dbs, grantee, req.Permissions)
 	} else {
 		sqlContent = renderMySQLDCLScript(dbs, grantee, req.Permissions)
 	}

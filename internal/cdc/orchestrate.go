@@ -163,6 +163,12 @@ func (o *Orchestrator) Apply(ctx context.Context, taskID, fromStep string) error
 		return o.applyDeleteTask(ctx, t)
 	}
 	extra := parseTaskExtra(t.Description)
+	if strings.EqualFold(strings.TrimSpace(t.Status), store.StatusSuperseded) {
+		return fmt.Errorf("分库汇总任务已拆成单库子任务，请操作子任务")
+	}
+	if o.shouldShardFanout(t, extra) {
+		return o.fanOutShardInit(ctx, t, extra)
+	}
 	srcEng := o.resolveCDCSourceEngine(t, extra)
 	extra["source_engine"] = srcEng
 	steps := []string{"pg", "kafka", "debezium", "starrocks"}
@@ -523,7 +529,7 @@ func (o *Orchestrator) stepPG(ctx context.Context, t *store.CDCTask, extra map[s
 			o.appendLog(t, "INFO", "pg", "分库 "+b.DbName+" 无映射表，跳过")
 			return nil
 		}
-		riTables, err := o.ensurePublicationAndSlot(ctx, inst, b.DbName, schema, b.PublicationName, b.SlotName, dbTables, false)
+		res, err := o.ensurePublicationAndSlotResult(ctx, inst, b.DbName, schema, b.PublicationName, b.SlotName, dbTables, false)
 		if err != nil {
 			return fmt.Errorf("分库 %s: %w", b.DbName, err)
 		}
@@ -533,57 +539,107 @@ func (o *Orchestrator) stepPG(ctx context.Context, t *store.CDCTask, extra map[s
 		_ = o.Store.UpsertSlotMeta(&store.SyncSlot{
 			Host: inst.Host, Port: inst.Port, SlotName: b.SlotName, Database: b.DbName, Active: true, Plugin: "pgoutput",
 		})
-		msg := "publication=" + b.PublicationName + " slot=" + b.SlotName + " db=" + b.DbName
-		if len(riTables) > 0 {
-			msg += " REPLICA IDENTITY FULL=" + JoinSample(riTables, 20)
+		if res.Created {
+			o.appendLog(t, "INFO", "pg", "已创建 publication="+b.PublicationName+" db="+b.DbName)
+		} else if res.Existed {
+			o.appendLog(t, "INFO", "pg", "publication 已存在，跳过创建 publication="+b.PublicationName+" db="+b.DbName)
 		}
-		o.appendLog(t, "INFO", "pg", msg)
+		if res.SlotEnsured {
+			o.appendLog(t, "INFO", "pg", "已确保 replication slot="+b.SlotName+" db="+b.DbName)
+		}
+		if len(res.Added) > 0 {
+			o.appendLog(t, "INFO", "pg", "ALTER PUBLICATION ADD TABLE publication="+b.PublicationName+" db="+b.DbName+" tables="+JoinSample(res.Added, 20))
+		}
+		if len(res.ReplicaIdentity) > 0 {
+			o.appendLog(t, "INFO", "pg", "REPLICA IDENTITY FULL db="+b.DbName+" tables="+JoinSample(res.ReplicaIdentity, 20))
+		}
 		return nil
 	})
+}
+
+// PublicationSlotResult 一次 publication/slot 编排实际做了什么，供调用方分开写日志。
+type PublicationSlotResult struct {
+	Created         bool
+	Existed         bool
+	SlotEnsured     bool
+	Added           []string
+	ReplicaIdentity []string
 }
 
 // ensurePublicationAndSlot 创建或补齐 publication/slot，并对本次加入 publication 的表设置 REPLICA IDENTITY FULL。
 // 返回实际执行了 REPLICA IDENTITY FULL 的表名列表。
 func (o *Orchestrator) ensurePublicationAndSlot(ctx context.Context, inst *store.Instance, dbName, schema, pub, slot string, tables []string, addOnly bool) ([]string, error) {
+	res, err := o.ensurePublicationAndSlotResult(ctx, inst, dbName, schema, pub, slot, tables, addOnly)
+	if err != nil {
+		return nil, err
+	}
+	return res.ReplicaIdentity, nil
+}
+
+func (o *Orchestrator) ensurePublicationAndSlotResult(ctx context.Context, inst *store.Instance, dbName, schema, pub, slot string, tables []string, addOnly bool) (PublicationSlotResult, error) {
+	var res PublicationSlotResult
 	db, err := dbmig.OpenInstance(ctx, inst, o.Secret, dbName)
 	if err != nil {
-		return nil, fmt.Errorf("连接源端失败: %w", err)
+		return res, fmt.Errorf("连接源端失败: %w", err)
 	}
 	defer db.Close()
 	applyPGOrchestrationTimeouts(db)
-	qTables := qualifyPGTables(schema, tables)
-	if len(qTables) == 0 {
-		return nil, fmt.Errorf("未指定同步表")
+	if len(qualifyPGTables(schema, tables)) == 0 {
+		return res, fmt.Errorf("未指定同步表")
 	}
-	if addOnly {
+	exists, allTables, err := lookupPublication(ctx, db, pub)
+	if err != nil {
+		return res, err
+	}
+	var missing []string
+	if exists || addOnly {
+		if exists {
+			res.Existed = true
+		}
 		have, herr := ListPublicationTables(ctx, db, pub)
 		if herr != nil {
-			return nil, fmt.Errorf("查询 publication 成员失败: %w", herr)
+			return res, fmt.Errorf("查询 publication 成员失败: %w", herr)
 		}
-		missing := missingPublicationTables(schema, tables, have)
-		if len(missing) == 0 {
-			return nil, nil
+		missing = missingPublicationTables(schema, tables, have)
+	}
+	plan, err := planPublicationSlotSQL(addOnly, exists, allTables, pub, slot, schema, tables, missing)
+	if err != nil {
+		return res, err
+	}
+	for _, stmt := range plan.Statements {
+		if strings.Contains(stmt, "pg_create_logical_replication_slot") {
+			if err := createLogicalSlot(ctx, db, slot); err != nil {
+				return res, err
+			}
+			res.SlotEnsured = true
+			continue
 		}
-		pubSQL := fmt.Sprintf(`ALTER PUBLICATION %s ADD TABLE %s`, quotePGIdent(pub), strings.Join(qualifyPGTables(schema, missing), ", "))
-		if _, err := db.ExecContext(ctx, pubSQL); err != nil {
-			return nil, fmt.Errorf("ALTER PUBLICATION 失败: %w", err)
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
+			if isCreatePublication(stmt) && strings.Contains(strings.ToLower(err.Error()), "already exists") {
+				res.Existed = true
+				res.Created = false
+				continue
+			}
+			if isCreatePublication(stmt) {
+				return res, fmt.Errorf("创建 publication 失败: %w", err)
+			}
+			if strings.Contains(strings.ToUpper(stmt), "ALTER PUBLICATION") {
+				return res, fmt.Errorf("ALTER PUBLICATION 失败: %w", err)
+			}
+			return res, err
 		}
-		if err := SetReplicaIdentityFull(ctx, db, schema, missing); err != nil {
-			return nil, err
+		if isCreatePublication(stmt) {
+			res.Created = true
 		}
-		return missing, nil
+		if strings.Contains(strings.ToUpper(stmt), "ALTER PUBLICATION") {
+			res.Added = append([]string(nil), plan.Added...)
+		}
 	}
-	pubSQL := fmt.Sprintf(`CREATE PUBLICATION %s FOR TABLE %s`, quotePGIdent(pub), strings.Join(qTables, ", "))
-	if _, err := db.ExecContext(ctx, pubSQL); err != nil && !strings.Contains(strings.ToLower(err.Error()), "already exists") {
-		return nil, fmt.Errorf("创建 publication 失败: %w", err)
+	if err := SetReplicaIdentityFull(ctx, db, schema, plan.ReplicaIdentity); err != nil {
+		return res, err
 	}
-	if err := SetReplicaIdentityFull(ctx, db, schema, tables); err != nil {
-		return nil, err
-	}
-	if err := createLogicalSlot(ctx, db, slot); err != nil {
-		return nil, err
-	}
-	return append([]string(nil), tables...), nil
+	res.ReplicaIdentity = append([]string(nil), plan.ReplicaIdentity...)
+	return res, nil
 }
 
 func (o *Orchestrator) dropPublicationTables(ctx context.Context, inst *store.Instance, dbName, schema, pub string, tables []string) error {
@@ -836,6 +892,7 @@ func PreviewTargetSQLItems(ctx context.Context, st *store.DB, secret string, t *
 		TaskType:           t.TaskType,
 		SQLOverrides:       ParseSQLOverrides(extra["sql_overrides"]),
 		KafkaDefaultOffset: extra["kafka_default_offsets"],
+		ShardMergedRL:      ShardMergedRL(extra),
 	}, colsBy, pksBy)
 	return items, nil
 }
@@ -1043,7 +1100,7 @@ func (o *Orchestrator) routineLoadAction(ctx context.Context, t *store.CDCTask, 
 		if table == "" {
 			return
 		}
-		names[RoutineLoadNameForTask(t.TaskType, extra["env"], t.SourceDB, extra["topic_prefix"], table)] = struct{}{}
+		names[RoutineLoadNameForExtra(t.TaskType, extra, t.SourceDB, table)] = struct{}{}
 	}
 	for _, m := range maps {
 		if strings.EqualFold(m.Status, "deleted") {
@@ -1082,7 +1139,7 @@ func (o *Orchestrator) routineLoadActionForTables(ctx context.Context, t *store.
 		if tb == "" {
 			continue
 		}
-		names[RoutineLoadNameForTask(t.TaskType, extra["env"], t.SourceDB, extra["topic_prefix"], tb)] = struct{}{}
+		names[RoutineLoadNameForExtra(t.TaskType, extra, t.SourceDB, tb)] = struct{}{}
 	}
 	o.execRoutineLoadNames(ctx, db, t, t.TargetDB, names, action)
 }

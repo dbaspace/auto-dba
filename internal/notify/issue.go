@@ -153,7 +153,30 @@ type CreateDBNotifyItem struct {
 	Username    string
 	Password    string // 明文；Reused=true 时忽略
 	Reused      bool   // 账号已存在，沿用原密码
+	Failed      string // 非空表示该实例上建账号失败（不附带密码）
 	Permissions []string
+}
+
+var permissionLabels = map[string]string{
+	"r":      "读操作",
+	"c":      "写操作",
+	"u":      "更新操作",
+	"d":      "删除操作",
+	"ddl":    "结构变更",
+	"export": "导出",
+}
+
+// PermissionLabels 权限代码转中文名称，未知代码原样保留。
+func PermissionLabels(perms []string) string {
+	out := make([]string, 0, len(perms))
+	for _, p := range perms {
+		if l, ok := permissionLabels[strings.ToLower(strings.TrimSpace(p))]; ok {
+			out = append(out, l)
+		} else {
+			out = append(out, p)
+		}
+	}
+	return strings.Join(out, ",")
 }
 
 // DCLNotifyItem 权限申请执行结果（飞书私聊申请人）。
@@ -190,7 +213,7 @@ func DCLDone(db *store.DB, issue *store.Issue, item DCLNotifyItem) {
 		lines = append(lines, "密码：沿用原密码")
 	}
 	if len(item.Permissions) > 0 {
-		lines = append(lines, "权限："+strings.Join(item.Permissions, ","))
+		lines = append(lines, "权限："+PermissionLabels(item.Permissions))
 	}
 	note := strings.TrimSpace(issue.Description)
 	if item.Created {
@@ -232,14 +255,17 @@ func CreateDBDone(db *store.DB, issue *store.Issue, items []CreateDBNotifyItem, 
 		note := desc
 		if strings.TrimSpace(it.Username) != "" {
 			lines = append(lines, "账号："+it.Username)
-			if it.Reused {
+			switch {
+			case it.Failed != "":
+				lines = append(lines, "账号创建失败："+it.Failed)
+			case it.Reused:
 				lines = append(lines, "密码：沿用原密码")
 				note = joinNote(note, "账号已存在，仅授权新库")
-			} else {
+			default:
 				lines = append(lines, "密码："+it.Password)
 			}
-			if len(it.Permissions) > 0 {
-				lines = append(lines, "权限："+strings.Join(it.Permissions, ","))
+			if len(it.Permissions) > 0 && it.Failed == "" {
+				lines = append(lines, "权限："+PermissionLabels(it.Permissions))
 			}
 		}
 		if w := strings.TrimSpace(warn); w != "" {

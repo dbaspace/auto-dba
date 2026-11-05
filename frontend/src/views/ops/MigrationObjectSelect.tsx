@@ -21,6 +21,9 @@ export interface MigrationObject {
 
 interface Props {
   instanceId: string
+  domain?: string
+  env?: string
+  dbType?: string
   objects: MigrationObject[]
   wholeDbs: string[]
   excludePattern?: string
@@ -88,8 +91,22 @@ async function mapPool<T, R>(items: T[], concurrency: number, fn: (item: T) => P
   return out
 }
 
+function dialParams(domain?: string, env?: string, dbType?: string) {
+  const params: Record<string, string> = {}
+  const d = String(domain || '').trim()
+  const e = String(env || '').trim()
+  const t = String(dbType || '').trim()
+  if (d) params.domain = d
+  if (e) params.env = e
+  if (t) params.db_type = t
+  return params
+}
+
 export default function MigrationObjectSelect({
   instanceId,
+  domain,
+  env,
+  dbType,
   objects,
   wholeDbs,
   excludePattern = '',
@@ -186,7 +203,9 @@ export default function MigrationObjectSelect({
 
   async function fetchDbs(): Promise<string[]> {
     if (!instanceId) return []
-    const { data } = await api.get(`/migration/instances/${instanceId}/databases`)
+    const { data } = await api.get(`/migration/instances/${instanceId}/databases`, {
+      params: dialParams(domain, env, dbType),
+    })
     return (data.data || [])
       .filter((d: any) => !d.system)
       .map((d: any) => d.name || d.db_name)
@@ -198,7 +217,7 @@ export default function MigrationObjectSelect({
     if (loadedRef.current.has(db)) return loadedRef.current.get(db)!
     const { data } = await api.get(
       `/migration/instances/${instanceId}/databases/${encodeURIComponent(db)}/tables`,
-      { params: withMeta ? {} : { names_only: 1 } },
+      { params: { ...(withMeta ? {} : { names_only: 1 }), ...dialParams(domain, env, dbType) } },
     )
     const raw = data.data || []
     const tables: TableMeta[] = raw
@@ -385,7 +404,7 @@ export default function MigrationObjectSelect({
         const { data } = await api.post(
           `/migration/instances/${instanceId}/databases/tables`,
           { databases: dbs, names_only: true },
-          { timeout: 120000 },
+          { timeout: 120000, params: dialParams(domain, env, dbType) },
         )
         for (const row of data.data || []) {
           if (row.error || !row.db) continue
@@ -645,7 +664,7 @@ export default function MigrationObjectSelect({
   useEffect(() => {
     refreshRoots()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [instanceId])
+  }, [instanceId, domain, env, dbType])
 
   useEffect(() => {
     onExcludeChange?.(exclude)
@@ -661,7 +680,7 @@ export default function MigrationObjectSelect({
     <div className="obj-wrap">
       <Card className="obj-card left" bordered title={<span className="card-title">源库对象</span>}>
         {!instanceId ? (
-          <span className="muted">请先在第二步选择源端实例</span>
+          <span className="muted">请先在第二步选择源端域名</span>
         ) : (
           <>
             <Input
@@ -746,7 +765,7 @@ export default function MigrationObjectSelect({
         }
       >
         {!instanceId ? (
-          <span className="muted">请先选择源端实例</span>
+          <span className="muted">请先选择源端域名</span>
         ) : (
           <>
             <div className="sum">

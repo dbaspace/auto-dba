@@ -90,26 +90,18 @@ func randomLowerHex(n int) string {
 	return s
 }
 
-// generatePublicationName 默认 Publication：{env}_{db}
+// generatePublicationName 默认 Publication / Connector：rt_{env}_{db}
 func generatePublicationName(env, dbName string) string {
-	return joinIdent(env, dbName)
+	return joinIdent("rt", env, dbName)
 }
 
-// generateSlotName 默认 Slot：slot_{env}_{db}_{rand6}
+// generateSlotName 默认 Slot：slot_{env}_{db}_{rand6}。不跟随自定义 publication。
 func generateSlotName(env, dbName string) string {
 	return "slot_" + joinIdent(env, dbName) + "_" + randomLowerHex(6)
 }
 
-func generateSlotNameFromPub(pub string) string {
-	p := sanitizeIdent(pub)
-	if p == "" {
-		p = "cdc_task"
-	}
-	return "slot_" + p + "_" + randomLowerHex(6)
-}
-
 func generateConnectorName(env, dbName string) string {
-	return joinIdent(env, dbName)
+	return generatePublicationName(env, dbName)
 }
 
 func generateTopicPrefix(env, dbName string) string {
@@ -143,10 +135,41 @@ func AddTableRoutineLoadName(target string) string {
 
 // RoutineLoadNameForTask 新增表用短名，其它任务沿用原来的前缀规则。
 func RoutineLoadNameForTask(taskType, env, srcDb, topicPrefix, target string) string {
+	return cdcRoutineLoadName(taskType, env, srcDb, topicPrefix, target, false)
+}
+
+// RoutineLoadNameForExtra 分库汇总任务和 fan-out 子任务的 Routine Load 按共享 topic_prefix 命名。
+func RoutineLoadNameForExtra(taskType string, extra map[string]string, srcDb, target string) string {
+	env, topic := "", ""
+	if extra != nil {
+		env = extra["env"]
+		topic = extra["topic_prefix"]
+	}
+	return cdcRoutineLoadName(taskType, env, srcDb, topic, target, ShardMergedRL(extra))
+}
+
+func cdcRoutineLoadName(taskType, env, srcDb, topicPrefix, target string, shardMerged bool) string {
 	if strings.EqualFold(strings.TrimSpace(taskType), "add_table") {
 		return AddTableRoutineLoadName(target)
 	}
+	if shardMerged && strings.TrimSpace(topicPrefix) != "" {
+		return "rl_" + joinIdent(topicPrefix, target)
+	}
 	return RoutineLoadNameFor(env, srcDb, topicPrefix, target)
+}
+
+// ShardMergedRL 分库（一条任务多库，或拆出的单库子任务）共用 topic 上的同一个 Routine Load。
+func ShardMergedRL(extra map[string]string) bool {
+	if extra == nil {
+		return false
+	}
+	if strings.TrimSpace(extra["cdc_fanout_from"]) != "" {
+		return true
+	}
+	if extra["shard_db"] != "true" && extra["source_scope_mode"] != "multi_db" {
+		return false
+	}
+	return len(ResolveShardDBs(extra, extra["representative_db"])) >= 2
 }
 
 // InitNaming 预检/创建最终生效的四项命名。
@@ -176,8 +199,9 @@ func resolveNamingField(userValue, defaultValue string) string {
 	return defaultValue
 }
 
-// ResolveInitNaming 对齐老项目：Publication/Connector/Topic={env}_{db}；
-// Slot=slot_{env}_{db}_{rand6}。显式 publication 时 slot 为 slot_{publication}_{rand6}。
+// ResolveInitNaming 默认 Publication 与 Connector 同为 rt_{env}_{db}。
+// 用户填写的 publication 原样采用，connector 与之相同，不再单独漂移。
+// 未填写 topic 时与 publication 相同。Slot 固定 slot_{env}_{db}_{rand6}，不跟随自定义 publication。
 func ResolveInitNaming(in InitNamingInput) InitNaming {
 	env := strings.TrimSpace(in.Env)
 	db := strings.TrimSpace(in.SourceDB)
@@ -185,33 +209,17 @@ func ResolveInitNaming(in InitNamingInput) InitNaming {
 		db = strings.TrimSpace(in.TaskName)
 	}
 
-	pubExplicit := strings.TrimSpace(in.PublicationName) != ""
-	connExplicit := strings.TrimSpace(in.ConnectorName) != ""
 	topicExplicit := strings.TrimSpace(in.TopicPrefix) != ""
-	slotExplicit := strings.TrimSpace(in.SlotName) != ""
 
 	pub := resolveNamingField(in.PublicationName, generatePublicationName(env, db))
+	connector := pub
 
-	connDefault := generateConnectorName(env, db)
-	if pubExplicit && !connExplicit {
-		connDefault = pub
+	topicPrefix := pub
+	if topicExplicit {
+		topicPrefix = resolveNamingField(in.TopicPrefix, pub)
 	}
-	connector := resolveNamingField(in.ConnectorName, connDefault)
 
-	topicDefault := generateTopicPrefix(env, db)
-	switch {
-	case pubExplicit && !topicExplicit:
-		topicDefault = pub
-	case connExplicit && !topicExplicit && !pubExplicit:
-		topicDefault = sanitizeIdent(in.ConnectorName)
-	}
-	topicPrefix := resolveNamingField(in.TopicPrefix, topicDefault)
-
-	slotDefault := generateSlotName(env, db)
-	if pubExplicit && !slotExplicit {
-		slotDefault = generateSlotNameFromPub(pub)
-	}
-	slot := resolveNamingField(in.SlotName, slotDefault)
+	slot := resolveNamingField(in.SlotName, generateSlotName(env, db))
 
 	return InitNaming{
 		Env:             env,

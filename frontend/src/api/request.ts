@@ -151,6 +151,12 @@ client.interceptors.response.use(
         location.hash = '#/login'
       }
     } else if (!(err.config as AxiosRequestConfig)?.silent && !isBenignCdcMiss(err.config?.url, status)) {
+      const url = String(err.config?.url || '')
+      const isQueryRun = String(err.config?.method || '').toLowerCase() === 'post' && /\/query$/.test(url)
+      if (!err.response && err.code === 'ECONNABORTED' && isQueryRun) {
+        msg = '网络较慢，结果在 90 秒内没有传完。可缩小时间范围或少查字段后再试。'
+        err.message = msg
+      }
       message.error(msg)
     }
     return Promise.reject(err)

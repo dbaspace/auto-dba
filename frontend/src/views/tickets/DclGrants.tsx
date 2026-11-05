@@ -4,6 +4,7 @@ import { Alert, AutoComplete, Button, Checkbox, Form, Input, Select, Space, mess
 import api from '../../api/request'
 import DatabasePicker from '../../components/DatabasePicker'
 import { dbLabel } from '../../utils/db'
+import { filterPermissions, permissionOptions, previewStarRocksGrantSql } from '../../utils/dbPermissions'
 import {
   filterAccessDomainsByGroup,
   loadTicketEnvGroups,
@@ -39,6 +40,7 @@ function grantPrivs(perms: string[]) {
 function previewGrantSql(dbType: string, dbNames: string[], username: string, permissions: string[]) {
   const user = String(username || '').trim()
   const perms = permissions || []
+  if (dbType === 'starrocks') return user ? previewStarRocksGrantSql(dbNames, user, perms) : ''
   const privs = grantPrivs(perms)
   if (!user || !dbNames.length || !privs) return ''
   if (dbType === 'postgres') {
@@ -171,7 +173,9 @@ export default function DclGrants() {
       : '暂无审批人，请配置 sync_default_approver'
 
   function onEnvOrTypeChange(patch: Partial<ReturnType<typeof emptyForm>>) {
-    patchForm({ ...patch, instance_id: '', domain: '', db_ids: [], username: '' })
+    const next: Partial<ReturnType<typeof emptyForm>> = { ...patch, instance_id: '', domain: '', db_ids: [], username: '' }
+    if (patch.db_type !== undefined) next.permissions = filterPermissions(patch.db_type, form.permissions)
+    patchForm(next)
   }
 
   async function loadDbs(instanceId: string) {
@@ -438,12 +442,10 @@ export default function DclGrants() {
               className="perm-group"
               value={form.permissions}
               onChange={(v) => patchForm({ permissions: v as string[] })}
-              options={[
-                { label: '读操作', value: 'r' },
-                { label: '写操作', value: 'c' },
-                { label: '更新操作', value: 'u' },
-                { label: '删除操作', value: 'd' },
-              ]}
+              options={permissionOptions(form.db_type).map((o) => ({
+                value: o.value,
+                label: o.title ? <span title={o.title}>{o.label}</span> : o.label,
+              }))}
             />
           </Form.Item>
           <Form.Item label="选择审批人" name="assigned_to" rules={[{ required: true, message: '请选择审批人' }]}>
