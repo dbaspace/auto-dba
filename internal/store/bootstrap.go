@@ -112,7 +112,13 @@ func (d *DB) migrateFast() error {
 			if err := d.ensureQueryFavoritesTable(); err != nil {
 				return err
 			}
-			if _, err := d.BackfillQueryFavoriteDatabaseIDs(); err != nil {
+			if err := d.backfillQueryFavoriteScope(); err != nil {
+				return err
+			}
+			if err := d.ensureQueryAuditsTable(); err != nil {
+				return err
+			}
+			if err := d.detachInheritedQueryAuditTenants(); err != nil {
 				return err
 			}
 			if err := d.ensureMigrationEnvSplit(); err != nil {
@@ -123,6 +129,12 @@ func (d *DB) migrateFast() error {
 		}
 	}
 	if err := d.migrate(); err != nil {
+		return err
+	}
+	if err := d.backfillQueryFavoriteScope(); err != nil {
+		return err
+	}
+	if err := d.detachInheritedQueryAuditTenants(); err != nil {
 		return err
 	}
 	if err := d.schemaMetaSet(metaSchemaVersion, SchemaVersion); err != nil {

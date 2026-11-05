@@ -1276,7 +1276,17 @@ func (d *DB) ensureQueryAuditsTable() error {
 	if _, err = d.db.Exec(`CREATE INDEX IF NOT EXISTS idx_query_audits_username ON tbl_query_audits(username)`); err != nil {
 		return err
 	}
-	_, err = d.db.Exec(`CREATE INDEX IF NOT EXISTS idx_query_audits_kind ON tbl_query_audits(kind)`)
+	if _, err = d.db.Exec(`CREATE INDEX IF NOT EXISTS idx_query_audits_kind ON tbl_query_audits(kind)`); err != nil {
+		return err
+	}
+	return d.ensureQueryAuditTenantColumn()
+}
+
+func (d *DB) ensureQueryAuditTenantColumn() error {
+	if err := d.ensureColumnIfMissing("tbl_query_audits", "tenant_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	_, err := d.Exec(`CREATE INDEX IF NOT EXISTS idx_query_audits_user_tenant ON tbl_query_audits(username, tenant_id)`)
 	return err
 }
 

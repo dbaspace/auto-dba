@@ -43,6 +43,7 @@ func (d *DB) CreateQueryAudit(it *QueryAudit) error {
 	it.Message = TruncateQueryAuditStatement(it.Message)
 	it.ClientType = strings.TrimSpace(it.ClientType)
 	it.TokenID = strings.TrimSpace(it.TokenID)
+	it.TenantID = strings.TrimSpace(it.TenantID)
 	success := 0
 	if it.Success {
 		success = 1
@@ -51,11 +52,11 @@ func (d *DB) CreateQueryAudit(it *QueryAudit) error {
 		`INSERT INTO tbl_query_audits(
 			id, kind, user_id, username, display_name, ip, user_agent,
 			instance_id, instance_name, db_type, target, statement,
-			success, message, row_count, elapsed_ms, client_type, token_id, client_request_id, created_at)
-		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			success, message, row_count, elapsed_ms, client_type, token_id, client_request_id, tenant_id, created_at)
+		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		it.ID, it.Kind, it.UserID, it.Username, it.DisplayName, it.IP, it.UserAgent,
 		it.InstanceID, it.InstanceName, it.DBType, it.Target, it.Statement,
-		success, it.Message, it.RowCount, it.ElapsedMS, it.ClientType, it.TokenID, it.ClientRequestID, it.CreatedAt,
+		success, it.Message, it.RowCount, it.ElapsedMS, it.ClientType, it.TokenID, it.ClientRequestID, it.TenantID, it.CreatedAt,
 	)
 	if err != nil && it.ClientRequestID != "" && isUniqueViolation(err) {
 		return nil
@@ -78,6 +79,27 @@ func (d *DB) MarkQueryClientTimeout(userID, username, clientRequestID, message s
 		return 0, err
 	}
 	return res.RowsAffected()
+}
+
+const metaQueryAuditTenantScoped = "query_audit_tenant_scoped"
+
+// detachInheritedQueryAuditTenants 旧审计没有记下真实租户，列上的默认租户不能当成隔离依据。
+// 只清一次，之后按当前租户写入的记录保留。空租户不会出现在「我的历史」。
+func (d *DB) detachInheritedQueryAuditTenants() error {
+	if err := d.ensureSchemaMetaTable(); err != nil {
+		return err
+	}
+	v, err := d.schemaMetaGet(metaQueryAuditTenantScoped)
+	if err != nil {
+		return err
+	}
+	if v == "1" {
+		return nil
+	}
+	if _, err := d.Exec(`UPDATE tbl_query_audits SET tenant_id='' WHERE COALESCE(tenant_id,'')=?`, DefaultTenantID); err != nil {
+		return err
+	}
+	return d.schemaMetaSet(metaQueryAuditTenantScoped, "1")
 }
 
 func isUniqueViolation(err error) bool {

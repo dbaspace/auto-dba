@@ -669,6 +669,7 @@ type PGLock struct {
 type QueryAudit struct {
 	ID              string `json:"id"`
 	Kind            string `json:"kind"`
+	TenantID        string `json:"tenant_id,omitempty"`
 	UserID          string `json:"user_id,omitempty"`
 	Username        string `json:"username"`
 	DisplayName     string `json:"display_name,omitempty"`

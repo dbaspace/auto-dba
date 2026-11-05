@@ -254,7 +254,6 @@ var tenantScopedTables = []string{
 	"tbl_cmdb_sync_runs",
 	"tbl_cmdb_ci_snapshots",
 	"tbl_sync_slots",
-	"tbl_query_audits",
 	"tbl_multilang_tasks",
 	"tbl_insight_jobs",
 	"tbl_monitor_job",

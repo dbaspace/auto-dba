@@ -13,7 +13,7 @@ import (
 )
 
 func (h *DatabaseHandler) ListQueryFavorites(c *gin.Context) {
-	list, err := h.Store.ListQueryFavorites(middleware.Username(c), 100)
+	list, err := h.Store.ListQueryFavorites(middleware.Username(c), middleware.TenantID(c), 100)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -46,6 +46,7 @@ func (h *DatabaseHandler) CreateQueryFavorite(c *gin.Context) {
 		name = "未命名"
 	}
 	it := &store.QueryFavorite{
+		TenantID:   middleware.TenantID(c),
 		UserID:     middleware.UserID(c),
 		Username:   middleware.Username(c),
 		Name:       name,
@@ -85,6 +86,7 @@ func (h *DatabaseHandler) UpdateQueryFavorite(c *gin.Context) {
 	}
 	it := &store.QueryFavorite{
 		ID:         c.Param("id"),
+		TenantID:   middleware.TenantID(c),
 		Username:   middleware.Username(c),
 		Name:       name,
 		DatabaseID: strings.TrimSpace(req.DatabaseID),
@@ -104,7 +106,7 @@ func (h *DatabaseHandler) UpdateQueryFavorite(c *gin.Context) {
 }
 
 func (h *DatabaseHandler) DeleteQueryFavorite(c *gin.Context) {
-	err := h.Store.DeleteQueryFavorite(c.Param("id"), middleware.Username(c))
+	err := h.Store.DeleteQueryFavorite(c.Param("id"), middleware.Username(c), middleware.TenantID(c))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			c.JSON(http.StatusNotFound, gin.H{"message": "收藏不存在"})
@@ -117,7 +119,7 @@ func (h *DatabaseHandler) DeleteQueryFavorite(c *gin.Context) {
 }
 
 func (h *DatabaseHandler) ListMyQueryHistory(c *gin.Context) {
-	list, err := h.Store.ListMyQueryAudits(middleware.Username(c), 100)
+	list, err := h.Store.ListMyQueryAudits(middleware.Username(c), middleware.TenantID(c), 100)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return

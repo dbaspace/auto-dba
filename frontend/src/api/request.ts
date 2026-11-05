@@ -1,6 +1,7 @@
 import axios, { AxiosRequestConfig } from 'axios'
 import { message } from 'antd'
 import { clearSystemNoticeDismissals } from '../utils/systemNoticeSession'
+import { clearQueryWorkspaces } from '../views/query/querySession'
 
 // 扩展 config：支持 silent（静默错误）与换票世代号
 declare module 'axios' {
@@ -140,7 +141,7 @@ client.interceptors.response.use(
       }
       localStorage.removeItem('token')
       localStorage.removeItem('user')
-      sessionStorage.removeItem('auto-dba-query-workspace')
+      clearQueryWorkspaces()
       clearSystemNoticeDismissals()
       const isLoginCall = /\/auth\/login/.test(String(err.config?.url || ''))
       if (isLoginCall) {

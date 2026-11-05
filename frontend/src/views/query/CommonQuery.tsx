@@ -43,15 +43,13 @@ import axios from 'axios'
 import api from '../../api/request'
 import { useAppSelector } from '../../store'
 import { prefetchQueryCatalog, readQueryTreeCache, refreshQueryCatalog } from './queryTreeCache'
+import { queryFavoriteKey, queryHistoryKey, queryWorkspaceKey } from './querySession'
 import DbTypeIcon from '../../components/DbTypeIcon'
 import SqlEditor from '../../components/SqlEditor'
 import { formatSqlContent } from '../../utils/formatSql'
 import './CommonQuery.css'
 
 const DQL_DRAFT_KEY = 'auto-dba-dql-draft'
-const WORKSPACE_KEY = 'auto-dba-query-workspace'
-const FAV_KEY = 'auto-dba-query-favorites'
-const HIST_KEY = 'auto-dba-query-history'
 const PAGE_SIZE_KEY = 'query_result_page_size'
 
 const TYPE_ORDER = [
@@ -288,10 +286,10 @@ function queryTabKeyAt(x: number, y: number): string | null {
   return lab?.dataset.tabKey || null
 }
 
-function loadWorkspace(): Workspace {
+function loadWorkspace(key: string): Workspace {
   const empty: Workspace = { tabs: [], activeKey: '', leftWidth: 280, editorHeight: 320, histWidth: 300 }
   try {
-    const raw = sessionStorage.getItem(WORKSPACE_KEY)
+    const raw = sessionStorage.getItem(key)
     if (!raw) return empty
     const d = JSON.parse(raw)
     const tabs = Array.isArray(d.tabs) ? d.tabs.map(normalizeSavedTab).filter(Boolean) as TabItem[] : []
@@ -314,6 +312,9 @@ export default function CommonQuery() {
   const tenantId = String(
     (useAppSelector((s) => s.auth.user) as { current_tenant?: { id?: string } })?.current_tenant?.id || '',
   )
+  const workspaceStoreKey = queryWorkspaceKey(tenantId)
+  const favStoreKey = queryFavoriteKey(tenantId)
+  const histStoreKey = queryHistoryKey(tenantId)
 
   const username = useMemo(() => {
     try {
@@ -333,7 +334,7 @@ export default function CommonQuery() {
   const [tablesMap, setTablesMap] = useState<Record<string, string[]>>({})
   const tableLoads = useRef<Record<string, Promise<{ names: string[]; error: string }>>>({})
 
-  const saved = useMemo(() => loadWorkspace(), [])
+  const saved = useMemo(() => loadWorkspace(workspaceStoreKey), [workspaceStoreKey])
   const [tabs, setTabs] = useState<TabItem[]>(saved.tabs)
   const [activeKey, setActiveKey] = useState(saved.activeKey)
   const [running, setRunning] = useState(false)
@@ -387,8 +388,8 @@ export default function CommonQuery() {
     const tab = (location.state as { storeTab?: string } | null)?.storeTab
     return tab === 'hist' || tab === 'fav' ? tab : 'fav'
   })
-  const [favorites, setFavorites] = useState<FavItem[]>(() => loadJSON<FavItem[]>(FAV_KEY, []))
-  const [history, setHistory] = useState<HistItem[]>(() => loadJSON<HistItem[]>(HIST_KEY, []))
+  const [favorites, setFavorites] = useState<FavItem[]>(() => loadJSON<FavItem[]>(favStoreKey, []))
+  const [history, setHistory] = useState<HistItem[]>(() => loadJSON<HistItem[]>(histStoreKey, []))
   const [favVisible, setFavVisible] = useState(false)
   const [favMode, setFavMode] = useState<'create' | 'saveas'>('create')
   const [favName, setFavName] = useState('')
@@ -886,13 +887,13 @@ export default function CommonQuery() {
           if (!map.has(key)) map.set(key, h)
         }
         const next = Array.from(map.values()).sort((a, b) => b.ts - a.ts).slice(0, 100)
-        saveJSON(HIST_KEY, next)
+        saveJSON(histStoreKey, next)
         return next
       })
     } catch {
       /* ignore */
     }
-  }, [databases, instMap])
+  }, [databases, instMap, histStoreKey])
 
   useEffect(() => {
     // 合并服务端收藏 / 历史，保留本地数据，不破坏现有能力
@@ -913,7 +914,7 @@ export default function CommonQuery() {
             const map = new Map<string, FavItem>()
             for (const f of [...remoteFavs, ...local]) map.set(f.id, f)
             const next = Array.from(map.values()).sort((a, b) => b.ts - a.ts)
-            saveJSON(FAV_KEY, next)
+            saveJSON(favStoreKey, next)
             return next
           })
         }
@@ -922,7 +923,7 @@ export default function CommonQuery() {
       }
       await mergeRemoteHistory()
     })()
-  }, [mergeRemoteHistory])
+  }, [mergeRemoteHistory, favStoreKey])
 
   useEffect(() => {
     if (storeTab === 'hist') void mergeRemoteHistory()
@@ -960,13 +961,13 @@ export default function CommonQuery() {
         })),
       }
       try {
-        sessionStorage.setItem(WORKSPACE_KEY, JSON.stringify(payload))
+        sessionStorage.setItem(workspaceStoreKey, JSON.stringify(payload))
       } catch {
         payload.tabs = payload.tabs.map((t) => ({ ...t, result: null }))
-        try { sessionStorage.setItem(WORKSPACE_KEY, JSON.stringify(payload)) } catch { /* ignore */ }
+        try { sessionStorage.setItem(workspaceStoreKey, JSON.stringify(payload)) } catch { /* ignore */ }
       }
     } catch { /* ignore */ }
-  }, [tabs, activeKey, leftWidth, editorHeight, histWidth])
+  }, [tabs, activeKey, leftWidth, editorHeight, histWidth, workspaceStoreKey])
 
   function updateCurrent(patch: Partial<TabItem>) {
     setTabs((list) => list.map((t) => (t.key === activeKey ? { ...t, ...patch } : t)))
@@ -1102,7 +1103,7 @@ export default function CommonQuery() {
         { id: `${Date.now()}`, dbId: tab.dbId, dbName: tab.dbName, sql: tab.sql, ts: Date.now() },
         ...list.filter((h) => h.sql !== tab.sql || h.dbId !== tab.dbId),
       ].slice(0, 100)
-      saveJSON(HIST_KEY, next)
+      saveJSON(histStoreKey, next)
       return next
     })
   }
@@ -1302,7 +1303,7 @@ export default function CommonQuery() {
         const drop = new Set(same.map((f) => f.id))
         setFavorites((list) => {
           const next = [item, ...list.filter((f) => !drop.has(f.id))]
-          saveJSON(FAV_KEY, next)
+          saveJSON(favStoreKey, next)
           return next
         })
         updateCurrent({ favId: keep.id })
@@ -1314,7 +1315,7 @@ export default function CommonQuery() {
         const item: FavItem = { id, name: trimmed, dbId: tab.dbId, dbName: tab.dbName, env: tab.env || '', sql: sqlText, ts: now }
         setFavorites((list) => {
           const next = [item, ...list]
-          saveJSON(FAV_KEY, next)
+          saveJSON(favStoreKey, next)
           return next
         })
         updateCurrent({ favId: id })
@@ -1355,7 +1356,7 @@ export default function CommonQuery() {
         const next = list.map((f) => (f.id === fav.id
           ? { ...f, dbId: tab.dbId, dbName: tab.dbName, env: tab.env || '', sql: sqlText, ts: Date.now() }
           : f))
-        saveJSON(FAV_KEY, next)
+        saveJSON(favStoreKey, next)
         return next
       })
       message.success('已更新收藏')
@@ -1401,7 +1402,7 @@ export default function CommonQuery() {
     api.delete(`/query/favorites/${id}`).catch(() => { /* ignore */ })
     setFavorites((list) => {
       const next = list.filter((f) => f.id !== id)
-      saveJSON(FAV_KEY, next)
+      saveJSON(favStoreKey, next)
       return next
     })
   }
@@ -1629,7 +1630,7 @@ export default function CommonQuery() {
         })
         setFavorites((list) => {
           const next = list.map((f) => (f.id === fav.id ? { ...f, name, ts: Date.now() } : f))
-          saveJSON(FAV_KEY, next)
+          saveJSON(favStoreKey, next)
           return next
         })
         return

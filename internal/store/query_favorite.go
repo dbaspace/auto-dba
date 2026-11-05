@@ -11,6 +11,7 @@ import (
 
 type QueryFavorite struct {
 	ID         string `json:"id"`
+	TenantID   string `json:"tenant_id,omitempty"`
 	UserID     string `json:"user_id"`
 	Username   string `json:"username"`
 	Name       string `json:"name"`
@@ -40,20 +41,25 @@ func (d *DB) ensureQueryFavoritesTable() error {
 	if err := d.ensureColumnIfMissing("tbl_query_favorites", "env", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
+	if err := d.ensureColumnIfMissing("tbl_query_favorites", "tenant_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
 	_, _ = d.Exec(`CREATE INDEX IF NOT EXISTS idx_query_fav_user ON tbl_query_favorites(username)`)
-	return nil
+	_, err = d.Exec(`CREATE INDEX IF NOT EXISTS idx_query_fav_user_tenant ON tbl_query_favorites(username, tenant_id)`)
+	return err
 }
 
-func (d *DB) ListQueryFavorites(username string, limit int) ([]QueryFavorite, error) {
+func (d *DB) ListQueryFavorites(username, tenantID string, limit int) ([]QueryFavorite, error) {
 	username = strings.TrimSpace(username)
-	if username == "" {
-		return nil, nil
+	tenantID = strings.TrimSpace(tenantID)
+	if username == "" || tenantID == "" {
+		return []QueryFavorite{}, nil
 	}
 	if limit <= 0 || limit > 200 {
 		limit = 100
 	}
-	rows, err := d.Query(`SELECT id, user_id, username, name, database_id, db_name, COALESCE(env,''), sql_text, created_at, updated_at
-		FROM tbl_query_favorites WHERE username=? ORDER BY updated_at DESC LIMIT ?`, username, limit)
+	rows, err := d.Query(`SELECT id, COALESCE(tenant_id,''), user_id, username, name, database_id, db_name, COALESCE(env,''), sql_text, created_at, updated_at
+		FROM tbl_query_favorites WHERE username=? AND tenant_id=? ORDER BY updated_at DESC LIMIT ?`, username, tenantID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +67,7 @@ func (d *DB) ListQueryFavorites(username string, limit int) ([]QueryFavorite, er
 	var out []QueryFavorite
 	for rows.Next() {
 		var it QueryFavorite
-		if err := rows.Scan(&it.ID, &it.UserID, &it.Username, &it.Name, &it.DatabaseID, &it.DBName, &it.Env, &it.SQL, &it.CreatedAt, &it.UpdatedAt); err != nil {
+		if err := rows.Scan(&it.ID, &it.TenantID, &it.UserID, &it.Username, &it.Name, &it.DatabaseID, &it.DBName, &it.Env, &it.SQL, &it.CreatedAt, &it.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, it)
@@ -84,25 +90,27 @@ func (d *DB) CreateQueryFavorite(it *QueryFavorite) error {
 		it.CreatedAt = now
 	}
 	it.UpdatedAt = now
+	it.TenantID = strings.TrimSpace(it.TenantID)
 	if err := d.fillFavoriteEnv(it); err != nil {
 		return err
 	}
-	_, err := d.Exec(`INSERT INTO tbl_query_favorites(id, user_id, username, name, database_id, db_name, env, sql_text, created_at, updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?)`,
-		it.ID, it.UserID, it.Username, it.Name, it.DatabaseID, it.DBName, it.Env, it.SQL, it.CreatedAt, it.UpdatedAt)
+	_, err := d.Exec(`INSERT INTO tbl_query_favorites(id, tenant_id, user_id, username, name, database_id, db_name, env, sql_text, created_at, updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+		it.ID, it.TenantID, it.UserID, it.Username, it.Name, it.DatabaseID, it.DBName, it.Env, it.SQL, it.CreatedAt, it.UpdatedAt)
 	return err
 }
 
 func (d *DB) UpdateQueryFavorite(it *QueryFavorite) error {
-	if it == nil || strings.TrimSpace(it.ID) == "" || strings.TrimSpace(it.Username) == "" {
+	if it == nil || strings.TrimSpace(it.ID) == "" || strings.TrimSpace(it.Username) == "" || strings.TrimSpace(it.TenantID) == "" {
 		return sql.ErrNoRows
 	}
+	it.TenantID = strings.TrimSpace(it.TenantID)
 	it.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	if err := d.fillFavoriteEnv(it); err != nil {
 		return err
 	}
-	res, err := d.Exec(`UPDATE tbl_query_favorites SET name=?, database_id=?, db_name=?, env=?, sql_text=?, updated_at=? WHERE id=? AND username=?`,
-		it.Name, it.DatabaseID, it.DBName, it.Env, it.SQL, it.UpdatedAt, strings.TrimSpace(it.ID), strings.TrimSpace(it.Username))
+	res, err := d.Exec(`UPDATE tbl_query_favorites SET name=?, database_id=?, db_name=?, env=?, sql_text=?, tenant_id=?, updated_at=? WHERE id=? AND username=? AND tenant_id=?`,
+		it.Name, it.DatabaseID, it.DBName, it.Env, it.SQL, it.TenantID, it.UpdatedAt, strings.TrimSpace(it.ID), strings.TrimSpace(it.Username), it.TenantID)
 	if err != nil {
 		return err
 	}
@@ -113,8 +121,12 @@ func (d *DB) UpdateQueryFavorite(it *QueryFavorite) error {
 	return nil
 }
 
-func (d *DB) DeleteQueryFavorite(id, username string) error {
-	res, err := d.Exec(`DELETE FROM tbl_query_favorites WHERE id=? AND username=?`, strings.TrimSpace(id), strings.TrimSpace(username))
+func (d *DB) DeleteQueryFavorite(id, username, tenantID string) error {
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		return sql.ErrNoRows
+	}
+	res, err := d.Exec(`DELETE FROM tbl_query_favorites WHERE id=? AND username=? AND tenant_id=?`, strings.TrimSpace(id), strings.TrimSpace(username), tenantID)
 	if err != nil {
 		return err
 	}
@@ -125,10 +137,11 @@ func (d *DB) DeleteQueryFavorite(id, username string) error {
 	return nil
 }
 
-func (d *DB) ListMyQueryAudits(username string, pageSize int) ([]QueryAudit, error) {
+func (d *DB) ListMyQueryAudits(username, tenantID string, pageSize int) ([]QueryAudit, error) {
 	username = strings.TrimSpace(username)
-	if username == "" {
-		return nil, nil
+	tenantID = strings.TrimSpace(tenantID)
+	if username == "" || tenantID == "" {
+		return []QueryAudit{}, nil
 	}
 	if pageSize <= 0 || pageSize > 100 {
 		pageSize = 50
@@ -136,7 +149,7 @@ func (d *DB) ListMyQueryAudits(username string, pageSize int) ([]QueryAudit, err
 	rows, err := d.Query(`SELECT id, kind, user_id, username, display_name, ip, user_agent,
 		instance_id, instance_name, db_type, target, statement,
 		success, message, row_count, elapsed_ms, created_at
-		FROM tbl_query_audits WHERE username=? AND kind='db' ORDER BY created_at DESC LIMIT ?`, username, pageSize)
+		FROM tbl_query_audits WHERE username=? AND kind='db' AND tenant_id=? ORDER BY created_at DESC LIMIT ?`, username, tenantID, pageSize)
 	if err != nil {
 		return nil, err
 	}
@@ -242,6 +255,30 @@ func (d *DB) BackfillQueryFavoriteDatabaseIDs() (int, error) {
 		n++
 	}
 	return n, nil
+}
+
+// BackfillQueryFavoriteTenantIDs 用已登记库的租户回填空的收藏租户。对不上库的旧收藏保持空，列表不再返回。
+func (d *DB) BackfillQueryFavoriteTenantIDs() (int, error) {
+	res, err := d.Exec(`UPDATE tbl_query_favorites AS f
+		SET tenant_id = d.tenant_id
+		FROM tbl_databases AS d
+		WHERE COALESCE(f.tenant_id, '') = ''
+		  AND f.database_id <> ''
+		  AND f.database_id = d.id
+		  AND TRIM(COALESCE(d.tenant_id, '')) <> ''`)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
+func (d *DB) backfillQueryFavoriteScope() error {
+	if _, err := d.BackfillQueryFavoriteDatabaseIDs(); err != nil {
+		return err
+	}
+	_, err := d.BackfillQueryFavoriteTenantIDs()
+	return err
 }
 
 func catalogTag(tags []string, key string) string {

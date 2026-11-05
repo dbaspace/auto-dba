@@ -30,6 +30,7 @@ import { clearLastActivity } from '../hooks/useIdleLogout'
 import { clearSharedLegacyDrafts } from '../utils/workOrderDraft'
 import { clearSystemNoticeDismissals } from '../utils/systemNoticeSession'
 import { clearQueryTreeCache } from '../views/query/queryTreeCache'
+import { clearQueryWorkspaces } from '../views/query/querySession'
 
 interface Props {
   user: CurrentUser
@@ -150,7 +151,7 @@ export default function UserAccountMenu({ user }: Props) {
       dispatch(clearAuth())
       dispatch(resetTabs({}))
       sessionStorage.removeItem('auto-dba-dml-prefill')
-      sessionStorage.removeItem('auto-dba-query-workspace')
+      clearQueryWorkspaces()
       clearSharedLegacyDrafts()
       navigate('/login')
     } catch (e: any) {
@@ -202,7 +203,7 @@ export default function UserAccountMenu({ user }: Props) {
         dispatch(clearAuth())
         dispatch(resetTabs({}))
         sessionStorage.removeItem('auto-dba-dml-prefill')
-        sessionStorage.removeItem('auto-dba-query-workspace')
+        clearQueryWorkspaces()
         clearSystemNoticeDismissals()
         clearSharedLegacyDrafts()
         navigate('/login')

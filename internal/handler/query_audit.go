@@ -17,6 +17,7 @@ func recordQueryAudit(st *store.DB, c *gin.Context, it *store.QueryAudit) {
 	}
 	it.Username = middleware.Username(c)
 	it.UserID = middleware.UserID(c)
+	it.TenantID = middleware.TenantID(c)
 	if u, err := st.GetUserByUsername(it.Username); err == nil && u != nil {
 		if it.UserID == "" {
 			it.UserID = u.ID
