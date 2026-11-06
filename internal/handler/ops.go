@@ -1139,9 +1139,29 @@ func (h *SlotHandler) runSlotCollect(parent context.Context, tid string, job *sl
 			if name := demoSlotName(inst.ID); name != "" {
 				_ = h.Store.DeleteSlotsByName(name)
 			}
-			label := cdc.SlotDisplayHost(inst)
-			if label == "" {
-				label = inst.Name
+			label, derr := cdc.SlotTagDomain(inst)
+			who := strings.TrimSpace(inst.Name)
+			if who == "" {
+				who = inst.ID
+			}
+			if derr != nil {
+				note := fmt.Sprintf("%s 采集失败：%s", who, derr.Error())
+				mu.Lock()
+				skipped++
+				notes = append(notes, note)
+				job.mu.Lock()
+				job.Done++
+				job.Skipped = skipped
+				job.Collected = collected
+				if job.Total > 0 {
+					job.Percent = job.Done * 100 / job.Total
+				}
+				job.Current = who
+				job.Message = fmt.Sprintf("跳过 %s（%d/%d）", who, job.Done, len(insts))
+				job.mu.Unlock()
+				mu.Unlock()
+				h.persistSlotOpLog(tid, store.SyncSlotOpCollect, formatSlotOpLine("采集", note))
+				return
 			}
 			target := fmt.Sprintf("%s:%d", label, inst.Port)
 			job.mu.Lock()

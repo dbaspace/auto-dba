@@ -4,8 +4,22 @@ import { Alert, Button, Form, Input, Select, Space, Switch, message } from 'antd
 import api from '../../api/request'
 import { useAppDispatch, useAppSelector } from '../../store'
 import { goTicketListAndClose } from './goTicketList'
-import { dbLabel } from '../../utils/db'
-import { envCodeInGroup, loadTicketEnvGroups, resolveTicketEnvValue, type TicketEnvGroup } from '../../utils/ticketEnv'
+import {
+  envCodeInGroup,
+  filterAccessDomainsByGroup,
+  loadTicketEnvGroups,
+  resolveTicketEnvValue,
+  type TicketEnvGroup,
+} from '../../utils/ticketEnv'
+import {
+  filterDbsByDomain,
+  parseSourceKey,
+  sourceKey,
+  sourcePrimaryLabel,
+  sourcesFromAccessDomains,
+  type AccessDomainRow,
+  type DomainSource,
+} from '../../utils/instanceSource'
 import DbTypeIcon from '../../components/DbTypeIcon'
 import { useTicketSubmitFreeze } from '../../hooks/useTicketSubmitFreeze'
 import { useWorkOrderDraft } from '../../hooks/useWorkOrderDraft'
@@ -25,10 +39,22 @@ const DEFAULT_DB_TYPES = [
   { value: 'clickhouse', label: 'ClickHouse' },
 ]
 
+/** DQL 库下拉：数据源已选定域名，不再重复「 @ 域名」。标签仍跟在库名后。 */
+function dqlDbOptionLabel(d: any): string {
+  const name = String(d?.db_name || d?.name || '').trim()
+  const tags = (Array.isArray(d?.tags) ? d.tags : [])
+    .map((t: any) => String(t || '').trim())
+    .filter(Boolean)
+  if (!name) return ''
+  if (!tags.length) return name
+  return `${name} [${tags.join(',')}]`
+}
+
 function emptyForm() {
   return {
     db_type: '',
     env: '',
+    domain: '',
     database_id: '',
     instance_id: '',
     db_name: '',
@@ -97,7 +123,9 @@ export default function DqlExport() {
   const [saving, setSaving] = useState(false)
   const [instances, setInstances] = useState<any[]>([])
   const [databases, setDatabases] = useState<any[]>([])
+  const [accessDomains, setAccessDomains] = useState<AccessDomainRow[]>([])
   const [envGroups, setEnvGroups] = useState<TicketEnvGroup[]>([])
+  const [envCatalogReady, setEnvCatalogReady] = useState(false)
   const envGroupsRef = useRef<TicketEnvGroup[]>([])
   const [dbTypes, setDbTypes] = useState(DEFAULT_DB_TYPES)
   const [approvers, setApprovers] = useState<string[]>([])
@@ -157,6 +185,7 @@ export default function DqlExport() {
         ...emptyForm(),
         database_id: d.database_id || '',
         instance_id: d.instance_id || '',
+        domain: d.domain || '',
         db_name: d.db_name || '',
         env: d.env || '',
         db_type: String(d.db_type || '').toLowerCase(),
@@ -187,20 +216,43 @@ export default function DqlExport() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [needStrictApproval])
 
-  const instMap = useMemo(() => {
-    const m: Record<string, any> = {}
-    for (const i of instances) m[i.id] = i
-    return m
-  }, [instances])
+  const dataSourceOptions = useMemo((): DomainSource[] => {
+    return sourcesFromAccessDomains(
+      filterAccessDomainsByGroup(accessDomains, {
+        groupCode: form.env,
+        groups: envGroups,
+        dbType: form.db_type,
+      }),
+    )
+  }, [accessDomains, form.env, form.db_type, envGroups])
+
+  const selectedSourceKey = form.instance_id && form.domain ? sourceKey(form.instance_id, form.domain) : undefined
+
+  const sourceSelectOptions = useMemo(() => {
+    const opts = dataSourceOptions.map((i) => ({
+      value: i.key,
+      label: sourcePrimaryLabel(i),
+    }))
+    if (selectedSourceKey && form.domain && !opts.some((o) => o.value === selectedSourceKey)) {
+      opts.unshift({ value: selectedSourceKey, label: form.domain })
+    }
+    return opts
+  }, [dataSourceOptions, selectedSourceKey, form.domain])
 
   const dbOptions = useMemo(() => {
-    return databases.filter((d) => {
-      const inst = instMap[d.instance_id] || {}
-      if (form.db_type && String(inst.db_type || '').toLowerCase() !== form.db_type) return false
-      if (form.env && !envCodeInGroup(inst.idc || '', form.env, envGroups)) return false
-      return true
-    })
-  }, [databases, instMap, form.db_type, form.env, envGroups])
+    if (!form.instance_id || !form.domain) return []
+    const scoped = databases.filter((d) => d.instance_id === form.instance_id)
+    const matched = filterDbsByDomain(scoped, form.domain)
+    return matched.length ? matched : scoped
+  }, [databases, form.instance_id, form.domain])
+
+  const dbSelectOptions = useMemo(() => {
+    const opts = dbOptions.map((d) => ({ value: d.id, label: dqlDbOptionLabel(d) }))
+    if (form.database_id && form.db_name && !opts.some((o) => o.value === form.database_id)) {
+      opts.unshift({ value: form.database_id, label: form.db_name })
+    }
+    return opts
+  }, [dbOptions, form.database_id, form.db_name])
 
   const parsedTables = useMemo(() => parseTables(form.sql_content), [form.sql_content])
 
@@ -216,19 +268,28 @@ export default function DqlExport() {
   }, [resultCols, form.sql_content, parsedTables])
 
   function onFilterChange(patch: Partial<ReturnType<typeof emptyForm>>) {
-    const next = { ...formRef.current, ...patch }
-    const options = databases.filter((d) => {
-      const inst = instMap[d.instance_id] || {}
-      if (next.db_type && String(inst.db_type || '').toLowerCase() !== next.db_type) return false
-      if (next.env && !envCodeInGroup(inst.idc || '', next.env, envGroupsRef.current)) return false
-      return true
-    })
-    if (next.database_id && !options.some((d) => d.id === next.database_id)) {
-      patchForm({ ...patch, database_id: '', instance_id: '', db_name: '' })
+    if ('db_type' in patch || 'env' in patch) {
+      patchForm({ ...patch, domain: '', instance_id: '', database_id: '', db_name: '' })
       setApprovers([])
       return
     }
     patchForm(patch)
+  }
+
+  function onDataSourceChange(v: string) {
+    const parsed = parseSourceKey(v || '')
+    if (!parsed) {
+      patchForm({ instance_id: '', domain: '', database_id: '', db_name: '' })
+      setApprovers([])
+      return
+    }
+    patchForm({
+      instance_id: parsed.instance_id,
+      domain: parsed.domain,
+      database_id: '',
+      db_name: '',
+    })
+    setApprovers([])
   }
 
   async function loadApprovers(instanceId: string, dbName: string) {
@@ -280,9 +341,10 @@ export default function DqlExport() {
   }
 
   async function loadMeta(): Promise<{ instances: any[]; databases: any[] }> {
-    const [instRes, dbRes, argRes, apprRes] = await Promise.all([
+    const [instRes, dbRes, domainRes, argRes, apprRes] = await Promise.all([
       api.get('/instances'),
       api.get('/databases'),
+      api.get('/access-domains').catch(() => ({ data: { data: [] } })),
       api.get('/global-args').catch(() => ({ data: { data: [] } })),
       api.get('/create-db/approvers', { params: { scope: 'tenant' } }).catch(() => ({ data: { data: [] } })),
     ])
@@ -290,9 +352,11 @@ export default function DqlExport() {
     const dbList = dbRes.data.data || []
     setInstances(instList)
     setDatabases(dbList)
+    setAccessDomains(domainRes.data.data || [])
     const groups = await loadTicketEnvGroups()
     envGroupsRef.current = groups
     setEnvGroups(groups)
+    setEnvCatalogReady(true)
     const raw = (argRes.data.data || []).find((a: any) => a.key === 'ticket_instance_types')?.value || ''
     try {
       const parsed = JSON.parse(raw)
@@ -332,6 +396,10 @@ export default function DqlExport() {
       return
     }
     const f = { ...formRef.current, sql_content: withLimit }
+    if (!f.domain || !f.instance_id) {
+      message.error('请选择数据源（域名）')
+      return
+    }
     if (!f.sql_content.trim()) {
       message.error('SQL语句不能为空')
       return
@@ -354,6 +422,7 @@ export default function DqlExport() {
       const { data } = await api.post('/tickets', {
         type: 'dql',
         instance_id: f.instance_id,
+        domain: f.domain,
         database_id: f.database_id,
         db_name: f.db_name,
         sql_content: withLimit,
@@ -455,18 +524,32 @@ export default function DqlExport() {
           <Form.Item name="env" label="环境" rules={[{ required: true, message: '请选择环境' }]}>
             <Select
               showSearch
-              placeholder="请选择环境"
+              placeholder={envCatalogReady ? '请选择环境' : '加载环境…'}
               onChange={(v) => onFilterChange({ env: v })}
               options={envGroups.map((e) => ({ value: e.code, label: e.label }))}
+              {...(envCatalogReady ? {} : { labelRender: () => '' })}
+            />
+          </Form.Item>
+          <Form.Item label="数据源" required>
+            <Select
+              showSearch
+              allowClear
+              optionFilterProp="label"
+              disabled={!form.env || !form.db_type}
+              placeholder={!form.env ? '请先选择环境' : !form.db_type ? '请先选择数据库类型' : '请选择数据源（域名）'}
+              value={selectedSourceKey}
+              onChange={(v) => onDataSourceChange(v || '')}
+              options={sourceSelectOptions}
             />
           </Form.Item>
           <Form.Item name="database_id" label="数据库" rules={[{ required: true, message: '请选择数据库' }]}>
             <Select
               showSearch
               optionFilterProp="label"
-              placeholder="请选择数据库"
+              disabled={!form.instance_id}
+              placeholder={form.instance_id ? '请选择数据库' : '请先选择数据源'}
               onChange={(v) => onDbChange(v)}
-              options={dbOptions.map((d) => ({ value: d.id, label: dbLabel(d) }))}
+              options={dbSelectOptions}
             />
           </Form.Item>
           <Form.Item

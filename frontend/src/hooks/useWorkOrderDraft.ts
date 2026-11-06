@@ -14,7 +14,7 @@ interface Options {
   type: string
   label: string
   path: string
-  getValues: () => Record<string, any>
+  getValues: () => Record<string, any> | null | undefined
   applyValues: (values: Record<string, any>) => void
   enabled?: boolean
 }
@@ -39,8 +39,10 @@ export function useWorkOrderDraft({ type, label, path, getValues, applyValues, e
         if (!silent) message.warning('未登录，无法保存本地草稿')
         return false
       }
+      const values = getValuesRef.current()
+      if (values == null) return false
       const ok = saveWorkOrderDraft(
-        { type, label, path, hint: '', values: getValuesRef.current() },
+        { type, label, path, hint: '', values },
         userId,
         { force: !silent },
       )

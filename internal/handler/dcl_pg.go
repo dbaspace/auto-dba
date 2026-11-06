@@ -246,11 +246,8 @@ func materializeDCLAccounts(st *store.DB, secretKey string, inst *store.Instance
 }
 
 func dclNotifyAddress(inst *store.Instance, domain string) string {
-	host := resolveInstanceHost(inst, domain)
-	if host == "" && inst != nil {
-		host = inst.Host
-	}
-	if inst != nil && !strings.Contains(host, ":") && inst.Port > 0 {
+	host := strings.TrimSpace(domain)
+	if inst != nil && host != "" && !strings.Contains(host, ":") && inst.Port > 0 {
 		return fmt.Sprintf("%s:%d", host, inst.Port)
 	}
 	return host

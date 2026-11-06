@@ -203,18 +203,55 @@ func databaseContainsDomain(db *store.Database, domain string) bool {
 	return false
 }
 
-func resolveInstanceHost(inst *store.Instance, preferredDomain string) string {
-	if d := strings.TrimSpace(preferredDomain); d != "" {
-		return d
+// dialHostFromAccessDomains 工单拨号地址只来自域名管理。
+// preferred 是页面从域名管理点选后记在工单上的地址，直接用，不再要求请求另带一份。
+// 没选时按实例在域名管理里的记录取：一条就用那条，没有或多条则失败，不回退连接主机。
+func dialHostFromAccessDomains(preferred string, rows []store.AccessDomain) (string, error) {
+	if d := strings.TrimSpace(preferred); d != "" {
+		return d, nil
 	}
+	var domains []string
+	seen := map[string]struct{}{}
+	for _, row := range rows {
+		d := strings.TrimSpace(row.Domain)
+		if d == "" {
+			continue
+		}
+		key := strings.ToLower(d)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		domains = append(domains, d)
+	}
+	switch len(domains) {
+	case 0:
+		return "", fmt.Errorf("域名管理中没有该数据源的地址")
+	case 1:
+		return domains[0], nil
+	default:
+		return "", fmt.Errorf("域名管理中该实例有多条地址，请在工单数据源中选定一条")
+	}
+}
+
+func (h *TicketHandler) resolveTicketDialHost(inst *store.Instance, preferred string) (string, error) {
 	if inst == nil {
-		return ""
+		return "", fmt.Errorf("工单实例不存在")
 	}
-	host := strings.TrimSpace(inst.Host)
-	if host == "" {
-		host = strings.TrimSpace(inst.DomainName)
+	var rows []store.AccessDomain
+	if strings.TrimSpace(preferred) == "" && h != nil && h.Store != nil {
+		list, err := h.Store.ListAccessDomainsByInstance(inst.ID, inst.DBType)
+		if err != nil {
+			return "", err
+		}
+		rows = list
 	}
-	return host
+	return dialHostFromAccessDomains(preferred, rows)
+}
+
+// resolveInstanceHost 只返回工单上已选定的域名管理地址，不回退实例连接主机。
+func resolveInstanceHost(inst *store.Instance, preferredDomain string) string {
+	return strings.TrimSpace(preferredDomain)
 }
 
 func (h *TicketHandler) execTarget(inst *store.Instance, dbName, preferredDomain string) (ticketexec.Target, error) {
@@ -226,9 +263,12 @@ func (h *TicketHandler) execTarget(inst *store.Instance, dbName, preferredDomain
 	if err != nil {
 		return t, fmt.Errorf("解密实例密码失败: %w", err)
 	}
-	host := resolveInstanceHost(inst, preferredDomain)
+	host, err := h.resolveTicketDialHost(inst, preferredDomain)
+	if err != nil {
+		return t, err
+	}
 	if host == "" {
-		return t, fmt.Errorf("实例未配置连接地址或域名")
+		return t, fmt.Errorf("域名管理中没有该数据源的地址")
 	}
 	t = ticketexec.Target{
 		Host:     host,

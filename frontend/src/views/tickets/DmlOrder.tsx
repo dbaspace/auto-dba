@@ -363,6 +363,7 @@ export default function DmlOrder() {
         db_type: f.instance_type,
         instance_id: f.instance_id,
         db_name: f.db_name,
+        domain: f.domain,
       })
       const parsed = Number(data.statement_count)
       const n = Number.isFinite(parsed) && parsed > 0 ? parsed : (data.statements || []).length

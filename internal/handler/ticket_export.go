@@ -26,16 +26,16 @@ type ticketExportReq struct {
 }
 
 const (
-	dqlExportPhaseAccepted      = "accepted"
-	dqlExportPhaseRouting       = "routing"
-	dqlExportPhaseRemoteSubmit  = "remote_submit"
-	dqlExportPhaseQuerying      = "querying"
-	dqlExportPhaseTransferring  = "transferring"
-	dqlExportPhaseReady         = "ready"
-	dqlExportPhaseFailed        = "failed"
-	dqlExportDirName            = "dql-exports"
-	dqlExportRetain             = 7 * 24 * time.Hour
-	dqlExportBGTimeout          = 15 * time.Minute
+	dqlExportPhaseAccepted     = "accepted"
+	dqlExportPhaseRouting      = "routing"
+	dqlExportPhaseRemoteSubmit = "remote_submit"
+	dqlExportPhaseQuerying     = "querying"
+	dqlExportPhaseTransferring = "transferring"
+	dqlExportPhaseReady        = "ready"
+	dqlExportPhaseFailed       = "failed"
+	dqlExportDirName           = "dql-exports"
+	dqlExportRetain            = 7 * 24 * time.Hour
+	dqlExportBGTimeout         = 15 * time.Minute
 )
 
 // Export POST /tickets/:id/export — 异步受理 DQL 导出（本机或就近执行器）。
@@ -82,6 +82,11 @@ func (h *TicketHandler) Export(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
+	dialHost, herr := h.resolveTicketDialHost(inst, it.Domain)
+	if herr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": herr.Error()})
+		return
+	}
 	if _, err := dbprobe.RequireExportSQLLimit(it.SQLContent); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
@@ -120,7 +125,7 @@ func (h *TicketHandler) Export(c *gin.Context) {
 	}
 	h.saveProgress(it.ID, &store.ExecProgress{
 		Total: 1, Phase: dqlExportPhaseAccepted, CurrentDB: rec.DBName,
-		InstanceID: inst.ID, CurrentInstance: inst.Name, Host: resolveInstanceHost(inst, it.Domain),
+		InstanceID: inst.ID, CurrentInstance: inst.Name, Host: dialHost,
 		DBType: inst.DBType, Env: inst.IDC,
 	})
 
@@ -206,7 +211,11 @@ func (h *TicketHandler) runDQLExportAsync(issueID, format string, dec sqlexec.De
 		h.failDQLExport(issueID, "实例密码解密失败")
 		return
 	}
-	host := resolveInstanceHost(inst, it.Domain)
+	host, err := h.resolveTicketDialHost(inst, it.Domain)
+	if err != nil {
+		h.failDQLExport(issueID, err.Error())
+		return
+	}
 	h.saveDQLExportProgress(it, inst, host, dqlExportPhaseRouting, "", dec)
 
 	limit, err := dbprobe.RequireExportSQLLimit(it.SQLContent)
@@ -237,7 +246,9 @@ func (h *TicketHandler) runDQLExportLocal(ctx context.Context, it *store.Issue, 
 		ex.ExportStage = dqlExportPhaseQuerying
 		ex.ExportExecutor = ""
 	})
-	res, err := dbprobe.ExecExport(ctx, inst, password, rec.DBName, it.SQLContent, limit)
+	dialInst := *inst
+	dialInst.Host = host
+	res, err := dbprobe.ExecExport(ctx, &dialInst, password, rec.DBName, it.SQLContent, limit)
 	if err != nil {
 		msg := err.Error()
 		if ctx.Err() != nil {

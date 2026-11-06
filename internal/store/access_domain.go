@@ -119,6 +119,35 @@ func (d *DB) GetAccessDomain(id string) (*AccessDomain, error) {
 	return it, err
 }
 
+// ListAccessDomainsByInstance 返回该实例在域名管理中的地址。dbType 为空则不按引擎过滤。
+func (d *DB) ListAccessDomainsByInstance(instanceID, dbType string) ([]AccessDomain, error) {
+	instanceID = strings.TrimSpace(instanceID)
+	if instanceID == "" {
+		return nil, nil
+	}
+	want := NormalizeEngineType(dbType)
+	rows, err := d.Query(
+		`SELECT `+accessDomainCols+` FROM tbl_access_domains WHERE instance_id=? ORDER BY domain`,
+		instanceID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AccessDomain
+	for rows.Next() {
+		it, err := scanAccessDomain(rows)
+		if err != nil {
+			return nil, err
+		}
+		if want != "" && NormalizeEngineType(it.DBType) != want {
+			continue
+		}
+		out = append(out, *it)
+	}
+	return out, rows.Err()
+}
+
 func (d *DB) GetAccessDomainByDomainType(domain, dbType string) (*AccessDomain, error) {
 	domain = normalizeAccessDomainHost(domain)
 	dbType = NormalizeEngineType(dbType)

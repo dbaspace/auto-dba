@@ -60,6 +60,33 @@ func TestPickPGIntranetPrefersInner(t *testing.T) {
 	}
 }
 
+func TestNetFromExtras(t *testing.T) {
+	host, port := NetFromExtras(EnginePostgres, map[string]any{
+		"DBInstanceNetInfo": []any{
+			map[string]any{"NetType": "public", "Ip": "1.2.3.4", "Port": float64(5432)},
+			map[string]any{"NetType": "inner", "Ip": "10.0.0.8", "Port": float64(5432)},
+		},
+	})
+	if host != "10.0.0.8" || port != 5432 {
+		t.Fatalf("pg %s %d", host, port)
+	}
+	host, port = NetFromExtras(EngineMySQL, map[string]any{"Vip": "10.1.1.1", "Vport": float64(3306)})
+	if host != "10.1.1.1" || port != 3306 {
+		t.Fatalf("mysql %s %d", host, port)
+	}
+	host, port = NetFromExtras(EngineRedis, map[string]any{"WanIp": "10.2.2.2", "Port": float64(6379)})
+	if host != "10.2.2.2" || port != 6379 {
+		t.Fatalf("redis %s %d", host, port)
+	}
+	host, port = NetFromExtras(EngineHost, map[string]any{"PrivateIpAddresses": []any{"10.3.3.3", "10.3.3.4"}})
+	if host != "10.3.3.3" || port != 0 {
+		t.Fatalf("host %s %d", host, port)
+	}
+	if h, p := NetFromExtras(EnginePostgres, nil); h != "" || p != 0 {
+		t.Fatalf("empty %s %d", h, p)
+	}
+}
+
 func TestMatchPlatformIDs(t *testing.T) {
 	items := []PlatformRef{
 		{ID: "a", Host: "pg.bj.restosuite.shop, 10.0.0.8", DBType: "PostgreSQL"},

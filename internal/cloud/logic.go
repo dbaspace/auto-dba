@@ -135,25 +135,30 @@ func PickPGIntranet(nets []any) (host string, port int) {
 
 // IntranetFromExtras 从已保存的云厂商原始返回里再解析内网地址。
 func IntranetFromExtras(engine string, extras map[string]any) string {
+	host, _ := NetFromExtras(engine, extras)
+	return host
+}
+
+// NetFromExtras 从已保存的云厂商原始返回里解析内网地址和端口。云主机没有端口。
+func NetFromExtras(engine string, extras map[string]any) (host string, port int) {
 	if len(extras) == 0 {
-		return ""
+		return "", 0
 	}
 	switch strings.ToLower(strings.TrimSpace(engine)) {
 	case "", EnginePostgres:
 		if nets, ok := extras["DBInstanceNetInfo"].([]any); ok {
-			host, _ := PickPGIntranet(nets)
-			return host
+			return PickPGIntranet(nets)
 		}
 	case EngineMySQL:
-		return anyStr(extras["Vip"])
+		return anyStr(extras["Vip"]), anyInt(extras["Vport"])
 	case EngineRedis:
-		return anyStr(extras["WanIp"])
+		return anyStr(extras["WanIp"]), anyInt(extras["Port"])
 	case EngineHost:
 		if ips, ok := extras["PrivateIpAddresses"].([]any); ok && len(ips) > 0 {
-			return anyStr(ips[0])
+			return anyStr(ips[0]), 0
 		}
 	}
-	return ""
+	return "", 0
 }
 
 // EngineOfDBType 把平台实例类型收成云引擎名。

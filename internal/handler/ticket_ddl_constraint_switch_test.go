@@ -24,7 +24,7 @@ func TestDDLConstraintCheckSwitch(t *testing.T) {
 
 	t.Run("false skips ddl comment check", func(t *testing.T) {
 		ddlConstraintCheckEnabled = func(*TicketHandler) bool { return false }
-		res := h.checkTicketSQL(alter, "ddl", "postgres", "", "", false)
+		res := h.checkTicketSQL(alter, "ddl", "postgres", "", "", false, "")
 		if !res.OK || !res.ConstraintCheckSkipped {
 			t.Fatalf("expected skip: %+v", res)
 		}
@@ -41,7 +41,7 @@ func TestDDLConstraintCheckSwitch(t *testing.T) {
 
 	t.Run("empty sql still fails", func(t *testing.T) {
 		ddlConstraintCheckEnabled = func(*TicketHandler) bool { return false }
-		res := h.checkTicketSQL("  ", "ddl", "postgres", "", "", false)
+		res := h.checkTicketSQL("  ", "ddl", "postgres", "", "", false, "")
 		if res.OK || res.ConstraintCheckSkipped {
 			t.Fatalf("empty sql should fail: %+v", res)
 		}
@@ -53,7 +53,7 @@ func TestDDLConstraintCheckSwitch(t *testing.T) {
 			ddlConstraintCheckEnabled = func(*TicketHandler) bool {
 				return store.ParseDDLConstraintCheckEnabled(raw)
 			}
-			res := h.checkTicketSQL(alter, "ddl", "postgres", "", "", false)
+			res := h.checkTicketSQL(alter, "ddl", "postgres", "", "", false, "")
 			if res.OK || res.ConstraintCheckSkipped || !resultHasRule(res, "DDLCheckColumnComment") {
 				t.Fatalf("raw %q should fail column comment: %+v", raw, res)
 			}
@@ -62,7 +62,7 @@ func TestDDLConstraintCheckSwitch(t *testing.T) {
 
 	t.Run("false still checks dml", func(t *testing.T) {
 		ddlConstraintCheckEnabled = func(*TicketHandler) bool { return false }
-		res := h.checkTicketSQL("DELETE FROM t;", "dml", "postgres", "", "", false)
+		res := h.checkTicketSQL("DELETE FROM t;", "dml", "postgres", "", "", false, "")
 		if res.OK || res.ConstraintCheckSkipped || !resultHasRule(res, "DMLWhere") {
 			t.Fatalf("dml should still fail: %+v", res)
 		}
@@ -105,11 +105,11 @@ ADD COLUMN IF NOT EXISTS corporation_id bigint NOT NULL DEFAULT 0;
 COMMENT ON COLUMN public.tbl_lxz_discount_account.corporation_id IS '集团 ID';`
 	h := &TicketHandler{}
 	// 检测、提交、执行前复核都走 checkTicketSQL，引擎只由 db_type / 实例类型决定。
-	pg := h.checkTicketSQL(sql, "ddl", "PostgreSQL", "", "", false)
+	pg := h.checkTicketSQL(sql, "ddl", "PostgreSQL", "", "", false, "")
 	if !pg.OK || resultHasRule(pg, "DDLCheckColumnComment") {
 		t.Fatalf("PostgreSQL 应认 COMMENT ON COLUMN: %+v", pg)
 	}
-	sr := h.checkTicketSQL(sql, "ddl", "sr", "", "", false)
+	sr := h.checkTicketSQL(sql, "ddl", "sr", "", "", false, "")
 	if sr.OK || !resultHasRule(sr, "DDLCheckColumnComment") {
 		t.Fatalf("StarRocks 不应把 COMMENT ON COLUMN 当成列注释: %+v", sr)
 	}

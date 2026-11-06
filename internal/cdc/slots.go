@@ -53,15 +53,44 @@ type SlotRow struct {
 	Heartbeat     string `json:"heartbeat,omitempty"`
 }
 
-// CollectInstanceSlots 对单个实例只建一条连接，读完即关。dbNames 是 postgres 库连不上时的备选库，仍只查复制槽目录。
-func CollectInstanceSlots(ctx context.Context, inst *store.Instance, secret string, dbNames []string) ([]store.SyncSlot, error) {
+// SlotTagDomain 采集拨号地址只取实例标签 domain=。有多条时用第一条非空值。没有则失败，不读连接主机。
+func SlotTagDomain(inst *store.Instance) (string, error) {
 	if inst == nil {
-		return nil, fmt.Errorf("实例不存在")
+		return "", fmt.Errorf("实例不存在")
 	}
+	for _, raw := range inst.Tags {
+		k, v, ok := splitInstanceTag(raw)
+		if !ok || !strings.EqualFold(k, "domain") {
+			continue
+		}
+		if v = strings.TrimSpace(v); v != "" {
+			return v, nil
+		}
+	}
+	return "", fmt.Errorf("实例标签没有 domain，不使用连接主机")
+}
+
+func splitInstanceTag(raw string) (key, value string, ok bool) {
+	raw = strings.TrimSpace(raw)
+	i := strings.Index(raw, "=")
+	if i <= 0 {
+		return "", "", false
+	}
+	return strings.TrimSpace(raw[:i]), strings.TrimSpace(raw[i+1:]), true
+}
+
+// CollectInstanceSlots 对单个实例只建一条连接，读完即关。dbNames 是 postgres 库连不上时的备选库，仍只查复制槽目录。
+// 拨号地址用标签 domain=，不用连接主机。
+func CollectInstanceSlots(ctx context.Context, inst *store.Instance, secret string, dbNames []string) ([]store.SyncSlot, error) {
+	domain, err := SlotTagDomain(inst)
+	if err != nil {
+		return nil, err
+	}
+	dial := dbmig.WithDialHost(inst, domain)
 	var last error
 	for i, name := range slotQueryDatabases(dbNames) {
 		ictx, cancel := context.WithTimeout(ctx, 8*time.Second)
-		db, err := dbmig.OpenInstance(ictx, inst, secret, name)
+		db, err := dbmig.OpenInstance(ictx, dial, secret, name)
 		if err != nil {
 			cancel()
 			last = err

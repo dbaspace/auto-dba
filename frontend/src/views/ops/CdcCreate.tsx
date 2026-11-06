@@ -285,6 +285,7 @@ export default function CdcCreate() {
   // ---- refs 镜像（供闭包/异步读取最新值） ----
   const formRef = useRef(form)
   formRef.current = form
+  const allowDraftPersist = useRef(false)
   const mappingsRef = useRef(mappings)
   mappingsRef.current = mappings
   const stepRef = useRef(step)
@@ -1550,20 +1551,21 @@ export default function CdcCreate() {
     label: 'CDC同步任务',
     path: '/ops/cdc/create',
     enabled: formRef.current.task_type === 'init',
-    getValues: () => ({ form: { ...formRef.current, mappings: mappingsRef.current }, step: stepRef.current }),
+    getValues: () => {
+      if (!allowDraftPersist.current) return null
+      return { form: { ...formRef.current, mappings: mappingsRef.current }, step: stepRef.current }
+    },
     applyValues: (v: any) => {
       const d = v.form || v
       const nextForm = { ...emptyForm(infraDefaultsRef.current), ...d }
       setForm(nextForm)
       formRef.current = nextForm
       restoreMappings(d.mappings || nextForm.mappings)
-      if (Number.isFinite(v.step)) {
-        setStep(v.step)
-        stepRef.current = v.step
-      } else if (Number.isFinite(d.step)) {
-        setStep(d.step)
-        stepRef.current = d.step
-      }
+      const rawStep = Number.isFinite(v.step) ? v.step : Number.isFinite(d.step) ? d.step : 0
+      const max = stepsForType(nextForm.task_type || 'init', nextForm.auto_create_table !== false).length - 1
+      const s = Math.min(Math.max(0, rawStep), Math.max(0, max))
+      setStep(s)
+      stepRef.current = s
     },
   })
 
@@ -1995,62 +1997,55 @@ export default function CdcCreate() {
     const type = String(searchParams.get('type') || 'init')
     resetMode(type)
     void (async () => {
-      const [instRes, connRes, taskRes, argRes, reviewerRes, domainRes] = await Promise.all([
-        api.get('/cdc-sync/instances', { params: formRef.current.env ? { env: formRef.current.env } : {} }).catch(() => api.get('/instances')),
-        api.get('/connectors').catch(() => ({ data: { data: [] } })),
-        api
-          .get('/cdc-sync/tasks/init-list')
-          .catch(() => api.get('/cdc-sync/tasks', { params: { task_type: 'init' } })),
-        api.get('/global-args').catch(() => ({ data: { data: [] } })),
-        api.get('/cdc-sync/reviewers').catch(() => ({ data: { data: [] } })),
-        api.get('/access-domains').catch(() => ({ data: { data: [] } })),
-      ])
-      const loadedInstances = instRes.data.data || []
-      instancesReady.current = true
-      setInstances(loadedInstances)
-      instancesRef.current = loadedInstances
-      const loadedDomains: AccessDomainRow[] = domainRes.data.data || []
-      setAccessDomains(loadedDomains)
-      setConnectors(connRes.data.data || [])
-      const inits = (taskRes.data.data || []).filter((t: any) => t.task_type === 'init')
-      setParentTasks(inits)
-      parentTasksRef.current = inits
-      const args = argRes.data.data || []
-      const infra = applyInfraDefaults(args)
-      setInfraDefaults(infra)
-      infraDefaultsRef.current = infra
-      patchForm({
-        routine_load_parallelism: infra.routine_load_parallelism,
-        kafka_topic_partitions: infra.kafka_topic_partitions,
-        kafka_topic_replication_factor: infra.kafka_topic_replication_factor,
-        sr_auto_buckets: infra.sr_auto_buckets,
-        sr_replication_num: infra.sr_replication_num,
-      })
-      const reviewers = (reviewerRes.data?.data || []).map((s: any) => String(s || '').trim()).filter(Boolean)
-      setDefaultReviewers(reviewers)
+      try {
+        const [instRes, connRes, taskRes, argRes, reviewerRes, domainRes] = await Promise.all([
+          api.get('/cdc-sync/instances', { params: formRef.current.env ? { env: formRef.current.env } : {} }).catch(() => api.get('/instances')),
+          api.get('/connectors').catch(() => ({ data: { data: [] } })),
+          api
+            .get('/cdc-sync/tasks/init-list')
+            .catch(() => api.get('/cdc-sync/tasks', { params: { task_type: 'init' } })),
+          api.get('/global-args').catch(() => ({ data: { data: [] } })),
+          api.get('/cdc-sync/reviewers').catch(() => ({ data: { data: [] } })),
+          api.get('/access-domains').catch(() => ({ data: { data: [] } })),
+        ])
+        const loadedInstances = instRes.data.data || []
+        instancesReady.current = true
+        setInstances(loadedInstances)
+        instancesRef.current = loadedInstances
+        const loadedDomains: AccessDomainRow[] = domainRes.data.data || []
+        setAccessDomains(loadedDomains)
+        setConnectors(connRes.data.data || [])
+        const inits = (taskRes.data.data || []).filter((t: any) => t.task_type === 'init')
+        setParentTasks(inits)
+        parentTasksRef.current = inits
+        const args = argRes.data.data || []
+        const infra = applyInfraDefaults(args)
+        setInfraDefaults(infra)
+        infraDefaultsRef.current = infra
+        patchForm({
+          routine_load_parallelism: infra.routine_load_parallelism,
+          kafka_topic_partitions: infra.kafka_topic_partitions,
+          kafka_topic_replication_factor: infra.kafka_topic_replication_factor,
+          sr_auto_buckets: infra.sr_auto_buckets,
+          sr_replication_num: infra.sr_replication_num,
+        })
+        const reviewers = (reviewerRes.data?.data || []).map((s: any) => String(s || '').trim()).filter(Boolean)
+        setDefaultReviewers(reviewers)
 
-      const preParent = String(searchParams.get('parent_id') || '').trim()
-      if (preParent && inits.some((t: any) => t.id === preParent)) {
-        const row = inits.find((t: any) => t.id === preParent)
-        if (row) onPickParent(row)
-      }
+        const preParent = String(searchParams.get('parent_id') || '').trim()
+        if (preParent && inits.some((t: any) => t.id === preParent)) {
+          const row = inits.find((t: any) => t.id === preParent)
+          if (row) onPickParent(row)
+        }
 
-      if (formRef.current.task_type !== 'init') return
-      if (!restoreDraft()) return
-      const savedID = String(formRef.current.source_instance_id || '')
-      const savedHost = String(formRef.current.source_host || '').trim().toLowerCase()
-      const domainHit =
-        savedID &&
-        savedHost &&
-        sourcesFromAccessDomains(
-          cdcSourceDomainRows(loadedDomains, formRef.current.env, formRef.current.source_engine),
-        ).some((s) => s.instance_id === savedID && s.domain.toLowerCase() === savedHost)
-      if (savedID && !domainHit) {
-        patchForm({ source_instance_id: '', source_host: '', source_port: 0, source_db: '', tables: [] })
+        if (formRef.current.task_type !== 'init') return
+        restoreDraft()
+        if (formRef.current.source_instance_id) await loadSourceDbs()
+        if (formRef.current.source_instance_id && formRef.current.source_db) await loadTables()
+        if (stepRef.current >= 5) void refreshSql()
+      } finally {
+        allowDraftPersist.current = true
       }
-      if (formRef.current.source_instance_id) await loadSourceDbs()
-      if (formRef.current.source_instance_id && formRef.current.source_db) await loadTables()
-      if (stepRef.current >= 5) void refreshSql()
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -3968,7 +3963,16 @@ export default function CdcCreate() {
       <div className="cdc-nav">
         <Button onClick={() => goList()}>取消</Button>
         <div className="cdc-nav-right">
-          {mode === 'init' && <Button onClick={() => saveDraft()}>保存草稿</Button>}
+          {mode === 'init' && (
+            <Button
+              onClick={() => {
+                allowDraftPersist.current = true
+                saveDraft()
+              }}
+            >
+              保存草稿
+            </Button>
+          )}
           {step > 0 && <Button onClick={prev}>上一步</Button>}
           {step < steps.length - 1 ? (
             <Button type="primary" loading={loadingTables} disabled={nextDisabled} onClick={next}>

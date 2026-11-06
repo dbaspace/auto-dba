@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"strings"
 	"testing"
 
 	"auto-dba/internal/store"
@@ -15,12 +16,27 @@ func TestResolveInstanceHostPrefersDomain(t *testing.T) {
 	if got := resolveInstanceHost(inst, "pg.b.example"); got != "pg.b.example" {
 		t.Fatalf("preferred domain: got %q", got)
 	}
-	if got := resolveInstanceHost(inst, ""); got != "10.0.0.1" {
-		t.Fatalf("fallback host: got %q", got)
+	if got := resolveInstanceHost(inst, ""); got != "" {
+		t.Fatalf("empty preferred must not fall back to host, got %q", got)
 	}
-	inst.Host = ""
-	if got := resolveInstanceHost(inst, ""); got != "pg.legacy.example" {
-		t.Fatalf("fallback domain_name: got %q", got)
+}
+
+func TestDialHostFromAccessDomains(t *testing.T) {
+	rows := []store.AccessDomain{{Domain: "pg.a.example"}, {Domain: "pg.b.example"}}
+	if got, err := dialHostFromAccessDomains("pg.b.example", rows); err != nil || got != "pg.b.example" {
+		t.Fatalf("preferred: got %q err %v", got, err)
+	}
+	if _, err := dialHostFromAccessDomains("", nil); err == nil || !strings.Contains(err.Error(), "没有该数据源") {
+		t.Fatalf("zero rows: %v", err)
+	}
+	if got, err := dialHostFromAccessDomains("", []store.AccessDomain{{Domain: "only.example"}}); err != nil || got != "only.example" {
+		t.Fatalf("one row: got %q err %v", got, err)
+	}
+	if _, err := dialHostFromAccessDomains("", rows); err == nil || !strings.Contains(err.Error(), "多条地址") {
+		t.Fatalf("many rows: %v", err)
+	}
+	if got, err := dialHostFromAccessDomains("", []store.AccessDomain{{Domain: "Same.Example"}, {Domain: "same.example"}}); err != nil || got != "Same.Example" {
+		t.Fatalf("dedupe: got %q err %v", got, err)
 	}
 }
 

@@ -128,6 +128,29 @@ func TestReplicationSlotsSQLIsCatalogOnly(t *testing.T) {
 	}
 }
 
+func TestSlotTagDomain(t *testing.T) {
+	inst := &store.Instance{
+		Host: "172.23.31.178",
+		Tags: []string{"idc=singapore", "domain=pg.sea.restosuite.ai", "domain="},
+	}
+	got, err := SlotTagDomain(inst)
+	if err != nil || got != "pg.sea.restosuite.ai" {
+		t.Fatalf("tag domain: got %q err %v", got, err)
+	}
+	if got == inst.Host {
+		t.Fatal("must not use connection host")
+	}
+	onlyHost := &store.Instance{Host: "10.0.0.1", DomainName: "pg.legacy.example"}
+	if _, err := SlotTagDomain(onlyHost); err == nil || !strings.Contains(err.Error(), "没有 domain") {
+		t.Fatalf("missing tag: %v", err)
+	}
+	second := &store.Instance{Host: "10.0.0.1", Tags: []string{"domain=", "domain=pg.bill.example"}}
+	got, err = SlotTagDomain(second)
+	if err != nil || got != "pg.bill.example" {
+		t.Fatalf("skip empty then first value: got %q err %v", got, err)
+	}
+}
+
 func TestSlotDisplayHost(t *testing.T) {
 	if got := SlotDisplayHost(&store.Instance{Host: "10.0.0.1,10.0.0.2", DomainName: "pg.example"}); got != "10.0.0.1" {
 		t.Fatalf("host = %s", got)

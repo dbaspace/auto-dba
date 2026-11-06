@@ -51,8 +51,9 @@ type ticketCheckReq struct {
 	InstanceID string `json:"instance_id"`
 	DBName     string `json:"db_name"`
 	// 分库/分表：SQL 为待前缀展开的模板，字面表名通常不存在，跳过库表存在性校验。
-	ShardDB    bool `json:"shard_db"`
-	ShardTable bool `json:"shard_table"`
+	ShardDB    bool   `json:"shard_db"`
+	ShardTable bool   `json:"shard_table"`
+	Domain     string `json:"domain"`
 }
 
 type ticketSubmitReq struct {
@@ -433,7 +434,7 @@ func (h *TicketHandler) CheckSQL(c *gin.Context) {
 		return
 	}
 	skipSchema := skipDDLSchemaCheck(req.ShardDB, req.ShardTable)
-	c.JSON(http.StatusOK, h.checkTicketSQL(req.SQLContent, req.Type, req.DBType, req.InstanceID, req.DBName, skipSchema))
+	c.JSON(http.StatusOK, h.checkTicketSQL(req.SQLContent, req.Type, req.DBType, req.InstanceID, req.DBName, skipSchema, req.Domain))
 }
 
 // skipDDLSchemaCheck 分库/分表模式下仅做语法与规范校验，不连库校验对象是否存在。
@@ -521,7 +522,7 @@ func (h *TicketHandler) loadReviewRules(engine string) []sqlcheck.Rule {
 	return toCheckRules(list)
 }
 
-func (h *TicketHandler) checkTicketSQL(sqlContent, issueType, dbType, instanceID, dbName string, skipSchemaCheck bool) sqlcheck.Result {
+func (h *TicketHandler) checkTicketSQL(sqlContent, issueType, dbType, instanceID, dbName string, skipSchemaCheck bool, dialDomain string) sqlcheck.Result {
 	engine := h.resolveReviewEngine(dbType, instanceID)
 	issueType = strings.ToLower(strings.TrimSpace(issueType))
 	if issueType == store.IssueTypeDDL && !ddlConstraintCheckEnabled(h) {
@@ -530,7 +531,7 @@ func (h *TicketHandler) checkTicketSQL(sqlContent, issueType, dbType, instanceID
 	var res sqlcheck.Result
 	// 分库/分表：模板表名通常不存在于代表库，跳过 goInception 库表存在性审核，仅静态规则。
 	if !skipSchemaCheck && engine == "mysql" && (issueType == store.IssueTypeDDL || issueType == store.IssueTypeDML) {
-		if out, used := h.checkViaGoInception(sqlContent, instanceID, dbName); used {
+		if out, used := h.checkViaGoInception(sqlContent, instanceID, dbName, dialDomain); used {
 			res = out
 			sqlcheck.AttachStatementCount(&res, sqlContent)
 			return res
@@ -601,7 +602,7 @@ func applyCreateDBReview(h *TicketHandler, sqlContent, dbType, instanceID string
 	return res
 }
 
-func (h *TicketHandler) checkViaGoInception(sqlContent, instanceID, dbName string) (sqlcheck.Result, bool) {
+func (h *TicketHandler) checkViaGoInception(sqlContent, instanceID, dbName, dialDomain string) (sqlcheck.Result, bool) {
 	cfg, err := h.Store.GetGoInceptionSettings(h.Secret)
 	if err != nil || cfg == nil || !cfg.Ready() {
 		return sqlcheck.Result{}, false
@@ -614,9 +615,13 @@ func (h *TicketHandler) checkViaGoInception(sqlContent, instanceID, dbName strin
 	if err != nil || inst == nil {
 		return giCheckFail("实例不存在"), true
 	}
-	host := resolveInstanceHost(inst, "")
-	if host == "" {
-		return giCheckFail("实例 host 为空"), true
+	host, herr := h.resolveTicketDialHost(inst, dialDomain)
+	if herr != nil || strings.TrimSpace(host) == "" {
+		msg := "域名管理中没有该数据源的地址"
+		if herr != nil && strings.TrimSpace(herr.Error()) != "" {
+			msg = herr.Error()
+		}
+		return giCheckFail(msg), true
 	}
 	password := ""
 	if strings.TrimSpace(inst.Password) != "" {
@@ -742,7 +747,7 @@ func (h *TicketHandler) Submit(c *gin.Context) {
 		return
 	}
 	skipSchema := req.Type == store.IssueTypeDDL && ddlShardSkipSchema(req.NeedRollback)
-	res := h.checkTicketSQL(req.SQLContent, req.Type, req.DBType, req.InstanceID, req.DBName, skipSchema)
+	res := h.checkTicketSQL(req.SQLContent, req.Type, req.DBType, req.InstanceID, req.DBName, skipSchema, req.Domain)
 	if !res.OK {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "SQL 校验未通过", "details": res})
 		return
@@ -1719,7 +1724,7 @@ func (h *TicketHandler) executeTicket(ctx context.Context, it *store.Issue) erro
 		})
 		return h.persistExec(it, res)
 	}
-	check := h.checkTicketSQL(it.SQLContent, it.IssueType, inst.DBType, it.InstanceID, it.DBName, false)
+	check := h.checkTicketSQL(it.SQLContent, it.IssueType, inst.DBType, it.InstanceID, it.DBName, false, it.Domain)
 	if !check.OK {
 		return h.persistExec(it, reviewGateResult(check))
 	}
@@ -1890,10 +1895,15 @@ func (h *TicketHandler) executeDDLTicket(ctx context.Context, it *store.Issue) e
 			jobs = append(jobs, ddlExecJob{id: id, dbName: it.DBName, failMsg: "实例不存在: " + id})
 			continue
 		}
+		domain := ddlDomainForInstance(it.NeedRollback, id, it.Domain)
+		dialHost := ""
+		if dial, herr := h.resolveTicketDialHost(inst, domain); herr == nil {
+			dialHost = dial
+		}
 		// 未分库：整实例只跑代表库，上次已全部成功则跳过
 		if shardPrefix == "" {
 			if ddlDoneSource(prev, id, it.DBName, stmtN) != nil {
-				jobs = append(jobs, ddlExecJob{inst: inst, id: id, dbName: it.DBName, host: inst.Host, skip: true})
+				jobs = append(jobs, ddlExecJob{inst: inst, id: id, domain: domain, dbName: it.DBName, host: dialHost, skip: true})
 				skipped = append(skipped, inst.Name)
 				continue
 			}
@@ -1905,23 +1915,22 @@ func (h *TicketHandler) executeDDLTicket(ctx context.Context, it *store.Issue) e
 		}
 		if dbEnt == nil {
 			msg := h.decorateTargetDeny(id, "库未登记，请先在「配置 → 已登记库」中登记 "+it.DBName)
-			jobs = append(jobs, ddlExecJob{inst: inst, id: id, dbName: it.DBName, host: inst.Host, failMsg: msg})
+			jobs = append(jobs, ddlExecJob{inst: inst, id: id, domain: domain, dbName: it.DBName, host: dialHost, failMsg: msg})
 			continue
 		}
 		skipSchema := ddlShardSkipSchema(it.NeedRollback)
-		check := h.checkTicketSQL(it.SQLContent, it.IssueType, inst.DBType, id, it.DBName, skipSchema)
+		check := h.checkTicketSQL(it.SQLContent, it.IssueType, inst.DBType, id, it.DBName, skipSchema, domain)
 		if !check.OK {
 			msg := "执行前审核规则未通过"
 			if gate := reviewGateResult(check); gate != nil && strings.TrimSpace(gate.Message) != "" {
 				msg = gate.Message
 			}
-			jobs = append(jobs, ddlExecJob{inst: inst, id: id, dbName: it.DBName, host: inst.Host, failMsg: msg})
+			jobs = append(jobs, ddlExecJob{inst: inst, id: id, domain: domain, dbName: it.DBName, host: dialHost, failMsg: msg})
 			continue
 		}
-		domain := ddlDomainForInstance(it.NeedRollback, id, it.Domain)
 		dbNames := []string{it.DBName}
 		if shardPrefix != "" {
-			host := resolveInstanceHost(inst, domain)
+			host := dialHost
 			if store.NormalizeReviewEngine(inst.DBType) != "postgres" {
 				jobs = append(jobs, ddlExecJob{inst: inst, id: id, domain: domain, dbName: it.DBName, host: host, failMsg: "分库执行仅支持 PostgreSQL"})
 				continue
@@ -1942,7 +1951,7 @@ func (h *TicketHandler) executeDDLTicket(ctx context.Context, it *store.Issue) e
 			plannedDBs += len(dbNames)
 		}
 		for _, dbName := range dbNames {
-			host := resolveInstanceHost(inst, domain)
+			host := dialHost
 			if shardPrefix != "" && ddlDoneSource(prev, id, dbName, stmtN) != nil {
 				jobs = append(jobs, ddlExecJob{inst: inst, id: id, domain: domain, dbName: dbName, host: host, skip: true})
 				skipped = append(skipped, inst.Name+"/"+dbName)
@@ -2224,7 +2233,7 @@ func (h *TicketHandler) executeRedisTicket(ctx context.Context, it *store.Issue)
 		}
 		password = plain
 	}
-	host, err := redisquery.ResolveHost(inst, it.Domain)
+	host, err := h.resolveTicketDialHost(inst, it.Domain)
 	if err != nil {
 		return h.persistExec(it, &ticketexec.Result{Success: false, Message: err.Error()})
 	}

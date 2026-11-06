@@ -548,6 +548,8 @@ type CloudInstance struct {
 	InstanceID   string         `json:"instance_id"`
 	InstanceName string         `json:"instance_name,omitempty"`
 	Reconcile    string         `json:"reconcile"`
+	Intranet     string         `json:"intranet,omitempty"`
+	Port         int            `json:"port,omitempty"`
 	Extras       map[string]any `json:"extras,omitempty"`
 	SyncedAt     string         `json:"synced_at"`
 }
@@ -612,6 +614,41 @@ func (d *DB) ListCloudResources(tenantID, engine, reconcile string) ([]CloudInst
 		if err := rows.Scan(&it.ID, &it.TenantID, &it.Vendor, &it.Engine, &it.AccountID, &it.CloudID, &it.Name, &it.Region, &it.Status, &it.CPU, &it.MemoryMB, &it.DiskGB, &it.DiskUsedGB, &it.Version, &it.Zone, &it.PayType, &it.ExpireAt, &it.InstanceID, &it.Reconcile, &it.SyncedAt); err != nil {
 			return nil, err
 		}
+		out = append(out, it)
+	}
+	return out, rows.Err()
+}
+
+// ListCloudResourcesForPage 云资源页列表。多读原始返回，调用方解析内网地址后应清掉 Extras 再响应。
+func (d *DB) ListCloudResourcesForPage(tenantID, engine, reconcile string) ([]CloudInstance, error) {
+	q := `SELECT id, tenant_id, vendor, COALESCE(engine,'postgres'), account_id, cloud_instance_id, name, region, status, cpu, memory_mb, disk_gb, disk_used_gb, version, zone, pay_type, expire_at, instance_id, reconcile, extras, synced_at FROM tbl_cloud_instances WHERE 1=1`
+	var args []any
+	if tenantID != "" {
+		q += ` AND tenant_id=?`
+		args = append(args, tenantID)
+	}
+	if engine != "" {
+		q += ` AND COALESCE(engine,'postgres')=?`
+		args = append(args, engine)
+	}
+	if reconcile != "" {
+		q += ` AND reconcile=?`
+		args = append(args, reconcile)
+	}
+	q += ` ORDER BY synced_at DESC`
+	rows, err := d.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []CloudInstance
+	for rows.Next() {
+		var it CloudInstance
+		var extra string
+		if err := rows.Scan(&it.ID, &it.TenantID, &it.Vendor, &it.Engine, &it.AccountID, &it.CloudID, &it.Name, &it.Region, &it.Status, &it.CPU, &it.MemoryMB, &it.DiskGB, &it.DiskUsedGB, &it.Version, &it.Zone, &it.PayType, &it.ExpireAt, &it.InstanceID, &it.Reconcile, &extra, &it.SyncedAt); err != nil {
+			return nil, err
+		}
+		it.Extras = decodeAnyMap(extra)
 		out = append(out, it)
 	}
 	return out, rows.Err()

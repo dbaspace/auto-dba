@@ -232,12 +232,14 @@ func (h *CloudHandler) ListPostgres(c *gin.Context) {
 	if engine == "" {
 		engine = cloud.EnginePostgres
 	}
-	list, err := h.Store.ListCloudResources(h.tenant(c), engine, c.Query("reconcile"))
+	list, err := h.Store.ListCloudResourcesForPage(h.tenant(c), engine, c.Query("reconcile"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
 	for i := range list {
+		list[i].Intranet, list[i].Port = cloud.NetFromExtras(list[i].Engine, list[i].Extras)
+		list[i].Extras = nil
 		if acc, _ := h.Store.GetCloudAccount(list[i].AccountID); acc != nil {
 			list[i].AccountName = acc.Name
 		}

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Button, Form, Input, InputNumber, Modal, Select, Space, Table, message } from 'antd'
+import { Button, Form, Input, InputNumber, Modal, Popover, Select, Space, Table, message } from 'antd'
 import { Link } from 'react-router-dom'
 import api from '../../../api/request'
 import Auth from '../../../components/Auth'
@@ -15,6 +15,13 @@ const actions = [
   { value: 'register_platform', label: '同步到平台资源' },
   { value: 'rebind_account', label: '改绑云账号' },
 ]
+
+function intranetLabel(row: { intranet?: string; port?: number }) {
+  const host = String(row.intranet || '').trim()
+  if (!host) return ''
+  const port = Number(row.port || 0)
+  return port > 0 ? `${host}:${port}` : host
+}
 
 const reconcileLabel: Record<string, string> = {
   linked: '已关联',
@@ -128,7 +135,6 @@ export default function CloudPostgres({ engine = 'postgres' }: { engine?: string
     try {
       const { data } = await api.post('/cloud/postgres/sync', { engine, account_ids: accountIds })
       reportSync(data)
-      setSyncOpen(false)
       await load()
     } catch (e: any) {
       message.error(e?.response?.data?.message || '同步失败')
@@ -138,6 +144,7 @@ export default function CloudPostgres({ engine = 'postgres' }: { engine?: string
   }
 
   function clickSync() {
+    if (syncing) return
     const ready = accounts.filter((a) => a.has_readonly)
     if (ready.length === 0) {
       message.warning('没有已登记只读密钥的云账号，请到配置中心 · 云账号登记后再同步')
@@ -149,6 +156,21 @@ export default function CloudPostgres({ engine = 'postgres' }: { engine?: string
     }
     setSyncIds([])
     setSyncOpen(true)
+  }
+
+  function onSyncPopover(next: boolean) {
+    if (syncing) return
+    if (!next) {
+      setSyncOpen(false)
+      return
+    }
+    clickSync()
+  }
+
+  function confirmSync() {
+    const ids = syncIds
+    setSyncOpen(false)
+    void runSync(ids)
   }
 
   async function assignAccount(row: any, accountId: string) {
@@ -255,7 +277,7 @@ export default function CloudPostgres({ engine = 'postgres' }: { engine?: string
   const shown = useMemo(() => {
     const q = keyword.trim().toLowerCase()
     if (!q) return rows
-    return rows.filter((r) => [r.name, r.cloud_instance_id, r.account_name, r.status, r.instance_name, r.region]
+    return rows.filter((r) => [r.name, r.cloud_instance_id, r.account_name, r.status, r.instance_name, r.region, intranetLabel(r)]
       .some((v) => String(v || '').toLowerCase().includes(q)))
   }, [rows, keyword])
 
@@ -266,7 +288,34 @@ export default function CloudPostgres({ engine = 'postgres' }: { engine?: string
     <div style={{ padding: 16 }}>
       <Space style={{ marginBottom: 12 }}>
         <h2 style={{ margin: 0 }}>{title}</h2>
-        <Button loading={syncing} onClick={clickSync}>立即同步</Button>
+        <Popover
+          title="选择要同步的云账号"
+          trigger="click"
+          placement="bottomLeft"
+          open={syncOpen && !syncing}
+          onOpenChange={onSyncPopover}
+          content={
+            <div style={{ width: 320 }}>
+              <Select
+                mode="multiple"
+                style={{ width: '100%' }}
+                placeholder="至少选择一个已登记只读密钥的账号"
+                value={syncIds}
+                onChange={setSyncIds}
+                getPopupContainer={(node) => node.parentElement || document.body}
+                options={accounts.filter((a) => a.has_readonly).map((a) => ({ value: a.id, label: a.name }))}
+              />
+              <div style={{ marginTop: 12, textAlign: 'right' }}>
+                <Space>
+                  <Button size="small" onClick={() => setSyncOpen(false)}>取消</Button>
+                  <Button size="small" type="primary" disabled={syncIds.length === 0} onClick={confirmSync}>确定</Button>
+                </Space>
+              </div>
+            </div>
+          }
+        >
+          <Button loading={syncing}>立即同步</Button>
+        </Popover>
         <Auth urn={Perm.cloud.submit}>
           {(caps.tencent?.create !== false) && <Button type="primary" onClick={() => openAction(null, 'create')}>资源申请</Button>}
         </Auth>
@@ -286,7 +335,7 @@ export default function CloudPostgres({ engine = 'postgres' }: { engine?: string
         <Input
           allowClear
           style={{ width: 280 }}
-          placeholder="搜索名称、云实例、账号、平台实例"
+          placeholder="搜索名称、云实例、账号、平台实例、内网地址"
           value={keyword}
           onChange={(e) => setKeyword(e.target.value)}
         />
@@ -294,7 +343,7 @@ export default function CloudPostgres({ engine = 'postgres' }: { engine?: string
       <Table
         rowKey="id"
         dataSource={shown}
-        scroll={{ x: 1100 }}
+        scroll={{ x: 1300 }}
         pagination={{
           current: page,
           pageSize,
@@ -309,6 +358,7 @@ export default function CloudPostgres({ engine = 'postgres' }: { engine?: string
         columns={[
           { title: '名称', dataIndex: 'name' },
           { title: '云实例', dataIndex: 'cloud_instance_id' },
+          { title: '内网地址', width: 200, render: (_, r) => intranetLabel(r) || '—' },
           { title: '地域', dataIndex: 'region', render: (v) => v || '—' },
           {
             title: '账号',
@@ -355,23 +405,6 @@ export default function CloudPostgres({ engine = 'postgres' }: { engine?: string
           },
         ]}
       />
-      <Modal
-        title="选择要同步的云账号"
-        open={syncOpen}
-        confirmLoading={syncing}
-        okButtonProps={{ disabled: syncIds.length === 0 }}
-        onCancel={() => setSyncOpen(false)}
-        onOk={() => void runSync(syncIds)}
-      >
-        <Select
-          mode="multiple"
-          style={{ width: '100%' }}
-          placeholder="至少选择一个已登记只读密钥的账号"
-          value={syncIds}
-          onChange={setSyncIds}
-          options={accounts.filter((a) => a.has_readonly).map((a) => ({ value: a.id, label: a.name }))}
-        />
-      </Modal>
       <Modal title="提交云变更工单" open={open} onCancel={() => setOpen(false)} onOk={() => form.submit()} width={720}>
         <Form form={form} layout="vertical" onFinish={async (v) => {
           if (v.action === 'scale_disk' && Number(v.disk_gb) <= Number(v.before_disk_gb || 0)) {

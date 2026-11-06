@@ -523,6 +523,7 @@ export default function DdlOrder() {
         db_type: f.instance_type,
         instance_id: primary.instance_id || '',
         db_name: f.db_name,
+        domain: primary.domain || '',
       })
       const parsed = Number(data.statement_count)
       const n = Number.isFinite(parsed) && parsed > 0 ? parsed : (data.statements || []).length
