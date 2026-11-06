@@ -781,6 +781,12 @@ func (d *DB) resourceOwnerTenantID(resourceType, resourceID string) (string, err
 			return "", err
 		}
 		return strings.TrimSpace(it.TenantID), nil
+	case "connector":
+		it, err := d.GetConnector(resourceID)
+		if err != nil || it == nil {
+			return "", err
+		}
+		return strings.TrimSpace(it.TenantID), nil
 	default:
 		return "", nil
 	}

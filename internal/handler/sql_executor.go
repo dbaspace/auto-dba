@@ -1,9 +1,11 @@
 package handler
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -309,6 +311,68 @@ func (h *SQLExecutorHandler) stopDeployed(dep *store.BackupAgentDeploy) error {
 		escalate = sqlexec.DetectSystemdEscalate(h.Store, h.sqlSSHStopOpts(dep.HostInstanceID, "", 0, ""))
 	}
 	return sqlexec.StopRemote(h.Store, h.sqlSSHStopOpts(dep.HostInstanceID, dep.RemoteDir, dep.ListenPort, escalate))
+}
+
+type sqlRuntimeStatus struct {
+	ID      string `json:"id"`
+	Status  string `json:"status"`
+	Message string `json:"message,omitempty"`
+	BaseURL string `json:"base_url,omitempty"`
+}
+
+// ListStatus GET /platform/agents/sql-executors/status — 批量探活，不改启用状态。
+func (h *SQLExecutorHandler) ListStatus(c *gin.Context) {
+	list, err := h.Store.ListSQLExecutors()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	parent, cancel := context.WithTimeout(c.Request.Context(), 12*time.Second)
+	defer cancel()
+	ch := make(chan sqlRuntimeStatus, len(list))
+	for i := range list {
+		row := list[i]
+		go func(e store.SQLExecutor) {
+			ch <- h.probeSQLStatus(parent, &e)
+		}(row)
+	}
+	out := make([]sqlRuntimeStatus, 0, len(list))
+	for range list {
+		out = append(out, <-ch)
+	}
+	c.JSON(http.StatusOK, gin.H{"data": out})
+}
+
+func (h *SQLExecutorHandler) probeSQLStatus(ctx context.Context, e *store.SQLExecutor) sqlRuntimeStatus {
+	out := sqlRuntimeStatus{Status: "unknown"}
+	if e == nil || strings.TrimSpace(e.BaseURL) == "" {
+		if e != nil {
+			out.ID = e.ID
+		}
+		out.Message = "无地址"
+		return out
+	}
+	out.ID = e.ID
+	out.BaseURL = e.BaseURL
+	pass := ""
+	if e.PasswordEnc != "" && h != nil && h.Secret != "" {
+		dec, err := secret.Decrypt(h.Secret, e.PasswordEnc)
+		if err != nil {
+			out.Message = "账号密码不对"
+			return out
+		}
+		pass = dec
+	}
+	pctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	if err := sqlexec.Probe(pctx, e.BaseURL, e.Username, pass); err != nil {
+		out.Status = "stopped"
+		out.Message = err.Error()
+		return out
+	}
+	out.Status = "running"
+	out.Message = "healthz ok"
+	return out
 }
 
 func (h *SQLExecutorHandler) Probe(c *gin.Context) {

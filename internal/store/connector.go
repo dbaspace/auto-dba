@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -55,9 +56,91 @@ func (d *DB) ListConnectorsInTenant(tenantID, env string) ([]Connector, error) {
 		if err != nil {
 			return nil, err
 		}
+		if err := d.fillConnectorTenant(it); err != nil {
+			return nil, err
+		}
 		out = append(out, *it)
 	}
 	return out, rows.Err()
+}
+
+// ListGrantedConnectors 授权给当前租户或用户、且授权方仍是连接器主人的连接器。
+func (d *DB) ListGrantedConnectors(toTenantID, toUserID, env string) ([]Connector, error) {
+	gs, err := d.ListTenantGrantsTo(toTenantID, toUserID)
+	if err != nil {
+		return nil, err
+	}
+	env = strings.TrimSpace(env)
+	var out []Connector
+	seen := map[string]struct{}{}
+	for _, g := range gs {
+		if g.ResourceType != "connector" {
+			continue
+		}
+		if _, ok := seen[g.ResourceID]; ok {
+			continue
+		}
+		it, err := d.GetConnector(g.ResourceID)
+		if err != nil || it == nil {
+			continue
+		}
+		if strings.TrimSpace(g.FromTenantID) != strings.TrimSpace(it.TenantID) {
+			continue
+		}
+		if env != "" && it.Env != env {
+			continue
+		}
+		seen[it.ID] = struct{}{}
+		out = append(out, *it)
+	}
+	return out, nil
+}
+
+// VisibleConnector 本租连接器，或授权给当前租户/用户的连接器。auditAll 时按 id 直接取。
+func (d *DB) VisibleConnector(id, tenantID, userID string, auditAll bool) (*Connector, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil, nil
+	}
+	if auditAll {
+		return d.GetConnector(id)
+	}
+	it, err := d.GetConnectorInTenant(id, tenantID)
+	if err != nil || it != nil {
+		return it, err
+	}
+	ok, err := d.HasResourceGrant(tenantID, userID, "connector", id)
+	if err != nil || !ok {
+		return nil, err
+	}
+	return d.GetConnector(id)
+}
+
+// AssignConnectorTenant 只改连接器归属，不连带 Kafka 实例。已属于目标租户视为成功。
+func (d *DB) AssignConnectorTenant(id, toTenantID string) error {
+	id = strings.TrimSpace(id)
+	toTenantID = strings.TrimSpace(toTenantID)
+	if id == "" || toTenantID == "" {
+		return fmt.Errorf("连接器与目标租户必填")
+	}
+	t, err := d.GetTenant(toTenantID)
+	if err != nil {
+		return err
+	}
+	if t == nil || t.Status != TenantStatusActive {
+		return fmt.Errorf("目标租户不存在或已停用")
+	}
+	it, err := d.GetConnector(id)
+	if err != nil {
+		return err
+	}
+	if it == nil {
+		return fmt.Errorf("连接器不存在")
+	}
+	if strings.TrimSpace(it.TenantID) == toTenantID {
+		return nil
+	}
+	return d.AssignTenantID("tbl_connectors", id, toTenantID)
 }
 
 func (d *DB) GetConnector(id string) (*Connector, error) {
@@ -65,7 +148,29 @@ func (d *DB) GetConnector(id string) (*Connector, error) {
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
-	return it, err
+	if err != nil || it == nil {
+		return it, err
+	}
+	if err := d.fillConnectorTenant(it); err != nil {
+		return nil, err
+	}
+	return it, nil
+}
+
+func (d *DB) fillConnectorTenant(it *Connector) error {
+	if it == nil || strings.TrimSpace(it.ID) == "" {
+		return nil
+	}
+	var tid sql.NullString
+	err := d.QueryRow(`SELECT COALESCE(tenant_id,'') FROM tbl_connectors WHERE id=?`, it.ID).Scan(&tid)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	it.TenantID = strings.TrimSpace(tid.String)
+	return nil
 }
 
 func (d *DB) GetConnectorInTenant(id, tenantID string) (*Connector, error) {

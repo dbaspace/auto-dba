@@ -551,7 +551,6 @@ func (h *CDCHandler) Create(c *gin.Context) {
 }
 
 func (h *CDCHandler) prepareCDCCreate(c *gin.Context, t *store.CDCTask) error {
-	tid := middleware.TenantID(c)
 	if t.TaskType == "" {
 		t.TaskType = "init"
 	}
@@ -627,7 +626,7 @@ func (h *CDCHandler) prepareCDCCreate(c *gin.Context, t *store.CDCTask) error {
 		extraAny["connector_name"] = n.ConnectorName
 		extraAny["topic_prefix"] = n.TopicPrefix
 		if id := extraMap["connector_id"]; id != "" {
-			conn, _ := h.Store.GetConnectorInTenant(id, tid)
+			conn, _ := h.Store.VisibleConnector(id, middleware.TenantID(c), middleware.UserID(c), platformAdminAuditing(h.Store, c))
 			if conn == nil {
 				return fmt.Errorf("Debezium 服务不存在：%s", id)
 			}

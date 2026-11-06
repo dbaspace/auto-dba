@@ -185,8 +185,8 @@ type reinitCandidates struct {
 	tasks            map[string]*store.CDCTask
 }
 
-func (h *CDCHandler) collectReinitCandidates(ctx context.Context, tenantID, connectorID string) (*reinitCandidates, error) {
-	conn, err := h.Store.GetConnectorInTenant(connectorID, tenantID)
+func (h *CDCHandler) collectReinitCandidates(ctx context.Context, c *gin.Context, connectorID string) (*reinitCandidates, error) {
+	conn, err := h.Store.VisibleConnector(connectorID, middleware.TenantID(c), middleware.UserID(c), platformAdminAuditing(h.Store, c))
 	if err != nil || conn == nil {
 		return nil, fmt.Errorf("Debezium 服务不存在：%s", connectorID)
 	}
@@ -207,7 +207,7 @@ func (h *CDCHandler) collectReinitCandidates(ctx context.Context, tenantID, conn
 			out.ConnectReachable = true
 		}
 	}
-	list, err := h.Store.ListCDCInTenant(tenantID, "", "init")
+	list, err := h.Store.ListCDCInTenant(middleware.TenantID(c), "", "init")
 	if err != nil {
 		return nil, err
 	}
@@ -266,7 +266,7 @@ func (h *CDCHandler) ReinitCandidates(c *gin.Context) {
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
-	out, err := h.collectReinitCandidates(ctx, middleware.TenantID(c), id)
+	out, err := h.collectReinitCandidates(ctx, c, id)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
@@ -302,7 +302,7 @@ func (h *CDCHandler) ReinitBatch(c *gin.Context) {
 	taskIDs = uniqueNonEmpty(taskIDs)
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
 	defer cancel()
-	cands, err := h.collectReinitCandidates(ctx, middleware.TenantID(c), connectorID)
+	cands, err := h.collectReinitCandidates(ctx, c, connectorID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return

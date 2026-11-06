@@ -138,6 +138,7 @@ type GlobalArg struct {
 type Connector struct {
 	ID                string `json:"id"`
 	TenantID          string `json:"tenant_id,omitempty"`
+	TenantName        string `json:"tenant_name,omitempty"`
 	DBZHost           string `json:"dbz_host"`
 	Env               string `json:"env"`
 	KafkaHost         string `json:"kafka_host"`

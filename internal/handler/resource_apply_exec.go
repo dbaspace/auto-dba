@@ -65,7 +65,7 @@ func (h *ResourceApplyHandler) applyACL(item ResourceApplyItem, username string)
 			return "", err
 		}
 		return "已写入主机 access_users", nil
-	case raTypeDomain, raTypeSrCluster, raTypeDbDeployCluster:
+	case raTypeDomain, raTypeSrCluster, raTypeDbDeployCluster, raTypeConnector:
 		return "同租资源已可见，仅记账", nil
 	default:
 		return "", fmt.Errorf("ACL 不支持类型 %s", item.ResourceType)
@@ -131,6 +131,11 @@ func (h *ResourceApplyHandler) applyAssign(item ResourceApplyItem, toTenantID st
 			return "", err
 		}
 		return "已划拨部署集群到申请租户", nil
+	case raTypeConnector:
+		if err := h.Store.AssignConnectorTenant(item.ResourceID, toTenantID); err != nil {
+			return "", err
+		}
+		return "已划拨连接器到申请租户", nil
 	default:
 		return "", fmt.Errorf("划拨不支持类型 %s", item.ResourceType)
 	}

@@ -56,7 +56,8 @@ import {
   instEnv,
   instVisibleInEnv,
   cdcInstLabel,
-  pickGrantedDomain,
+  cdcDomainOptionLabel,
+  cdcSourceDomainRows,
   type ShardGroup,
   matchInstanceByEndpoint,
   keyModelLabel,
@@ -78,6 +79,7 @@ import {
   validateAddTableParents,
   validatePartitionColumnsForMappings,
 } from './cdc'
+import { parseSourceKey, sourcesFromAccessDomains, type AccessDomainRow } from '../../utils/instanceSource'
 import type { BatchAvailableTables, BatchParentTableRef } from './cdc'
 import {
   ADD_STEPS,
@@ -248,6 +250,7 @@ export default function CdcCreate() {
   const [debeziumPreview, setDebeziumPreview] = useState<any>(null)
   const [, setDebeziumPreviewError] = useState('')
   const [instances, setInstances] = useState<any[]>([])
+  const [accessDomains, setAccessDomains] = useState<AccessDomainRow[]>([])
   const [envOptions, setEnvOptions] = useState<{ value: string; label: string }[]>([])
   const [envLoading, setEnvLoading] = useState(true)
   const envFromCatalog = useRef(false)
@@ -502,19 +505,22 @@ export default function CdcCreate() {
     return parentCandidates.some((t) => selectedParentIdSet.has(t.id)) && !filteredParentsAllSelected
   }, [parentCandidates, selectedParentIdSet, filteredParentsAllSelected])
 
-  const sourceInstances = useMemo(() => {
-    const eng = form.source_engine === 'mysql' ? 'mysql' : 'postgres'
-    return instances.filter((i) => {
-      if (eng === 'mysql') {
-        if (!(matchType(i.db_type, 'mysql') || matchType(i.db_type, 'tidb') || matchType(i.db_type, 'oceanbase') || matchType(i.db_type, 'mariadb'))) {
-          return false
-        }
-      } else if (!matchType(i.db_type, 'postgres')) {
-        return false
+  const sourceDomainOptions = useMemo(() => {
+    const rows = cdcSourceDomainRows(accessDomains, form.env, form.source_engine)
+    return sourcesFromAccessDomains(rows).map((s) => {
+      const inst = instances.find((i) => String(i.id) === s.instance_id)
+      return {
+        ...s,
+        label: cdcDomainOptionLabel(s.domain, Number(inst?.port || 0), s.name),
       }
-      return instVisibleInEnv(i, form.env)
     })
-  }, [instances, form.env, form.source_engine])
+  }, [accessDomains, instances, form.env, form.source_engine])
+  const selectedSourceKey = useMemo(() => {
+    const id = String(form.source_instance_id || '')
+    const host = String(form.source_host || '').trim().toLowerCase()
+    if (!id || !host) return undefined
+    return sourceDomainOptions.find((s) => s.instance_id === id && s.domain.toLowerCase() === host)?.key
+  }, [sourceDomainOptions, form.source_instance_id, form.source_host])
   const targetInstances = useMemo(() => {
     const list = instances.filter(
       (i) => matchType(i.db_type, 'starrocks') && instVisibleInEnv(i, form.env),
@@ -856,13 +862,6 @@ export default function CdcCreate() {
   }
 
   // ---- 环境/实例/库/表加载 ----
-  function grantedSourcePatch(instId: string, env: string) {
-    const inst = instancesRef.current.find((i) => String(i.id) === instId)
-    const d = pickGrantedDomain(inst, env)
-    if (!d) return { source_host: '', source_port: 0 }
-    return { source_host: d.domain, source_port: d.port > 0 ? d.port : Number(inst?.port || 0) }
-  }
-
   async function reloadCDCInstances(env?: string) {
     const params: Record<string, string> = {}
     const envVal = String(env ?? formRef.current.env ?? '').trim()
@@ -892,10 +891,20 @@ export default function CdcCreate() {
   }
 
   async function onSourceInstChange(v: string) {
-    patchForm({ source_instance_id: v, source_db: '', tables: [], ...grantedSourcePatch(v, formRef.current.env) })
+    const parsed = parseSourceKey(v)
+    const instId = parsed?.instance_id || ''
+    const domain = parsed?.domain || ''
+    const inst = instancesRef.current.find((i) => String(i.id) === instId)
+    patchForm({
+      source_instance_id: instId,
+      source_db: '',
+      tables: [],
+      source_host: domain,
+      source_port: Number(inst?.port || 0),
+    })
     setTables([])
     setMappings([])
-    await loadSourceDbs(v)
+    await loadSourceDbs(instId)
   }
 
   function onSourceDbChange(v: string) {
@@ -1986,7 +1995,7 @@ export default function CdcCreate() {
     const type = String(searchParams.get('type') || 'init')
     resetMode(type)
     void (async () => {
-      const [instRes, connRes, taskRes, argRes, reviewerRes] = await Promise.all([
+      const [instRes, connRes, taskRes, argRes, reviewerRes, domainRes] = await Promise.all([
         api.get('/cdc-sync/instances', { params: formRef.current.env ? { env: formRef.current.env } : {} }).catch(() => api.get('/instances')),
         api.get('/connectors').catch(() => ({ data: { data: [] } })),
         api
@@ -1994,11 +2003,14 @@ export default function CdcCreate() {
           .catch(() => api.get('/cdc-sync/tasks', { params: { task_type: 'init' } })),
         api.get('/global-args').catch(() => ({ data: { data: [] } })),
         api.get('/cdc-sync/reviewers').catch(() => ({ data: { data: [] } })),
+        api.get('/access-domains').catch(() => ({ data: { data: [] } })),
       ])
       const loadedInstances = instRes.data.data || []
       instancesReady.current = true
       setInstances(loadedInstances)
       instancesRef.current = loadedInstances
+      const loadedDomains: AccessDomainRow[] = domainRes.data.data || []
+      setAccessDomains(loadedDomains)
       setConnectors(connRes.data.data || [])
       const inits = (taskRes.data.data || []).filter((t: any) => t.task_type === 'init')
       setParentTasks(inits)
@@ -2025,9 +2037,16 @@ export default function CdcCreate() {
 
       if (formRef.current.task_type !== 'init') return
       if (!restoreDraft()) return
-      if (formRef.current.source_instance_id && !String(formRef.current.source_host || '').trim()) {
-        const hostPatch = grantedSourcePatch(formRef.current.source_instance_id, formRef.current.env)
-        if (hostPatch.source_host) patchForm(hostPatch)
+      const savedID = String(formRef.current.source_instance_id || '')
+      const savedHost = String(formRef.current.source_host || '').trim().toLowerCase()
+      const domainHit =
+        savedID &&
+        savedHost &&
+        sourcesFromAccessDomains(
+          cdcSourceDomainRows(loadedDomains, formRef.current.env, formRef.current.source_engine),
+        ).some((s) => s.instance_id === savedID && s.domain.toLowerCase() === savedHost)
+      if (savedID && !domainHit) {
+        patchForm({ source_instance_id: '', source_host: '', source_port: 0, source_db: '', tables: [] })
       }
       if (formRef.current.source_instance_id) await loadSourceDbs()
       if (formRef.current.source_instance_id && formRef.current.source_db) await loadTables()
@@ -2123,6 +2142,8 @@ export default function CdcCreate() {
                       patchForm({
                         source_engine: v,
                         source_instance_id: '',
+                        source_host: '',
+                        source_port: 0,
                         source_db: '',
                         source_schema: v === 'mysql' ? '' : 'public',
                         mysql_server_id: form.mysql_server_id || '5400',
@@ -2155,16 +2176,20 @@ export default function CdcCreate() {
                     placeholder={
                       form.env
                         ? form.source_engine === 'mysql'
-                          ? '搜索 / 选择 MySQL 实例'
-                          : '搜索 / 选择 PG 实例'
+                          ? '搜索 / 选择 MySQL 域名'
+                          : '搜索 / 选择 PG 域名'
                         : '请先选择环境'
                     }
                     style={{ width: '100%' }}
-                    value={form.source_instance_id || undefined}
+                    value={selectedSourceKey}
                     onChange={onSourceInstChange}
                     optionFilterProp="label"
-                    options={sourceInstances.map((i) => ({ value: String(i.id), label: cdcInstLabel(i, form.env) }))}
+                    options={sourceDomainOptions.map((s) => ({ value: s.key, label: s.label }))}
+                    notFoundContent={form.env ? '当前环境在域名管理里没有对应域名' : '请先选择环境'}
                   />
+                  {form.env && !sourceDomainOptions.length ? (
+                    <div className="form-extra">请先到「资源配置 / 域名管理」同步或划拨当前环境的域名。</div>
+                  ) : null}
                 </Form.Item>
                 <Form.Item label="同步范围">
                   <Radio.Group
@@ -2436,7 +2461,7 @@ export default function CdcCreate() {
                   )}
                 />
                 {form.env && !filteredConnectors.length && (
-                  <div className="form-extra warn">当前环境暂无匹配集群，请先在「配置 → 连接器」维护。</div>
+                  <div className="form-extra warn">当前环境暂无匹配集群。请先在「配置 → 连接器」维护，或让所属租户授权该连接器。</div>
                 )}
               </Form.Item>
               {selectedConnector &&

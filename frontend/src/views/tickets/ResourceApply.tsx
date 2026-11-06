@@ -7,7 +7,7 @@ import { useAppDispatch, useAppSelector } from '../../store'
 import { goTicketListAndClose } from './goTicketList'
 import './ResourceApply.css'
 
-type ResourceType = 'database' | 'domain' | 'host' | 'sr_cluster' | 'db_deploy_cluster'
+type ResourceType = 'database' | 'domain' | 'host' | 'sr_cluster' | 'db_deploy_cluster' | 'connector'
 type ApplyIntent = 'visibility' | 'approver'
 
 interface Candidate {
@@ -40,6 +40,7 @@ const ACTION_LABEL: Record<string, string> = {
 const TYPE_LABEL: Record<string, string> = {
   database: '已登记库',
   domain: '访问域名',
+  connector: '连接器',
   host: '主机',
   sr_cluster: 'StarRocks 集群',
   db_deploy_cluster: '部署集群',
@@ -135,7 +136,7 @@ export default function ResourceApply() {
     if (isApproverIntent) return ['database']
     if (form.category === 'host') return ['host']
     if (form.category === 'cluster') return ['sr_cluster', 'db_deploy_cluster']
-    return ['database', 'domain']
+    return ['database', 'domain', 'connector']
   }, [form.category, isApproverIntent])
 
   useEffect(() => {

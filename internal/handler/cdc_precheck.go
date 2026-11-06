@@ -12,6 +12,7 @@ import (
 
 	"auto-dba/internal/cdc"
 	"auto-dba/internal/dbmig"
+	"auto-dba/internal/middleware"
 	"auto-dba/internal/store"
 )
 
@@ -226,7 +227,7 @@ func (h *CDCHandler) Precheck(c *gin.Context) {
 	connHost, dbzHost, schemaMode := "", "", ""
 	if connID == "" {
 		add(cdcPrecheckItem{Code: "connector", Name: "Debezium 集群", Level: "required", Status: "failed", Message: "未选择 Debezium 集群"})
-	} else if conn, _ := h.Store.GetConnectorInTenant(connID, effectiveListTenantID(h.Store, c)); conn == nil {
+	} else if conn, _ := h.Store.VisibleConnector(connID, middleware.TenantID(c), middleware.UserID(c), platformAdminAuditing(h.Store, c)); conn == nil {
 		add(cdcPrecheckItem{Code: "connector", Name: "Debezium 集群", Level: "required", Status: "failed", Message: "连接器未登记"})
 	} else {
 		connHost, dbzHost, schemaMode = conn.KafkaHost, conn.DBZHost, conn.MessageSchemaMode

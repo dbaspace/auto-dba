@@ -55,6 +55,7 @@ export default function PlatformAgent() {
   const [envOptions, setEnvOptions] = useState<{ value: string; label: string }[]>([])
   const [sqlOpen, setSqlOpen] = useState(false)
   const [agentStatus, setAgentStatus] = useState<Record<string, string>>({})
+  const [sqlStatus, setSqlStatus] = useState<Record<string, string>>({})
   const [actingId, setActingId] = useState('')
   const [loading, setLoading] = useState(false)
   const [agOpen, setAgOpen] = useState(false)
@@ -106,18 +107,41 @@ export default function PlatformAgent() {
       api.get('/platform/agents/sql-executors').catch(() => ({ data: { data: [] } })),
       api.get('/environments').catch(() => ({ data: { data: [] } })),
     ])
-    setSqlExecs(sqlList.data.data || [])
+    const execs = sqlList.data.data || []
+    setSqlExecs(execs)
     setEnvOptions(
       (envRes.data.data || []).map((e: any) => ({
         value: e.code,
         label: e.name ? `${e.name}（${e.code}）` : e.code,
       })),
     )
+    return execs
   }
 
   async function loadDeploys() {
-    const [list] = await Promise.all([refreshDeployList(), loadFormCatalog()])
-    return list
+    const [, execs] = await Promise.all([refreshDeployList(), loadFormCatalog()])
+    return execs as any[]
+  }
+
+  async function refreshSqlStatus(list?: any[]) {
+    const rows = list || sqlExecs
+    if (!rows.length) {
+      setSqlStatus({})
+      return
+    }
+    const checking: Record<string, string> = {}
+    for (const r of rows) checking[r.id] = 'checking'
+    setSqlStatus((prev) => ({ ...prev, ...checking }))
+    try {
+      const { data } = await api.get('/platform/agents/sql-executors/status')
+      const map: Record<string, string> = {}
+      for (const it of data.data || []) map[it.id] = it.status || 'unknown'
+      setSqlStatus(map)
+    } catch {
+      const fail: Record<string, string> = {}
+      for (const r of rows) fail[r.id] = 'unknown'
+      setSqlStatus(fail)
+    }
   }
 
   async function refreshAgentStatus(list?: any[]) {
@@ -157,8 +181,8 @@ export default function PlatformAgent() {
         const t = String(it.db_type || '').toLowerCase()
         return t === 'host' || t === 'os' || t === '主机'
       }))
-      await loadDeploys()
-      await refreshAgentStatus(agentList)
+      const execs = await loadDeploys()
+      await Promise.all([refreshAgentStatus(agentList), refreshSqlStatus(execs)])
     } finally {
       setLoading(false)
     }
@@ -372,7 +396,9 @@ export default function PlatformAgent() {
         try {
           await api.post(`/platform/agents/sql-executors/${row.id}/stop`)
           message.success('已停止并禁用')
+          setSqlStatus((prev) => ({ ...prev, [row.id]: 'stopped' }))
           await loadDeploys()
+          await refreshSqlStatus()
         } catch (e: any) {
           message.error(e?.response?.data?.message || '停止失败')
         } finally {
@@ -638,7 +664,7 @@ export default function PlatformAgent() {
           平台级执行面：定义时勾选归属（备份 / Redis RDB / 高可用 / K8s 反向隧道），业务模块按归属引用。
         </span>
         <Space>
-          <Button onClick={() => refreshAgentStatus()}>刷新状态</Button>
+          <Button onClick={() => { void refreshAgentStatus(); void refreshSqlStatus() }}>刷新状态</Button>
           <Button
             onClick={() => {
               depForm.resetFields()
@@ -674,21 +700,24 @@ export default function PlatformAgent() {
       <div className="backup-toolbar" style={{ marginTop: 24 }}>
         <h3>SQL 执行器</h3>
         <span className="backup-hint">独立进程，默认端口 8093。下发成功后按所选环境登记，工单按实例环境发到这里。不并进上面的备份 / 高可用 Agent。</span>
-        <Button
-          onClick={() => {
-            sqlForm.resetFields()
-            sqlForm.setFieldsValue({
-              listen_port: 8093,
-              remote_dir: '',
-              escalate: false,
-              env_codes: [],
-            })
-            void loadFormCatalog().catch(() => {})
-            setSqlOpen(true)
-          }}
-        >
-          下发到主机
-        </Button>
+        <Space>
+          <Button onClick={() => void refreshSqlStatus()}>刷新状态</Button>
+          <Button
+            onClick={() => {
+              sqlForm.resetFields()
+              sqlForm.setFieldsValue({
+                listen_port: 8093,
+                remote_dir: '',
+                escalate: false,
+                env_codes: [],
+              })
+              void loadFormCatalog().catch(() => {})
+              setSqlOpen(true)
+            }}
+          >
+            下发到主机
+          </Button>
+        </Space>
       </div>
       <ResponsiveTable
         rowKey="id"
@@ -698,6 +727,11 @@ export default function PlatformAgent() {
         columns={[
           { title: '名称', dataIndex: 'name' },
           { title: '地址', dataIndex: 'base_url' },
+          {
+            title: '运行状态',
+            width: 100,
+            render: (_, row) => runtimeTag(sqlStatus[row.id]),
+          },
           {
             title: '绑定环境',
             render: (_, row) =>

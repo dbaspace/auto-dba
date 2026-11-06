@@ -7,6 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"auto-dba/internal/cdc"
+	"auto-dba/internal/middleware"
 	"auto-dba/internal/store"
 )
 
@@ -15,7 +16,9 @@ type ConnectorHandler struct {
 }
 
 func (h *ConnectorHandler) List(c *gin.Context) {
-	list, err := h.Store.ListConnectorsInTenant(effectiveListTenantID(h.Store, c), c.Query("env"))
+	env := c.Query("env")
+	scope := effectiveListTenantID(h.Store, c)
+	list, err := h.Store.ListConnectorsInTenant(scope, env)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -23,10 +26,44 @@ func (h *ConnectorHandler) List(c *gin.Context) {
 	if list == nil {
 		list = []store.Connector{}
 	}
+	if scope != "" {
+		extra, gerr := h.Store.ListGrantedConnectors(middleware.TenantID(c), middleware.UserID(c), env)
+		if gerr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": gerr.Error()})
+			return
+		}
+		seen := map[string]struct{}{}
+		for i := range list {
+			seen[list[i].ID] = struct{}{}
+		}
+		for _, it := range extra {
+			if _, ok := seen[it.ID]; ok {
+				continue
+			}
+			list = append(list, it)
+		}
+	}
+	h.enrichConnectorTenants(list)
 	for i := range list {
 		list[i].KafkaHost = cdc.NormalizeKafkaBootstrap(list[i].KafkaHost)
 	}
 	c.JSON(http.StatusOK, gin.H{"data": list})
+}
+
+func (h *ConnectorHandler) enrichConnectorTenants(list []store.Connector) {
+	names := map[string]string{}
+	if tenants, err := h.Store.ListTenants(); err == nil {
+		for _, t := range tenants {
+			name := strings.TrimSpace(t.Name)
+			if name == "" {
+				name = t.Code
+			}
+			names[t.ID] = name
+		}
+	}
+	for i := range list {
+		list[i].TenantName = names[list[i].TenantID]
+	}
 }
 
 func (h *ConnectorHandler) Get(c *gin.Context) {
@@ -118,4 +155,67 @@ func (h *ConnectorHandler) Delete(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// AssignTenantBatch POST /connectors/assign-tenant — 批量把连接器划到目标租户。
+func (h *ConnectorHandler) AssignTenantBatch(c *gin.Context) {
+	if !platformAdminAuditing(h.Store, c) {
+		c.JSON(http.StatusForbidden, gin.H{"message": "仅平台管理员在租户模式下可划拨资源"})
+		return
+	}
+	var req struct {
+		TenantID string   `json:"tenant_id"`
+		IDs      []string `json:"ids"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "参数无效"})
+		return
+	}
+	to := strings.TrimSpace(req.TenantID)
+	if to == "" {
+		to = middleware.TenantID(c)
+	}
+	if to == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "目标租户必填"})
+		return
+	}
+	seen := map[string]bool{}
+	ids := make([]string, 0, len(req.IDs))
+	for _, id := range req.IDs {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "ids 必填"})
+		return
+	}
+	type failItem struct {
+		ID      string `json:"id"`
+		DBZHost string `json:"dbz_host,omitempty"`
+		Message string `json:"message"`
+	}
+	okCount := 0
+	failed := make([]failItem, 0)
+	actor := middleware.UserID(c)
+	for _, id := range ids {
+		host := ""
+		if it, _ := h.Store.GetConnector(id); it != nil {
+			host = it.DBZHost
+		}
+		if err := h.Store.AssignConnectorTenant(id, to); err != nil {
+			failed = append(failed, failItem{ID: id, DBZHost: host, Message: err.Error()})
+			continue
+		}
+		okCount++
+		_ = h.Store.AppendTenantAudit(to, actor, "resource.assign", "connector:"+id)
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"ok_count":   okCount,
+		"fail_count": len(failed),
+		"failed":     failed,
+	})
 }

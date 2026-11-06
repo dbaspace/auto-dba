@@ -79,7 +79,8 @@ const GRANT_TYPES = [
   { value: 'database', label: '已登记库' },
   { value: 'domain', label: '域名' },
   { value: 'sr_cluster', label: 'SR集群' },
-  { value: 'db_deploy_cluster', label: '部署集群' },
+	{ value: 'db_deploy_cluster', label: '部署集群' },
+	{ value: 'connector', label: '连接器' },
 ]
 
 export default function Tenants() {

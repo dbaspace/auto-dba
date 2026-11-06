@@ -212,6 +212,9 @@ export default function Instances() {
   const [cloudSyncing, setCloudSyncing] = useState(false)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [deleting, setDeleting] = useState(false)
+  const [grantOpen, setGrantOpen] = useState(false)
+  const [grantTid, setGrantTid] = useState('')
+  const [granting, setGranting] = useState(false)
 
   const dbTypeKey = typeKey(form.db_type)
   const hostType = isHostType(form.db_type)
@@ -648,6 +651,83 @@ export default function Instances() {
     }
   }
 
+  function openKafkaGrant() {
+    const picked = rows.filter((r) => r.id && selectedIds.includes(r.id) && typeKey(r.db_type) === 'kafka')
+    if (!picked.length) {
+      message.warning('请先勾选 Kafka 实例')
+      return
+    }
+    setGrantTid(currentTenantId)
+    setGrantOpen(true)
+  }
+
+  async function confirmKafkaGrant() {
+    const picked = rows.filter((r) => r.id && selectedIds.includes(r.id) && typeKey(r.db_type) === 'kafka')
+    if (!picked.length || !grantTid) {
+      message.warning('请选择目标租户')
+      return
+    }
+    const groups = new Map<string, InstanceRow[]>()
+    const failed: { id: string; name: string; message: string }[] = []
+    for (const row of picked) {
+      const from = String(row.tenant_id || '').trim()
+      const id = String(row.id || '')
+      if (!from) {
+        failed.push({ id, name: row.name || id, message: '缺少所属租户' })
+        continue
+      }
+      if (from === grantTid) {
+        failed.push({ id, name: row.name || id, message: '目标租户与所属租户相同，未授权' })
+        continue
+      }
+      const list = groups.get(from) || []
+      list.push(row)
+      groups.set(from, list)
+    }
+    setGranting(true)
+    let ok = 0
+    try {
+      for (const [from, list] of groups) {
+        const { data } = await api.post(`/tenants/${from}/grants/batch`, {
+          resource_type: 'instance',
+          resource_ids: list.map((r) => r.id),
+          to_tenant_id: grantTid,
+          permission: 'read',
+        })
+        const bad = new Map((data.failed || []).map((f: { id?: string; message?: string }) => [String(f.id || ''), f.message || '授权失败']))
+        for (const row of list) {
+          const id = String(row.id || '')
+          if (bad.has(id)) {
+            failed.push({ id, name: row.name || id, message: String(bad.get(id) || '授权失败') })
+          } else {
+            ok++
+          }
+        }
+      }
+      const failedIds = new Set(failed.map((f) => f.id))
+      setSelectedIds((prev) => prev.filter((id) => failedIds.has(id)))
+      if (failed.length) {
+        Modal.error({
+          title: ok ? `已授权 ${ok} 条，失败 ${failed.length} 条` : '授权失败',
+          content: (
+            <ul style={{ margin: 0, paddingLeft: 18, maxHeight: 240, overflow: 'auto' }}>
+              {failed.map((f) => (
+                <li key={f.id}>{f.name}：{f.message}</li>
+              ))}
+            </ul>
+          ),
+        })
+      } else {
+        message.success(`已授权 ${ok} 条`)
+        setGrantOpen(false)
+      }
+    } catch (e: any) {
+      message.error(e?.response?.data?.message || '授权失败')
+    } finally {
+      setGranting(false)
+    }
+  }
+
   function removeSelected() {
     const picked = rows.filter((r) => r.id && selectedIds.includes(r.id))
     if (!picked.length) return
@@ -783,6 +863,13 @@ export default function Instances() {
               批量删除
             </Button>
           </Auth>
+          {impersonating && typeKey(activeType) === 'kafka' ? (
+            <Auth urn={Perm.tenants.grants}>
+              <Button disabled={!selectedIds.length} loading={granting} onClick={openKafkaGrant}>
+                批量授权
+              </Button>
+            </Auth>
+          ) : null}
           {isHostType(activeType) ? (
             <Auth urn={Perm.instances.create}>
               <Button loading={syncingHosts} onClick={() => void syncHostsFromMonitor()}>
@@ -794,7 +881,9 @@ export default function Instances() {
       </div>
       {impersonating ? (
         <div className="type-hint" style={{ margin: '0 0 8px', color: 'var(--ant-color-text-secondary, #666)' }}>
-          租户模式：列表含全平台实例。可用「指定租户」将实例（及下属已登记库/账号）划到目标租户；当前工作租户为「{currentTenantLabel}」。
+          {typeKey(activeType) === 'kafka'
+            ? '租户模式：Kafka 用「批量授权」给其它租户只读使用，不改变所属租户。'
+            : `租户模式：列表含全平台实例。可用「指定租户」将实例（及下属已登记库/账号）划到目标租户；当前工作租户为「${currentTenantLabel}」。`}
         </div>
       ) : null}
       <div className="ops-table">
@@ -939,11 +1028,11 @@ export default function Instances() {
             },
             {
               title: '操作',
-              width: impersonating ? 240 : 140,
+              width: impersonating && typeKey(activeType) !== 'kafka' ? 240 : 140,
               fixed: 'right' as const,
               render: (_: unknown, row: InstanceRow) => (
                 <>
-                  {impersonating ? (
+                  {impersonating && typeKey(row.db_type) !== 'kafka' ? (
                     <Auth urn={Perm.tenants.impersonate}>
                       <Button type="link" onClick={() => openAssign(row)}>
                         指定租户
@@ -1313,6 +1402,29 @@ export default function Instances() {
           optionFilterProp="label"
           value={assignTid || undefined}
           onChange={(v) => setAssignTid(v)}
+          options={tenants.map((t) => ({
+            value: t.id,
+            label: `${t.name || t.code || t.id}${t.id === currentTenantId ? '（当前工作租户）' : ''}`,
+          }))}
+        />
+      </Modal>
+      <Modal
+        open={grantOpen}
+        title="批量授权 Kafka"
+        okText="授权"
+        confirmLoading={granting}
+        onCancel={() => !granting && setGrantOpen(false)}
+        onOk={confirmKafkaGrant}
+      >
+        <p style={{ marginBottom: 12 }}>
+          将勾选的 {selectedIds.length} 条 Kafka 只读授权给目标租户。实例、已登记库和账号仍留在原租户。
+        </p>
+        <Select
+          style={{ width: '100%' }}
+          showSearch
+          optionFilterProp="label"
+          value={grantTid || undefined}
+          onChange={(v) => setGrantTid(v)}
           options={tenants.map((t) => ({
             value: t.id,
             label: `${t.name || t.code || t.id}${t.id === currentTenantId ? '（当前工作租户）' : ''}`,

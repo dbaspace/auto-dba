@@ -389,6 +389,28 @@ export function cdcInstLabel(i: any, env?: string): string {
   return i?.name ? `${i.name} — ${addr}` : addr
 }
 
+const CDC_MYSQL_FAMILY = ['mysql', 'tidb', 'oceanbase', 'mariadb']
+
+/** 初始化源端：按环境和源引擎过滤域名管理行。MySQL 引擎含 TiDB / OceanBase / MariaDB。 */
+export function cdcSourceDomainRows(rows: any[], env: string, engine: string): any[] {
+  const want = String(env || '').trim()
+  const types = engine === 'mysql' ? CDC_MYSQL_FAMILY : ['postgres']
+  return (rows || []).filter((r) => {
+    if (want && String(r?.env_code || '').trim() !== want) return false
+    const key = String(r?.db_type || '').trim().toLowerCase()
+    const normalized = key === 'postgresql' || key === 'pg' || key === 'pgsql' ? 'postgres' : key
+    return types.includes(normalized)
+  })
+}
+
+/** 域名选项标签：域名:端口 — 实例名。没有端口时只显示域名。 */
+export function cdcDomainOptionLabel(domain: string, port: number, name: string): string {
+  const d = String(domain || '').trim()
+  const addr = port > 0 ? `${d}:${port}` : d
+  const n = String(name || '').trim()
+  return n ? `${addr} — ${n}` : addr
+}
+
 export function formatSourceScopeLabel(dbName: string, prefix: string, dbNames?: string[]): string {
   const names = dbNames || []
   if (names.length > 1) {

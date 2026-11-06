@@ -20,6 +20,7 @@ const (
 	raTypeHost            = "host"
 	raTypeSrCluster       = "sr_cluster"
 	raTypeDbDeployCluster = "db_deploy_cluster"
+	raTypeConnector       = "connector"
 
 	raActionACL      = "acl"
 	raActionGrant    = "grant"
@@ -263,6 +264,19 @@ func (h *ResourceApplyHandler) resolveResource(resourceType, resourceID string) 
 			return "", "", "", fmt.Errorf("部署集群不存在")
 		}
 		return strings.TrimSpace(cl.TenantID), cl.Name, "集群无行级 ACL，同租仅记账", nil
+	case raTypeConnector:
+		conn, e := h.Store.GetConnector(resourceID)
+		if e != nil {
+			return "", "", "", e
+		}
+		if conn == nil {
+			return "", "", "", fmt.Errorf("连接器不存在")
+		}
+		name := conn.DBZHost
+		if conn.Env != "" {
+			name = conn.DBZHost + " (" + conn.Env + ")"
+		}
+		return strings.TrimSpace(conn.TenantID), name, "连接器无行级 ACL，同租仅记账", nil
 	default:
 		return "", "", "", fmt.Errorf("不支持的 resource_type: %s", resourceType)
 	}
@@ -730,14 +744,28 @@ func (h *ResourceApplyHandler) Candidates(c *gin.Context) {
 				env := resourceApplyEnvFromCode(cl.Environment, envByID, envByCode)
 				appendCand(raTypeDbDeployCluster, cl.ID, disp, cl.TenantID, "", "", env)
 			}
+		case raTypeConnector:
+			list, err := h.Store.ListConnectors("")
+			if err != nil {
+				return err
+			}
+			for i := range list {
+				conn := &list[i]
+				disp := conn.DBZHost
+				if conn.Env != "" {
+					disp = conn.DBZHost + " (" + conn.Env + ")"
+				}
+				env := resourceApplyEnvFromCode(conn.Env, envByID, envByCode)
+				appendCand(raTypeConnector, conn.ID, disp, conn.TenantID, "", "", env)
+			}
 		default:
-			return fmt.Errorf("type 须为 database|domain|host|sr_cluster|db_deploy_cluster")
+			return fmt.Errorf("type 须为 database|domain|host|sr_cluster|db_deploy_cluster|connector")
 		}
 		return nil
 	}
 	types := []string{typ}
 	if typ == "" && intent != raIntentApprover {
-		types = []string{raTypeDatabase, raTypeDomain, raTypeHost, raTypeSrCluster, raTypeDbDeployCluster}
+		types = []string{raTypeDatabase, raTypeDomain, raTypeHost, raTypeSrCluster, raTypeDbDeployCluster, raTypeConnector}
 	}
 	for _, t := range types {
 		if err := collect(t); err != nil {

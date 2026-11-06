@@ -527,6 +527,7 @@ func Init(e *gin.Engine, d Deps) {
 
 	secured.GET("/connectors", d.Connector.List)
 	secured.POST("/connectors", requireURN(store.URNConnectorsCreate), d.Connector.Create)
+	secured.POST("/connectors/assign-tenant", requireURN(store.URNTenantsImpersonate), d.Connector.AssignTenantBatch)
 	secured.GET("/connectors/:id", d.Connector.Get)
 	secured.PUT("/connectors/:id", requireURN(store.URNConnectorsEdit), d.Connector.Update)
 	secured.DELETE("/connectors/:id", requireURN(store.URNConnectorsDelete), d.Connector.Delete)
@@ -906,6 +907,7 @@ func Init(e *gin.Engine, d Deps) {
 		pg.GET("/deploys/:id", d.Backup.GetDeploy)
 		if d.SQLExec != nil {
 			pg.GET("/sql-executors", d.SQLExec.List)
+			pg.GET("/sql-executors/status", d.SQLExec.ListStatus)
 			pg.GET("/sql-executors/deploys", d.SQLExec.ListDeploys)
 			pg.POST("/sql-executors/deploy", d.SQLExec.Deploy)
 			pg.DELETE("/sql-executors/:id", d.SQLExec.Delete)

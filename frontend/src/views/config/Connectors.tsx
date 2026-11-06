@@ -2,10 +2,15 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { Button, Form, Input, Modal, Pagination, Radio, Select, Space, Tag, message } from 'antd'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import api from '../../api/request'
+import Auth from '../../components/Auth'
+import { Perm } from '../../hooks/usePermission'
+import { useAppSelector } from '../../store'
 import './Connectors.css'
 
 interface ConnectorRow {
   id?: string
+  tenant_id?: string
+  tenant_name?: string
   dbz_host?: string
   env?: string
   kafka_host?: string
@@ -38,6 +43,10 @@ function kafkaAddress(i?: KafkaRow) {
 }
 
 export default function Connectors() {
+  const user = useAppSelector((s) => s.auth.user)
+  const impersonating = Boolean((user as { impersonating?: boolean })?.impersonating)
+  const currentTenant = (user as { current_tenant?: { id?: string } })?.current_tenant
+  const currentTenantId = String(currentTenant?.id || '')
   const [rows, setRows] = useState<ConnectorRow[]>([])
   const [envs, setEnvs] = useState<EnvRow[]>([])
   const [kafkas, setKafkas] = useState<KafkaRow[]>([])
@@ -50,6 +59,11 @@ export default function Connectors() {
   const [kafkaFilter, setKafkaFilter] = useState('')
   const [dbzFilter, setDbzFilter] = useState('')
   const [editingId, setEditingId] = useState('')
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [tenants, setTenants] = useState<{ id: string; name?: string; code?: string }[]>([])
+  const [assignOpen, setAssignOpen] = useState(false)
+  const [assignTid, setAssignTid] = useState('')
+  const [assigning, setAssigning] = useState(false)
   const [form] = Form.useForm()
 
   const filteredRows = useMemo(() => {
@@ -168,14 +182,63 @@ export default function Connectors() {
       onOk: async () => {
         await api.delete('/connectors/' + row.id)
         message.success('删除成功')
+        setSelectedIds((prev) => prev.filter((id) => id !== row.id))
         await load()
       },
     })
   }
 
+  function canEdit(row: ConnectorRow) {
+    if (impersonating) return true
+    const owner = String(row.tenant_id || '').trim()
+    return !owner || owner === currentTenantId
+  }
+
+  async function confirmAssign() {
+    const ids = selectedIds.filter(Boolean)
+    if (!ids.length || !assignTid) {
+      message.warning('请选择目标租户')
+      return
+    }
+    setAssigning(true)
+    try {
+      const { data } = await api.post('/connectors/assign-tenant', { tenant_id: assignTid, ids })
+      const failed: { id?: string; dbz_host?: string; message?: string }[] = data.failed || []
+      const failedIds = new Set(failed.map((f) => String(f.id || '')))
+      setSelectedIds(ids.filter((id) => failedIds.has(id)))
+      const ok = Number(data.ok_count || 0)
+      if (failed.length) {
+        Modal.error({
+          title: ok ? `已划拨 ${ok} 条，失败 ${failed.length} 条` : '划拨失败',
+          content: (
+            <ul style={{ margin: 0, paddingLeft: 18, maxHeight: 240, overflow: 'auto' }}>
+              {failed.map((f) => (
+                <li key={f.id || f.dbz_host}>
+                  {f.dbz_host || f.id}：{f.message || '失败'}
+                </li>
+              ))}
+            </ul>
+          ),
+        })
+      } else {
+        message.success(`已划拨 ${ok} 条`)
+        setAssignOpen(false)
+      }
+      await load()
+    } catch (e: any) {
+      message.error(e?.response?.data?.message || '划拨失败')
+    } finally {
+      setAssigning(false)
+    }
+  }
+
   useEffect(() => {
     load()
-  }, [])
+    if (!impersonating) return
+    void api.get('/tenants').then(({ data }) => {
+      setTenants((data.data || []).filter((t: { status?: string }) => t.status !== 'disabled'))
+    }).catch(() => setTenants([]))
+  }, [impersonating])
 
   return (
     <div className="ops-page">
@@ -216,8 +279,26 @@ export default function Connectors() {
         <Button type="primary" className="connector-add" onClick={() => open()}>
           增加
         </Button>
+        {impersonating ? (
+          <Auth urn={Perm.tenants.impersonate}>
+            <Button
+              disabled={!selectedIds.length}
+              loading={assigning}
+              onClick={() => {
+                setAssignTid(currentTenantId)
+                setAssignOpen(true)
+              }}
+            >
+              批量指定租户{selectedIds.length ? `（${selectedIds.length}）` : ''}
+            </Button>
+          </Auth>
+        ) : null}
       </div>
-      <p className="hint">维护 Debezium Connect 集群。环境来自「环境管理」，Kafka 地址来自已登记的 Kafka 实例。</p>
+      <p className="hint">
+        {impersonating
+          ? '租户模式：勾选后「批量指定租户」只改连接器归属，不连带 Kafka 实例。'
+          : '维护 Debezium Connect 集群。环境来自「环境管理」，Kafka 地址来自已登记的 Kafka 实例。'}
+      </p>
       <div className="ops-table">
         <ResponsiveTable
           rowKey={(r) => r.id || r.dbz_host || ''}
@@ -225,10 +306,26 @@ export default function Connectors() {
           loading={loading}
           bordered
           pagination={false}
+          rowSelection={
+            impersonating
+              ? {
+                  selectedRowKeys: selectedIds,
+                  preserveSelectedRowKeys: true,
+                  onChange: (keys) => {
+                    const pageIds = new Set(pagedRows.map((r) => r.id).filter(Boolean) as string[])
+                    const onPage = keys.map((k) => String(k)).filter((id) => pageIds.has(id))
+                    setSelectedIds((prev) => [...prev.filter((id) => !pageIds.has(id)), ...onPage])
+                  },
+                }
+              : undefined
+          }
           scroll={{ x: 'max-content', y: '100%' }}
           style={{ height: '100%' }}
           columns={[
             { title: 'dbz_host', dataIndex: 'dbz_host', width: 240, ellipsis: true },
+            ...(impersonating
+              ? [{ title: '所属租户', width: 140, render: (_: unknown, row: ConnectorRow) => row.tenant_name || row.tenant_id || '—' }]
+              : []),
             { title: 'env', width: 180, render: (_, row) => envLabel(row.env) },
             {
               title: '消息格式',
@@ -249,16 +346,19 @@ export default function Connectors() {
               title: '操作',
               width: 160,
               fixed: 'right',
-              render: (_, row) => (
-                <Space size={0}>
-                  <Button type="link" onClick={() => open(row)}>
-                    编辑
-                  </Button>
-                  <Button type="link" danger onClick={() => remove(row)}>
-                    删除
-                  </Button>
-                </Space>
-              ),
+              render: (_, row) =>
+                canEdit(row) ? (
+                  <Space size={0}>
+                    <Button type="link" onClick={() => open(row)}>
+                      编辑
+                    </Button>
+                    <Button type="link" danger onClick={() => remove(row)}>
+                      删除
+                    </Button>
+                  </Space>
+                ) : (
+                  '—'
+                ),
             },
           ]}
         />
@@ -339,6 +439,27 @@ export default function Connectors() {
             <Input.TextArea rows={2} placeholder="可选" />
           </Form.Item>
         </Form>
+      </Modal>
+      <Modal
+        open={assignOpen}
+        title={`批量指定连接器归属租户（${selectedIds.length}）`}
+        okText="划拨"
+        confirmLoading={assigning}
+        onCancel={() => !assigning && setAssignOpen(false)}
+        onOk={confirmAssign}
+      >
+        <p style={{ marginBottom: 12 }}>把选中的连接器划到目标租户。不改 Kafka 实例的归属。</p>
+        <Select
+          style={{ width: '100%' }}
+          showSearch
+          optionFilterProp="label"
+          value={assignTid || undefined}
+          onChange={(v) => setAssignTid(v)}
+          options={tenants.map((t) => ({
+            value: t.id,
+            label: `${t.name || t.code || t.id}${t.id === currentTenantId ? '（当前工作租户）' : ''}`,
+          }))}
+        />
       </Modal>
     </div>
   )
