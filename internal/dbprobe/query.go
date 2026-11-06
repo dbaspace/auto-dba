@@ -1,6 +1,7 @@
 package dbprobe
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -8,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -494,13 +496,21 @@ func queryClickHouse(ctx context.Context, host string, port int, user, password,
 	if err != nil {
 		return nil, err
 	}
+	return parseClickHouseBody(body, limit)
+}
+
+// parseClickHouseBody 解析 FORMAT JSON。整型用 UseNumber 保留原文，64 位及以上再转成十进制字符串。
+func parseClickHouseBody(body []byte, limit int) (*QueryResult, error) {
 	var parsed struct {
 		Meta []struct {
 			Name string `json:"name"`
+			Type string `json:"type"`
 		} `json:"meta"`
 		Data []map[string]any `json:"data"`
 	}
-	if err := json.Unmarshal(body, &parsed); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.UseNumber()
+	if err := dec.Decode(&parsed); err != nil || dec.More() {
 		lines := strings.Split(strings.TrimSpace(string(body)), "\n")
 		out := &QueryResult{Columns: []string{"result"}, Rows: make([][]any, 0, len(lines))}
 		for i, line := range lines {
@@ -516,8 +526,10 @@ func queryClickHouse(ctx context.Context, host string, port int, user, password,
 		return out, nil
 	}
 	cols := make([]string, 0, len(parsed.Meta))
+	types := make([]string, 0, len(parsed.Meta))
 	for _, m := range parsed.Meta {
 		cols = append(cols, m.Name)
+		types = append(types, m.Type)
 	}
 	out := &QueryResult{Columns: cols, Rows: make([][]any, 0, len(parsed.Data))}
 	for i, rec := range parsed.Data {
@@ -527,7 +539,7 @@ func queryClickHouse(ctx context.Context, host string, port int, user, password,
 		}
 		row := make([]any, len(cols))
 		for j, c := range cols {
-			row[j] = rec[c]
+			row[j] = normalizeCell(rec[c], typeAt(types, j))
 		}
 		out.Rows = append(out.Rows, row)
 	}
@@ -653,6 +665,9 @@ func typeAt(names []string, i int) string {
 	return names[i]
 }
 
+// jsMaxSafeInteger 是 JavaScript Number 能精确表示的最大整数。更大的整型必须按十进制字符串返回。
+const jsMaxSafeInteger int64 = 9007199254740991
+
 func normalizeCell(v any, dbType ...string) any {
 	kind := ""
 	if len(dbType) > 0 {
@@ -665,8 +680,84 @@ func normalizeCell(v any, dbType ...string) any {
 		return string(t)
 	case time.Time:
 		return FormatQueryTime(t, kind)
+	case int:
+		return normalizeCell(int64(t), kind)
+	case int64:
+		if isWideIntegerType(kind) || (strings.TrimSpace(kind) == "" && absExceedsJSSafe(t)) {
+			return strconv.FormatInt(t, 10)
+		}
+		return t
+	case uint64:
+		if isWideIntegerType(kind) || t > uint64(jsMaxSafeInteger) {
+			return strconv.FormatUint(t, 10)
+		}
+		return t
+	case json.Number:
+		if isWideIntegerType(kind) || integerLiteralExceedsJSSafe(t.String()) {
+			return t.String()
+		}
+		if i, err := t.Int64(); err == nil {
+			return i
+		}
+		if f, err := t.Float64(); err == nil {
+			return f
+		}
+		return t.String()
 	default:
 		return t
+	}
+}
+
+func absExceedsJSSafe(n int64) bool {
+	if n < 0 {
+		return n < -jsMaxSafeInteger
+	}
+	return n > jsMaxSafeInteger
+}
+
+func integerLiteralExceedsJSSafe(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" || strings.ContainsAny(s, ".eE") {
+		return false
+	}
+	digits := strings.TrimLeft(s, "-")
+	if digits == "" || strings.Trim(digits, "0123456789") != "" {
+		return false
+	}
+	digits = strings.TrimLeft(digits, "0")
+	if digits == "" {
+		return false
+	}
+	limit := strconv.FormatInt(jsMaxSafeInteger, 10)
+	if len(digits) != len(limit) {
+		return len(digits) > len(limit)
+	}
+	return digits > limit
+}
+
+func isWideIntegerType(dbType string) bool {
+	switch canonicalTypeName(dbType) {
+	case "BIGINT", "BIGINT UNSIGNED", "LARGEINT",
+		"INT8", "BIGSERIAL", "SERIAL8",
+		"INT64", "UINT64", "UBIGINT",
+		"INT128", "UINT128", "INT256", "UINT256":
+		return true
+	default:
+		return false
+	}
+}
+
+func canonicalTypeName(dbType string) string {
+	name := strings.ToUpper(strings.TrimSpace(dbType))
+	for {
+		switch {
+		case strings.HasPrefix(name, "NULLABLE(") && strings.HasSuffix(name, ")"):
+			name = strings.TrimSpace(name[len("NULLABLE(") : len(name)-1])
+		case strings.HasPrefix(name, "LOWCARDINALITY(") && strings.HasSuffix(name, ")"):
+			name = strings.TrimSpace(name[len("LOWCARDINALITY(") : len(name)-1])
+		default:
+			return name
+		}
 	}
 }
 
