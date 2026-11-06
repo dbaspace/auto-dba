@@ -493,7 +493,7 @@ export default function CreateDb() {
               rules={[{ required: true, message: '请选择审批人' }]}
               extra={
                 approvers.length ? (
-                  <div className="extra">候选来自 create-db/approvers，默认预填 sync_default_approver</div>
+                  <div className="extra">仅限 admin、dba 租户用户、sync_default_approver 与超级审核白名单</div>
                 ) : null
               }
             >

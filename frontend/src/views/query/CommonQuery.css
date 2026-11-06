@@ -223,6 +223,18 @@
   flex-shrink: 0;
 }
 .db-name { font-size: 14px; color: var(--app-text, #111827); }
+.env-tag-btn { cursor: pointer; }
+.env-pick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-width: 280px;
+}
+.env-pick-item { cursor: pointer; margin: 0; }
+.env-pick-item.on {
+  outline: 2px solid var(--app-text, #111827);
+  outline-offset: 1px;
+}
 .env-swap { color: #6b7280; cursor: pointer; }
 .env-swap:hover { color: #2563eb; }
 .sql-box {

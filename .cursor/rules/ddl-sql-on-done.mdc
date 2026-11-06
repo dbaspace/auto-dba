@@ -1,0 +1,19 @@
+---
+description: 开发完成且有表结构变更时，回复末尾给出可在现有元库执行的 DDL
+alwaysApply: true
+---
+
+# 开发完成时输出 DDL
+
+一次改动里如果有 DDL（新建或修改表、列、索引、约束），开发完成的回复末尾必须给出可直接执行的 SQL。
+
+- 按本项目元库的 PostgreSQL 写法，使用 `IF NOT EXISTS` / `ADD COLUMN IF NOT EXISTS`。已有对象再执行不会改掉数据。
+- 只输出本次变更对应的语句，并注明在元数据库执行后再重启或刷新。
+- 没有表结构变更时不输出 SQL。
+- 这段 SQL 不代替代码里的迁移。跳过全量迁移的已有库靠它补齐。
+
+示例：
+
+```sql
+ALTER TABLE tbl_example ADD COLUMN IF NOT EXISTS example_col TEXT NOT NULL DEFAULT '';
+```

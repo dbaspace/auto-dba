@@ -1251,6 +1251,16 @@ func (h *TicketHandler) validateTransferAssignee(it *store.Issue, newAssignee st
 	if strings.EqualFold(strings.TrimSpace(it.Submitter), newAssignee) {
 		return "不能将审核人转给提交人本人"
 	}
+	if it.IssueType == store.IssueTypeCreateDB {
+		ok, err := createDBApproverAllowed(h.Store, newAssignee)
+		if err != nil {
+			return err.Error()
+		}
+		if !ok {
+			return createDBApproverDenied
+		}
+		return ""
+	}
 	tid := strings.TrimSpace(it.TenantID)
 	if tid == "" {
 		tid = store.DefaultTenantID
@@ -1259,8 +1269,6 @@ func (h *TicketHandler) validateTransferAssignee(it *store.Issue, newAssignee st
 		return err.Error()
 	}
 	switch it.IssueType {
-	case store.IssueTypeCreateDB:
-		return ""
 	case store.IssueTypeMigration:
 		if !h.migrationApproverAllowed(newAssignee) {
 			return "审核人不在迁移审批人列表"
@@ -2126,6 +2134,10 @@ func (h *TicketHandler) actorCanApproveIssue(c *gin.Context, it *store.Issue) bo
 	}
 	if it.IssueType == store.IssueTypeDnsChange && h.DNS != nil && h.DNS.IsDNSApprover(user) {
 		return true
+	}
+	if it.IssueType == store.IssueTypeCreateDB {
+		ok, err := createDBApproverAllowed(h.Store, user)
+		return err == nil && ok
 	}
 	return h.Store.CanApproveIssue(it, user, priv)
 }

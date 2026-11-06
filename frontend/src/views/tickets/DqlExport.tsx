@@ -284,7 +284,7 @@ export default function DqlExport() {
       api.get('/instances'),
       api.get('/databases'),
       api.get('/global-args').catch(() => ({ data: { data: [] } })),
-      api.get('/create-db/approvers').catch(() => ({ data: { data: [] } })),
+      api.get('/create-db/approvers', { params: { scope: 'tenant' } }).catch(() => ({ data: { data: [] } })),
     ])
     const instList = instRes.data.data || []
     const dbList = dbRes.data.data || []

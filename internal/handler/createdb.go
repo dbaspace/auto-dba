@@ -3,6 +3,7 @@ package handler
 import (
 	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"math/big"
 	"net/http"
 	"regexp"
@@ -54,30 +55,150 @@ func unionApproverNames(groups ...[]string) []string {
 	return out
 }
 
+const createDBApproverDenied = "审批人须为 admin、dba 租户用户、sync_default_approver 或超级审核白名单中的用户"
+
 func (h *CreateDBHandler) ListApprovers(c *gin.Context) {
 	tid := middleware.TenantID(c)
 	if tid == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "请先选择租户"})
 		return
 	}
-	userNames, err := listTenantMemberUsernames(h.Store, tid)
+	var names []string
+	var err error
+	// scope=tenant 只给数据导出的 DBA/安全审批人沿用旧的本租户候选人，不参与建库审批。
+	if strings.EqualFold(strings.TrimSpace(c.Query("scope")), "tenant") {
+		names, err = listTenantScopedApproverNames(h.Store, tid)
+	} else {
+		names, err = listCreateDBApproverNames(h.Store)
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
-	}
-	def, _ := h.Store.GetGlobalArg("sync_default_approver")
-	if strings.TrimSpace(def) != "" && requireTenantMemberUsernames(h.Store, tid, []string{def}) != nil {
-		def = ""
 	}
 	type item struct {
 		Type string `json:"type"`
 		Name string `json:"name"`
 	}
-	out := make([]item, 0)
-	for _, name := range unionApproverNames([]string{def}, userNames) {
+	out := make([]item, 0, len(names))
+	for _, name := range names {
 		out = append(out, item{Type: "user", Name: name})
 	}
 	c.JSON(http.StatusOK, gin.H{"data": out})
+}
+
+// mergeCreateDBApproverNames 建库审批人：sync_default_approver、admin、白名单、dba 租户成员。同名只保留先出现的。
+func mergeCreateDBApproverNames(defaultApprover, whitelist string, dbaMembers []string) []string {
+	raw := make([]string, 0, 1+len(dbaMembers))
+	raw = append(raw, store.ParseApproverWhitelist(defaultApprover)...)
+	raw = append(raw, "admin")
+	raw = append(raw, store.ParseApproverWhitelist(whitelist)...)
+	raw = append(raw, dbaMembers...)
+	return store.ExpandApproverNames(raw)
+}
+
+func keepCreateDBApprover(name string, user *store.User) bool {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false
+	}
+	if user != nil && user.IsLoginBlocked() {
+		return false
+	}
+	if user == nil && !strings.EqualFold(name, "admin") {
+		return false
+	}
+	return true
+}
+
+func listCreateDBApproverNames(db *store.DB) ([]string, error) {
+	if db == nil {
+		return nil, nil
+	}
+	def, err := db.GetGlobalArg("sync_default_approver")
+	if err != nil {
+		return nil, err
+	}
+	white, err := db.GetGlobalArg(store.ArgIssueGlobalApproverWhitelist)
+	if err != nil {
+		return nil, err
+	}
+	var dbaMembers []string
+	t, err := db.GetTenantByCode(store.DBATenantCode)
+	if err != nil {
+		return nil, err
+	}
+	if t != nil {
+		dbaMembers, err = listTenantMemberUsernames(db, t.ID)
+		if err != nil {
+			return nil, err
+		}
+	}
+	names := mergeCreateDBApproverNames(def, white, dbaMembers)
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		u, err := db.GetUserByUsername(name)
+		if err != nil {
+			return nil, err
+		}
+		if !keepCreateDBApprover(name, u) {
+			continue
+		}
+		if u != nil && strings.TrimSpace(u.Username) != "" {
+			name = u.Username
+		}
+		out = append(out, name)
+	}
+	return store.ExpandApproverNames(out), nil
+}
+
+// listTenantScopedApproverNames 本租户活跃成员，并在默认审批人同属该租户时放在前面。
+func listTenantScopedApproverNames(db *store.DB, tenantID string) ([]string, error) {
+	userNames, err := listTenantMemberUsernames(db, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	def, _ := db.GetGlobalArg("sync_default_approver")
+	if strings.TrimSpace(def) != "" && requireTenantMemberUsernames(db, tenantID, []string{def}) != nil {
+		def = ""
+	}
+	return unionApproverNames([]string{def}, userNames), nil
+}
+
+func createDBApproverAllowed(db *store.DB, username string) (bool, error) {
+	pool, err := listCreateDBApproverNames(db)
+	if err != nil {
+		return false, err
+	}
+	_, ok := matchCreateDBApprover(pool, username)
+	return ok, nil
+}
+
+func matchCreateDBApprover(pool []string, name string) (string, bool) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", false
+	}
+	for _, p := range pool {
+		if strings.EqualFold(p, name) {
+			return p, true
+		}
+	}
+	return "", false
+}
+
+func resolveCreateDBApprover(db *store.DB, preferred string) (string, error) {
+	preferred = strings.TrimSpace(preferred)
+	if preferred == "" {
+		return "", fmt.Errorf("请选择审批人")
+	}
+	pool, err := listCreateDBApproverNames(db)
+	if err != nil {
+		return "", err
+	}
+	if name, ok := matchCreateDBApprover(pool, preferred); ok {
+		return name, nil
+	}
+	return "", fmt.Errorf("%s", createDBApproverDenied)
 }
 
 func (h *CreateDBHandler) CheckSQL(c *gin.Context) {
@@ -196,7 +317,7 @@ func (h *CreateDBHandler) Submit(c *gin.Context) {
 	if names := unionApproverNames([]string{req.AssignedTo}); len(names) > 0 {
 		preferred = names[0]
 	}
-	approver, aerr := resolveTenantAssignee(h.Store, middleware.TenantID(c), preferred)
+	approver, aerr := resolveCreateDBApprover(h.Store, preferred)
 	if aerr != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": aerr.Error()})
 		return
@@ -265,7 +386,9 @@ func (h *CreateDBHandler) Submit(c *gin.Context) {
 		ScheduledAt:  req.ScheduledAt,
 	}
 	stampTenantID(c, func(tid string) {
-		if issue != nil { issue.TenantID = tid }
+		if issue != nil {
+			issue.TenantID = tid
+		}
 	})
 	if err := h.Store.CreateIssue(issue); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})

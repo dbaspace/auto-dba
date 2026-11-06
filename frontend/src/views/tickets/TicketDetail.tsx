@@ -205,6 +205,7 @@ export default function TicketDetail() {
   const params = useParams()
   const dispatch = useAppDispatch()
   const menus = useAppSelector((s) => s.auth.menus)
+  const activeKey = useAppSelector((s) => s.tabs.activeKey)
 
   const backToTicketList = () => {
     const detailKey = tabKey(location.pathname, location.search)
@@ -1112,27 +1113,58 @@ export default function TicketDetail() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // 后台执行中轮询详情，直到成功/失败
+  // 待审批、已通过、执行中时静默刷新，终态后停止。页签切走或浏览器在后台时不请求。
+  const detailLive = item?.status === 'pending' || item?.status === 'approved' || item?.status === 'running'
+  const detailTabActive = !!params.id && activeKey.split('?')[0] === `/ops/tickets/${params.id}`
   useEffect(() => {
-    if (item?.status !== 'running' || !params.id) return
-    const timer = window.setInterval(async () => {
+    if (!detailLive || !detailTabActive || !params.id) return
+    let timer = 0
+    let stopped = false
+    const stillLive = (status: unknown) =>
+      status === 'pending' || status === 'approved' || status === 'running'
+    const tick = async () => {
       try {
         const { data } = await api.get('/tickets/' + params.id, { silent: true })
+        if (stopped) return
         const next = data.data
         if (!next) return
         setItem(next)
         if (typeof data.can_approve === 'boolean') setCanApproveFlag(data.can_approve)
         if (typeof data.can_stop === 'boolean') setCanStop(data.can_stop)
         if (typeof data.can_transfer === 'boolean') setCanTransferFlag(data.can_transfer)
-        if (next.status !== 'running') {
+        if (!stillLive(next.status)) {
           window.clearInterval(timer)
+          timer = 0
         }
       } catch {
         /* ignore */
       }
-    }, 3000)
-    return () => window.clearInterval(timer)
-  }, [item?.status, params.id])
+    }
+    const start = (immediate: boolean) => {
+      window.clearInterval(timer)
+      timer = 0
+      if (stopped || document.visibilityState === 'hidden') return
+      if (immediate) void tick()
+      timer = window.setInterval(() => {
+        void tick()
+      }, 3000)
+    }
+    start(false)
+    const onVis = () => {
+      if (document.visibilityState === 'hidden') {
+        window.clearInterval(timer)
+        timer = 0
+        return
+      }
+      start(true)
+    }
+    document.addEventListener('visibilitychange', onVis)
+    return () => {
+      stopped = true
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVis)
+    }
+  }, [detailLive, detailTabActive, params.id])
 
   // 切换工单时清空环境映射，避免串单
   useEffect(() => {

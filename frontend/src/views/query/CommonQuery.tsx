@@ -14,6 +14,7 @@ import {
   Input,
   Modal,
   Pagination,
+  Popover,
   Select,
   Space,
   Spin,
@@ -328,6 +329,7 @@ export default function CommonQuery() {
   const [catalogReady, setCatalogReady] = useState(false)
   const [keyword, setKeyword] = useState('')
   const [envFilter, setEnvFilter] = useState('')
+  const [envPickOpen, setEnvPickOpen] = useState(false)
   const [envOptions, setEnvOptions] = useState<string[]>([])
   const [databases, setDatabases] = useState<any[]>([])
   const [instances, setInstances] = useState<any[]>([])
@@ -934,6 +936,10 @@ export default function CommonQuery() {
     return databases.filter((d) => d.db_name === current.dbName)
   }, [current, databases])
 
+  useEffect(() => {
+    setEnvPickOpen(false)
+  }, [activeKey])
+
   // persist
   useEffect(() => {
     try {
@@ -1059,21 +1065,33 @@ export default function CommonQuery() {
     setActiveKey(tab.key)
   }
 
+  function switchEnv(db: any) {
+    if (!db || !current || db.id === current.dbId) return
+    const exist = tabs.find((t) => t.dbId === db.id && !t.table && t.key !== current.key)
+    if (exist) {
+      setActiveKey(exist.key)
+      return
+    }
+    const inst = instMap[db.instance_id] || {}
+    updateCurrent({
+      dbId: db.id,
+      dbName: db.db_name,
+      instanceId: db.instance_id,
+      dbType: inst.db_type || current.dbType,
+      env: resolveDbEnv(db, inst),
+      tag: dbTag(db),
+      result: null,
+      results: undefined,
+      resultIdx: 0,
+      error: '',
+    })
+  }
+
   function cycleEnv() {
     if (!current || envPeers.length < 2) return
     const idx = envPeers.findIndex((d) => d.id === current.dbId)
     const next = envPeers[(idx + 1) % envPeers.length]
-    const inst = instMap[next.instance_id] || {}
-    updateCurrent({
-      dbId: next.id,
-      dbName: next.db_name,
-      instanceId: next.instance_id,
-      dbType: inst.db_type || current.dbType,
-      env: resolveDbEnv(next, inst),
-      tag: dbTag(next),
-      result: null,
-      error: '',
-    })
+    switchEnv(next)
   }
 
   function formatSQL() {
@@ -1865,9 +1883,41 @@ export default function CommonQuery() {
                     </Space>
                   </div>
                   <div className="db-meta">
-                    <Tag color={envTagColor(current?.env)}>{current?.env || '—'}</Tag>
                     {envPeers.length > 1 ? (
-                      <span className="env-swap" onClick={cycleEnv} title="切换同名库环境">⇄</span>
+                      <Popover
+                        open={envPickOpen}
+                        onOpenChange={setEnvPickOpen}
+                        trigger="click"
+                        placement="bottomLeft"
+                        content={(
+                          <div className="env-pick">
+                            {envPeers.map((d) => {
+                              const env = resolveDbEnv(d, instMap[d.instance_id]) || '—'
+                              const on = d.id === current?.dbId
+                              return (
+                                <Tag
+                                  key={d.id}
+                                  color={envTagColor(env)}
+                                  className={on ? 'env-pick-item on' : 'env-pick-item'}
+                                  onClick={() => {
+                                    switchEnv(d)
+                                    setEnvPickOpen(false)
+                                  }}
+                                >
+                                  {env}
+                                </Tag>
+                              )
+                            })}
+                          </div>
+                        )}
+                      >
+                        <Tag color={envTagColor(current?.env)} className="env-tag-btn">{current?.env || '—'}</Tag>
+                      </Popover>
+                    ) : (
+                      <Tag color={envTagColor(current?.env)}>{current?.env || '—'}</Tag>
+                    )}
+                    {envPeers.length > 1 ? (
+                      <span className="env-swap" onClick={cycleEnv} title="切换到下一个环境">⇄</span>
                     ) : null}
                     <DbTypeIcon type={current?.dbType} size={16} />
                     <span className="db-name">
