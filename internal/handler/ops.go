@@ -43,15 +43,6 @@ type CDCHandler struct {
 	Secret string
 }
 
-func (h *CDCHandler) ListInstances(c *gin.Context) {
-	list, err := h.Store.ListInstancesInTenant(effectiveListTenantID(h.Store, c), c.Query("db_type"), c.Query("q"))
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"data": list})
-}
-
 func (h *CDCHandler) List(c *gin.Context) {
 	list, err := h.Store.ListCDCInTenant(effectiveListTenantID(h.Store, c), c.Query("status"), c.Query("task_type"))
 	if err != nil {

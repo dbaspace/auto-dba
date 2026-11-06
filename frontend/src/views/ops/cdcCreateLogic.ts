@@ -356,6 +356,13 @@ export function extraPayload(deps: PayloadDeps): Record<string, any> {
   const overrides = collectSqlOverrides(sqlPreviews)
   return {
     env: form.env,
+    // 只有初始化任务把授权域名写进 source_host。加表等子任务继续用父任务地址。
+    ...(form.task_type === 'init' && String(form.source_host || '').trim()
+      ? {
+          source_host: String(form.source_host).trim(),
+          source_port: Number(form.source_port) > 0 ? Number(form.source_port) : undefined,
+        }
+      : {}),
     source_engine: form.source_engine || 'postgres',
     mysql_server_id: form.source_engine === 'mysql' ? form.mysql_server_id || '5400' : undefined,
     source_instance_id: instanceID(form.source_instance_id),

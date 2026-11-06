@@ -1398,12 +1398,7 @@ func (h *DatabaseHandler) ListLive(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"message": "实例不存在"})
 		return
 	}
-	var registered []store.Database
-	if platformAdminAuditing(h.Store, c) {
-		registered, err = h.Store.ListDatabases(inst.ID, "")
-	} else {
-		registered, err = h.Store.ListDatabasesInTenant(effectiveListTenantID(h.Store, c), inst.ID, "")
-	}
+	registered, err := h.liveRegisteredDatabases(c, inst)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -1421,6 +1416,75 @@ func (h *DatabaseHandler) ListLive(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": mergeLive(live, registered), "live": true})
+}
+
+// liveRegisteredDatabases 默认只返回本租已登记库。
+// include_granted=1 时并入库授权和域名/实例授权展开的库；仅因域名授权可见时，再并上全部被授库名。
+// 其它页面不带这个参数，实连结果与原来一致。
+func (h *DatabaseHandler) liveRegisteredDatabases(c *gin.Context, inst *store.Instance) ([]store.Database, error) {
+	if platformAdminAuditing(h.Store, c) {
+		return h.Store.ListDatabases(inst.ID, "")
+	}
+	tid := effectiveListTenantID(h.Store, c)
+	list, err := h.Store.ListDatabasesInTenant(tid, inst.ID, "")
+	if err != nil || !includeGrantedDatabases(c) {
+		return list, err
+	}
+	uid := middleware.UserID(c)
+	extra, err := h.Store.ListGrantedDatabases(tid, uid, inst.ID, "")
+	if err != nil {
+		return nil, err
+	}
+	list = appendDatabasesByID(list, extra)
+	// 本租实例只补登记在该实例上的授权库。域名展开会把同实例上其它租户的库带进来，不用于本租实连。
+	if strings.TrimSpace(inst.TenantID) == tid {
+		return list, nil
+	}
+	via, err := h.Store.ListDatabasesViaInstanceAccess(tid, uid, inst.ID, "")
+	if err != nil {
+		return nil, err
+	}
+	list = appendDatabasesByID(list, via)
+	only, err := cdcDomainGrantOnly(h.Store, tid, uid, inst)
+	if err != nil {
+		return nil, err
+	}
+	if !only {
+		return list, nil
+	}
+	all, err := h.Store.ListGrantedDatabases(tid, uid, "", "")
+	if err != nil {
+		return nil, err
+	}
+	return appendDatabasesByID(list, all), nil
+}
+
+func includeGrantedDatabases(c *gin.Context) bool {
+	if c == nil {
+		return false
+	}
+	v := strings.TrimSpace(c.Query("include_granted"))
+	return v == "1" || strings.EqualFold(v, "true")
+}
+
+func appendDatabasesByID(list []store.Database, extra []store.Database) []store.Database {
+	seen := map[string]struct{}{}
+	for i := range list {
+		if id := strings.TrimSpace(list[i].ID); id != "" {
+			seen[id] = struct{}{}
+		}
+	}
+	for _, it := range extra {
+		id := strings.TrimSpace(it.ID)
+		if id != "" {
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+		}
+		list = append(list, it)
+	}
+	return list
 }
 
 func mergeLive(live []dbprobe.Item, registered []store.Database) []liveDBItem {

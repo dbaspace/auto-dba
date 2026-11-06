@@ -55,6 +55,7 @@ import SqlInsightSettings from '../views/config/SqlInsightSettings'
 import LoginLogs from '../views/config/LoginLogs'
 import LoginSessions from '../views/config/LoginSessions'
 import QueryAudits from '../views/config/QueryAudits'
+import ExportWhitelist from '../views/config/ExportWhitelist'
 import ClientAccess from '../views/config/ClientAccess'
 import MyAccessTokens from '../views/config/MyAccessTokens'
 import Connectors from '../views/config/Connectors'
@@ -327,6 +328,7 @@ export function TabPagePanel({ pathname, search }: { pathname: string; search?: 
       <Route path="/config/login-logs" element={<LoginLogs />} />
       <Route path="/config/login-sessions" element={<LoginSessions />} />
       <Route path="/config/query-audits" element={<QueryAudits />} />
+      <Route path="/config/export-whitelist" element={<ExportWhitelist />} />
       <Route path="/config/client-access" element={<ClientAccess />} />
       <Route path="/config/my-access-tokens" element={<MyAccessTokens />} />
       <Route path="/config/ldap" element={<AuthConfig />} />

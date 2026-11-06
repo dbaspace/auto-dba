@@ -277,6 +277,7 @@ func Init(e *gin.Engine, d Deps) {
 	secured.POST("/instances/sync-hosts-from-monitor", requireURN(store.URNInstancesCreate), d.Inst.SyncHostsFromMonitor)
 	secured.GET("/instances/:id", d.Inst.Get)
 	secured.PUT("/instances/:id", requireURN(store.URNInstancesEdit), d.Inst.Update)
+	secured.POST("/instances/:id/sync-cloud", requireURN(store.URNInstancesEdit), d.Inst.SyncCloud)
 	secured.POST("/instances/:id/assign-tenant", requireURN(store.URNTenantsImpersonate), d.Inst.AssignTenant)
 	secured.DELETE("/instances/:id", requireURN(store.URNInstancesDelete), d.Inst.Delete)
 	if d.Terminal != nil {
@@ -319,6 +320,12 @@ func Init(e *gin.Engine, d Deps) {
 	secured.PUT("/query/favorites/:id", d.DB.UpdateQueryFavorite)
 	secured.DELETE("/query/favorites/:id", d.DB.DeleteQueryFavorite)
 	secured.GET("/query/history", d.DB.ListMyQueryHistory)
+	secured.GET("/export-whitelist/check", d.DB.CheckExportWhitelist)
+	secured.POST("/query/export-record", d.DB.RecordQueryExport)
+	secured.GET("/export-whitelist", d.DB.ListExportWhitelist)
+	secured.POST("/export-whitelist", d.DB.CreateExportWhitelist)
+	secured.PUT("/export-whitelist/:id", d.DB.UpdateExportWhitelist)
+	secured.DELETE("/export-whitelist/:id", d.DB.DeleteExportWhitelist)
 
 	secured.GET("/regions", d.Region.List)
 	secured.POST("/regions", requireURN(store.URNRegionsCreate), d.Region.Create)

@@ -209,6 +209,9 @@ export default function Instances() {
   const [assignTid, setAssignTid] = useState('')
   const [assigning, setAssigning] = useState(false)
   const [syncingHosts, setSyncingHosts] = useState(false)
+  const [cloudSyncing, setCloudSyncing] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [deleting, setDeleting] = useState(false)
 
   const dbTypeKey = typeKey(form.db_type)
   const hostType = isHostType(form.db_type)
@@ -317,6 +320,7 @@ export default function Instances() {
 
   useEffect(() => {
     setPage(1)
+    setSelectedIds([])
   }, [activeType])
 
   useEffect(() => {
@@ -398,6 +402,42 @@ export default function Instances() {
     setRegionEnvs((await api.get(`/regions/${regionId}/envs`)).data.data || [])
   }
 
+  async function syncCloudFields() {
+    if (!form.id) return
+    setCloudSyncing(true)
+    try {
+      const { data } = await api.post('/instances/' + form.id + '/sync-cloud', {
+        host: form.host || '',
+        db_type: form.db_type || '',
+        cloud_vendor: form.cloud_vendor || '',
+        cloud_instance_id: form.cloud_instance_id || '',
+        cloud_region: form.cloud_region || '',
+      })
+      const row = data?.data || {}
+      const nextVendor = String(row.cloud_vendor ?? form.cloud_vendor ?? '')
+      const nextID = String(row.cloud_instance_id ?? form.cloud_instance_id ?? '')
+      const nextRegion = String(row.cloud_region ?? form.cloud_region ?? '')
+      const changed =
+        nextVendor !== String(form.cloud_vendor || '') ||
+        nextID !== String(form.cloud_instance_id || '') ||
+        nextRegion !== String(form.cloud_region || '')
+      if (changed) {
+        setForm((f) => ({
+          ...f,
+          cloud_vendor: nextVendor,
+          cloud_instance_id: nextID,
+          cloud_region: nextRegion,
+        }))
+        void load()
+      }
+      message.success(data?.message || '已补齐云资源信息')
+    } catch {
+      /* 拦截器已提示 */
+    } finally {
+      setCloudSyncing(false)
+    }
+  }
+
   async function load() {
     const { data } = await api.get('/instances', { params: { q } })
     setRows(data.data || [])
@@ -423,6 +463,7 @@ export default function Instances() {
   /** 查询：重新筛选后回到第 1 页；保存/删除等刷新不调用此函数，以保留当前页 */
   async function search() {
     setPage(1)
+    setSelectedIds([])
     await load()
   }
 
@@ -607,26 +648,52 @@ export default function Instances() {
     }
   }
 
-  function remove(row: InstanceRow) {
-    const host = isHostType(row.db_type)
+  function removeSelected() {
+    const picked = rows.filter((r) => r.id && selectedIds.includes(r.id))
+    if (!picked.length) return
+    const hasHost = picked.some((r) => isHostType(r.db_type))
     Modal.confirm({
       title: '提示',
-      content: host
-        ? '删除该主机？若主机上仍有 Agent 或集群节点，需先下线节点、删除 Agent 后再删除主机。'
-        : '删除实例及其已登记库？',
+      content: hasHost
+        ? `删除选中的 ${picked.length} 条及其已登记库？其中包含主机。若主机上仍有 Agent 或集群节点，需先下线节点、删除 Agent 后再删除主机。`
+        : `删除选中的 ${picked.length} 条及其已登记库？`,
+      okText: '删除',
       okButtonProps: { danger: true },
       onOk: async () => {
+        setDeleting(true)
+        const failed: { id: string; name: string; reason: string }[] = []
+        let removed = 0
         try {
-          await api.delete('/instances/' + row.id, { silent: true })
-        } catch (e: any) {
-          Modal.error({
-            title: host ? '主机仍被使用，无法删除' : '删除失败',
-            width: 560,
-            content: <div style={{ whiteSpace: 'pre-wrap' }}>{e?.response?.data?.message || e?.message || '删除失败'}</div>,
-          })
-          return
+          for (const row of picked) {
+            try {
+              await api.delete('/instances/' + row.id, { silent: true })
+              removed += 1
+            } catch (e: any) {
+              failed.push({
+                id: row.id || '',
+                name: row.name || row.host || row.id || '',
+                reason: e?.response?.data?.message || e?.message || '删除失败',
+              })
+            }
+          }
+          setSelectedIds(failed.map((f) => f.id).filter(Boolean))
+          await load()
+          if (failed.length) {
+            Modal.error({
+              title: removed ? `已删除 ${removed} 条，${failed.length} 条未删除` : '删除失败',
+              width: 560,
+              content: (
+                <div style={{ whiteSpace: 'pre-wrap' }}>
+                  {failed.map((f) => `${f.name}：${f.reason}`).join('\n')}
+                </div>
+              ),
+            })
+          } else if (removed) {
+            message.success(`已删除 ${removed} 条`)
+          }
+        } finally {
+          setDeleting(false)
         }
-        await load()
       },
     })
   }
@@ -688,6 +755,7 @@ export default function Instances() {
             onChange={(v) => {
               setEnvFilter(v)
               setPage(1)
+              setSelectedIds([])
             }}
           />
         </div>
@@ -710,6 +778,11 @@ export default function Instances() {
               新增实例
             </Button>
           </Auth>
+          <Auth urn={Perm.instances.delete}>
+            <Button danger disabled={!selectedIds.length} loading={deleting} onClick={removeSelected}>
+              批量删除
+            </Button>
+          </Auth>
           {isHostType(activeType) ? (
             <Auth urn={Perm.instances.create}>
               <Button loading={syncingHosts} onClick={() => void syncHostsFromMonitor()}>
@@ -730,6 +803,15 @@ export default function Instances() {
           dataSource={pagedRows}
           bordered
           pagination={false}
+          rowSelection={{
+            selectedRowKeys: selectedIds,
+            preserveSelectedRowKeys: true,
+            onChange: (keys) => {
+              const pageIds = new Set(pagedRows.map((r) => r.id).filter(Boolean) as string[])
+              const onPage = keys.map((k) => String(k)).filter((id) => pageIds.has(id))
+              setSelectedIds((prev) => [...prev.filter((id) => !pageIds.has(id)), ...onPage])
+            },
+          }}
           scroll={{ y: 'calc(100% - 47px)' }}
           style={{ height: '100%' }}
           onChange={(_pag, _filters, sorter) => {
@@ -857,7 +939,7 @@ export default function Instances() {
             },
             {
               title: '操作',
-              width: impersonating ? 300 : 220,
+              width: impersonating ? 240 : 140,
               fixed: 'right' as const,
               render: (_: unknown, row: InstanceRow) => (
                 <>
@@ -892,11 +974,6 @@ export default function Instances() {
                   <Auth urn={Perm.instances.edit}>
                     <Button type="link" onClick={() => open(row)}>
                       编辑
-                    </Button>
-                  </Auth>
-                  <Auth urn={Perm.instances.delete}>
-                    <Button type="link" danger onClick={() => remove(row)}>
-                      删除
                     </Button>
                   </Auth>
                 </>
@@ -1183,6 +1260,17 @@ export default function Instances() {
               />
             </div>
           )}
+          {showCloud && form.id ? (
+            <div className="fi">
+              <label />
+              <div className="fi-body">
+                <Button loading={cloudSyncing} onClick={() => void syncCloudFields()}>
+                  同步云资源
+                </Button>
+                <div className="type-hint">按连接主机或云实例 ID 对照已同步的云清单，补齐云厂商、云实例 ID 和云 Region。</div>
+              </div>
+            </div>
+          ) : null}
           <div className="fi">
             <label>审批人</label>
             <Select

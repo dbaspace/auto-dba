@@ -304,6 +304,9 @@ func (d *DB) seedRBAC(now string) error {
 	if err := d.ensureQueryAuditsMenu(now); err != nil {
 		return err
 	}
+	if err := d.ensureExportWhitelistMenu(now); err != nil {
+		return err
+	}
 	if err := d.ensureClientAccessMenus(now); err != nil {
 		return err
 	}
@@ -570,6 +573,8 @@ func defaultMenuIcon(id, path string) string {
 		return "safety"
 	case "m-cfg-query-audits":
 		return "audit"
+	case "m-cfg-export-whitelist":
+		return "download"
 	}
 	switch path {
 	case "/ops/dashboard":
@@ -1592,6 +1597,18 @@ func (d *DB) ensureDNSMenus(now string) error {
 		}
 	}
 	return nil
+}
+
+func (d *DB) ensureExportWhitelistMenu(now string) error {
+	m := &Menu{
+		ID: "m-cfg-export-whitelist", ParentID: "m-rbac", Title: "导出白名单", Path: "/config/export-whitelist",
+		URN: "um.sidebar.config-export-whitelist", PermissionDesc: "维护查询结果导出白名单", Icon: "download",
+		SortOrder: 64, Enabled: true, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := d.EnsureMenu(m); err != nil {
+		return err
+	}
+	return d.grantMenuToRoleCode(m.ID, "admin")
 }
 
 func (d *DB) ensureQueryAuditsMenu(now string) error {

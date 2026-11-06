@@ -372,6 +372,20 @@ func (d *DB) CreateInstance(it *Instance) error {
 	return err
 }
 
+// PatchInstanceCloudIdentity 只补云厂商、云实例 ID 和云 Region，不动连接主机、账号和密码。
+func (d *DB) PatchInstanceCloudIdentity(id, vendor, cloudID, region string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("实例不存在")
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := d.Exec(
+		`UPDATE tbl_instances SET cloud_vendor=?, cloud_instance_id=?, cloud_region=?, updated_at=? WHERE id=?`,
+		strings.TrimSpace(vendor), strings.TrimSpace(cloudID), strings.TrimSpace(region), now, id,
+	)
+	return err
+}
+
 func (d *DB) UpdateInstance(it *Instance) error {
 	it.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	normalizeInstanceDomains(it)

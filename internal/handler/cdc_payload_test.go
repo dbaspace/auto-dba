@@ -1,6 +1,10 @@
 package handler
 
-import "testing"
+import (
+	"testing"
+
+	"auto-dba/internal/store"
+)
 
 func TestHydrateCDCFromMapFlatFields(t *testing.T) {
 	t.Parallel()
@@ -79,6 +83,65 @@ func TestNormalizeCDCDescriptionCoercesStringArrays(t *testing.T) {
 	}
 	if normalizeCDCDescription(got) != got {
 		t.Fatal("second normalize should be idempotent")
+	}
+}
+
+func TestHydrateCDCFromMapCopiesSourceHost(t *testing.T) {
+	t.Parallel()
+	raw := map[string]any{
+		"name":               "init",
+		"task_type":          "init",
+		"source_instance_id": "inst-b",
+		"source_db":          "db_data_front",
+		"source_host":        "pg.test.restosuite.ai",
+		"source_port":        5432,
+	}
+	got := hydrateCDCFromMap(raw)
+	extra := parseCDCExtraMap(got.Description)
+	if extra["source_host"] != "pg.test.restosuite.ai" {
+		t.Fatalf("source_host=%v", extra["source_host"])
+	}
+	switch p := extra["source_port"].(type) {
+	case float64:
+		if int(p) != 5432 {
+			t.Fatalf("source_port=%v", p)
+		}
+	case int:
+		if p != 5432 {
+			t.Fatalf("source_port=%v", p)
+		}
+	default:
+		t.Fatalf("source_port type %T value %v", extra["source_port"], extra["source_port"])
+	}
+	plain := map[string]any{
+		"name":               "own",
+		"source_instance_id": "inst-c",
+		"source_host":        "",
+	}
+	own := hydrateCDCFromMap(plain)
+	if _, ok := parseCDCExtraMap(own.Description)["source_host"]; ok {
+		t.Fatal("empty source_host should stay unset")
+	}
+}
+
+func TestCDCDomainMatchesEnv(t *testing.T) {
+	t.Parallel()
+	if !cdcDomainMatchesEnv("test", "") || !cdcDomainMatchesEnv("", "test") || !cdcDomainMatchesEnv("test", "test") {
+		t.Fatal("expected match")
+	}
+	if cdcDomainMatchesEnv("prod", "test") {
+		t.Fatal("prod domain should not match test")
+	}
+}
+
+func TestAppendDatabasesByIDKeepsFirst(t *testing.T) {
+	t.Parallel()
+	list := appendDatabasesByID(
+		[]store.Database{{ID: "a", DBName: "db_a"}},
+		[]store.Database{{ID: "a", DBName: "dup"}, {ID: "b", DBName: "db_data_front"}},
+	)
+	if len(list) != 2 || list[0].DBName != "db_a" || list[1].DBName != "db_data_front" {
+		t.Fatalf("%+v", list)
 	}
 }
 

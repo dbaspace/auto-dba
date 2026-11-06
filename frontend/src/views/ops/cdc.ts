@@ -346,6 +346,49 @@ export function instEnv(i: any): string {
   return i?.idc || i?.env || i?.env_code || ''
 }
 
+export interface GrantedDialDomain {
+  domain: string
+  port: number
+  env_code: string
+}
+
+/** 实例上当前用户可拨号的授权域名。本租实例通常为空。 */
+export function grantedDomainsOf(i: any): GrantedDialDomain[] {
+  const raw = i?.granted_domains
+  if (!Array.isArray(raw)) return []
+  return raw
+    .map((d) => ({
+      domain: String(d?.domain || '').trim(),
+      port: Number(d?.port || 0),
+      env_code: String(d?.env_code || '').trim(),
+    }))
+    .filter((d) => d.domain)
+}
+
+/** 所选环境下用来拨号的授权域名。没有匹配域名时返回空，调用方继续用实例 host。 */
+export function pickGrantedDomain(i: any, env: string): GrantedDialDomain | undefined {
+  const all = grantedDomainsOf(i)
+  const want = String(env || '').trim()
+  if (!want) return all[0]
+  return all.find((d) => !d.env_code || d.env_code === want)
+}
+
+/** 环境匹配实例 idc，或该实例带回的授权域名环境；实例没有环境时保留。 */
+export function instVisibleInEnv(i: any, env: string): boolean {
+  const want = String(env || '').trim()
+  if (!want) return true
+  if (!instEnv(i) || instEnv(i) === want) return true
+  return grantedDomainsOf(i).some((d) => !d.env_code || d.env_code === want)
+}
+
+/** 有匹配授权域名时展示域名，否则展示实例 host。 */
+export function cdcInstLabel(i: any, env?: string): string {
+  const d = pickGrantedDomain(i, env || '')
+  if (!d) return instLabel(i)
+  const addr = d.port > 0 ? `${d.domain}:${d.port}` : d.domain
+  return i?.name ? `${i.name} — ${addr}` : addr
+}
+
 export function formatSourceScopeLabel(dbName: string, prefix: string, dbNames?: string[]): string {
   const names = dbNames || []
   if (names.length > 1) {

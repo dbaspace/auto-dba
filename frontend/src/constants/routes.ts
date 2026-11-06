@@ -134,6 +134,7 @@ export const PAGE_ROUTES = [
   { path: '/config/login-logs', title: '登录日志' },
   { path: '/config/login-sessions', title: '登录会话' },
   { path: '/config/query-audits', title: '查询审计' },
+  { path: '/config/export-whitelist', title: '导出白名单' },
   { path: '/config/client-access', title: '客户端访问授权' },
   { path: '/config/my-access-tokens', title: '我的访问令牌' },
   { path: '/config/ldap', title: '认证配置' },

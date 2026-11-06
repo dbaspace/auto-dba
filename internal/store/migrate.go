@@ -619,6 +619,9 @@ func (d *DB) ensureLoginLogsTable() error {
 	if err := d.ensureQueryAuditsTable(); err != nil {
 		return err
 	}
+	if err := d.ensureExportWhitelistTable(); err != nil {
+		return err
+	}
 	if err := d.ensureClientAccessSchema(); err != nil {
 		return err
 	}

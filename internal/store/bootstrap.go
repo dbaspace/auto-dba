@@ -118,6 +118,9 @@ func (d *DB) migrateFast() error {
 			if err := d.ensureQueryAuditsTable(); err != nil {
 				return err
 			}
+			if err := d.ensureExportWhitelistTable(); err != nil {
+				return err
+			}
 			if err := d.detachInheritedQueryAuditTenants(); err != nil {
 				return err
 			}
@@ -177,6 +180,9 @@ func (d *DB) seedFast() error {
 			}
 			// 登录会话菜单须在 skip 路径幂等补齐
 			if err := d.ensureLoginSessionsMenu(now); err != nil {
+				return err
+			}
+			if err := d.ensureExportWhitelistMenu(now); err != nil {
 				return err
 			}
 			if err := d.ensureScheduledJobsMenu(now); err != nil {

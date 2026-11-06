@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { effectiveSourceEndpoint, sourceEndpointLabel } from './cdc'
+import { cdcInstLabel, effectiveSourceEndpoint, instVisibleInEnv, pickGrantedDomain, sourceEndpointLabel } from './cdc'
 
 const inst = { name: 'ai-sea-pg', host: 'pg.member.example', port: 5432 }
 
@@ -17,6 +17,34 @@ describe('effectiveSourceEndpoint', () => {
     expect(effectiveSourceEndpoint({ debezium_config: { 'database.hostname': 'pg.obj.example' } }, inst)).toEqual({ host: 'pg.obj.example', port: 5432 })
     expect(effectiveSourceEndpoint({}, inst)).toEqual({ host: 'pg.member.example', port: 5432 })
     expect(effectiveSourceEndpoint({ debezium_config: 'not json' }, inst)).toEqual({ host: 'pg.member.example', port: 5432 })
+  })
+})
+
+describe('granted source instance', () => {
+  const foreign = {
+    id: 'inst-b',
+    name: 'b-pg',
+    host: '10.0.0.8',
+    port: 5432,
+    idc: 'other',
+    db_type: 'postgres',
+    granted_domains: [{ domain: 'pg.test.restosuite.ai', port: 5432, env_code: 'test' }],
+  }
+  const own = { id: 'inst-c', name: 'c-pg', host: '10.0.0.9', port: 5432, idc: 'test', db_type: 'postgres' }
+
+  it('keeps an instance when its idc or granted domain matches the env', () => {
+    expect(instVisibleInEnv(own, 'test')).toBe(true)
+    expect(instVisibleInEnv(foreign, 'test')).toBe(true)
+    expect(instVisibleInEnv(foreign, 'prod')).toBe(false)
+    expect(instVisibleInEnv({ idc: '' }, 'test')).toBe(true)
+  })
+
+  it('labels and dials the granted domain for the selected env', () => {
+    expect(cdcInstLabel(foreign, 'test')).toBe('b-pg — pg.test.restosuite.ai:5432')
+    expect(cdcInstLabel(own, 'test')).toBe('c-pg — 10.0.0.9:5432')
+    expect(pickGrantedDomain(foreign, 'test')?.domain).toBe('pg.test.restosuite.ai')
+    expect(pickGrantedDomain(foreign, 'prod')).toBeUndefined()
+    expect(pickGrantedDomain(own, 'test')).toBeUndefined()
   })
 })
 

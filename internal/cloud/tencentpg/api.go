@@ -87,16 +87,11 @@ func mapInstance(row map[string]any, region string) cloud.Instance {
 	if region == "" {
 		region = str(row["Region"])
 	}
-	host, port := "", 0
-	if nets, ok := row["DBInstanceNetInfo"].([]any); ok && len(nets) > 0 {
-		if m, ok := nets[0].(map[string]any); ok {
-			host = str(m["Ip"])
-			if host == "" {
-				host = str(m["Address"])
-			}
-			port = num(m["Port"])
-		}
+	var nets []any
+	if raw, ok := row["DBInstanceNetInfo"].([]any); ok {
+		nets = raw
 	}
+	host, port := cloud.PickPGIntranet(nets)
 	return cloud.Instance{
 		CloudID:  str(row["DBInstanceId"]),
 		Name:     str(row["DBInstanceName"]),

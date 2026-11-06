@@ -12,12 +12,14 @@ import {
 import {
   Button,
   Input,
+  Drawer,
   Modal,
   Pagination,
   Popover,
   Select,
   Space,
   Spin,
+  Switch,
   Tabs,
   Tag,
   Tooltip,
@@ -34,6 +36,7 @@ import {
   DoubleLeftOutlined,
   DoubleRightOutlined,
   DownloadOutlined,
+  ExpandAltOutlined,
   SearchOutlined,
   StarOutlined,
   StopOutlined,
@@ -48,6 +51,13 @@ import { queryFavoriteKey, queryHistoryKey, queryWorkspaceKey } from './querySes
 import DbTypeIcon from '../../components/DbTypeIcon'
 import SqlEditor from '../../components/SqlEditor'
 import { formatSqlContent } from '../../utils/formatSql'
+import {
+  buildExportContent,
+  downloadPasswordZip,
+  downloadTextFile,
+  formatJsonKeepBigint,
+  tableNameFromSQL,
+} from './exportResult'
 import './CommonQuery.css'
 
 const DQL_DRAFT_KEY = 'auto-dba-dql-draft'
@@ -155,6 +165,112 @@ function cellText(v: any): string {
   if (v === null || v === undefined) return 'NULL'
   if (typeof v === 'object') return JSON.stringify(v)
   return String(v)
+}
+
+const RESULT_COL_MIN = 72
+const RESULT_COL_MAX = 460
+let measureCanvas: HTMLCanvasElement | null = null
+
+function measureResultText(text: string): number {
+  if (typeof document === 'undefined') return text.length * 8
+  if (!measureCanvas) measureCanvas = document.createElement('canvas')
+  const ctx = measureCanvas.getContext('2d')
+  if (!ctx) return text.length * 8
+  ctx.font = '12px ui-sans-serif, system-ui, sans-serif'
+  return ctx.measureText(text || '').width
+}
+
+function highlightText(text: string, keyword: string): React.ReactNode {
+  const q = keyword.trim()
+  if (!q) return text
+  const lower = text.toLowerCase()
+  const nq = q.toLowerCase()
+  const parts: React.ReactNode[] = []
+  let from = 0
+  let n = 0
+  while (from < text.length) {
+    const idx = lower.indexOf(nq, from)
+    if (idx < 0) {
+      parts.push(text.slice(from))
+      break
+    }
+    if (idx > from) parts.push(text.slice(from, idx))
+    parts.push(<span className="result-hit" key={`${idx}-${n}`}>{text.slice(idx, idx + q.length)}</span>)
+    n += 1
+    from = idx + q.length
+  }
+  return parts
+}
+
+function CellDetailBody({
+  raw, index, total, prettyOn, onPretty, onPrev, onNext,
+}: {
+  raw: string
+  index: number
+  total: number
+  prettyOn: boolean
+  onPretty: (v: boolean) => void
+  onPrev: () => void
+  onNext: () => void
+}) {
+  const pretty = formatJsonKeepBigint(raw)
+  const shown = prettyOn && pretty ? pretty : raw
+  return (
+    <div className="result-detail">
+      <div className="result-detail-bar">
+        <span>
+          <Button size="small" disabled={index <= 0} onClick={onPrev}>上一条</Button>
+          <Button size="small" disabled={index >= total - 1} onClick={onNext} style={{ marginLeft: 8 }}>下一条</Button>
+          <span className="result-detail-pos">{total ? index + 1 : 0} / {total} 条记录</span>
+        </span>
+        <span>
+          <Button
+            size="small"
+            icon={<CopyOutlined />}
+            onClick={() => {
+              navigator.clipboard.writeText(shown).then(
+                () => message.success('已复制'),
+                () => message.error('复制失败'),
+              )
+            }}
+          >
+            拷贝
+          </Button>
+          {pretty ? (
+            <Button size="small" icon={<CodeOutlined />} style={{ marginLeft: 8 }} onClick={() => onPretty(!prettyOn)}>
+              {prettyOn ? '原文本' : '格式化'}
+            </Button>
+          ) : null}
+        </span>
+      </div>
+      <pre className="result-detail-body">{shown}</pre>
+    </div>
+  )
+}
+
+function ResultCell({ text, keyword, onExpand }: { text: string; keyword: string; onExpand: () => void }) {
+  const ref = useRef<HTMLSpanElement | null>(null)
+  const [overflow, setOverflow] = useState(false)
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    setOverflow(el.scrollWidth - el.clientWidth > 1)
+  }, [text, keyword])
+  return (
+    <div className="result-cell">
+      <span ref={ref} className="result-cell-text" title={text}>{highlightText(text, keyword)}</span>
+      {overflow ? (
+        <button
+          type="button"
+          className="result-cell-expand"
+          title="展开"
+          onClick={(e) => { e.stopPropagation(); onExpand() }}
+        >
+          <ExpandAltOutlined />
+        </button>
+      ) : null}
+    </div>
+  )
 }
 
 function resultCellKey(index: number) {
@@ -366,6 +482,15 @@ export default function CommonQuery() {
   })
   const [resultPage, setResultPage] = useState(1)
   const [resultKeyword, setResultKeyword] = useState('')
+  const [colWidths, setColWidths] = useState<number[]>([])
+  const colDragRef = useRef(false)
+  const [cellDetail, setCellDetail] = useState<{ row: number; col: number } | null>(null)
+  const [cellPretty, setCellPretty] = useState(false)
+  const [directExportOpen, setDirectExportOpen] = useState(false)
+  const [exportFormat, setExportFormat] = useState<'csv' | 'json' | 'sql'>('csv')
+  const [exportEncrypt, setExportEncrypt] = useState(false)
+  const [exportPassword, setExportPassword] = useState('')
+  const [exporting, setExporting] = useState(false)
   const [tableInfoOpen, setTableInfoOpen] = useState(false)
   const [tableInfoLoading, setTableInfoLoading] = useState(false)
   const [tableInfoMode, setTableInfoMode] = useState<'list' | 'sql'>('list')
@@ -767,6 +892,62 @@ export default function CommonQuery() {
     return resultRowsFiltered.slice(start, start + resultPageSize)
   }, [resultRowsFiltered, resultPage, resultPageSize])
 
+  const resultSig = `${current?.key || ''}|${current?.resultIdx || 0}|${(activeResult?.columns || []).join('\0')}|${activeResult?.elapsed_ms || 0}`
+  useEffect(() => {
+    colDragRef.current = false
+    setCellDetail(null)
+    setCellPretty(false)
+  }, [resultSig])
+
+  useEffect(() => {
+    if (colDragRef.current) return
+    const cols = activeResult?.columns || []
+    if (!cols.length) {
+      setColWidths([])
+      return
+    }
+    const widths = cols.map((name, i) => {
+      let w = measureResultText(name) + 36
+      for (const row of resultRows) {
+        w = Math.max(w, measureResultText(String(row[resultCellKey(i)] ?? '')) + 36)
+        if (w >= RESULT_COL_MAX) {
+          w = RESULT_COL_MAX
+          break
+        }
+      }
+      return Math.max(RESULT_COL_MIN, Math.min(RESULT_COL_MAX, Math.ceil(w)))
+    })
+    setColWidths(widths)
+  }, [activeResult, resultRows, resultSig])
+
+  function startColResize(e: React.MouseEvent, index: number) {
+    e.preventDefault()
+    e.stopPropagation()
+    colDragRef.current = true
+    const startX = e.clientX
+    const startW = colWidths[index] || 120
+    const move = (ev: MouseEvent) => {
+      const next = Math.max(RESULT_COL_MIN, startW + ev.clientX - startX)
+      setColWidths((list) => {
+        const copy = list.slice()
+        copy[index] = next
+        return copy
+      })
+    }
+    const up = () => {
+      document.removeEventListener('mousemove', move)
+      document.removeEventListener('mouseup', up)
+    }
+    document.addEventListener('mousemove', move)
+    document.addEventListener('mouseup', up)
+  }
+
+  function openCellDetail(pageIndex: number, col: number) {
+    const row = (Math.max(resultPage, 1) - 1) * resultPageSize + pageIndex
+    setCellPretty(false)
+    setCellDetail({ row, col })
+  }
+
   const execSQLText = useMemo(() => {
     const v = String(activeResult?.valid_sql || current?.sql || '').trim()
     return v.replace(/\s+/g, ' ')
@@ -852,6 +1033,10 @@ export default function CommonQuery() {
     setResultPage(1)
     setResultKeyword('')
   }, [activeResult, current?.resultIdx])
+
+  useEffect(() => {
+    setResultPage(1)
+  }, [resultKeyword])
 
   useEffect(() => {
     setResultPage(1)
@@ -1228,11 +1413,68 @@ export default function CommonQuery() {
     }
   }
 
+  function filteredRawRows(): any[][] {
+    const rows = activeResult?.rows || []
+    const q = resultKeyword.trim().toLowerCase()
+    if (!q) return rows
+    return rows.filter((row) => (row || []).some((cell) => cellText(cell).toLowerCase().includes(q)))
+  }
+
+  async function downloadDirectExport() {
+    const tab = current
+    const columns = activeResult?.columns || []
+    if (!tab?.dbId || !columns.length) {
+      message.warning('请先运行查询')
+      return
+    }
+    if (exportEncrypt && !exportPassword.trim()) {
+      message.warning('请填写压缩密码')
+      return
+    }
+    const rows = filteredRawRows()
+    const table = tableNameFromSQL(execSQLText || tab.sql || '')
+    const content = buildExportContent(exportFormat, columns, rows, table)
+    const stamp = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15)
+    const base = `${table}_${stamp}`
+    setExporting(true)
+    try {
+      if (exportEncrypt) {
+        await downloadPasswordZip(`${base}.zip`, `${base}.${exportFormat}`, content, exportPassword.trim())
+      } else {
+        downloadTextFile(`${base}.${exportFormat}`, content)
+      }
+      api.post('/query/export-record', {
+        database_id: tab.dbId,
+        format: exportFormat,
+        row_count: rows.length,
+        encrypted: exportEncrypt,
+      }).catch(() => undefined)
+      message.success('已导出')
+      setDirectExportOpen(false)
+    } catch (e: any) {
+      message.error(e?.message || '导出失败')
+    } finally {
+      setExporting(false)
+    }
+  }
+
   async function exportDQL() {
     const tab = current
     if (!tab?.dbId || !tab.sql?.trim()) {
       message.warning('请先选择数据库并填写 SQL')
       return
+    }
+    try {
+      const { data } = await api.get('/export-whitelist/check', { params: { database_id: tab.dbId } })
+      if (data?.allowed && (activeResult?.rows || []).length) {
+        setExportFormat('csv')
+        setExportEncrypt(false)
+        setExportPassword('')
+        setDirectExportOpen(true)
+        return
+      }
+    } catch {
+      /* 判断失败时走导出工单 */
     }
     const exportSql = tab.result && tab.executedSql?.trim() ? tab.executedSql : tab.sql
     Modal.confirm({
@@ -2095,11 +2337,25 @@ export default function CommonQuery() {
                             },
                           },
                           ...(activeResult.columns || []).map((col, i) => ({
-                            title: col,
+                            title: (
+                              <div className="result-col-head">
+                                <span className="result-col-title">{col}</span>
+                                <span
+                                  className="result-col-resize"
+                                  onMouseDown={(e) => startColResize(e, i)}
+                                />
+                              </div>
+                            ),
                             dataIndex: resultCellKey(i),
                             key: resultCellKey(i),
-                            width: 120,
-                            ellipsis: true,
+                            width: colWidths[i] || 120,
+                            render: (value: string, _: unknown, index: number) => (
+                              <ResultCell
+                                text={String(value ?? '')}
+                                keyword={resultKeyword}
+                                onExpand={() => openCellDetail(index, i)}
+                              />
+                            ),
                           })),
                         ]}
                       />
@@ -2113,6 +2369,71 @@ export default function CommonQuery() {
           )}
         </div>
       </div>
+
+      <Drawer
+        title="详情"
+        width={640}
+        open={!!cellDetail}
+        onClose={() => { setCellDetail(null); setCellPretty(false) }}
+        destroyOnClose
+      >
+        {cellDetail ? (
+          <CellDetailBody
+            raw={String(resultRowsFiltered[cellDetail.row]?.[resultCellKey(cellDetail.col)] ?? '')}
+            index={cellDetail.row}
+            total={resultRowsFiltered.length}
+            prettyOn={cellPretty}
+            onPretty={setCellPretty}
+            onPrev={() => {
+              setCellPretty(false)
+              setCellDetail((cur) => cur && cur.row > 0 ? { ...cur, row: cur.row - 1 } : cur)
+            }}
+            onNext={() => {
+              setCellPretty(false)
+              setCellDetail((cur) => cur && cur.row < resultRowsFiltered.length - 1 ? { ...cur, row: cur.row + 1 } : cur)
+            }}
+          />
+        ) : null}
+      </Drawer>
+
+      <Drawer
+        title="导出表数据"
+        width={480}
+        open={directExportOpen}
+        onClose={() => setDirectExportOpen(false)}
+        destroyOnClose
+      >
+        <div className="result-export-form">
+          <div>
+            <div className="result-export-label">格式</div>
+            <Select
+              style={{ width: '100%' }}
+              value={exportFormat}
+              onChange={(v) => setExportFormat(v)}
+              options={[
+                { value: 'csv', label: 'CSV' },
+                { value: 'json', label: 'JSON' },
+                { value: 'sql', label: 'SQL' },
+              ]}
+            />
+          </div>
+          <div className="result-export-row">
+            <span>密码压缩</span>
+            <Switch checked={exportEncrypt} onChange={setExportEncrypt} />
+          </div>
+          {exportEncrypt ? (
+            <Input.Password
+              placeholder="压缩密码"
+              value={exportPassword}
+              onChange={(e) => setExportPassword(e.target.value)}
+            />
+          ) : null}
+          <div className="result-export-tip">导出当前查询结果{resultKeyword.trim() ? '中符合搜索条件的行' : ''}，共 {filteredRawRows().length} 行。</div>
+          <Button type="primary" icon={<DownloadOutlined />} loading={exporting} onClick={() => void downloadDirectExport()}>
+            下载
+          </Button>
+        </div>
+      </Drawer>
 
       <Modal
         open={favVisible}

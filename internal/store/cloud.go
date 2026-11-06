@@ -738,6 +738,81 @@ func (d *DB) DeleteCloudResource(id string) error {
 	return err
 }
 
+// ListCloudResourcesByCloudIDLite 按云实例 ID 取清单，不读原始返回。
+func (d *DB) ListCloudResourcesByCloudIDLite(tenantID, engine, cloudID string) ([]CloudInstance, error) {
+	cloudID = strings.TrimSpace(cloudID)
+	if cloudID == "" {
+		return nil, nil
+	}
+	q := `SELECT id, tenant_id, vendor, COALESCE(engine,'postgres'), cloud_instance_id, region, instance_id FROM tbl_cloud_instances WHERE LOWER(cloud_instance_id)=LOWER(?)`
+	args := []any{cloudID}
+	if tid := strings.TrimSpace(tenantID); tid != "" {
+		q += ` AND tenant_id=?`
+		args = append(args, tid)
+	}
+	if eng := strings.TrimSpace(engine); eng != "" {
+		q += ` AND COALESCE(engine,'postgres')=?`
+		args = append(args, eng)
+	}
+	rows, err := d.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []CloudInstance
+	for rows.Next() {
+		var it CloudInstance
+		if err := rows.Scan(&it.ID, &it.TenantID, &it.Vendor, &it.Engine, &it.CloudID, &it.Region, &it.InstanceID); err != nil {
+			return nil, err
+		}
+		out = append(out, it)
+	}
+	return out, rows.Err()
+}
+
+// ListCloudResourcesForMatch 读取本租户某引擎的云清单，含原始返回，供内网地址对照。
+func (d *DB) ListCloudResourcesForMatch(tenantID, engine string) ([]CloudInstance, error) {
+	q := `SELECT id, tenant_id, vendor, COALESCE(engine,'postgres'), cloud_instance_id, region, instance_id, extras FROM tbl_cloud_instances WHERE 1=1`
+	var args []any
+	if tid := strings.TrimSpace(tenantID); tid != "" {
+		q += ` AND tenant_id=?`
+		args = append(args, tid)
+	}
+	if eng := strings.TrimSpace(engine); eng != "" {
+		q += ` AND COALESCE(engine,'postgres')=?`
+		args = append(args, eng)
+	}
+	rows, err := d.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []CloudInstance
+	for rows.Next() {
+		var it CloudInstance
+		var extra string
+		if err := rows.Scan(&it.ID, &it.TenantID, &it.Vendor, &it.Engine, &it.CloudID, &it.Region, &it.InstanceID, &extra); err != nil {
+			return nil, err
+		}
+		it.Extras = decodeAnyMap(extra)
+		out = append(out, it)
+	}
+	return out, rows.Err()
+}
+
+// LinkCloudResourceIfUnbound 把尚未挂平台实例的云清单挂到这台实例。已挂其他实例的不改。
+func (d *DB) LinkCloudResourceIfUnbound(id, instanceID string) error {
+	id = strings.TrimSpace(id)
+	instanceID = strings.TrimSpace(instanceID)
+	if id == "" || instanceID == "" {
+		return nil
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := d.Exec(`UPDATE tbl_cloud_instances SET instance_id=?, reconcile=?, updated_at=? WHERE id=? AND COALESCE(instance_id,'')=''`,
+		instanceID, "linked", now, id)
+	return err
+}
+
 func (d *DB) UpdateCloudResourceOwnership(id, accountID, instanceID, reconcile string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := d.Exec(`UPDATE tbl_cloud_instances SET account_id=?, instance_id=?, reconcile=?, updated_at=? WHERE id=?`,

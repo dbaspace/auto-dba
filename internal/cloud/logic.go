@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -101,6 +102,249 @@ func DecideBind(currentAccount, incomingAccount string, matches int) BindResult 
 		return BindKeep
 	}
 	return BindConflict
+}
+
+// IsIntranetNetType 判断云上网络类型是否为内网。
+func IsIntranetNetType(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "inner", "private", "intranet", "1", "内网":
+		return true
+	default:
+		return false
+	}
+}
+
+// PickPGIntranet 从 PostgreSQL DBInstanceNetInfo 取内网地址。未标成内网的条目不用。
+func PickPGIntranet(nets []any) (host string, port int) {
+	for _, item := range nets {
+		m, ok := item.(map[string]any)
+		if !ok || !IsIntranetNetType(anyStr(m["NetType"])) {
+			continue
+		}
+		host = anyStr(m["Ip"])
+		if host == "" {
+			host = anyStr(m["Address"])
+		}
+		port = anyInt(m["Port"])
+		if host != "" {
+			return host, port
+		}
+	}
+	return "", 0
+}
+
+// IntranetFromExtras 从已保存的云厂商原始返回里再解析内网地址。
+func IntranetFromExtras(engine string, extras map[string]any) string {
+	if len(extras) == 0 {
+		return ""
+	}
+	switch strings.ToLower(strings.TrimSpace(engine)) {
+	case "", EnginePostgres:
+		if nets, ok := extras["DBInstanceNetInfo"].([]any); ok {
+			host, _ := PickPGIntranet(nets)
+			return host
+		}
+	case EngineMySQL:
+		return anyStr(extras["Vip"])
+	case EngineRedis:
+		return anyStr(extras["WanIp"])
+	case EngineHost:
+		if ips, ok := extras["PrivateIpAddresses"].([]any); ok && len(ips) > 0 {
+			return anyStr(ips[0])
+		}
+	}
+	return ""
+}
+
+// EngineOfDBType 把平台实例类型收成云引擎名。
+func EngineOfDBType(dbType string) string {
+	switch strings.ToLower(strings.TrimSpace(dbType)) {
+	case "postgres", "postgresql", "pg":
+		return EnginePostgres
+	case "mysql":
+		return EngineMySQL
+	case "redis":
+		return EngineRedis
+	case "host", "cvm":
+		return EngineHost
+	default:
+		return strings.ToLower(strings.TrimSpace(dbType))
+	}
+}
+
+// PlatformRef 是用来和云上内网地址对照的平台实例。
+type PlatformRef struct {
+	ID     string
+	Host   string
+	DBType string
+}
+
+// MatchPlatformIDs 返回连接主机与内网地址相同、且引擎一致的平台实例。多地址按逗号拆开，忽略大小写。
+func MatchPlatformIDs(intranet, engine string, items []PlatformRef) []string {
+	intranet = strings.TrimSpace(intranet)
+	engine = strings.ToLower(strings.TrimSpace(engine))
+	if intranet == "" || engine == "" {
+		return nil
+	}
+	var ids []string
+	for _, it := range items {
+		if EngineOfDBType(it.DBType) != engine {
+			continue
+		}
+		if HostListHas(it.Host, intranet) {
+			ids = append(ids, it.ID)
+		}
+	}
+	return ids
+}
+
+// HostListHas 判断连接主机列表里是否有这一段。
+func HostListHas(list, host string) bool {
+	host = strings.ToLower(strings.TrimSpace(host))
+	if host == "" {
+		return false
+	}
+	for _, part := range splitHostList(list) {
+		if strings.ToLower(part) == host {
+			return true
+		}
+	}
+	return false
+}
+
+func splitHostList(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	raw = strings.ReplaceAll(raw, "，", ",")
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// InventoryRef 是已经同步进清单的一条云资源。
+type InventoryRef struct {
+	ID         string
+	CloudID    string
+	Vendor     string
+	Region     string
+	Intranet   string
+	InstanceID string
+}
+
+// CloudFill 是补齐平台实例云厂商、云实例 ID、云 Region 的结果。
+type CloudFill struct {
+	OK          bool
+	Message     string
+	Vendor      string
+	CloudID     string
+	Region      string
+	ResourceIDs []string
+}
+
+// FillFromInventory 用云实例 ID 或连接主机对照清单。两条都对上时以云实例 ID 为准。只补空项。
+func FillFromInventory(host, vendor, cloudID, region string, rows []InventoryRef) CloudFill {
+	vendor = strings.TrimSpace(vendor)
+	cloudID = strings.TrimSpace(cloudID)
+	region = strings.TrimSpace(region)
+	if cloudID != "" {
+		var byID []InventoryRef
+		for _, row := range rows {
+			if strings.EqualFold(strings.TrimSpace(row.CloudID), cloudID) {
+				byID = append(byID, row)
+			}
+		}
+		if len(byID) > 0 {
+			return filled(vendor, cloudID, region, byID[0], byID)
+		}
+		if len(matchIntranet(host, rows)) > 0 {
+			return CloudFill{Message: "云实例 ID 与云清单不一致，未修改"}
+		}
+		return CloudFill{Message: "云清单中没有这个云实例 ID，请先在云资源页立即同步"}
+	}
+	hits := matchIntranet(host, rows)
+	switch len(hits) {
+	case 0:
+		return CloudFill{Message: "没有对上云资源。请先在云资源页立即同步，或确认连接主机与云上内网地址一致"}
+	case 1:
+		return filled(vendor, cloudID, region, hits[0], hits)
+	default:
+		return CloudFill{Message: "连接主机对应多条云资源，未修改"}
+	}
+}
+
+func filled(vendor, cloudID, region string, src InventoryRef, rows []InventoryRef) CloudFill {
+	out := CloudFill{
+		OK:      true,
+		Vendor:  BlankFill(vendor, src.Vendor),
+		CloudID: BlankFill(cloudID, src.CloudID),
+		Region:  BlankFill(region, src.Region),
+	}
+	if out.Vendor == vendor && out.CloudID == cloudID && out.Region == region {
+		out.Message = "云信息已与清单一致"
+	} else {
+		out.Message = "已补齐云厂商、云实例 ID 和云 Region"
+	}
+	for _, row := range rows {
+		if strings.TrimSpace(row.InstanceID) == "" && strings.TrimSpace(row.ID) != "" {
+			out.ResourceIDs = append(out.ResourceIDs, row.ID)
+		}
+	}
+	return out
+}
+
+func matchIntranet(host string, rows []InventoryRef) []InventoryRef {
+	var hits []InventoryRef
+	for _, row := range rows {
+		if HostListHas(host, row.Intranet) {
+			hits = append(hits, row)
+		}
+	}
+	return hits
+}
+
+// BlankFill 空值用云清单补上，已有值保留。
+func BlankFill(cur, next string) string {
+	if strings.TrimSpace(cur) != "" {
+		return strings.TrimSpace(cur)
+	}
+	return strings.TrimSpace(next)
+}
+
+func anyStr(v any) string {
+	if v == nil {
+		return ""
+	}
+	s := strings.TrimSpace(fmt.Sprint(v))
+	if s == "<nil>" {
+		return ""
+	}
+	return s
+}
+
+func anyInt(v any) int {
+	switch n := v.(type) {
+	case float64:
+		return int(n)
+	case json.Number:
+		i, _ := n.Int64()
+		return int(i)
+	case string:
+		i, _ := strconv.Atoi(strings.TrimSpace(n))
+		return i
+	case int:
+		return n
+	default:
+		i, _ := strconv.Atoi(anyStr(v))
+		return i
+	}
 }
 
 type Approval struct {

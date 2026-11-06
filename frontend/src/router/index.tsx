@@ -58,6 +58,7 @@ import SqlInsightSettings from '../views/config/SqlInsightSettings'
 import LoginLogs from '../views/config/LoginLogs'
 import LoginSessions from '../views/config/LoginSessions'
 import QueryAudits from '../views/config/QueryAudits'
+import ExportWhitelist from '../views/config/ExportWhitelist'
 import ClientAccess from '../views/config/ClientAccess'
 import MyAccessTokens from '../views/config/MyAccessTokens'
 import Connectors from '../views/config/Connectors'
@@ -297,6 +298,7 @@ const router = createHashRouter([
       { path: 'config/login-logs', element: <LoginLogs /> },
       { path: 'config/login-sessions', element: <LoginSessions /> },
       { path: 'config/query-audits', element: <QueryAudits /> },
+      { path: 'config/export-whitelist', element: <ExportWhitelist /> },
       { path: 'config/client-access', element: <ClientAccess /> },
       { path: 'config/my-access-tokens', element: <MyAccessTokens /> },
       { path: 'config/ldap', element: <AuthConfig /> },

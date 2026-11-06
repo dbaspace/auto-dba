@@ -306,6 +306,10 @@ func (s *Service) SyncAccountEngine(ctx context.Context, account *store.CloudAcc
 		s.noteSync(account, engine, "inventory", "", err)
 		return regionErrs, err
 	}
+	var plats []store.Instance
+	if strings.TrimSpace(account.TenantID) != "" {
+		plats, _ = s.DB.ListInstancesInTenant(account.TenantID, "", "")
+	}
 	seen := make([]string, 0, len(all))
 	for _, inst := range all {
 		seen = append(seen, inst.CloudID)
@@ -316,7 +320,10 @@ func (s *Service) SyncAccountEngine(ctx context.Context, account *store.CloudAcc
 			DiskGB: inst.DiskGB, DiskUsedGB: inst.DiskUsed, Version: inst.Version, Zone: inst.Zone,
 			PayType: inst.PayType, ExpireAt: inst.ExpireAt, Extras: inst.Extras,
 		}
-		s.bindPlatform(row, prev)
+		s.bindPlatform(row, prev, inst.Host, plats)
+		if row.InstanceID != "" && (row.Reconcile == cloud.ReconcileLinked || row.Reconcile == cloud.ReconcileChanged) {
+			s.fillInstanceCloudBlanks(row.InstanceID, row.Vendor, row.CloudID, row.Region)
+		}
 		if err := s.DB.UpsertCloudInstance(row); err != nil {
 			return regionErrs, err
 		}
@@ -404,7 +411,7 @@ func (s *Service) AssignAccount(resourceID, accountID, username string) (*store.
 	}
 	keep.InstanceID = ""
 	keep.Reconcile = cloud.ReconcileCloudOnly
-	s.bindPlatform(keep, keep)
+	s.bindPlatform(keep, keep, "", nil)
 	if keep.InstanceID != "" {
 		// 同步对账可能匹配到已有平台实例；改清单账号不得回写平台绑定
 		keep.InstanceID = ""
@@ -430,7 +437,7 @@ func (s *Service) AssignAccount(resourceID, accountID, username string) (*store.
 	return out, nil
 }
 
-func (s *Service) bindPlatform(row *store.CloudInstance, prev *store.CloudInstance) {
+func (s *Service) bindPlatform(row *store.CloudInstance, prev *store.CloudInstance, intranet string, plats []store.Instance) {
 	matches, err := s.DB.InstancesByCloudID(row.TenantID, row.Vendor, row.CloudID)
 	if err != nil {
 		row.Reconcile = cloud.ReconcileCloudOnly
@@ -444,29 +451,69 @@ func (s *Service) bindPlatform(row *store.CloudInstance, prev *store.CloudInstan
 		row.Reconcile = cloud.ReconcileConflict
 		return
 	}
-	switch cloud.DecideBind(accountOf(matches), row.AccountID, len(matches)) {
-	case cloud.BindFill:
-		// 只标记对账，不把云账号写进平台实例；登记/改绑须工单。
-		row.InstanceID = matches[0].ID
-		row.Reconcile = cloud.ReconcileLinked
-	case cloud.BindKeep:
-		row.InstanceID = matches[0].ID
-		row.Reconcile = cloud.ReconcileLinked
-	case cloud.BindConflict:
-		row.Reconcile = cloud.ReconcileConflict
-		if len(matches) == 1 {
+	if len(matches) == 0 {
+		s.bindByIntranet(row, intranet, plats)
+	} else {
+		switch cloud.DecideBind(accountOf(matches), row.AccountID, len(matches)) {
+		case cloud.BindFill:
+			// 只标记对账，不把云账号写进平台实例；登记/改绑须工单。
 			row.InstanceID = matches[0].ID
-		}
-	default:
-		if len(matches) == 0 {
-			row.Reconcile = cloud.ReconcileCloudOnly
-		} else {
+			row.Reconcile = cloud.ReconcileLinked
+		case cloud.BindKeep:
+			row.InstanceID = matches[0].ID
+			row.Reconcile = cloud.ReconcileLinked
+		case cloud.BindConflict:
+			row.Reconcile = cloud.ReconcileConflict
+			if len(matches) == 1 {
+				row.InstanceID = matches[0].ID
+			}
+		default:
 			row.Reconcile = cloud.ReconcileCloudOnly
 		}
 	}
 	if prev != nil && prev.Status != "" && prev.Status != row.Status && row.Reconcile == cloud.ReconcileLinked {
 		row.Reconcile = cloud.ReconcileChanged
 	}
+}
+
+func (s *Service) bindByIntranet(row *store.CloudInstance, intranet string, plats []store.Instance) {
+	row.Reconcile = cloud.ReconcileCloudOnly
+	refs := make([]cloud.PlatformRef, 0, len(plats))
+	byID := make(map[string]store.Instance, len(plats))
+	for _, it := range plats {
+		refs = append(refs, cloud.PlatformRef{ID: it.ID, Host: it.Host, DBType: it.DBType})
+		byID[it.ID] = it
+	}
+	ids := cloud.MatchPlatformIDs(intranet, row.Engine, refs)
+	if len(ids) != 1 {
+		return
+	}
+	hit, ok := byID[ids[0]]
+	if !ok {
+		return
+	}
+	if cur := strings.TrimSpace(hit.CloudInstanceID); cur != "" && !strings.EqualFold(cur, row.CloudID) {
+		return
+	}
+	row.InstanceID = hit.ID
+	row.Reconcile = cloud.ReconcileLinked
+}
+
+func (s *Service) fillInstanceCloudBlanks(id, vendor, cloudID, region string) {
+	it, err := s.DB.GetInstance(id)
+	if err != nil || it == nil {
+		return
+	}
+	if cur := strings.TrimSpace(it.CloudInstanceID); cur != "" && !strings.EqualFold(cur, strings.TrimSpace(cloudID)) {
+		return
+	}
+	nv := cloud.BlankFill(it.CloudVendor, vendor)
+	nid := cloud.BlankFill(it.CloudInstanceID, cloudID)
+	nr := cloud.BlankFill(it.CloudRegion, region)
+	if nv == strings.TrimSpace(it.CloudVendor) && nid == strings.TrimSpace(it.CloudInstanceID) && nr == strings.TrimSpace(it.CloudRegion) {
+		return
+	}
+	_ = s.DB.PatchInstanceCloudIdentity(it.ID, nv, nid, nr)
 }
 
 func accountOf(list []store.Instance) string {

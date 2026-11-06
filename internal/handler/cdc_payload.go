@@ -66,6 +66,8 @@ func mergeFlatCDCFields(raw, extra map[string]any) {
 		}
 	}
 	copyKey("env", "env")
+	copyKey("source_host", "source_host")
+	copyKey("source_port", "source_port")
 	copyKey("source_instance_id", "source_instance_id")
 	copyKey("target_instance_id", "target_instance_id")
 	copyKey("source_schema", "source_schema")

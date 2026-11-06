@@ -54,8 +54,10 @@ import {
   formatSrDynamicPartitionDisplay,
   groupShardTables,
   instEnv,
+  instVisibleInEnv,
+  cdcInstLabel,
+  pickGrantedDomain,
   type ShardGroup,
-  instLabel,
   matchInstanceByEndpoint,
   keyModelLabel,
   matchGlob,
@@ -510,12 +512,12 @@ export default function CdcCreate() {
       } else if (!matchType(i.db_type, 'postgres')) {
         return false
       }
-      return !form.env || instEnv(i) === form.env || !instEnv(i)
+      return instVisibleInEnv(i, form.env)
     })
   }, [instances, form.env, form.source_engine])
   const targetInstances = useMemo(() => {
     const list = instances.filter(
-      (i) => matchType(i.db_type, 'starrocks') && (!form.env || instEnv(i) === form.env || !instEnv(i)),
+      (i) => matchType(i.db_type, 'starrocks') && instVisibleInEnv(i, form.env),
     )
     return list.length
       ? list
@@ -854,22 +856,43 @@ export default function CdcCreate() {
   }
 
   // ---- 环境/实例/库/表加载 ----
+  function grantedSourcePatch(instId: string, env: string) {
+    const inst = instancesRef.current.find((i) => String(i.id) === instId)
+    const d = pickGrantedDomain(inst, env)
+    if (!d) return { source_host: '', source_port: 0 }
+    return { source_host: d.domain, source_port: d.port > 0 ? d.port : Number(inst?.port || 0) }
+  }
+
+  async function reloadCDCInstances(env?: string) {
+    const params: Record<string, string> = {}
+    const envVal = String(env ?? formRef.current.env ?? '').trim()
+    if (envVal) params.env = envVal
+    const instRes = await api.get('/cdc-sync/instances', { params }).catch(() => api.get('/instances'))
+    const loaded = instRes.data.data || []
+    instancesReady.current = true
+    setInstances(loaded)
+    instancesRef.current = loaded
+  }
+
   function onEnvChange(v: string) {
     patchForm({
       env: v,
       source_instance_id: '',
       target_instance_id: '',
       source_db: '',
+      source_host: '',
+      source_port: 0,
       connector_id: '',
       tables: [],
     })
     setSourceDbs([])
     setTables([])
     setMappings([])
+    void reloadCDCInstances(v)
   }
 
   async function onSourceInstChange(v: string) {
-    patchForm({ source_instance_id: v, source_db: '', tables: [] })
+    patchForm({ source_instance_id: v, source_db: '', tables: [], ...grantedSourcePatch(v, formRef.current.env) })
     setTables([])
     setMappings([])
     await loadSourceDbs(v)
@@ -912,7 +935,7 @@ export default function CdcCreate() {
     setLoadingDbs(true)
     try {
       const [live, reg] = await Promise.all([
-        api.get(`/instances/${id}/databases`).catch(() => ({ data: { data: [] } })),
+        api.get(`/instances/${id}/databases`, { params: { include_granted: 1 } }).catch(() => ({ data: { data: [] } })),
         api.get('/databases', { params: { instance_id: id } }).catch(() => ({ data: { data: [] } })),
       ])
       let dbs = (live.data.data || [])
@@ -1964,7 +1987,7 @@ export default function CdcCreate() {
     resetMode(type)
     void (async () => {
       const [instRes, connRes, taskRes, argRes, reviewerRes] = await Promise.all([
-        api.get('/cdc-sync/instances').catch(() => api.get('/instances')),
+        api.get('/cdc-sync/instances', { params: formRef.current.env ? { env: formRef.current.env } : {} }).catch(() => api.get('/instances')),
         api.get('/connectors').catch(() => ({ data: { data: [] } })),
         api
           .get('/cdc-sync/tasks/init-list')
@@ -2002,6 +2025,10 @@ export default function CdcCreate() {
 
       if (formRef.current.task_type !== 'init') return
       if (!restoreDraft()) return
+      if (formRef.current.source_instance_id && !String(formRef.current.source_host || '').trim()) {
+        const hostPatch = grantedSourcePatch(formRef.current.source_instance_id, formRef.current.env)
+        if (hostPatch.source_host) patchForm(hostPatch)
+      }
       if (formRef.current.source_instance_id) await loadSourceDbs()
       if (formRef.current.source_instance_id && formRef.current.source_db) await loadTables()
       if (stepRef.current >= 5) void refreshSql()
@@ -2136,7 +2163,7 @@ export default function CdcCreate() {
                     value={form.source_instance_id || undefined}
                     onChange={onSourceInstChange}
                     optionFilterProp="label"
-                    options={sourceInstances.map((i) => ({ value: String(i.id), label: instLabel(i) }))}
+                    options={sourceInstances.map((i) => ({ value: String(i.id), label: cdcInstLabel(i, form.env) }))}
                   />
                 </Form.Item>
                 <Form.Item label="同步范围">
@@ -2659,7 +2686,7 @@ export default function CdcCreate() {
                   value={form.target_instance_id || undefined}
                   onChange={(v) => patchForm({ target_instance_id: v || '' })}
                   optionFilterProp="label"
-                  options={targetInstances.map((i) => ({ value: String(i.id), label: instLabel(i) }))}
+                  options={targetInstances.map((i) => ({ value: String(i.id), label: cdcInstLabel(i, form.env) }))}
                 />
                 {targetOptional && <div className="form-extra">手动 DDL 模式：可不填目标端，后续自行建表</div>}
               </Form.Item>

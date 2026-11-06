@@ -27,13 +27,13 @@ KeePlus（进程 `auto-dba`）支持多种打包方式。**构建在有 Node 18+
 
 一体包与后端包解压后工作目录须为**包根**（存在 `deploy/node-agent/bin/node-agent`、`deploy/sql-agent/bin/sql-agent` 等），集群部署和 SQL 执行器 SSH 下发无需再本机构建。
 
-可选环境变量：`GOOS` `GOARCH`（默认 `linux`/`amd64`）、`STAMP`（默认时间戳；发版用 `STAMP=v1.12.89`）、`IMAGE_TAG`、`SKIP_PNPM_INSTALL=1`（已有 `node_modules` 时）。
+可选环境变量：`GOOS` `GOARCH`（默认 `linux`/`amd64`）、`STAMP`（默认时间戳；发版用 `STAMP=v1.12.90`）、`IMAGE_TAG`、`SKIP_PNPM_INSTALL=1`（已有 `node_modules` 时）。
 
 ```bash
-STAMP=v1.12.89 ./scripts/pack_release.sh all
-STAMP=v1.12.89 ./scripts/pack_release.sh backend
-STAMP=v1.12.89 ./scripts/pack_release.sh frontend
-IMAGE_TAG=auto-dba:v1.12.89 ./scripts/pack_release.sh docker
+STAMP=v1.12.90 ./scripts/pack_release.sh all
+STAMP=v1.12.90 ./scripts/pack_release.sh backend
+STAMP=v1.12.90 ./scripts/pack_release.sh frontend
+IMAGE_TAG=auto-dba:v1.12.90 ./scripts/pack_release.sh docker
 ```
 
 ## 发布到 GitHub Release（固定流程）
@@ -46,13 +46,13 @@ IMAGE_TAG=auto-dba:v1.12.89 ./scripts/pack_release.sh docker
 # 已 push 的提交 + 写好 docs/changelog-vX.Y.Z.md 后：
 
 # 推荐：打包 + 打 tag + 创建 Release（一体包）
-PACK=1 ./scripts/publish_github_release.sh v1.12.89
+PACK=1 ./scripts/publish_github_release.sh v1.12.90
 
-# 已有 dist/*-v1.12.89.tgz 时只发版
-./scripts/publish_github_release.sh v1.12.89
+# 已有 dist/*-v1.12.90.tgz 时只发版
+./scripts/publish_github_release.sh v1.12.90
 
 # 发版前顺带删若干旧 Release（不删受仓库 Rules 保护的 tag）
-DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12.89
+DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12.90
 ```
 
 前提：本机能 `git push origin HEAD`；已安装 `gh`。若 Keychain 无凭据，先手动 push 一次或导出 `GH_TOKEN=...`。
@@ -61,7 +61,8 @@ DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12
 
 | 版本 | 要点 |
 |------|------|
-| [v1.12.89](changelog-v1.12.89.md) | **当前推荐**。查询结果的大整数按十进制原文返回，避免末尾被改掉 |
+| [v1.12.90](changelog-v1.12.90.md) | **当前推荐**。云资源按内网地址绑定，实例批量删除，查询结果按白名单导出 |
+| [v1.12.89](changelog-v1.12.89.md) | 查询结果的大整数按十进制原文返回，避免末尾被改掉 |
 | [v1.12.88](changelog-v1.12.88.md) | 工单详情审核后自动刷新，查询页点选环境，建库审批人收窄 |
 | [v1.12.87](changelog-v1.12.87.md) | 数据迁移补齐中转与定时，同步槽采集补齐 Connect，权限申请列出现有账号 |
 | [v1.12.86](changelog-v1.12.86.md) | 查询页签、收藏和历史按当前租户分开 |
