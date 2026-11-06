@@ -1,7 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Link,
-  useNavigate } from 'react-router-dom'
+  useLocation,
+  useNavigate,
+  useSearchParams } from 'react-router-dom'
 import {
   Alert,
   Button,
@@ -19,6 +21,9 @@ import {
 import ResponsiveTable from '../../components/ResponsiveTable'
 import dayjs from 'dayjs'
 import api from '../../api/request'
+import { useAppDispatch, useAppSelector } from '../../store'
+import { closeTab, openTab, tabKey } from '../../store/tabsSlice'
+import { goTicketListAndClose } from '../tickets/goTicketList'
 import { useWorkOrderDraft } from '../../hooks/useWorkOrderDraft'
 import {
   filterAccessDomainRows,
@@ -116,6 +121,13 @@ function conflictLabel(v: any) {
     >)[v] || v
   )
 }
+function domainFor(rows: AccessDomainRow[], instanceId: string, host: string) {
+  const list = (rows || []).filter((r) => String(r.instance_id || '') === String(instanceId || ''))
+  const hostKey = String(host || '').trim().toLowerCase()
+  const hit = list.find((r) => String(r.domain || '').trim().toLowerCase() === hostKey)
+  return String((hit || list[0])?.domain || '')
+}
+
 function validateObjects(list: MigrationObject[]): string {
   const seen = new Set<string>()
   for (const o of list || []) {
@@ -132,6 +144,11 @@ function validateObjects(list: MigrationObject[]): string {
 
 export default function MigrationCreate() {
   const navigate = useNavigate()
+  const location = useLocation()
+  const [searchParams] = useSearchParams()
+  const editTaskId = searchParams.get('editTaskId') || ''
+  const dispatch = useAppDispatch()
+  const menus = useAppSelector((s) => s.auth.menus)
   const [step, setStep] = useState(0)
   const [submitting, setSubmitting] = useState(false)
   const [prechecking, setPrechecking] = useState(false)
@@ -151,6 +168,7 @@ export default function MigrationCreate() {
   })
   const [extraApprovers, setExtraApprovers] = useState<string[]>([])
   const [form, setForm] = useState<MigForm>(emptyForm())
+  const approvalOn = settings.approval_enabled !== false
 
   const formRef = useRef(form)
   formRef.current = form
@@ -333,8 +351,9 @@ export default function MigrationCreate() {
   })
 
   useEffect(() => {
+    if (editTaskId) return
     schedulePersist()
-  }, [form, step, schedulePersist])
+  }, [form, step, schedulePersist, editTaskId])
 
   function payload() {
     const f = formRef.current
@@ -390,13 +409,16 @@ export default function MigrationCreate() {
       message.warning(objErr)
       return
     }
-    if (!form.assigned_approver) {
+    if (approvalOn && !form.assigned_approver) {
       message.warning('请选择审核人')
       return
     }
     setSubmitting(true)
     try {
-      const { data } = await api.post('/migration/tasks', payload(), { timeout: 60000 })
+      const req = editTaskId
+        ? api.put(`/migration/tasks/${editTaskId}`, payload(), { timeout: 60000 })
+        : api.post('/migration/tasks', payload(), { timeout: 60000 })
+      const { data } = await req
       clearOnSubmitSuccess()
       if (data.ok === false) {
         message.warning(data.message || '已创建但预检未通过')
@@ -404,10 +426,16 @@ export default function MigrationCreate() {
         navigate(id ? `/ops/migration/${id}` : '/ops/migration')
         return
       }
+      if (data.approval_required === false) {
+        message.success(form.start_mode === 'scheduled' ? '预检通过，已进入定时' : '预检通过，已开始执行')
+        const curKey = tabKey(location.pathname, location.search)
+        dispatch(openTab({ path: '/ops/migration', menus, title: '数据迁移' }))
+        dispatch(closeTab(curKey))
+        navigate('/ops/migration')
+        return
+      }
       message.success('已提交审批，通过后自动执行')
-      const row = data.data || {}
-      if (row.issue_id) navigate('/ops/tickets/' + row.issue_id)
-      else navigate(row.id ? `/ops/migration/${row.id}` : '/ops/migration')
+      goTicketListAndClose(dispatch, navigate, location, menus)
     } finally {
       setSubmitting(false)
     }
@@ -447,6 +475,52 @@ export default function MigrationCreate() {
         .filter(Boolean)
         .forEach((u) => extras.push(u))
       setExtraApprovers(extras)
+      if (editTaskId) {
+        const { data: taskRes } = await api.get(`/migration/tasks/${editTaskId}`)
+        const t = taskRes.data
+        if (t && t.status === 'pre_check_failed') {
+          const objects = (t.objects || []).map((o: any) => ({
+            source_db_name: o.source_db_name,
+            source_schema: o.source_schema || '',
+            source_table_name: o.source_table_name,
+            target_db_name: o.target_db_name,
+            target_schema: o.target_schema || '',
+            target_table_name: o.target_table_name,
+            total_bytes: Number(o.total_bytes || 0),
+          }))
+          const domains = domainRes.data.data || []
+          setForm({
+            ...emptyForm(),
+            name: t.name || '',
+            description: t.description || '',
+            db_type: t.db_type || 'postgres',
+            env: t.source_env || t.env || 'test',
+            source_env: t.source_env || t.env || 'test',
+            target_env: t.target_env || t.env || 'test',
+            start_mode: t.start_mode || 'immediate',
+            scheduled_at: t.scheduled_at || '',
+            assigned_approver: t.assigned_approver || '',
+            source_instance_id: t.source_instance_id || '',
+            target_instance_id: t.target_instance_id || '',
+            source_domain: domainFor(domains, t.source_instance_id, t.source_host),
+            target_domain: domainFor(domains, t.target_instance_id, t.target_host),
+            migration_mode: t.migration_mode || 'full_data',
+            schema_strategy: t.schema_strategy || 'init',
+            conflict_strategy: t.conflict_strategy || 'abort',
+            transfer_mode: t.transfer_mode || 'direct',
+            batch_size: t.batch_size || 1000,
+            speed_limit: Number(t.speed_limit || 0),
+            source_db: t.source_db || '',
+            target_db: t.target_db || '',
+            tables: objects.map((o: MigrationObject) => o.source_table_name),
+            objects,
+            whole_dbs: [],
+          })
+          setStep(0)
+        } else {
+          message.warning('仅预检失败的任务可以重新编辑')
+        }
+      }
       setForm((f) => {
         if (!f.assigned_approver) {
           const set = new Set(
@@ -461,7 +535,7 @@ export default function MigrationCreate() {
         }
         return f
       })
-      restoreDraft()
+      if (!editTaskId) restoreDraft()
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -509,7 +583,7 @@ export default function MigrationCreate() {
         </aside>
         <div className="mig-create-main">
           <div className="ops-title">
-            <h1>新建迁移任务</h1>
+            <h1>{editTaskId ? '编辑迁移任务' : '新建迁移任务'}</h1>
             <Button onClick={() => navigate('/ops/migration')}>返回列表</Button>
           </div>
           {(form.source_env === 'prod' || form.target_env === 'prod') && (
@@ -600,7 +674,7 @@ export default function MigrationCreate() {
                   />
                 </Form.Item>
               )}
-              <Form.Item label="审核人" required>
+              <Form.Item label="审核人" required={approvalOn}>
                 <Select
                   showSearch
                   mode="tags"
@@ -728,6 +802,9 @@ export default function MigrationCreate() {
                     <Radio value="direct">直连流式传输</Radio>
                     <Radio value="oss">OSS 中转</Radio>
                   </Radio.Group>
+                  {form.transfer_mode === 'oss' && form.db_type !== 'postgres' && (
+                    <Alert type="warning" showIcon className="mt" message="OSS 中转当前仅支持 PostgreSQL" />
+                  )}
                   {form.transfer_mode === 'oss' && !ossReadyForEnv && (
                     <Alert
                       type="warning"
@@ -750,6 +827,15 @@ export default function MigrationCreate() {
                   step={100}
                   value={form.batch_size}
                   onChange={(v) => patchForm({ batch_size: Number(v) })}
+                />
+              </Form.Item>
+              <Form.Item label="限速（行/秒）" extra="留空或 0 时使用全局默认限速">
+                <InputNumber
+                  min={0}
+                  max={1000000}
+                  step={100}
+                  value={form.speed_limit}
+                  onChange={(v) => patchForm({ speed_limit: v == null ? 0 : Number(v) })}
                 />
               </Form.Item>
             </>
@@ -831,12 +917,12 @@ export default function MigrationCreate() {
             下一步
           </Button>
         ) : (
-          <Button type="primary" loading={submitting} disabled={!form.assigned_approver} onClick={submit}>
-            提交审批
+          <Button type="primary" loading={submitting} disabled={approvalOn && !form.assigned_approver} onClick={submit}>
+            {approvalOn ? '提交审批' : '提交'}
           </Button>
         )}
       </div>
-      {step === 4 && <p className="hint">提交后超过 8 小时未审核完成，系统将自动取消。</p>}
+      {step === 4 && approvalOn && <p className="hint">提交后超过 8 小时未审核完成，系统将自动取消。</p>}
         </div>
       </div>
     </div>

@@ -2,6 +2,8 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -317,7 +319,9 @@ func (h *MigrationHandler) Create(c *gin.Context) {
 	if t.TargetDB == "" {
 		t.TargetDB = t.SourceDB
 	}
-	perf := h.Store.GetMigrationSettings().Performance
+	settings := h.Store.GetMigrationSettings()
+	perf := settings.Performance
+	approvalOn := settings.ApprovalEnabled
 	if t.BatchSize <= 0 {
 		t.BatchSize = perf.BatchSize
 	}
@@ -337,39 +341,46 @@ func (h *MigrationHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
-	preferred := strings.TrimSpace(req.AssignedApprover)
-	if preferred == "" {
-		preferred = strings.TrimSpace(req.Reviewer)
-	}
-	if preferred == "" {
-		preferred = strings.TrimSpace(req.Approver)
-	}
-	if preferred == "" {
-		preferred = strings.TrimSpace(req.AssignedTo)
-	}
-	if preferred == "" {
-		def, _ := h.Store.GetGlobalArg("migration_approver_user_ids")
-		if def == "" {
-			def, _ = h.Store.GetGlobalArg("sync_default_approver")
+	reviewer := ""
+	if approvalOn {
+		preferred := strings.TrimSpace(req.AssignedApprover)
+		if preferred == "" {
+			preferred = strings.TrimSpace(req.Reviewer)
 		}
-		preferred = strings.TrimSpace(def)
-		if i := strings.IndexAny(preferred, ",，"); i >= 0 {
-			preferred = strings.TrimSpace(preferred[:i])
+		if preferred == "" {
+			preferred = strings.TrimSpace(req.Approver)
 		}
+		if preferred == "" {
+			preferred = strings.TrimSpace(req.AssignedTo)
+		}
+		if preferred == "" {
+			def, _ := h.Store.GetGlobalArg("migration_approver_user_ids")
+			if def == "" {
+				def, _ = h.Store.GetGlobalArg("sync_default_approver")
+			}
+			preferred = strings.TrimSpace(def)
+			if i := strings.IndexAny(preferred, ",，"); i >= 0 {
+				preferred = strings.TrimSpace(preferred[:i])
+			}
+		}
+		var aerr error
+		reviewer, aerr = resolveTenantAssignee(h.Store, middleware.TenantID(c), preferred)
+		if aerr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"message": aerr.Error()})
+			return
+		}
+		th := &TicketHandler{Store: h.Store}
+		if approvers := th.resolveApprovers(t.SourceID, t.SourceDB); len(approvers) > 0 && !usernameInList(reviewer, approvers) {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "审核人不在实例/库审批人名单中"})
+			return
+		}
+		t.AssignedApprover = reviewer
+		t.ApprovalStatus = store.StatusPending
+	} else {
+		t.AssignedApprover = ""
+		t.ApprovalStatus = store.StatusApproved
 	}
-	reviewer, aerr := resolveTenantAssignee(h.Store, middleware.TenantID(c), preferred)
-	if aerr != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"message": aerr.Error()})
-		return
-	}
-	th := &TicketHandler{Store: h.Store}
-	if approvers := th.resolveApprovers(t.SourceID, t.SourceDB); len(approvers) > 0 && !usernameInList(reviewer, approvers) {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "审核人不在实例/库审批人名单中"})
-		return
-	}
-	t.AssignedApprover = reviewer
 	t.Status = store.StatusPending
-	t.ApprovalStatus = store.StatusPending
 	if err := h.Store.CreateMigration(t); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -437,31 +448,218 @@ func (h *MigrationHandler) Create(c *gin.Context) {
 		return
 	}
 
-	issue := &store.Issue{
-		IssueType:   store.IssueTypeMigration,
-		Type:        store.IssueTypeMigration,
-		InstanceID:  t.SourceID,
-		DBName:      t.SourceDB,
-		SQLContent:  "migration " + t.ID + " " + t.Name,
-		Description: t.Description,
-		Submitter:   middleware.Username(c),
-		AssignedTo:  reviewer,
-	}
-	stampTenantID(c, func(tid string) {
-		if issue != nil {
-			issue.TenantID = tid
+	h.finishMigration(c, t, reviewer, approvalOn, items)
+}
+
+func (h *MigrationHandler) finishMigration(c *gin.Context, t *store.MigrationTask, reviewer string, approvalOn bool, items []store.MigrationPrecheck) {
+	if !approvalOn {
+		t.ApprovalStatus = store.StatusApproved
+		t.IssueID = ""
+		if t.StartMode == "scheduled" {
+			t.Status = store.StatusScheduled
+			_ = h.Store.UpdateMigration(t)
+			_ = h.Store.AddMigrationLog(t.ID, "INFO", "预检通过，等待定时启动")
+			saved, _ := h.Store.GetMigrationInTenant(t.ID, effectiveListTenantID(h.Store, c))
+			c.JSON(http.StatusOK, gin.H{"data": saved, "ok": true, "items": items, "approval_required": false})
+			return
 		}
-	})
-	if err := h.Store.CreateIssue(issue); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		_ = h.Store.UpdateMigration(t)
+		if err := h.engine().Start(t.ID); err != nil {
+			t.Status = store.StatusPending
+			t.ErrorMessage = err.Error()
+			_ = h.Store.UpdateMigration(t)
+			_ = h.Store.AddMigrationLog(t.ID, "WARN", "预检通过，启动失败: "+err.Error())
+			saved, _ := h.Store.GetMigrationInTenant(t.ID, effectiveListTenantID(h.Store, c))
+			c.JSON(http.StatusOK, gin.H{"data": saved, "ok": false, "items": items, "approval_required": false, "message": err.Error()})
+			return
+		}
+		_ = h.Store.AddMigrationLog(t.ID, "INFO", "预检通过，已开始执行")
+		saved, _ := h.Store.GetMigrationInTenant(t.ID, effectiveListTenantID(h.Store, c))
+		c.JSON(http.StatusOK, gin.H{"data": saved, "ok": true, "items": items, "approval_required": false})
 		return
 	}
-	NotifyIssueCreatedAsync(h.Store, h.Secret, issue)
-	t.IssueID = issue.ID
+	if strings.TrimSpace(t.IssueID) == "" {
+		issue := &store.Issue{
+			IssueType:   store.IssueTypeMigration,
+			Type:        store.IssueTypeMigration,
+			InstanceID:  t.SourceID,
+			DBName:      t.SourceDB,
+			SQLContent:  "migration " + t.ID + " " + t.Name,
+			Description: t.Description,
+			Submitter:   middleware.Username(c),
+			AssignedTo:  reviewer,
+		}
+		stampTenantID(c, func(tid string) {
+			if issue != nil {
+				issue.TenantID = tid
+			}
+		})
+		if err := h.Store.CreateIssue(issue); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+			return
+		}
+		NotifyIssueCreatedAsync(h.Store, h.Secret, issue)
+		t.IssueID = issue.ID
+	}
+	t.Status = store.StatusPending
+	t.ApprovalStatus = store.StatusPending
 	_ = h.Store.UpdateMigration(t)
 	_ = h.Store.AddMigrationLog(t.ID, "INFO", "已提交审批，通过后自动执行")
 	saved, _ := h.Store.GetMigrationInTenant(t.ID, effectiveListTenantID(h.Store, c))
-	c.JSON(http.StatusOK, gin.H{"data": saved, "ok": true, "items": items})
+	c.JSON(http.StatusOK, gin.H{"data": saved, "ok": true, "items": items, "approval_required": true})
+}
+
+func (h *MigrationHandler) resubmit(c *gin.Context, t *store.MigrationTask, req migCreateReq) {
+	if len(req.Objects) > 0 {
+		if strings.TrimSpace(req.SourceDB) == "" {
+			req.SourceDB = strings.TrimSpace(req.Objects[0].SourceDB)
+		}
+		if strings.TrimSpace(req.TargetDB) == "" {
+			req.TargetDB = strings.TrimSpace(req.Objects[0].TargetDB)
+		}
+	}
+	if strings.TrimSpace(req.Name) == "" || req.SourceID == "" || req.TargetID == "" || strings.TrimSpace(req.SourceDomain) == "" || strings.TrimSpace(req.TargetDomain) == "" || (req.SourceDB == "" && len(req.WholeDBs) == 0 && len(req.Objects) == 0) {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "任务名称、源/目标域名、源库必填"})
+		return
+	}
+	t.Name = req.Name
+	t.Description = req.Description
+	t.DBType = store.NormalizeDBType(req.DBType)
+	t.Env = req.Env
+	t.SourceEnv = req.SourceEnv
+	t.TargetEnv = req.TargetEnv
+	t.SourceID = req.SourceID
+	t.TargetID = req.TargetID
+	t.SourceDB = req.SourceDB
+	t.TargetDB = req.TargetDB
+	t.MigrationMode = req.MigrationMode
+	t.SchemaStrategy = req.SchemaStrategy
+	t.ConflictStrategy = req.ConflictStrategy
+	t.TransferMode = req.TransferMode
+	t.StartMode = req.StartMode
+	t.ScheduledAt = req.ScheduledAt
+	t.BatchSize = req.BatchSize
+	t.SpeedLimit = req.SpeedLimit
+	t.ErrorMessage = ""
+	t.FinishedAt = ""
+	if t.TargetDB == "" {
+		t.TargetDB = t.SourceDB
+	}
+	settings := h.Store.GetMigrationSettings()
+	perf := settings.Performance
+	approvalOn := settings.ApprovalEnabled
+	if t.BatchSize <= 0 {
+		t.BatchSize = perf.BatchSize
+	}
+	if t.SpeedLimit <= 0 {
+		t.SpeedLimit = perf.DefaultSpeedLimit
+	}
+	if t.StartMode == "scheduled" {
+		t.ScheduledAt = normalizeScheduledAt(t.ScheduledAt)
+		if t.ScheduledAt == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "定时启动请填写启动时间"})
+			return
+		}
+	} else {
+		t.ScheduledAt = ""
+	}
+	if err := h.applyDialDomains(c, t, req.SourceDomain, req.TargetDomain); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	reviewer := ""
+	if approvalOn {
+		preferred := strings.TrimSpace(req.AssignedApprover)
+		if preferred == "" {
+			preferred = strings.TrimSpace(t.AssignedApprover)
+		}
+		var aerr error
+		reviewer, aerr = resolveTenantAssignee(h.Store, middleware.TenantID(c), preferred)
+		if aerr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"message": aerr.Error()})
+			return
+		}
+		th := &TicketHandler{Store: h.Store}
+		if approvers := th.resolveApprovers(t.SourceID, t.SourceDB); len(approvers) > 0 && !usernameInList(reviewer, approvers) {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "审核人不在实例/库审批人名单中"})
+			return
+		}
+		t.AssignedApprover = reviewer
+		t.ApprovalStatus = store.StatusPending
+	} else {
+		t.AssignedApprover = ""
+		t.ApprovalStatus = store.StatusApproved
+	}
+	t.Status = store.StatusPending
+	objs := dbmig.BuildObjectsFromSels(t.DBType, req.Objects)
+	if len(objs) == 0 {
+		objs = dbmig.BuildObjects(t.DBType, t.SourceDB, t.TargetDB, req.Tables)
+	}
+	if len(req.WholeDBs) > 0 {
+		expandCtx, expandCancel := context.WithTimeout(c.Request.Context(), 3*time.Minute)
+		expanded, err := dbmig.ExpandWholeDBs(expandCtx, h.Store, h.Secret, t.DBType, t.SourceID, req.WholeDBs, req.WholeDBTargets, req.ExcludeTables, objs, t.SourceHost)
+		expandCancel()
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "展开整库对象失败: " + err.Error()})
+			return
+		}
+		objs = expanded
+	}
+	if len(objs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "请至少选择一张表或整个库"})
+		return
+	}
+	if strings.TrimSpace(t.SourceDB) == "" {
+		t.SourceDB = objs[0].SourceDB
+	}
+	if strings.TrimSpace(t.TargetDB) == "" {
+		t.TargetDB = objs[0].TargetDB
+	}
+	if err := h.Store.ReplaceMigrationObjects(t.ID, objs); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	t.TotalObjects = len(objs)
+	t.CompletedObjects = 0
+	t.CompletedRows = 0
+	if err := h.Store.UpdateMigration(t); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	dbs := map[string]struct{}{}
+	var estBytes int64
+	for _, o := range objs {
+		if o.SourceDB != "" {
+			dbs[o.SourceDB] = struct{}{}
+		}
+		estBytes += o.TotalBytes
+	}
+	_ = h.Store.SetMigrationTags(t.ID, store.MergeMigrationTags(h.Store.GetMigrationTags(t.ID), map[string]any{
+		"selection": map[string]any{
+			"db_count":              len(dbs),
+			"table_count":           len(objs),
+			"estimated_total_bytes": estBytes,
+		},
+	}))
+	_ = h.Store.AddMigrationLog(t.ID, "INFO", "已重新编辑并预检")
+	pctx, pcancel := context.WithTimeout(c.Request.Context(), 60*time.Second)
+	items := dbmig.Precheck(pctx, h.Store, h.Secret, t)
+	pcancel()
+	_ = h.Store.ReplaceMigrationPrechecks(t.ID, items)
+	if !dbmig.PrecheckPassed(items) {
+		t.Status = store.StatusPreCheckFailed
+		t.ErrorMessage = "预检未通过"
+		_ = h.Store.UpdateMigration(t)
+		_ = h.Store.AddMigrationLog(t.ID, "ERROR", "重新编辑后预检未通过")
+		saved, _ := h.Store.GetMigrationInTenant(t.ID, effectiveListTenantID(h.Store, c))
+		c.JSON(http.StatusOK, gin.H{"data": saved, "ok": false, "items": items, "message": "预检未通过"})
+		return
+	}
+	fresh, _ := h.Store.GetMigration(t.ID)
+	if fresh != nil {
+		t.Objects = fresh.Objects
+	}
+	h.finishMigration(c, t, reviewer, approvalOn, items)
 }
 
 func (h *MigrationHandler) loadTask(c *gin.Context) *store.MigrationTask {
@@ -748,13 +946,33 @@ func (h *MigrationHandler) Approve(c *gin.Context) {
 		Comment string `json:"comment"`
 	}
 	_ = c.ShouldBindJSON(&req)
-	t.ApprovalStatus = "approved"
+	if strings.TrimSpace(t.IssueID) != "" {
+		if err := h.Store.UpdateIssueStatus(t.IssueID, store.StatusApproved, req.Comment); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+			return
+		}
+	}
+	t.ApprovalStatus = store.StatusApproved
 	t.ApprovedBy = user
 	t.ApprovalComment = req.Comment
-	_ = h.Store.UpdateMigration(t)
-	_ = h.Store.AddMigrationLog(t.ID, "INFO", "审批通过: "+user)
-	if t.StartMode != "scheduled" {
-		_ = h.engine().Start(t.ID)
+	if t.StartMode == "scheduled" {
+		t.Status = store.StatusScheduled
+		if err := h.Store.UpdateMigration(t); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+			return
+		}
+		_ = h.Store.AddMigrationLog(t.ID, "INFO", "审批已通过，等待定时启动")
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+		return
+	}
+	if err := h.Store.UpdateMigration(t); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	_ = h.Store.AddMigrationLog(t.ID, "INFO", "审批已通过，开始执行")
+	if err := h.engine().Start(t.ID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
@@ -780,11 +998,19 @@ func (h *MigrationHandler) Reject(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "驳回原因必填"})
 		return
 	}
-	t.ApprovalStatus = "rejected"
+	if strings.TrimSpace(t.IssueID) != "" {
+		if err := h.Store.UpdateIssueStatus(t.IssueID, store.StatusRejected, req.Comment); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+			return
+		}
+	}
+	t.ApprovalStatus = store.StatusRejected
 	t.Status = store.StatusCanceled
 	t.ApprovalComment = req.Comment
+	t.ErrorMessage = "审批已驳回"
 	t.FinishedAt = time.Now().UTC().Format(time.RFC3339)
 	_ = h.Store.UpdateMigration(t)
+	_ = h.Store.AddMigrationLog(t.ID, "WARN", "审批已驳回")
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
@@ -1013,13 +1239,38 @@ func (h *MigrationHandler) Update(c *gin.Context) {
 	if t == nil {
 		return
 	}
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil || strings.TrimSpace(string(body)) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "参数无效"})
+		return
+	}
+	var probe struct {
+		Objects []dbmig.ObjectSel `json:"objects"`
+	}
+	if err := json.Unmarshal(body, &probe); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "参数无效"})
+		return
+	}
+	if len(probe.Objects) > 0 {
+		if t.Status != store.StatusPreCheckFailed {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "仅预检失败的任务可重新编辑"})
+			return
+		}
+		var req migCreateReq
+		if err := json.Unmarshal(body, &req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "参数无效"})
+			return
+		}
+		h.resubmit(c, t, req)
+		return
+	}
 	var req struct {
 		AssignedApprover      string `json:"assigned_approver"`
 		AssignedApproverLogin string `json:"assigned_approver_login"`
 		Description           string `json:"description"`
 		Name                  string `json:"name"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := json.Unmarshal(body, &req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "参数无效"})
 		return
 	}

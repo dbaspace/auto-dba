@@ -5,6 +5,7 @@ import {
   Button,
   Card,
   Descriptions,
+  Checkbox,
   Input,
   Modal,
   Pagination,
@@ -64,14 +65,16 @@ function statusTextOf(s: any, approvalStatus?: any) {
       executed: '已完成',
       completed: '已完成',
       failed: '失败',
+      paused: '已暂停',
       canceled: '已取消',
+      trigger_missed: '错过触发',
     } as Record<string, string>)[s] || s || '—'
   )
 }
 function statusTagColor(s: any) {
   if (s === 'executed' || s === 'completed') return 'success'
   if (s === 'running' || s === 'pre_checking' || s === 'scheduled' || s === 'pending') return 'warning'
-  if (s === 'failed' || s === 'pre_check_failed') return 'error'
+  if (s === 'failed' || s === 'pre_check_failed' || s === 'trigger_missed') return 'error'
   return 'default'
 }
 function approvalText(s: any) {
@@ -204,6 +207,7 @@ export default function MigrationDetail() {
   const [logPage, setLogPage] = useState(1)
   const [logPageSize, setLogPageSize] = useState(10)
   const [verifying, setVerifying] = useState(false)
+  const [verifySchema, setVerifySchema] = useState(false)
   const [remainSec, setRemainSec] = useState<number | null>(null)
 
   const taskRef = useRef<any>(task)
@@ -374,7 +378,7 @@ export default function MigrationDetail() {
   async function triggerVerify() {
     setVerifying(true)
     try {
-      const { data } = await api.post(`/migration/tasks/${id}/verify`, { row_count: true })
+      const { data } = await api.post(`/migration/tasks/${id}/verify`, { row_count: true, schema: verifySchema })
       setVerifyRows(mapVerifyRows(data))
       message.success('校验完成')
     } catch (e: any) {
@@ -463,6 +467,11 @@ export default function MigrationDetail() {
             className="mb"
             message="预检未通过"
             description="请修正配置后重新编辑并预检，或联系任务创建人处理。"
+            action={
+              <Button size="small" type="primary" onClick={() => navigate(`/ops/migration/create?editTaskId=${id}`)}>
+                重新编辑
+              </Button>
+            }
           />
         )}
 
@@ -797,6 +806,13 @@ export default function MigrationDetail() {
                     <Button type="primary" loading={verifying} onClick={triggerVerify}>
                       触发校验
                     </Button>
+                    <Checkbox
+                      style={{ marginLeft: 12 }}
+                      checked={verifySchema}
+                      onChange={(e) => setVerifySchema(e.target.checked)}
+                    >
+                      同时比对表结构
+                    </Checkbox>
                     <ResponsiveTable
                       className="mt"
                       rowKey={(_, idx) => String(idx)}

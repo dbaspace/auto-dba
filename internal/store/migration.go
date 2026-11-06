@@ -324,6 +324,15 @@ func (d *DB) ListMigrationPrechecks(taskID string) ([]MigrationPrecheck, error) 
 	return out, rows.Err()
 }
 
+func (d *DB) CountActiveMigrationsExcept(taskID string) (int, error) {
+	var n int
+	err := d.QueryRow(`SELECT COUNT(1) FROM tbl_migration_tasks
+		WHERE id<>? AND status IN (?, ?)
+		AND COALESCE(tenant_id,'') = COALESCE((SELECT tenant_id FROM tbl_migration_tasks WHERE id=?), '')`,
+		taskID, StatusRunning, StatusPreChecking, taskID).Scan(&n)
+	return n, err
+}
+
 func (d *DB) ListDueScheduledMigrations() ([]MigrationTask, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	rows, err := d.Query(`SELECT `+migTaskCols+` FROM tbl_migration_tasks WHERE status=? AND scheduled_at<>'' AND scheduled_at<=?`, StatusScheduled, now)

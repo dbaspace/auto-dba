@@ -31,6 +31,7 @@ const STATUS_OPTS = [
   { label: '失败', value: 'failed' },
   { label: '已暂停', value: 'paused' },
   { label: '已取消', value: 'canceled' },
+  { label: '错过触发', value: 'trigger_missed' },
 ]
 
 function dbTypeLabel(t: any) {
@@ -72,6 +73,7 @@ function statusText(s: any, row?: any) {
       failed: '失败',
       paused: '已暂停',
       canceled: '已取消',
+      trigger_missed: '错过触发',
     } as Record<string, string>)[s] || s || '—'
   )
 }
@@ -80,7 +82,7 @@ function statusTagColor(s: any, row?: any) {
   if (row?.approval_status === 'pending' && (s === 'pending' || s === 'init')) return 'warning'
   if (s === 'executed' || s === 'completed') return 'success'
   if (s === 'running' || s === 'pre_checking' || s === 'scheduled') return 'warning'
-  if (s === 'failed' || s === 'pre_check_failed') return 'error'
+  if (s === 'failed' || s === 'pre_check_failed' || s === 'trigger_missed') return 'error'
   return 'default'
 }
 function approvalText(s: any) {

@@ -104,6 +104,8 @@ export default function DclGrants() {
   const [accessDomains, setAccessDomains] = useState<AccessDomainRow[]>([])
   const [envGroups, setEnvGroups] = useState<TicketEnvGroup[]>([])
   const [databases, setDatabases] = useState<any[]>([])
+  const [dbAccounts, setDbAccounts] = useState<string[]>([])
+  const [accountLoading, setAccountLoading] = useState(false)
   const [dbLoading, setDbLoading] = useState(false)
   const [approverLoading, setApproverLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -139,12 +141,6 @@ export default function DclGrants() {
     return list.map((d) => ({ value: d.id, label: dbLabel(d) }))
   }, [databases, form.instance_id, form.domain])
 
-  const accountOptions = useMemo(() => {
-    const names: string[] = []
-    if (currentInst?.username) names.push(currentInst.username)
-    return names
-  }, [currentInst])
-
   const approverOptions = useMemo(() => {
     const set = new Set<string>()
     if (defaultApprover) set.add(defaultApprover)
@@ -165,7 +161,9 @@ export default function DclGrants() {
     ? '请先选择数据源(别名)'
     : !form.db_type
       ? '请先选择数据库类型'
-      : '输入账号筛选，或直接选择/自定义输入'
+      : accountLoading
+        ? '正在读取实例账号…'
+        : '输入账号筛选，或直接选择/自定义输入'
   const approverPlaceholder = approverLoading
     ? '加载审批人…'
     : approverOptions.length
@@ -201,7 +199,7 @@ export default function DclGrants() {
       instance_id: instanceId,
       domain,
       db_ids: [],
-      username: inst?.username || '',
+      ...(instanceId ? {} : { username: '' }),
     })
     await loadDbs(instanceId)
     const f = formRef.current
@@ -270,7 +268,11 @@ export default function DclGrants() {
       return
     }
     const username = String(form.username || '').trim()
-    if (!accountOptions.includes(username) && !username.toLowerCase().endsWith('_user')) {
+    if (accountLoading) {
+      message.warning('正在读取实例账号，请稍候')
+      return
+    }
+    if (!dbAccounts.includes(username) && !username.toLowerCase().endsWith('_user')) {
       message.warning('自定义账号须以 _user 结尾')
       return
     }
@@ -354,6 +356,39 @@ export default function DclGrants() {
   }, [])
 
   useEffect(() => {
+    let cancelled = false
+    const instanceId = form.instance_id
+    const domain = form.domain
+    if (!instanceId || !domain || !form.db_type) {
+      setDbAccounts([])
+      setAccountLoading(false)
+      return
+    }
+    setAccountLoading(true)
+    ;(async () => {
+      try {
+        const { data } = await api.get('/dcl-grants/accounts', {
+          params: { instance_id: instanceId, domain },
+        })
+        if (cancelled) return
+        const names: string[] = Array.isArray(data?.data) ? data.data.map((n: unknown) => String(n || '').trim()).filter(Boolean) : []
+        setDbAccounts(names)
+        const username = String(formRef.current.username || '').trim()
+        if (username && !names.includes(username)) patchForm({ username: '' })
+      } catch {
+        if (cancelled) return
+        setDbAccounts([])
+        if (String(formRef.current.username || '').trim()) patchForm({ username: '' })
+      } finally {
+        if (!cancelled) setAccountLoading(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [form.instance_id, form.domain, form.db_type])
+
+  useEffect(() => {
     antdForm.setFieldsValue({
       ...form,
       instance_id: sourceSelectValue,
@@ -425,11 +460,11 @@ export default function DclGrants() {
           >
             <AutoComplete
               allowClear
-              disabled={!form.instance_id || !form.db_type}
+              disabled={!form.instance_id || !form.db_type || accountLoading}
               placeholder={accountPlaceholder}
               value={form.username || undefined}
               onChange={(v) => patchForm({ username: v || '' })}
-              options={accountOptions.map((a) => ({ value: a, label: a }))}
+              options={dbAccounts.map((a) => ({ value: a, label: a }))}
             />
           </Form.Item>
           <Form.Item

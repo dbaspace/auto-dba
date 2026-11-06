@@ -22,6 +22,10 @@ func Precheck(ctx context.Context, st *store.DB, secretKey string, t *store.Migr
 		return items
 	}
 	if t.TransferMode == "oss" {
+		if engine != "postgres" {
+			add("transfer_mode", "required", "failed", "OSS 中转当前仅支持 PostgreSQL")
+			return items
+		}
 		ossEnv := strings.TrimSpace(t.SourceEnv)
 		if ossEnv == "" {
 			ossEnv = strings.TrimSpace(t.Env)

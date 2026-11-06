@@ -258,6 +258,51 @@ func (c *Client) AbortMultipartUpload(ctx context.Context, objectKey, uploadID s
 	return nil
 }
 
+// PutObject 上传完整对象，返回 ETag。
+func (c *Client) PutObject(ctx context.Context, objectKey, contentType string, body []byte) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, c.objectURL(objectKey, nil), bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	if err := c.sign(req, sha256HexBytes(body)); err != nil {
+		return "", err
+	}
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode >= 300 {
+		return "", fmt.Errorf("PutObject HTTP %d: %s", resp.StatusCode, string(b))
+	}
+	return strings.Trim(resp.Header.Get("ETag"), `"`), nil
+}
+
+// DeleteObject 删除对象。不存在时视为成功。
+func (c *Client) DeleteObject(ctx context.Context, objectKey string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.objectURL(objectKey, nil), nil)
+	if err != nil {
+		return err
+	}
+	if err := c.sign(req, sha256HexBytes(nil)); err != nil {
+		return err
+	}
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusNoContent || resp.StatusCode < 300 {
+		return nil
+	}
+	return fmt.Errorf("DeleteObject HTTP %d", resp.StatusCode)
+}
+
 // HeadObject 返回对象 Content-Length。
 func (c *Client) HeadObject(ctx context.Context, objectKey string) (int64, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodHead, c.objectURL(objectKey, nil), nil)

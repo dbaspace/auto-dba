@@ -117,6 +117,10 @@ func (d *DB) migrate() error {
 			active_pid BIGINT NOT NULL DEFAULT 0,
 			lag_bytes BIGINT NOT NULL DEFAULT 0,
 			plugin TEXT,
+			connect_base TEXT NOT NULL DEFAULT '',
+			connector_name TEXT NOT NULL DEFAULT '',
+			task_name TEXT NOT NULL DEFAULT '',
+			topic TEXT NOT NULL DEFAULT '',
 			updated_at TEXT NOT NULL,
 			UNIQUE(host, port, slot_name)
 		)`,
@@ -1730,6 +1734,11 @@ func (d *DB) ensureCDCSyncLogsTable() error {
 }
 
 func (d *DB) ensureSyncSlotColumns() error {
+	for _, col := range []string{"connect_base", "connector_name", "task_name", "topic"} {
+		if err := d.ensureColumnIfMissing("tbl_sync_slots", col, "TEXT NOT NULL DEFAULT ''"); err != nil {
+			return err
+		}
+	}
 	specs := []struct{ col, def string }{
 		{"confirmed_flush_lsn", "TEXT"},
 		{"active_pid", "BIGINT NOT NULL DEFAULT 0"},

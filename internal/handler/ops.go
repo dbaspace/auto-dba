@@ -1009,6 +1009,7 @@ func (h *SlotHandler) List(c *gin.Context) {
 		return
 	}
 	rows := cdc.AttachSlotCDC(list, tasks, insts)
+	rows = cdc.FillSlotConnectFallback(rows)
 	if rows == nil {
 		rows = []cdc.SlotRow{}
 	}
@@ -1220,6 +1221,8 @@ func (h *SlotHandler) runSlotCollect(parent context.Context, tid string, job *sl
 	finalNotes := append([]string(nil), notes...)
 	mu.Unlock()
 
+	_, connectNote := h.enrichSlotsFromConnect(ctx, tid)
+
 	msg := fmt.Sprintf("已采集 %d 个复制槽", finalCollected)
 	if finalSkipped > 0 {
 		msg += fmt.Sprintf("，跳过 %d 个实例", finalSkipped)
@@ -1230,6 +1233,9 @@ func (h *SlotHandler) runSlotCollect(parent context.Context, tid string, job *sl
 			shown = append(append([]string{}, finalNotes[:3]...), fmt.Sprintf("另有 %d 条失败", len(finalNotes)-3))
 		}
 		msg += "：" + strings.Join(shown, "；")
+	}
+	if connectNote != "" {
+		msg += "。" + connectNote
 	}
 	job.mu.Lock()
 	job.Status = "done"
@@ -1242,6 +1248,56 @@ func (h *SlotHandler) runSlotCollect(parent context.Context, tid string, job *sl
 	job.FinishedAt = time.Now().Format("2006-01-02 15:04:05")
 	job.mu.Unlock()
 	h.persistSlotOpLog(tid, store.SyncSlotOpCollect, formatSlotOpLine("采集", msg))
+}
+
+func (h *SlotHandler) enrichSlotsFromConnect(ctx context.Context, tid string) (int, string) {
+	conns, err := h.Store.ListConnectorsInTenant(tid, "")
+	if err != nil {
+		return 0, "Connect 补齐失败：" + err.Error()
+	}
+	var bases []string
+	seen := map[string]struct{}{}
+	for _, conn := range conns {
+		base := cdc.NormalizeConnectBaseURL(conn.DBZHost)
+		if base == "" {
+			continue
+		}
+		if _, ok := seen[base]; ok {
+			continue
+		}
+		seen[base] = struct{}{}
+		bases = append(bases, base)
+	}
+	if len(bases) == 0 {
+		return 0, ""
+	}
+	metas, complete := cdc.LoadConnectSlotMetas(ctx, bases)
+	slots, err := h.Store.ListSlotsInTenant(tid)
+	if err != nil {
+		return 0, "Connect 补齐失败：" + err.Error()
+	}
+	assigned := cdc.AssignConnectSlotMeta(slots, metas)
+	n := 0
+	for id, meta := range assigned {
+		if err := h.Store.UpdateSlotConnectMeta(id, meta.Base, meta.ConnectorName, meta.Topic); err != nil {
+			return n, "Connect 补齐写入失败：" + err.Error()
+		}
+		n++
+	}
+	if complete {
+		for _, slot := range slots {
+			if _, ok := assigned[slot.ID]; ok {
+				continue
+			}
+			if slot.ConnectMetaBase == "" && slot.ConnectMetaName == "" && slot.ConnectMetaTask == "" && slot.ConnectMetaTopic == "" {
+				continue
+			}
+			if err := h.Store.ClearSlotConnectMeta(slot.ID); err != nil {
+				return n, "Connect 补齐清理失败：" + err.Error()
+			}
+		}
+	}
+	return n, fmt.Sprintf("Connect 补齐 %d 个槽", n)
 }
 
 func slotDBNames(inst *store.Instance, tasks []store.CDCTask, slots []store.SyncSlot) []string {

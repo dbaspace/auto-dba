@@ -265,6 +265,11 @@ type SyncSlot struct {
 	LagBytes          int64  `json:"lag_bytes,omitempty"`
 	Plugin            string `json:"plugin,omitempty"`
 	UpdatedAt         string `json:"updated_at"`
+	// Connect 采集补齐的连接器信息。列表在本地 CDC 任务未命中时才用来填展示列。
+	ConnectMetaBase  string `json:"-"`
+	ConnectMetaName  string `json:"-"`
+	ConnectMetaTask  string `json:"-"`
+	ConnectMetaTopic string `json:"-"`
 }
 
 type MigrationTask struct {
@@ -805,6 +810,7 @@ const (
 	StatusCompleted      = "completed"
 	StatusPreChecking    = "pre_checking"
 	StatusPreCheckFailed = "pre_check_failed"
+	StatusTriggerMissed  = "trigger_missed"
 	StatusSucceeded      = "succeeded"
 	StatusReinitializing = "reinitializing"
 )

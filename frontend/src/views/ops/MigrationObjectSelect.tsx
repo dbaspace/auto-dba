@@ -13,8 +13,10 @@ import './MigrationObjectSelect.css'
 
 export interface MigrationObject {
   source_db_name: string
+  source_schema?: string
   source_table_name: string
   target_db_name: string
+  target_schema?: string
   target_table_name: string
   total_bytes: number
 }

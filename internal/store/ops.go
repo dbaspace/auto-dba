@@ -174,7 +174,7 @@ func (d *DB) ListSlots() ([]SyncSlot, error) {
 }
 
 func (d *DB) ListSlotsInTenant(tenantID string) ([]SyncSlot, error) {
-	q := `SELECT id, host, port, slot_name, database_name, active, COALESCE(active_pid,0), restart_lsn, COALESCE(confirmed_flush_lsn,''), COALESCE(lag_bytes,0), plugin, updated_at FROM tbl_sync_slots WHERE 1=1`
+	q := `SELECT id, host, port, slot_name, database_name, active, COALESCE(active_pid,0), restart_lsn, COALESCE(confirmed_flush_lsn,''), COALESCE(lag_bytes,0), plugin, updated_at, COALESCE(connect_base,''), COALESCE(connector_name,''), COALESCE(task_name,''), COALESCE(topic,'') FROM tbl_sync_slots WHERE 1=1`
 	args := []any{}
 	q, args = appendTenantFilter(q, args, tenantID)
 	q += ` ORDER BY host, slot_name`
@@ -187,7 +187,7 @@ func (d *DB) ListSlotsInTenant(tenantID string) ([]SyncSlot, error) {
 	for rows.Next() {
 		var s SyncSlot
 		var active int
-		if err := rows.Scan(&s.ID, &s.Host, &s.Port, &s.SlotName, &s.Database, &active, &s.ActivePID, &s.RestartLSN, &s.ConfirmedFlushLSN, &s.LagBytes, &s.Plugin, &s.UpdatedAt); err != nil {
+		if err := rows.Scan(&s.ID, &s.Host, &s.Port, &s.SlotName, &s.Database, &active, &s.ActivePID, &s.RestartLSN, &s.ConfirmedFlushLSN, &s.LagBytes, &s.Plugin, &s.UpdatedAt, &s.ConnectMetaBase, &s.ConnectMetaName, &s.ConnectMetaTask, &s.ConnectMetaTopic); err != nil {
 			return nil, err
 		}
 		s.Active = active == 1
@@ -268,6 +268,25 @@ func (d *DB) UpsertSlot(s *SyncSlot) error {
 		return d.AssignTenantID("tbl_sync_slots", s.ID, tid)
 	}
 	return nil
+}
+
+func (d *DB) UpdateSlotConnectMeta(id, base, connectorName, topic string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil
+	}
+	_, err := d.Exec(`UPDATE tbl_sync_slots SET connect_base=?, connector_name=?, task_name=?, topic=? WHERE id=?`,
+		strings.TrimSpace(base), strings.TrimSpace(connectorName), strings.TrimSpace(connectorName), strings.TrimSpace(topic), id)
+	return err
+}
+
+func (d *DB) ClearSlotConnectMeta(id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil
+	}
+	_, err := d.Exec(`UPDATE tbl_sync_slots SET connect_base='', connector_name='', task_name='', topic='' WHERE id=?`, id)
+	return err
 }
 
 func (d *DB) DeleteSlot(id string) error {

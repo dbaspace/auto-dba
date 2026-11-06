@@ -588,6 +588,7 @@ func Init(e *gin.Engine, d Deps) {
 	rr.POST("", requireURN(store.URNReviewRulesCreate), d.Review.Create)
 	rr.PUT("", requireURN(store.URNReviewRulesEdit), d.Review.Update)
 
+	secured.GET("/dcl-grants/accounts", d.DCL.Accounts)
 	secured.POST("/dcl-grants", d.DCL.Submit)
 
 	if d.ResourceApply != nil {

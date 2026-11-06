@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"auto-dba/internal/ossupload"
 	"auto-dba/internal/store"
 )
 
@@ -42,6 +43,21 @@ func (e *Engine) start(taskID string, resume bool) error {
 	}
 	if !store.MigrationApproved(t) {
 		return fmt.Errorf("审批未通过，不能启动")
+	}
+	limit := e.Store.GetMigrationSettings().Performance.MaxConcurrentTasks
+	if limit <= 0 {
+		limit = 3
+	}
+	active, err := e.Store.CountActiveMigrationsExcept(taskID)
+	if err != nil {
+		return err
+	}
+	if active >= limit {
+		return fmt.Errorf("当前租户同时执行的迁移任务已达上限 %d", limit)
+	}
+	t.Status = store.StatusPreChecking
+	if err := e.Store.UpdateMigration(t); err != nil {
+		return err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	e.mu.Lock()
@@ -188,6 +204,19 @@ func (e *Engine) execute(ctx context.Context, t *store.MigrationTask, resume boo
 	if tableTimeout <= 0 {
 		tableTimeout = 30 * time.Minute
 	}
+	var ossCli *ossupload.Client
+	var ossPrefix string
+	var ossChunkMB int
+	if strings.EqualFold(strings.TrimSpace(t.TransferMode), "oss") && t.MigrationMode != "schema_only" {
+		if engine != "postgres" {
+			return fmt.Errorf("OSS 中转当前仅支持 PostgreSQL")
+		}
+		ossCli, ossPrefix, ossChunkMB, err = openMigrationOSS(e.Store, e.Secret, t)
+		if err != nil {
+			return err
+		}
+	}
+	var manifestMu sync.Mutex
 
 	var pairMu sync.Mutex
 	pairs := map[string]*dbPair{}
@@ -327,7 +356,15 @@ func (e *Engine) execute(ctx context.Context, t *store.MigrationTask, resume boo
 			}
 
 			if t.MigrationMode != "schema_only" {
-				n, err := copyTable(tableCtx, engine, pair.src, pair.tgt, o, t.BatchSize, t.SpeedLimit, func(delta int64) error {
+				copyFn := func(cb func(int64) error) (int64, error) {
+					return copyTable(tableCtx, engine, pair.src, pair.tgt, o, t.BatchSize, t.SpeedLimit, cb)
+				}
+				if ossCli != nil {
+					copyFn = func(cb func(int64) error) (int64, error) {
+						return copyPostgresViaOSS(tableCtx, e.Store, ossCli, ossPrefix, ossChunkMB, &manifestMu, t, pair.src, pair.tgt, o, t.BatchSize, t.SpeedLimit, cb)
+					}
+				}
+				n, err := copyFn(func(delta int64) error {
 					progressMu.Lock()
 					o.CompletedRows += delta
 					t.CompletedRows += delta
@@ -480,14 +517,29 @@ func (e *Engine) ScanDue() {
 	if err != nil {
 		return
 	}
+	tol := e.Store.GetMigrationSettings().Performance.ScheduleToleranceMin
+	now := time.Now().UTC()
 	for _, t := range list {
-		if !store.MigrationApproved(&t) {
-			continue
-		}
-		if err := e.Start(t.ID); err != nil {
-			e.logf(t.ID, "WARN", "定时启动失败: %s", err.Error())
-		} else {
-			e.logf(t.ID, "INFO", "定时任务已触发")
+		switch ScheduleDueAction(t.ScheduledAt, now, tol) {
+		case "missed":
+			task, _ := e.Store.GetMigration(t.ID)
+			if task == nil || task.Status != store.StatusScheduled {
+				continue
+			}
+			task.Status = store.StatusTriggerMissed
+			task.ErrorMessage = "已超出定时触发容忍窗口"
+			task.FinishedAt = now.Format(time.RFC3339)
+			_ = e.Store.UpdateMigration(task)
+			e.logf(t.ID, "WARN", "已超出定时触发容忍窗口")
+		case "start":
+			if !store.MigrationApproved(&t) {
+				continue
+			}
+			if err := e.Start(t.ID); err != nil {
+				e.logf(t.ID, "WARN", "定时启动失败: %s", err.Error())
+			} else {
+				e.logf(t.ID, "INFO", "定时任务已触发")
+			}
 		}
 	}
 }
@@ -515,11 +567,13 @@ func BuildObjects(engine, sourceDB, targetDB string, tables []string) []store.Mi
 }
 
 type ObjectSel struct {
-	SourceDB    string `json:"source_db_name"`
-	SourceTable string `json:"source_table_name"`
-	TargetDB    string `json:"target_db_name"`
-	TargetTable string `json:"target_table_name"`
-	TotalBytes  int64  `json:"total_bytes"`
+	SourceDB     string `json:"source_db_name"`
+	SourceSchema string `json:"source_schema"`
+	SourceTable  string `json:"source_table_name"`
+	TargetDB     string `json:"target_db_name"`
+	TargetSchema string `json:"target_schema"`
+	TargetTable  string `json:"target_table_name"`
+	TotalBytes   int64  `json:"total_bytes"`
 }
 
 func BuildObjectsFromSels(engine string, items []ObjectSel) []store.MigrationObject {
@@ -535,21 +589,31 @@ func BuildObjectsFromSels(engine string, items []ObjectSel) []store.MigrationObj
 		if table == "" {
 			table = srcTable
 		}
+		if s := strings.TrimSpace(it.SourceSchema); s != "" {
+			schema = s
+		}
 		tgtDB := strings.TrimSpace(it.TargetDB)
 		if tgtDB == "" {
 			tgtDB = srcDB
 		}
+		tgtSchema := schema
 		tgtTable := strings.TrimSpace(it.TargetTable)
 		if tgtTable == "" {
 			tgtTable = table
 		}
-		_, tt := splitTable(engine, tgtTable)
+		ts, tt := splitTable(engine, tgtTable)
 		if tt != "" {
 			tgtTable = tt
+			if strings.TrimSpace(it.TargetSchema) == "" && strings.Contains(strings.TrimSpace(it.TargetTable), ".") {
+				tgtSchema = ts
+			}
+		}
+		if s := strings.TrimSpace(it.TargetSchema); s != "" {
+			tgtSchema = s
 		}
 		out = append(out, store.MigrationObject{
 			SourceDB: srcDB, SourceSchema: schema, SourceTable: table,
-			TargetDB: tgtDB, TargetSchema: schema, TargetTable: tgtTable,
+			TargetDB: tgtDB, TargetSchema: tgtSchema, TargetTable: tgtTable,
 			ObjectType: "table", TotalBytes: it.TotalBytes,
 		})
 	}
