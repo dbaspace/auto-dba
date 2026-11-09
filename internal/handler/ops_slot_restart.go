@@ -214,6 +214,11 @@ func (h *SlotHandler) runSlotRestart(parent context.Context, tid string, job *sl
 		h.finishRestartJob(tid, job, fmt.Sprintf("加载实例失败：%v", err))
 		return
 	}
+	dbs, err := h.Store.ListDatabasesInTenant(tid, "", "")
+	if err != nil {
+		h.finishRestartJob(tid, job, fmt.Sprintf("加载已登记库失败：%v", err))
+		return
+	}
 
 	for i := range items {
 		if i > 0 {
@@ -226,7 +231,7 @@ func (h *SlotHandler) runSlotRestart(parent context.Context, tid string, job *sl
 		default:
 		}
 
-		label, result, detail := h.restartOneSlot(ctx, tid, items[i], tasks, insts)
+		label, result, detail := h.restartOneSlot(ctx, tid, items[i], tasks, insts, dbs)
 		job.mu.Lock()
 		job.Done = i + 1
 		if job.Total > 0 {
@@ -279,7 +284,7 @@ func (h *SlotHandler) finishRestartJob(tid string, job *slotRestartJob, msg stri
 }
 
 // restartOneSlot 返回展示名、结果(ok|skip|fail)、日志详情。
-func (h *SlotHandler) restartOneSlot(ctx context.Context, tid string, item slotRestartItem, tasks []store.CDCTask, insts []store.Instance) (label, result, detail string) {
+func (h *SlotHandler) restartOneSlot(ctx context.Context, tid string, item slotRestartItem, tasks []store.CDCTask, insts []store.Instance, dbs []store.Database) (label, result, detail string) {
 	slot, how, errMsg := h.resolveRestartSlot(tid, item)
 	if slot == nil {
 		label = restartItemLabel(item)
@@ -289,26 +294,28 @@ func (h *SlotHandler) restartOneSlot(ctx context.Context, tid string, item slotR
 		return label, "skip", errMsg
 	}
 	_ = how
-	rows := cdc.AttachSlotCDC([]store.SyncSlot{*slot}, tasks, insts)
-	taskName := slot.SlotName
-	hostDB := fmt.Sprintf("%s/%s", slot.Host, slot.Database)
-	if len(rows) > 0 && rows[0].TaskName != "" {
-		taskName = rows[0].TaskName
+	connName, connectBase, taskName := cdc.ResolveSlotConnector(*slot, tasks, insts)
+	if taskName == "" {
+		taskName = slot.SlotName
 	}
+	hostDB := fmt.Sprintf("%s/%s", slot.Host, slot.Database)
 	slotName := strings.TrimSpace(slot.SlotName)
 	label = fmt.Sprintf("%s slot=%s (%s)", taskName, slotName, hostDB)
-	if len(rows) == 0 || rows[0].ConnectorName == "" || rows[0].ConnectBase == "" {
+	if connName == "" || connectBase == "" {
 		return label, "skip", fmt.Sprintf("跳过：未匹配到槽 %s、库 %s 对应的 connector", slotName, slot.Database)
 	}
-	if strings.HasSuffix(strings.ToLower(rows[0].ConnectorName), "-add") {
-		return label, "skip", fmt.Sprintf("跳过：槽 %s、库 %s 不能用加表任务名 %s 当 connector", slotName, slot.Database, rows[0].ConnectorName)
+	if strings.HasSuffix(strings.ToLower(connName), "-add") {
+		return label, "skip", fmt.Sprintf("跳过：槽 %s、库 %s 不能用加表任务名 %s 当 connector", slotName, slot.Database, connName)
 	}
 	inst := cdc.FindInstanceForSlot(*slot, insts)
 	if inst == nil {
 		return label, "fail", "失败：未找到匹配实例凭证"
 	}
-	connName := rows[0].ConnectorName
-	if err := cdc.RestartSyncSlotItem(ctx, inst, h.Secret, slot.Database, rows[0].ConnectBase, connName); err != nil {
+	dialHost, derr := cdc.DatabaseDialHost(dbs, inst.ID, slot.Database)
+	if derr != nil {
+		return label, "fail", "失败：" + derr.Error()
+	}
+	if err := cdc.RestartSyncSlotItem(ctx, inst, h.Secret, slot.Database, connectBase, connName, dialHost); err != nil {
 		return label, "fail", "失败：" + err.Error()
 	}
 	return label, "ok", fmt.Sprintf("成功：heartbeat + %s/tasks/0", connName)

@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"auto-dba/internal/store"
 )
 
 func TestRestartDebeziumTask0(t *testing.T) {
@@ -49,6 +51,40 @@ func TestRestartDebeziumTask0_409Retries(t *testing.T) {
 	}
 	if n := rec.count("/tasks/0/restart"); n != 3 {
 		t.Fatalf("want 3 attempts, got %d: %v", n, rec.calls)
+	}
+}
+
+func TestDatabaseDialHostUsesRegisteredDomain(t *testing.T) {
+	dbs := []store.Database{{
+		InstanceID: "i1", DBName: "db_data_front", Domains: []string{"pg.bj.restosuite.cn"},
+	}}
+	got, err := DatabaseDialHost(dbs, "i1", "db_data_front")
+	if err != nil || got != "pg.bj.restosuite.cn" {
+		t.Fatalf("domain %q err %v", got, err)
+	}
+	if got == "10.0.0.8" {
+		t.Fatal("must not use connection host")
+	}
+	if _, err := DatabaseDialHost(dbs, "i1", "db_missing"); err == nil || !strings.Contains(err.Error(), "未登记域名") {
+		t.Fatalf("missing db: %v", err)
+	}
+	bare := []store.Database{{InstanceID: "i1", DBName: "db_data_front"}}
+	if _, err := DatabaseDialHost(bare, "i1", "db_data_front"); err == nil {
+		t.Fatal("empty domains must fail")
+	}
+}
+
+func TestFindInstanceForSlotByListedDomain(t *testing.T) {
+	insts := []store.Instance{{
+		ID: "i1", Host: "10.0.0.8", Port: 5432, Domains: []string{"pg.bj.restosuite.cn"},
+	}}
+	slot := store.SyncSlot{Host: "pg.bj.restosuite.cn", Port: 5432, SlotName: "s"}
+	got := FindInstanceForSlot(slot, insts)
+	if got == nil || got.ID != "i1" {
+		t.Fatalf("domain host = %+v", got)
+	}
+	if got.Host != "10.0.0.8" {
+		t.Fatalf("instance host changed: %s", got.Host)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -79,14 +80,96 @@ func splitInstanceTag(raw string) (key, value string, ok bool) {
 	return strings.TrimSpace(raw[:i]), strings.TrimSpace(raw[i+1:]), true
 }
 
+// CollectHost 采集拨号只用连接主机的第一段。没有连接主机就失败，不用域名。
+func CollectHost(inst *store.Instance) (string, error) {
+	if inst == nil {
+		return "", fmt.Errorf("实例不存在")
+	}
+	h := strings.TrimSpace(inst.Host)
+	if i := strings.IndexAny(h, ",，"); i >= 0 {
+		h = strings.TrimSpace(h[:i])
+	}
+	if h == "" {
+		return "", fmt.Errorf("未配置连接主机")
+	}
+	return h, nil
+}
+
+// SlotCollectPlan 是一次采集里某台实例要不要连。同一连接主机和端口只采第一次。
+type SlotCollectPlan struct {
+	Host string
+	Skip string
+}
+
+// PlanSlotCollect 按连接主机加端口去重。没有连接主机、或该地址已经排过的实例记入 Skip。
+func PlanSlotCollect(insts []store.Instance) []SlotCollectPlan {
+	out := make([]SlotCollectPlan, len(insts))
+	seen := map[string]string{}
+	for i := range insts {
+		host, err := CollectHost(&insts[i])
+		if err != nil {
+			out[i].Skip = err.Error()
+			continue
+		}
+		key := strings.ToLower(host) + "\n" + strconv.Itoa(insts[i].Port)
+		if prev, ok := seen[key]; ok {
+			out[i].Host = host
+			out[i].Skip = fmt.Sprintf("连接地址 %s:%d 已由 %s 采集，跳过", host, insts[i].Port, prev)
+			continue
+		}
+		name := strings.TrimSpace(insts[i].Name)
+		if name == "" {
+			name = insts[i].ID
+		}
+		seen[key] = name
+		out[i].Host = host
+	}
+	return out
+}
+
+// CollectReplaceAliases 覆盖槽行时带上连接主机、域名和标签 domain=，好把以前按域名记下的同名槽改回来。
+func CollectReplaceAliases(inst *store.Instance) []string {
+	out := InstanceHostAliases(inst)
+	seen := map[string]struct{}{}
+	for _, h := range out {
+		seen[strings.ToLower(h)] = struct{}{}
+	}
+	add := func(raw string) {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			return
+		}
+		key := strings.ToLower(raw)
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, raw)
+	}
+	if inst == nil {
+		return out
+	}
+	for _, d := range inst.Domains {
+		add(d)
+	}
+	add(inst.DomainName)
+	for _, raw := range inst.Tags {
+		k, v, ok := splitInstanceTag(raw)
+		if ok && strings.EqualFold(k, "domain") {
+			add(v)
+		}
+	}
+	return out
+}
+
 // CollectInstanceSlots 对单个实例只建一条连接，读完即关。dbNames 是 postgres 库连不上时的备选库，仍只查复制槽目录。
-// 拨号地址用标签 domain=，不用连接主机。
+// 拨号地址用连接主机，不用域名。
 func CollectInstanceSlots(ctx context.Context, inst *store.Instance, secret string, dbNames []string) ([]store.SyncSlot, error) {
-	domain, err := SlotTagDomain(inst)
+	host, err := CollectHost(inst)
 	if err != nil {
 		return nil, err
 	}
-	dial := dbmig.WithDialHost(inst, domain)
+	dial := dbmig.WithDialHost(inst, host)
 	var last error
 	for i, name := range slotQueryDatabases(dbNames) {
 		ictx, cancel := context.WithTimeout(ctx, 8*time.Second)
@@ -287,6 +370,15 @@ func AttachSlotCDC(slots []store.SyncSlot, tasks []store.CDCTask, insts []store.
 		out = append(out, row)
 	}
 	return out
+}
+
+// ResolveSlotConnector 先按本地 CDC 任务配对，对不上再用采集记下的连接器。
+func ResolveSlotConnector(slot store.SyncSlot, tasks []store.CDCTask, insts []store.Instance) (name, base, taskName string) {
+	rows := FillSlotConnectFallback(AttachSlotCDC([]store.SyncSlot{slot}, tasks, insts))
+	if len(rows) == 0 {
+		return "", "", ""
+	}
+	return strings.TrimSpace(rows[0].ConnectorName), strings.TrimSpace(rows[0].ConnectBase), strings.TrimSpace(rows[0].TaskName)
 }
 
 // slotTaskRank 让初始化任务压过加表等子任务。子任务最高 3 分，init 从 100 起，所以库名对得上的 init 不会被 *-add 盖掉。

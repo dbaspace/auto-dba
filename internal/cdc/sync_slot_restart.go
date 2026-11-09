@@ -19,11 +19,33 @@ const (
 	connectTask0HTTPTimeout = 30 * time.Second
 )
 
-// RestartSyncSlotItem 同步列表单条重启：连业务库写 heartbeat，再 POST .../tasks/0/restart。
-// 不走 CDC 编排，也不调用 includeTasks 全量重启。
-func RestartSyncSlotItem(ctx context.Context, inst *store.Instance, secret, dbName, connectBase, connectorName string) error {
+// DatabaseDialHost 取该库在实例上登记的域名。没有登记则失败，不回退连接主机。
+func DatabaseDialHost(dbs []store.Database, instanceID, dbName string) (string, error) {
+	instanceID = strings.TrimSpace(instanceID)
+	dbName = strings.TrimSpace(dbName)
+	if instanceID == "" || dbName == "" {
+		return "", fmt.Errorf("库 %s 未登记域名", dbName)
+	}
+	for _, db := range dbs {
+		if db.InstanceID != instanceID || !strings.EqualFold(strings.TrimSpace(db.DBName), dbName) {
+			continue
+		}
+		for _, d := range db.Domains {
+			if s := strings.TrimSpace(d); s != "" {
+				return s, nil
+			}
+		}
+		return "", fmt.Errorf("库 %s 未登记域名", dbName)
+	}
+	return "", fmt.Errorf("库 %s 未登记域名", dbName)
+}
+
+// RestartSyncSlotItem 同步列表单条重启：按库域名连业务库写 heartbeat，再 POST .../tasks/0/restart。
+// 不走 CDC 编排，也不调用 includeTasks 全量重启，不改实例连接主机和 CDC 任务记录。
+func RestartSyncSlotItem(ctx context.Context, inst *store.Instance, secret, dbName, connectBase, connectorName, dialHost string) error {
 	dbName = strings.TrimSpace(dbName)
 	connectorName = strings.TrimSpace(connectorName)
+	dialHost = strings.TrimSpace(dialHost)
 	if inst == nil {
 		return fmt.Errorf("实例不存在")
 	}
@@ -33,12 +55,16 @@ func RestartSyncSlotItem(ctx context.Context, inst *store.Instance, secret, dbNa
 	if connectorName == "" {
 		return fmt.Errorf("connector 名称为空")
 	}
+	if dialHost == "" {
+		return fmt.Errorf("库 %s 未登记域名", dbName)
+	}
 	base := NormalizeConnectBaseURL(connectBase)
 	if base == "" {
 		return fmt.Errorf("connect 地址为空")
 	}
 
-	if err := updateSyncSlotHeartbeat(ctx, inst, secret, dbName); err != nil {
+	dial := dbmig.WithDialHost(inst, dialHost)
+	if err := updateSyncSlotHeartbeat(ctx, dial, secret, dbName); err != nil {
 		return err
 	}
 	return RestartDebeziumTask0(ctx, base, connectorName)
@@ -83,7 +109,7 @@ func RestartDebeziumTask0(ctx context.Context, base, name string) error {
 	return nil
 }
 
-// FindInstanceForSlot 按槽的 host:port 在实例列表中匹配。
+// FindInstanceForSlot 按槽的 host:port 在实例列表中匹配。连接主机优先；对不上时再看实例域名和标签 domain=，便于还记在域名上的旧槽找到凭证。
 func FindInstanceForSlot(slot store.SyncSlot, insts []store.Instance) *store.Instance {
 	for i := range insts {
 		inst := &insts[i]
@@ -91,5 +117,36 @@ func FindInstanceForSlot(slot store.SyncSlot, insts []store.Instance) *store.Ins
 			return inst
 		}
 	}
+	for i := range insts {
+		inst := &insts[i]
+		if inst.Port != slot.Port {
+			continue
+		}
+		if instanceListedDomain(inst, slot.Host) {
+			return inst
+		}
+	}
 	return nil
+}
+
+func instanceListedDomain(inst *store.Instance, host string) bool {
+	host = strings.ToLower(strings.TrimSpace(host))
+	if inst == nil || host == "" {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(inst.DomainName), host) {
+		return true
+	}
+	for _, d := range inst.Domains {
+		if strings.EqualFold(strings.TrimSpace(d), host) {
+			return true
+		}
+	}
+	for _, raw := range inst.Tags {
+		k, v, ok := splitInstanceTag(raw)
+		if ok && strings.EqualFold(k, "domain") && strings.EqualFold(strings.TrimSpace(v), host) {
+			return true
+		}
+	}
+	return false
 }

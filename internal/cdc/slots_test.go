@@ -128,6 +128,39 @@ func TestReplicationSlotsSQLIsCatalogOnly(t *testing.T) {
 	}
 }
 
+func TestPlanSlotCollectOncePerHost(t *testing.T) {
+	insts := []store.Instance{
+		{ID: "a", Name: "主", Host: "10.0.0.8", Port: 5432, Domains: []string{"pg.a.example", "pg.b.example"}},
+		{ID: "b", Name: "同地址", Host: "10.0.0.8", Port: 5432, Domains: []string{"pg.c.example"}},
+		{ID: "c", Name: "另一端口", Host: "10.0.0.8", Port: 5433},
+		{ID: "d", Name: "没主机", Domains: []string{"pg.only.example"}},
+	}
+	plans := PlanSlotCollect(insts)
+	if plans[0].Skip != "" || plans[0].Host != "10.0.0.8" {
+		t.Fatalf("first = %+v", plans[0])
+	}
+	if plans[1].Skip == "" || !strings.Contains(plans[1].Skip, "已由 主 采集") {
+		t.Fatalf("duplicate = %+v", plans[1])
+	}
+	if plans[2].Skip != "" || plans[2].Host != "10.0.0.8" {
+		t.Fatalf("other port = %+v", plans[2])
+	}
+	if plans[3].Skip == "" || !strings.Contains(plans[3].Skip, "未配置连接主机") {
+		t.Fatalf("missing host = %+v", plans[3])
+	}
+}
+
+func TestResolveSlotConnectorUsesConnectMeta(t *testing.T) {
+	slot := store.SyncSlot{
+		Host: "pg.bj.restosuite.cn", Port: 5432, SlotName: "bj_slot_db_data_front", Database: "db_data_front",
+		ConnectMetaBase: "http://10.128.20.112:8083", ConnectMetaTask: "bj_db_data_front",
+	}
+	name, base, task := ResolveSlotConnector(slot, nil, nil)
+	if name != "bj_db_data_front" || base != "http://10.128.20.112:8083" || task != "bj_db_data_front" {
+		t.Fatalf("fallback name=%s base=%s task=%s", name, base, task)
+	}
+}
+
 func TestSlotTagDomain(t *testing.T) {
 	inst := &store.Instance{
 		Host: "172.23.31.178",

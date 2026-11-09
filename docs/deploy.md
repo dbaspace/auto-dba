@@ -27,13 +27,13 @@ KeePlus（进程 `auto-dba`）支持多种打包方式。**构建在有 Node 18+
 
 一体包与后端包解压后工作目录须为**包根**（存在 `deploy/node-agent/bin/node-agent`、`deploy/sql-agent/bin/sql-agent` 等），集群部署和 SQL 执行器 SSH 下发无需再本机构建。
 
-可选环境变量：`GOOS` `GOARCH`（默认 `linux`/`amd64`）、`STAMP`（默认时间戳；发版用 `STAMP=v1.12.92`）、`IMAGE_TAG`、`SKIP_PNPM_INSTALL=1`（已有 `node_modules` 时）。
+可选环境变量：`GOOS` `GOARCH`（默认 `linux`/`amd64`）、`STAMP`（默认时间戳；发版用 `STAMP=v1.12.93`）、`IMAGE_TAG`、`SKIP_PNPM_INSTALL=1`（已有 `node_modules` 时）。
 
 ```bash
-STAMP=v1.12.92 ./scripts/pack_release.sh all
-STAMP=v1.12.92 ./scripts/pack_release.sh backend
-STAMP=v1.12.92 ./scripts/pack_release.sh frontend
-IMAGE_TAG=auto-dba:v1.12.92 ./scripts/pack_release.sh docker
+STAMP=v1.12.93 ./scripts/pack_release.sh all
+STAMP=v1.12.93 ./scripts/pack_release.sh backend
+STAMP=v1.12.93 ./scripts/pack_release.sh frontend
+IMAGE_TAG=auto-dba:v1.12.93 ./scripts/pack_release.sh docker
 ```
 
 ## 发布到 GitHub Release（固定流程）
@@ -46,13 +46,13 @@ IMAGE_TAG=auto-dba:v1.12.92 ./scripts/pack_release.sh docker
 # 已 push 的提交 + 写好 docs/changelog-vX.Y.Z.md 后：
 
 # 推荐：打包 + 打 tag + 创建 Release（一体包）
-PACK=1 ./scripts/publish_github_release.sh v1.12.92
+PACK=1 ./scripts/publish_github_release.sh v1.12.93
 
-# 已有 dist/*-v1.12.92.tgz 时只发版
-./scripts/publish_github_release.sh v1.12.92
+# 已有 dist/*-v1.12.93.tgz 时只发版
+./scripts/publish_github_release.sh v1.12.93
 
 # 发版前顺带删若干旧 Release（不删受仓库 Rules 保护的 tag）
-DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12.92
+DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12.93
 ```
 
 前提：本机能 `git push origin HEAD`；已安装 `gh`。若 Keychain 无凭据，先手动 push 一次或导出 `GH_TOKEN=...`。
@@ -61,7 +61,8 @@ DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12
 
 | 版本 | 要点 |
 |------|------|
-| [v1.12.92](changelog-v1.12.92.md) | **当前推荐**。工单和同步槽按域名拨号，云资源展示内网地址，CDC 草稿恢复后留在原步骤 |
+| [v1.12.93](changelog-v1.12.93.md) | **当前推荐**。同步列表按连接主机采集，批量重启使用已记下的连接器 |
+| [v1.12.92](changelog-v1.12.92.md) | 工单和同步槽按域名拨号，云资源展示内网地址，CDC 草稿恢复后留在原步骤 |
 | [v1.12.91](changelog-v1.12.91.md) | CDC 源端改用域名，连接器可授权划拨，Kafka 批量授权，SQL 执行器显示运行状态 |
 | [v1.12.90](changelog-v1.12.90.md) | 云资源按内网地址绑定，实例批量删除，查询结果按白名单导出 |
 | [v1.12.89](changelog-v1.12.89.md) | 查询结果的大整数按十进制原文返回，避免末尾被改掉 |

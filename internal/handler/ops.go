@@ -1119,6 +1119,7 @@ func (h *SlotHandler) runSlotCollect(parent context.Context, tid string, job *sl
 	defer cancel()
 
 	h.persistSlotOpLog(tid, store.SyncSlotOpCollect, formatSlotOpLine("采集", fmt.Sprintf("开始采集，共 %d 个实例", len(insts))))
+	plans := cdc.PlanSlotCollect(insts)
 
 	const workers = 4
 	sem := make(chan struct{}, workers)
@@ -1139,13 +1140,13 @@ func (h *SlotHandler) runSlotCollect(parent context.Context, tid string, job *sl
 			if name := demoSlotName(inst.ID); name != "" {
 				_ = h.Store.DeleteSlotsByName(name)
 			}
-			label, derr := cdc.SlotTagDomain(inst)
+			plan := plans[i]
 			who := strings.TrimSpace(inst.Name)
 			if who == "" {
 				who = inst.ID
 			}
-			if derr != nil {
-				note := fmt.Sprintf("%s 采集失败：%s", who, derr.Error())
+			if plan.Skip != "" {
+				note := fmt.Sprintf("%s 采集跳过：%s", who, plan.Skip)
 				mu.Lock()
 				skipped++
 				notes = append(notes, note)
@@ -1163,7 +1164,7 @@ func (h *SlotHandler) runSlotCollect(parent context.Context, tid string, job *sl
 				h.persistSlotOpLog(tid, store.SyncSlotOpCollect, formatSlotOpLine("采集", note))
 				return
 			}
-			target := fmt.Sprintf("%s:%d", label, inst.Port)
+			target := fmt.Sprintf("%s:%d", plan.Host, inst.Port)
 			job.mu.Lock()
 			job.Current = target
 			job.Message = fmt.Sprintf("正在采集 %s（%d/%d）", target, job.Done+1, len(insts))
@@ -1177,7 +1178,7 @@ func (h *SlotHandler) runSlotCollect(parent context.Context, tid string, job *sl
 			if qerr != nil {
 				fail = true
 				note = fmt.Sprintf("%s 采集失败：%s", target, qerr.Error())
-			} else if err := h.Store.ReplaceHostSlots(label, inst.Port, cdc.InstanceHostAliases(inst), slots); err != nil {
+			} else if err := h.Store.ReplaceHostSlots(plan.Host, inst.Port, cdc.CollectReplaceAliases(inst), slots); err != nil {
 				fail = true
 				note = fmt.Sprintf("%s 写入失败：%s", target, err.Error())
 			} else {
