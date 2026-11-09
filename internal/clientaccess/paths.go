@@ -55,6 +55,8 @@ func WhitelistOKWithOpts(method, path string, opts WhitelistOpts) bool {
 	switch {
 	case method == "POST" && path == "/api/v1/query":
 		return true
+	case method == "GET" && path == "/api/v1/query/catalog":
+		return true
 	case method == "POST" && path == "/api/v1/query/table-info":
 		return true
 	case method == "GET" && path == "/api/v1/query/favorites":
@@ -73,11 +75,8 @@ func WhitelistOKWithOpts(method, path string, opts WhitelistOpts) bool {
 		return true
 	case method == "GET" && strings.HasPrefix(path, "/api/v1/instances/") && strings.HasSuffix(path, "/kafka/topics"):
 		return instanceSubPath(path, "/kafka/topics")
-	// 可选：看密（须 PAT credential scope）
-	case opts.AllowCredential && method == "GET" && strings.HasPrefix(path, "/api/v1/db-accounts/"):
-		rest := strings.TrimPrefix(path, "/api/v1/db-accounts/")
-		return rest != "" && !strings.Contains(rest, "/")
 	default:
+		_ = opts
 		return false
 	}
 }

@@ -22,6 +22,16 @@ func normType(dbType string) string {
 	}
 }
 
+// ForcePATReadOnlySession 这些引擎在 PAT 查询时强制会话只读。StarRocks 不在其中。
+func ForcePATReadOnlySession(dbType string) bool {
+	switch normType(dbType) {
+	case "postgres", "mysql", "tidb":
+		return true
+	default:
+		return false
+	}
+}
+
 func family(dbType string) string {
 	switch normType(dbType) {
 	case "postgres", "cockroachdb":

@@ -110,14 +110,11 @@ func (h *AccountHandler) Get(c *gin.Context) {
 }
 
 func (h *AccountHandler) allowViewCredential(c *gin.Context, it *store.DBAccount) bool {
-	// PAT：须开 credential scope 开关且令牌含 credential
+	// PAT 查询通道不回传平台登记的密码，不论令牌是否带 credential。
 	if middleware.IsPATAuth(c) {
-		if !h.Store.AllowCredentialScope() || !store.ScopeHas(c.GetString(middleware.CtxPATScopes), store.ClientScopeCredential) {
-			h.recordCredAudit(c, it, false, "pat missing credential scope")
-			c.JSON(http.StatusForbidden, gin.H{"message": "令牌无权查看明文密码", "code": "credential_scope_denied"})
-			return false
-		}
-		return true
+		h.recordCredAudit(c, it, false, "pat cannot view credential")
+		c.JSON(http.StatusForbidden, gin.H{"message": "查询接口不提供平台登记的密码", "code": "credential_scope_denied"})
+		return false
 	}
 	if h.Store.HardenViewCredential() {
 		uid := middleware.UserID(c)

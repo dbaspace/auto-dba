@@ -269,7 +269,7 @@ export default function BackupPolicies() {
                 ? [{ required: true, message: '物理备份必须绑定平台 Agent' }]
                 : undefined
             }
-            extra="须在「配置中心 → 平台 Agent」勾选归属「备份控制」。物理备份必填；逻辑备份空则走平台内嵌（需 allow_embedded）"
+            extra="须在「配置中心 → Agent管理」的平台 Agent 页签勾选归属「备份控制」。物理备份必填；逻辑备份空则走平台内嵌（需 allow_embedded）"
           >
             <Select allowClear options={agents.map((a) => ({ value: a.id, label: a.name }))} />
           </Form.Item>

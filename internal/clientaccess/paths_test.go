@@ -8,6 +8,7 @@ func TestWhitelistOK(t *testing.T) {
 		ok           bool
 	}{
 		{"POST", "/api/v1/query", true},
+		{"GET", "/api/v1/query/catalog", true},
 		{"POST", "/api/v1/query/table-info", true},
 		{"GET", "/api/v1/databases/abc/tables", true},
 		{"GET", "/api/v1/databases/abc/extra/tables", false},
@@ -20,8 +21,8 @@ func TestWhitelistOK(t *testing.T) {
 		{"GET", "/api/v1/instances/i1/kafka/topics/t1/messages", true},
 		{"GET", "/api/v1/db-accounts/a1", false},
 	}
-	if !WhitelistOKWithOpts("GET", "/api/v1/db-accounts/a1", WhitelistOpts{AllowCredential: true}) {
-		t.Fatal("credential whitelist")
+	if WhitelistOKWithOpts("GET", "/api/v1/db-accounts/a1", WhitelistOpts{AllowCredential: true}) {
+		t.Fatal("PAT 不能走看密接口")
 	}
 	for _, tc := range cases {
 		if got := WhitelistOK(tc.method, tc.path); got != tc.ok {

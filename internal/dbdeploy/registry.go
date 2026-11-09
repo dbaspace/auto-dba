@@ -399,14 +399,14 @@ func ValidateClusterAgainstRegistry(engine, deployKind, topology string, haEnabl
 
 // AgentInfo 集群部署用到的现场 Agent（进程/端口分开，不可混填）。
 type AgentInfo struct {
-	Kind        string `json:"kind"`         // platform | node | db
-	Label       string `json:"label"`        // 展示名
-	Port        int    `json:"port"`         // 默认监听端口
-	Artifact    string `json:"artifact"`     // 仓库路径
-	Where       string `json:"where"`        // 登记/下发入口
-	SharedWith  string `json:"shared_with"`  // 共用范围
-	UsedBy      string `json:"used_by"`      // 本 Hub 内用途
-	Note        string `json:"note"`         // 一句话
+	Kind       string `json:"kind"`        // platform | node | db
+	Label      string `json:"label"`       // 展示名
+	Port       int    `json:"port"`        // 默认监听端口
+	Artifact   string `json:"artifact"`    // 仓库路径
+	Where      string `json:"where"`       // 登记/下发入口
+	SharedWith string `json:"shared_with"` // 共用范围
+	UsedBy     string `json:"used_by"`     // 本 Hub 内用途
+	Note       string `json:"note"`        // 一句话
 }
 
 // AgentsOverview 三种 Agent 对照（Hub 页说明用）。
@@ -414,27 +414,27 @@ func AgentsOverview() []AgentInfo {
 	return []AgentInfo{
 		{
 			Kind: "platform", Label: "平台 Agent", Port: 8090,
-			Artifact: "deploy/backup-agent → platform-agent",
-			Where: "配置中心 → 平台 Agent（/config/agents）",
+			Artifact:   "deploy/backup-agent → platform-agent",
+			Where:      "配置中心 → Agent管理 → 平台 Agent（/config/agents?tab=platform）",
 			SharedWith: "备份 / Redis RDB / 高可用控制器 / 接入层代理 共用同一类 Agent",
-			UsedBy: "HAProxy · Nginx · LVS 自建装包与 conf；HA 钩子也走此类",
-			Note: "发行版包 + keepalived VIP；勿与 DB/Node Agent 端口冲突",
+			UsedBy:     "HAProxy · Nginx · LVS 自建装包与 conf；HA 钩子也走此类",
+			Note:       "发行版包 + keepalived VIP；勿与 DB/Node Agent 端口冲突",
 		},
 		{
 			Kind: "node", Label: "Node Agent", Port: 8091,
-			Artifact: "deploy/node-agent",
-			Where: "StarRocks 工作台 → Node Agent Tab",
+			Artifact:   "deploy/node-agent",
+			Where:      "配置中心 → Agent管理 → Node Agent（/config/agents?tab=node）",
 			SharedWith: "仅 StarRocks 使用（独立进程，不与平台 Agent 共用）",
-			UsedBy: "FE/BE 角色装机、OSS 拉包、变更单",
-			Note: "只在 SR 工作台下发/登记；仅装 8090 平台 Agent 不够",
+			UsedBy:     "FE/BE 角色装机、OSS 拉包、变更单",
+			Note:       "在 Agent管理下发/登记；仅装 8090 平台 Agent 不够",
 		},
 		{
 			Kind: "db", Label: "DB Agent", Port: 8092,
-			Artifact: "deploy/db-agent",
-			Where: "引擎工作台 → DB Agent Tab（MySQL/PG/Redis 等）",
+			Artifact:   "deploy/db-agent",
+			Where:      "配置中心 → Agent管理 → DB Agent（/config/agents?tab=db）",
 			SharedWith: "关系型 / NoSQL / 分布式 SQL 等 db-deploy 引擎共用",
-			UsedBy: "OSS 制品装机、复制验收、systemd 启停",
-			Note: "云托管单入口无需 Agent；勿填 8090/8091",
+			UsedBy:     "OSS 制品装机、复制验收、systemd 启停",
+			Note:       "云托管单入口无需 Agent；勿填 8090/8091",
 		},
 	}
 }
@@ -548,4 +548,3 @@ func ParseTicketInstanceTypeValues(raw string) []string {
 	}
 	return out
 }
-

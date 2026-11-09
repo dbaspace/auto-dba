@@ -26,6 +26,8 @@ function normPath(path: string): string {
 
 function tabKey(path: string, search = ''): string {
   const p = normPath(path)
+  // Agent管理的 ?tab= 是页内页签，不拆成多个导航 Tab
+  if (p === '/config/agents') return p
   const s = search && search !== '?' ? search : ''
   return s ? `${p}${s.startsWith('?') ? s : `?${s}`}` : p
 }
@@ -320,6 +322,9 @@ const tabsSlice = createSlice({
       if (existing) {
         state.activeKey = existing.key
         if (resolvedTitle) existing.title = resolvedTitle
+        if (path === '/config/agents') {
+          existing.search = search && !search.startsWith('?') ? `?${search}` : search
+        }
         return
       }
 

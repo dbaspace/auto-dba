@@ -75,6 +75,19 @@ func (h *DatabaseHandler) resolveVisibleDB(c *gin.Context, id string) (*store.Da
 	return rec, inst, password, nil
 }
 
+func (h *DatabaseHandler) auditSubmittedQuery(c *gin.Context, sql, target, msg string, inst *store.Instance, success bool, rows int, elapsed int64, reqID string) {
+	if strings.TrimSpace(sql) == "" {
+		return
+	}
+	it := &store.QueryAudit{
+		Kind: "db", Target: target, Statement: sql,
+		Success: success, Message: msg, RowCount: rows, ElapsedMS: elapsed,
+		ClientRequestID: reqID,
+	}
+	fillInstanceAudit(it, inst)
+	recordQueryAudit(h.Store, c, it)
+}
+
 func writeQueryErr(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, errQueryNotFound), errors.Is(err, errQueryNoInstance):
@@ -119,13 +132,24 @@ func (h *DatabaseHandler) Query(c *gin.Context) {
 		return
 	}
 	req.SQL = strings.TrimSpace(req.SQL)
+	reqID := normalizeClientRequestID(req.ClientRequestID)
 	stmts, err := dbprobe.SplitReadOnlyStatements(req.SQL, maxQueryStatements)
 	if err != nil {
+		h.auditSubmittedQuery(c, req.SQL, strings.TrimSpace(req.DatabaseID), err.Error(), nil, false, 0, 0, reqID)
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
+	if middleware.IsPATAuth(c) {
+		if idx, missing := dbprobe.MissingPATSelectLimit(stmts); missing {
+			msg := dbprobe.PATSelectLimitMessage(idx, len(stmts))
+			h.auditSubmittedQuery(c, req.SQL, strings.TrimSpace(req.DatabaseID), msg, nil, false, 0, 0, reqID)
+			c.JSON(http.StatusBadRequest, gin.H{"message": msg})
+			return
+		}
+	}
 	rec, inst, password, err := h.resolveVisibleDB(c, strings.TrimSpace(req.DatabaseID))
 	if err != nil {
+		h.auditSubmittedQuery(c, req.SQL, strings.TrimSpace(req.DatabaseID), err.Error(), nil, false, 0, 0, reqID)
 		writeQueryErr(c, err)
 		return
 	}
@@ -135,13 +159,16 @@ func (h *DatabaseHandler) Query(c *gin.Context) {
 		maxLimit = h.Store.QueryMaxLimit()
 	}
 	qctx := c.Request.Context()
-	if h.Store != nil && h.Store.HardenReadOnlySession() {
+	if middleware.IsPATAuth(c) {
+		if dbprobe.ForcePATReadOnlySession(inst.DBType) {
+			qctx = dbprobe.WithReadOnlySession(qctx)
+		}
+	} else if h.Store != nil && h.Store.HardenReadOnlySession() {
 		qctx = dbprobe.WithReadOnlySession(qctx)
 	}
 	ctx, cancel := context.WithTimeout(qctx, 25*time.Second)
 	defer cancel()
 
-	reqID := normalizeClientRequestID(req.ClientRequestID)
 	if reqID != "" {
 		rememberPendingQuery(reqID, pendingQuery{
 			UserID:       middleware.UserID(c),
@@ -159,23 +186,16 @@ func (h *DatabaseHandler) Query(c *gin.Context) {
 	results := make([]*dbprobe.QueryResult, 0, len(stmts))
 	totalRows := 0
 	var totalMS int64
-	auditSQL := req.SQL
-	for i, stmt := range stmts {
+	for _, stmt := range stmts {
 		ens := dbprobe.EnsureQueryLimit(stmt, defLimit, maxLimit)
 		res, qerr := dbprobe.ExecQuery(ctx, inst, password, rec.DBName, ens.SQL, ens.AppliedLimit)
 		if qerr != nil {
 			msg := explainQueryErr(qerr)
-			it := &store.QueryAudit{
-				Kind: "db", Target: rec.DBName, Statement: auditSQL,
-				Success: false, Message: msg, ClientRequestID: reqID,
-			}
-			fillInstanceAudit(it, inst)
 			if respondInteractiveQueryErr(c, qerr) {
-				it.Message = "查询已终止"
-				recordQueryAudit(h.Store, c, it)
+				h.auditSubmittedQuery(c, req.SQL, rec.DBName, "查询已终止", inst, false, 0, 0, reqID)
 				return
 			}
-			recordQueryAudit(h.Store, c, it)
+			h.auditSubmittedQuery(c, req.SQL, rec.DBName, msg, inst, false, 0, 0, reqID)
 			writeQueryJSON(c, http.StatusBadRequest, gin.H{"message": msg})
 			return
 		}
@@ -193,19 +213,10 @@ func (h *DatabaseHandler) Query(c *gin.Context) {
 		results = append(results, res)
 		totalRows += len(res.Rows)
 		totalMS += res.ElapsedMS
-		if i == 0 {
-			auditSQL = ens.SQL
-		}
 	}
 
 	primary := results[0]
-	it := &store.QueryAudit{
-		Kind: "db", Target: rec.DBName, Statement: auditSQL,
-		Success: true, RowCount: totalRows, ElapsedMS: totalMS,
-		ClientRequestID: reqID,
-	}
-	fillInstanceAudit(it, inst)
-	recordQueryAudit(h.Store, c, it)
+	h.auditSubmittedQuery(c, req.SQL, rec.DBName, "", inst, true, totalRows, totalMS, reqID)
 
 	payload := gin.H{"data": primary}
 	if len(results) > 1 {

@@ -911,7 +911,7 @@ func (h *HAHandler) CreateController(c *gin.Context) {
 			hasHA = backup.HasGroupEnabled(r, backup.GroupHA)
 		}
 		if !hasHA {
-			c.JSON(http.StatusBadRequest, gin.H{"message": "所选 Agent 未勾选「高可用」归属，请在配置中心 → 平台 Agent 中设置"})
+			c.JSON(http.StatusBadRequest, gin.H{"message": "所选 Agent 未勾选「高可用」归属，请在配置中心 → Agent管理 的平台 Agent 中设置"})
 			return
 		}
 		kind := strings.ToLower(strings.TrimSpace(req.Kind))

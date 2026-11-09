@@ -13,7 +13,13 @@ const (
 	MaxQueryLimit     = 10000
 )
 
-var reTailLimitNum = regexp.MustCompile(`(?i)\s+LIMIT\s+(\d+)\s*;?\s*$`)
+var (
+	reTailLimitNum    = regexp.MustCompile(`(?i)\s+LIMIT\s+(\d+)\s*;?\s*$`)
+	reTailLimitOffset = regexp.MustCompile(`(?i)\s+LIMIT\s+(\d+)\s+OFFSET\s+\d+\s*;?\s*$`)
+	reTailLimitComma  = regexp.MustCompile(`(?i)\s+LIMIT\s+\d+\s*,\s*(\d+)\s*;?\s*$`)
+)
+
+const patSelectLimitHint = "PAT 查询的 SELECT 必须在语句末尾写 LIMIT，例如 LIMIT 100"
 
 // EnsureQueryLimitResult 改写后的 SQL 与生效行数上限。
 type EnsureQueryLimitResult struct {
@@ -64,6 +70,48 @@ func ParseSQLTailLimit(raw string) (n int, ok bool) {
 		return 0, false
 	}
 	return n, true
+}
+
+// MissingPATSelectLimit 返回第一条缺少语句末尾 LIMIT 的 SELECT/WITH 下标。SHOW/EXPLAIN/DESC 不要求。
+// 只认末尾的 LIMIT n、LIMIT n OFFSET m、LIMIT offset, count；子查询里的 LIMIT 不算。行数必须是正整数。
+func MissingPATSelectLimit(stmts []string) (idx int, missing bool) {
+	for i, stmt := range stmts {
+		body := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(stmt), ";"))
+		switch firstSQLKeyword(body) {
+		case "SELECT", "WITH":
+		default:
+			continue
+		}
+		if _, ok := parsePositiveTailLimit(body); !ok {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// PATSelectLimitMessage 是拒绝 PAT 查询时返回给调用方的说明。多条语句时写明第几条。
+func PATSelectLimitMessage(idx, total int) string {
+	if total > 1 {
+		return fmt.Sprintf("第 %d 条 SQL：%s", idx+1, patSelectLimitHint)
+	}
+	return patSelectLimitHint
+}
+
+// parsePositiveTailLimit 解析语句末尾的行数上限。LIMIT n OFFSET m 取 n，LIMIT offset, count 取 count。
+func parsePositiveTailLimit(body string) (n int, ok bool) {
+	if m := reTailLimitOffset.FindStringSubmatch(body); m != nil {
+		n, _ = strconv.Atoi(m[1])
+		return n, n > 0
+	}
+	if m := reTailLimitComma.FindStringSubmatch(body); m != nil {
+		n, _ = strconv.Atoi(m[1])
+		return n, n > 0
+	}
+	if m := reTailLimitNum.FindStringSubmatch(body); m != nil {
+		n, _ = strconv.Atoi(m[1])
+		return n, n > 0
+	}
+	return 0, false
 }
 
 // RequireExportSQLLimit 导出 SQL 必须自带 LIMIT；返回钳制后的扫描上限（代码硬顶 100 万）。

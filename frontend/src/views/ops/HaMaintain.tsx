@@ -1967,7 +1967,7 @@ export default function HaMaintain() {
               rules={[{ required: true, message: '请选择归属含「高可用」的平台 Agent' }]}
               extra={
                 <>
-                  请在 <Link to="/config/agents">配置中心 → 平台 Agent</Link> 勾选归属「高可用」后下发/登记。
+                  请在 <Link to="/config/agents?tab=platform">配置中心 → Agent管理</Link> 的平台 Agent 页签勾选归属「高可用」后下发/登记。
                   {platAgents.length === 0 ? ' 当前无可选 Agent。' : ''}
                 </>
               }

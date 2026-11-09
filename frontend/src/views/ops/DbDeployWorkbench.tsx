@@ -8,7 +8,6 @@ import api from '../../api/request'
 import Auth from '../../components/Auth'
 import { Perm } from '../../hooks/usePermission'
 import { useAppSelector } from '../../store'
-import { activeDeployHostIds, isAgentDeployActive, useAgentDeployTracker } from './agentDeployTracker'
 import { ensureAgentForHost, endpointHost } from './ensureAgentForHost'
 import {
   NodePrecheckPanel, agentMatchesHost, agentMismatchMessage, hostPrimaryAddr, resolveNodeHostInstanceId, useHostApprovers,
@@ -305,7 +304,6 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
   const [clusters, setClusters] = useState<Cluster[]>([])
   const [releases, setReleases] = useState<Release[]>([])
   const [agents, setAgents] = useState<{ id: string; name?: string; base_url: string; host_instance_id?: string }[]>([])
-  const [agentDeploys, setAgentDeploys] = useState<{ id: string; host_instance_id: string; status: string; listen_port?: number; base_url?: string; log_text?: string; created_at?: string }[]>([])
   const [hosts, setHosts] = useState<{ id: string; name: string; host?: string; domain_name?: string; domains?: string[]; port?: number }[]>([])
   const [ossBind, setOssBind] = useState<{ oss_setting_id?: string; prefix?: string; oss_environment?: string }>({})
   const [ossOptions, setOssOptions] = useState<{ id: string; environment: string; endpoint?: string; bucket?: string }[]>([])
@@ -352,10 +350,6 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
   const nodeApprovers = useHostApprovers()
   const ticketApprovers = useHostApprovers()
   const [watchTicketIds, setWatchTicketIds] = useState<string[]>([])
-  const [agentOpen, setAgentOpen] = useState(false)
-  const [deployModal, setDeployModal] = useState(false)
-  const [deployBusy, setDeployBusy] = useState(false)
-  const [deployLog, setDeployLog] = useState<{ id: string; status: string; log_text?: string; base_url?: string } | null>(null)
   const [topoFilter, setTopoFilter] = useState<string>('all')
   const [haControllers, setHaControllers] = useState<HAController[]>([])
   const [mhaEnvOk, setMhaEnvOk] = useState(false)
@@ -403,8 +397,6 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
   }
   const [nodeForm] = Form.useForm()
   const [ossForm] = Form.useForm()
-  const [agentForm] = Form.useForm()
-  const [deployForm] = Form.useForm()
   const [ticketForm] = Form.useForm()
   const [ticketDraft, setTicketDraft] = useState<{
     action: string
@@ -495,14 +487,13 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
   }
 
   const load = useCallback(async () => {
-    const [m, c, r, o, ossList, ag, dep, hostRes, haCtrl] = await Promise.all([
+    const [m, c, r, o, ossList, ag, hostRes, haCtrl] = await Promise.all([
       api.get('/db-deploy/meta', { params: { engine } }),
       api.get('/db-deploy/clusters', { params: { engine: engine === 'redis' ? undefined : engine } }),
       api.get('/db-deploy/releases', { params: { engine: engine === 'redis' ? undefined : engine } }),
       api.get('/db-deploy/oss', { params: { engine: engine === 'redis' ? 'redis' : engine } }),
       api.get('/oss-settings').catch(() => ({ data: { data: [] } })),
       api.get('/db-deploy/agents').catch(() => ({ data: { data: [] } })),
-      api.get('/db-deploy/agents/deploys', { params: { limit: 50 } }).catch(() => ({ data: { data: [] } })),
       api.get('/instances', { params: { db_type: 'host' } }).catch(() => ({ data: { data: [] } })),
       engine === 'mysql' || engine === 'postgres'
         ? api.get('/ha/controllers', { params: { engine } }).catch(() => ({ data: { data: [] } }))
@@ -535,7 +526,6 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
     ossForm.setFieldsValue(o.data?.data || {})
     setOssOptions(ossList.data?.data || [])
     setAgents(ag.data?.data || [])
-    setAgentDeploys(dep.data?.data || [])
     setHosts(hostRes.data?.data || [])
   }, [engine, ossForm])
 
@@ -594,31 +584,6 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
     linkedLookupTried.current.add(linked)
     void loadRegInstances()
   }, [selected?.linked_instance_id, regInstances, loadRegInstances])
-
-  // 轮询下发进度时只刷新 Agent 与下发记录，避免整页重载
-  const loadAgentLists = useCallback(async () => {
-    const [ag, dep] = await Promise.all([
-      api.get('/db-deploy/agents').catch(() => null),
-      api.get('/db-deploy/agents/deploys', { params: { limit: 50 } }).catch(() => null),
-    ])
-    if (ag) setAgents(ag.data?.data || [])
-    if (dep) setAgentDeploys(dep.data?.data || [])
-  }, [])
-  const hostLabel = (id: string) => {
-    const h = hosts.find((x) => x.id === id)
-    return h ? `${h.name} (${h.host || h.domain_name || '-'})` : id
-  }
-  const deployTracker = useAgentDeployTracker<{ id: string; host_instance_id: string; status: string; log_text?: string; base_url?: string; created_at?: string }>({
-    basePath: '/db-deploy/agents/deploys',
-    agentName: 'DB Agent',
-    hostLabel,
-    onShowLog: (row) => setDeployLog(row),
-    onFinished: () => { void loadAgentLists() },
-    refreshList: () => { void loadAgentLists() },
-  })
-  const { trackFromList: trackDeploysFromList } = deployTracker
-  useEffect(() => { trackDeploysFromList(agentDeploys) }, [agentDeploys, trackDeploysFromList])
-  const deployingHostIds = useMemo(() => activeDeployHostIds(agentDeploys), [agentDeploys])
 
   const pollChange = useCallback(async (id: string) => {
     const res = await api.get(`/db-deploy/changes/${id}`)
@@ -1384,143 +1349,19 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
             key: 'agents',
             label: 'DB Agent',
             children: (
-              <Space direction="vertical" style={{ width: '100%' }} size="middle">
-                <Alert
-                  type="info"
-                  showIcon
-                  message="DB Agent 下发与登记（MySQL / PostgreSQL / Redis 自建节点）"
-                  description={(
-                    <>
-                      SSH 下发
-                      {' '}
-                      <code>deploy/db-agent</code>
-                      {' '}
-                      到 host 实例，默认监听
-                      {' '}
-                      <code>:8092</code>
-                      （API
-                      {' '}
-                      <code>/v1/db/*</code>
-                      ）。
-                      <strong>不是</strong>
-                      {' '}
-                      StarRocks Node Agent（
-                      <code>:8091</code>
-                      /
-                      <code>/v1/sr/*</code>
-                      ），也
-                      <strong>不是</strong>
-                      {' '}
-                      配置中心平台 Agent（
-                      <code>:8090</code>
-                      ）。
-                      下发前请在控制面执行
-                      {' '}
-                      <code>cd deploy/db-agent && ./build.sh</code>
-                      。云托管单入口无需 Agent。对已有集群：下发
-                      <strong>仅安装/重启 Agent 自身</strong>
-                      ，不启停 MySQL/PG/Redis 等业务服务。
-                    </>
-                  )}
-                />
-                <Space wrap>
-                  <Button type="primary" onClick={() => {
-                    deployForm.resetFields()
-                    deployForm.setFieldsValue({
-                      listen_port: 8092,
-                      remote_dir: '/home/sysadmin/auto-dba/db-agent',
-                      escalate: false,
-                    })
-                    setDeployModal(true)
-                  }}
-                  >
-                    SSH 下发
-                  </Button>
-                  <Button onClick={() => { agentForm.resetFields(); setAgentOpen(true) }}>手工登记</Button>
-                  <Button onClick={() => { load() }}>刷新</Button>
-                </Space>
-                <Table
-                  rowKey="id"
-                  size="small"
-                  title={() => '已登记 DB Agent'}
-                  dataSource={agents}
-                  columns={[
-                    { title: '名称', dataIndex: 'name', width: 160 },
-                    { title: 'Base URL', dataIndex: 'base_url' },
-                    {
-                      title: '来源',
-                      width: 100,
-                      render: (_: unknown, row: { id: string; host_instance_id?: string }) => (
-                        row.host_instance_id ? <Tag color="blue">SSH 下发</Tag> : <Tag>手工</Tag>
-                      ),
-                    },
-                    { title: 'ID', dataIndex: 'id', width: 240, ellipsis: true },
-                    {
-                      title: '操作',
-                      width: 80,
-                      render: (_: unknown, row: { id: string; name?: string; base_url?: string }) => (
-                        <Button size="small" danger onClick={() => {
-                          Modal.confirm({
-                            title: '删除 Agent',
-                            content: `确认删除「${row.name || row.base_url || row.id}」登记？删除后，该主机上的集群节点将无法通过 Agent 运维；在该主机重新下发 Agent 后会自动恢复绑定。`,
-                            okButtonProps: { danger: true },
-                            onOk: async () => {
-                              try {
-                                const res = await api.delete(`/db-deploy/agents/${row.id}`)
-                                const affected: { name: string; detail?: string }[] = res.data?.affected_nodes || []
-                                if (affected.length) {
-                                  message.warning(
-                                    `已删除。以下节点需重新下发 Agent 后才能运维：${affected
-                                      .map((n) => (n.detail ? `${n.name}（${n.detail}）` : n.name))
-                                      .join('、')}`,
-                                    6,
-                                  )
-                                } else {
-                                  message.success('已删除')
-                                }
-                                load()
-                              } catch {
-                                /* 错误已由全局拦截器提示 */
-                              }
-                            },
-                          })
-                        }}
-                        >
-                          删除
-                        </Button>
-                      ),
-                    },
-                  ]}
-                />
-                <Table
-                  rowKey="id"
-                  size="small"
-                  title={() => '下发记录'}
-                  dataSource={agentDeploys}
-                  pagination={{ pageSize: 8 }}
-                  columns={[
-                    { title: '主机', dataIndex: 'host_instance_id', ellipsis: true, render: (id: string) => hostLabel(id) },
-                    {
-                      title: '状态',
-                      dataIndex: 'status',
-                      width: 110,
-                      render: (s: string, row: { id: string; host_instance_id: string; status: string; created_at?: string }) => (
-                        <Tag color={STATUS_COLOR[s]} icon={isAgentDeployActive(row) ? <SyncOutlined spin /> : undefined}>{s}</Tag>
-                      ),
-                    },
-                    { title: '端口', dataIndex: 'listen_port', width: 70 },
-                    { title: 'URL', dataIndex: 'base_url', ellipsis: true },
-                    { title: '时间', dataIndex: 'created_at', width: 180 },
-                    {
-                      title: '日志',
-                      width: 80,
-                      render: (_: unknown, row: { id: string; status: string; log_text?: string; base_url?: string }) => (
-                        <Button type="link" size="small" onClick={() => setDeployLog(row)}>查看</Button>
-                      ),
-                    },
-                  ]}
-                />
-              </Space>
+              <Alert
+                type="info"
+                showIcon
+                message="DB Agent 已集中到配置中心"
+                description={(
+                  <>
+                    手工登记和下发都在
+                    {' '}
+                    <Link to="/config/agents?tab=db">配置中心 → Agent管理 → DB Agent</Link>
+                    。自建节点仍绑定 :8092 的 DB Agent，匹配规则不变。云托管单入口无需 Agent。
+                  </>
+                )}
+              />
             ),
           },
           {
@@ -2200,7 +2041,7 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
             extra={nodeHostInst && nodeAgentOptions.length === 0 ? (
               <span>
                 该主机尚无 DB Agent（:8092），
-                <Button type="link" size="small" style={{ padding: 0 }} onClick={() => { setNodeOpen(false); setTab('agents') }}>去下发 Agent</Button>
+                <Button type="link" size="small" style={{ padding: 0 }} onClick={() => { setNodeOpen(false); navigate('/config/agents?tab=db') }}>去 Agent管理</Button>
               </span>
             ) : '只列出与所选主机地址一致的 Agent'}
           >
@@ -2296,126 +2137,6 @@ export default function DbDeployWorkbench({ engine }: { engine: DbEngine }) {
         </Form>
       </Modal>
 
-      <Modal title="手工登记 DB Agent" open={agentOpen} onCancel={() => setAgentOpen(false)} onOk={() => agentForm.submit()} destroyOnClose>
-        <Alert type="info" showIcon style={{ marginBottom: 12 }} message="Base URL 须指向 DB Agent，默认端口 :8092（/v1/db/*），勿填 Node Agent :8091。" />
-        <Form
-          form={agentForm}
-          layout="vertical"
-          onFinish={async (v) => {
-            try {
-              await api.post('/db-deploy/agents', v)
-              message.success('已登记')
-              setAgentOpen(false)
-              load()
-            } catch (e: any) {
-              message.error(e?.response?.data?.message || String(e))
-            }
-          }}
-        >
-          <Form.Item name="name" label="名称" rules={[{ required: true }]}><Input /></Form.Item>
-          <Form.Item name="base_url" label="Base URL" rules={[{ required: true }]}><Input placeholder="http://10.x.x.x:8092" /></Form.Item>
-          <Form.Item name="username" label="Basic 用户"><Input /></Form.Item>
-          <Form.Item name="password" label="Basic 密码"><Input.Password /></Form.Item>
-        </Form>
-      </Modal>
-
-      <Modal
-        title="SSH 下发 DB Agent"
-        open={deployModal}
-        confirmLoading={deployBusy}
-        onCancel={() => setDeployModal(false)}
-        onOk={async () => {
-          const v = await deployForm.validateFields()
-          setDeployBusy(true)
-          try {
-            const res = await api.post('/db-deploy/agents/deploy', {
-              host_instance_id: v.host_instance_id,
-              listen_port: v.listen_port || 8092,
-              remote_dir: v.remote_dir,
-              escalate: v.escalate ? 'sudo_su' : '',
-            })
-            const deployId = res.data?.data?.deploy_id as string
-            message.success('已提交下发，进度见下发记录，完成后会通知')
-            setDeployModal(false)
-            if (deployId) deployTracker.track(deployId)
-            void loadAgentLists()
-          } catch (e: any) {
-            message.error(e?.response?.data?.message || e.message)
-          } finally {
-            setDeployBusy(false)
-          }
-        }}
-        destroyOnClose
-        okText="开始下发"
-      >
-        <Alert
-          type="warning"
-          showIcon
-          style={{ marginBottom: 12 }}
-          message="下发前请确认控制面已构建制品；对已运行集群安全"
-          description={(
-            <>
-              <div><code>cd deploy/db-agent && ./build.sh</code></div>
-              <div style={{ marginTop: 6 }}>
-                仅安装/重启 DB Agent，不启停业务库。监听端口请用 8092（约定 8090–8199），禁止填业务端口。
-              </div>
-            </>
-          )}
-        />
-        <Form form={deployForm} layout="vertical" initialValues={{ listen_port: 8092, remote_dir: '/home/sysadmin/auto-dba/db-agent', escalate: false }}>
-          <Form.Item
-            name="host_instance_id"
-            label="目标主机"
-            rules={[{ required: true, message: '请选择 host 类型实例' }]}
-            extra="须在实例管理登记类型为 host；按主机环境（idc）选用 Nacos SSH 密钥档案，未配置则用全局密钥。"
-          >
-            <Select
-              showSearch
-              optionFilterProp="label"
-              placeholder={hosts.length ? '选择主机' : '暂无 host 实例'}
-              options={hosts.map((h) => ({
-                value: h.id,
-                disabled: deployingHostIds.has(h.id),
-                label: `${h.name} — ${h.host || h.domain_name || '-'} :${h.port || 22}${deployingHostIds.has(h.id) ? '（下发中）' : ''}`,
-              }))}
-            />
-          </Form.Item>
-          <Form.Item name="escalate" label="提权执行（sudo su -）" valuePropName="checked">
-            <Switch checkedChildren="开" unCheckedChildren="关" />
-          </Form.Item>
-          <Form.Item
-            name="listen_port"
-            label="监听端口"
-            extra="默认 8092；勿与平台 8090、Node 8091 及业务端口冲突"
-            rules={[{ required: true, type: 'number', min: 1024, max: 65535, message: '端口须在 1024–65535' }]}
-          >
-            <InputNumber min={1024} max={65535} style={{ width: '100%' }} />
-          </Form.Item>
-          <Form.Item name="remote_dir" label="远程目录">
-            <Input placeholder="/home/sysadmin/auto-dba/db-agent" />
-          </Form.Item>
-        </Form>
-      </Modal>
-
-      <Modal
-        title="下发日志"
-        open={!!deployLog}
-        onCancel={() => setDeployLog(null)}
-        footer={<Button onClick={() => setDeployLog(null)}>关闭</Button>}
-        width={720}
-      >
-        {deployLog && (
-          <>
-            <p>
-              状态
-              {' '}
-              <Tag color={STATUS_COLOR[deployLog.status] || 'default'}>{deployLog.status}</Tag>
-              {deployLog.base_url ? ` · ${deployLog.base_url}` : ''}
-            </p>
-            <pre className="db-change-log">{deployLog.log_text || '（无日志）'}</pre>
-          </>
-        )}
-      </Modal>
     </div>
   )
 }

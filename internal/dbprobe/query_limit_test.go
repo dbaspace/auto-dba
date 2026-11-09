@@ -12,6 +12,18 @@ func TestIsReadOnlySQL(t *testing.T) {
 	if err := IsReadOnlySQL("with x as (select 1) select * from x"); err != nil {
 		t.Fatal(err)
 	}
+	if err := IsReadOnlySQL("SELECT 'insert into t' AS txt"); err != nil {
+		t.Fatal(err)
+	}
+	for _, sql := range []string{
+		"WITH x AS (SELECT 1) INSERT INTO t SELECT * FROM x",
+		"SELECT * INTO new_t FROM old_t",
+		"EXPLAIN ANALYZE INSERT INTO t VALUES (1)",
+	} {
+		if err := IsReadOnlySQL(sql); err == nil {
+			t.Fatalf("expected deny nested write: %s", sql)
+		}
+	}
 	for _, sql := range []string{
 		"TRUNCATE TABLE t",
 		"DELETE FROM t",
@@ -59,6 +71,43 @@ func TestEnsureQueryLimit(t *testing.T) {
 	got = EnsureQueryLimit("WITH c AS (SELECT 1 AS a) SELECT * FROM c", 100, 200)
 	if !strings.Contains(got.SQL, "limit 100") {
 		t.Fatalf("with: %q", got.SQL)
+	}
+}
+
+func TestMissingPATSelectLimit(t *testing.T) {
+	if _, missing := MissingPATSelectLimit([]string{"SELECT * FROM t"}); !missing {
+		t.Fatal("expected missing LIMIT")
+	}
+	if _, missing := MissingPATSelectLimit([]string{"SELECT * FROM (SELECT * FROM t LIMIT 10) x"}); !missing {
+		t.Fatal("subquery LIMIT must not count")
+	}
+	if _, missing := MissingPATSelectLimit([]string{"SELECT * FROM t LIMIT 0"}); !missing {
+		t.Fatal("LIMIT 0 is not a positive count")
+	}
+	for _, sql := range []string{
+		"SELECT * FROM t LIMIT 100",
+		"select * from t limit 10;",
+		"SELECT * FROM t LIMIT 10 OFFSET 5",
+		"SELECT * FROM t LIMIT 20, 5",
+		"WITH c AS (SELECT 1 AS a) SELECT * FROM c LIMIT 10",
+		"SHOW TABLES",
+		"EXPLAIN SELECT * FROM t",
+		"DESC t",
+	} {
+		if _, missing := MissingPATSelectLimit([]string{sql}); missing {
+			t.Fatalf("should allow: %s", sql)
+		}
+	}
+	idx, missing := MissingPATSelectLimit([]string{"SHOW TABLES", "SELECT * FROM t"})
+	if !missing || idx != 1 {
+		t.Fatalf("idx=%d missing=%v", idx, missing)
+	}
+	msg := PATSelectLimitMessage(0, 1)
+	if msg != "PAT 查询的 SELECT 必须在语句末尾写 LIMIT，例如 LIMIT 100" {
+		t.Fatalf("msg=%s", msg)
+	}
+	if !strings.Contains(PATSelectLimitMessage(1, 2), "第 2 条") {
+		t.Fatal(PATSelectLimitMessage(1, 2))
 	}
 }
 

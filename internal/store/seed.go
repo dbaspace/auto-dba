@@ -703,7 +703,7 @@ func (d *DB) seedMenus(now string) error {
 		{"m-cloud-accounts", "m-cfg-base", "云账号", "/config/cloud-accounts", URNSidebarCloudAccounts, "查看云账号", "key", 5},
 		{"m-cfg-tags", "m-cfg-access", "标签管理", "/config/tags", "um.sidebar.config-tags", "查看标签管理", "tag", 1},
 		{"m-cfg-conn", "m-cfg-access", "连接器", "/config/connectors", "um.sidebar.config-connectors", "查看连接器", "connection", 2},
-		{"m-cfg-agent", "m-cfg-access", "平台 Agent", "/config/agents", "um.sidebar.config-agents", "查看平台 Agent", "connection", 3},
+		{"m-cfg-agent", "m-cfg-access", "Agent管理", "/config/agents", "um.sidebar.config-agents", "查看 Agent 管理", "connection", 3},
 		{"m-cfg-oss", "m-cfg-access", "对象存储", "/config/oss", "um.sidebar.config-oss", "查看对象存储配置与上传", "upload", 4},
 		{"m-cfg-monitor", "m-cfg-obs", "监控目标注册", "/config/monitor-targets", "um.sidebar.config-monitor-targets", "查看监控目标注册", "monitor", 1},
 		{"m-cfg-fe-admin", "m-cfg-obs", "FE管理", "/config/fe-admin", "um.sidebar.config-fe-admin", "查看 FE 管理", "coin", 2},
@@ -1228,11 +1228,11 @@ func (d *DB) ensureConfigCenterGroups(now string) error {
 	return nil
 }
 
-// ensurePlatformAgentMenu 配置中心 · 平台 Agent（平台级执行面，归属 backup/rdb/ha）。
+// ensurePlatformAgentMenu 配置中心 · Agent管理（平台 Agent / SQL 执行器 / Node Agent / DB Agent）。
 func (d *DB) ensurePlatformAgentMenu(now string) error {
 	m := &Menu{
-		ID: "m-cfg-agent", ParentID: "m-cfg-access", Title: "平台 Agent", Path: "/config/agents",
-		URN: "um.sidebar.config-agents", PermissionDesc: "查看平台 Agent", Icon: "connection",
+		ID: "m-cfg-agent", ParentID: "m-cfg-access", Title: "Agent管理", Path: "/config/agents",
+		URN: "um.sidebar.config-agents", PermissionDesc: "查看 Agent 管理", Icon: "connection",
 		SortOrder: 3, Enabled: true, CreatedAt: now, UpdatedAt: now,
 	}
 	if err := d.EnsureMenu(m); err != nil {
@@ -1497,7 +1497,21 @@ func (d *DB) ensureSQLExecutorMenu(now string) error {
 	if err := d.GrantMenuFollowingParent(m.ID, m.ParentID); err != nil {
 		return err
 	}
-	return d.grantMenuToRoleCode(m.ID, "admin")
+	if err := d.grantMenuToRoleCode(m.ID, "admin"); err != nil {
+		return err
+	}
+	// EnsureMenu 会强制 Enabled=true。执行器页已并入 Agent管理，菜单保持隐藏，避免后续 EnsureMenu 把它重新打开。
+	exist, err := d.GetMenu(m.ID)
+	if err != nil {
+		return err
+	}
+	if exist == nil {
+		return nil
+	}
+	exist.Enabled = false
+	exist.Title = "执行器"
+	exist.Path = "/config/sql-executors"
+	return d.UpdateMenu(exist)
 }
 
 func (d *DB) ensureSystemNoticeMenu(now string) error {

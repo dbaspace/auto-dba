@@ -892,7 +892,7 @@ export default function ProxyWorkbench({ kind }: { kind: ProxyKind }) {
                                 form.setFieldValue(['nodes', field.name, 'name'], host)
                               }
                             } else {
-                              message.warning(`主机 ${host} 无匹配平台 Agent（:8090），请先在配置中心登记或下发`)
+                              message.warning(`主机 ${host} 无匹配平台 Agent（:8090），请先在配置中心 → Agent管理登记或下发`)
                             }
                           }}
                         />

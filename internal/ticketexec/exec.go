@@ -465,6 +465,8 @@ func runPostgresDDL(ctx context.Context, t Target, stmts []string, collect *Resu
 		collect.appendFailure(t, "(连接)", time.Now(), err)
 		return fmt.Errorf("连接失败 %s/%s: %w", t.Host, t.DBName, err)
 	}
+	// 触发器若写在函数创建之前，PostgreSQL 会报函数不存在。只调整执行顺序，不改工单原文。
+	stmts = sqlcheck.OrderFunctionsBeforeTriggers(stmts)
 	return execSerial(ctx, db, t, stmts, collect, effectiveLongTimeout(t.LongStmtTimeout))
 }
 

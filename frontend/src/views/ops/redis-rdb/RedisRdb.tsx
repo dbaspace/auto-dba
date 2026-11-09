@@ -262,7 +262,7 @@ export default function RedisRdb() {
         Redis 内存分析（RDB）
       </Typography.Title>
       <div className="redis-rdb-hint">
-        解析在平台本机完成。可通过「配置中心 → 平台 Agent」（归属含 Redis RDB）拉取，或手动上传
+        解析在平台本机完成。可通过「配置中心 → Agent管理」的平台 Agent（归属含 Redis RDB）拉取，或手动上传
         dump.rdb。不走工单 BGSAVE。
       </div>
 

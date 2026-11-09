@@ -218,19 +218,31 @@ export default function AppLayout() {
 
   useEffect(() => {
     if (!path || path === '/403' || path === '/login') return
+    if (path === '/config/sql-executors') {
+      for (const t of tabs) {
+        if (t.path === '/config/sql-executors') dispatch(closeTab(t.key))
+      }
+      navigate('/config/agents?tab=sql', { replace: true })
+      return
+    }
     const allowed = collectPaths(menus)
     if (allowed.length && !pathAllowed(path, allowed)) return
-    // /ops/cdc?tab=pending 与 /ops/cdc 共用一个导航 Tab，避免同名重复
+    // /ops/cdc?tab= 与 /config/agents?tab= 共用一个导航 Tab，避免同名重复
     const tabSearch = path === '/ops/cdc' ? '' : search
     const key = tabKey(path, tabSearch)
-    if (path === '/ops/cdc') {
+    if (path === '/ops/cdc' || path === '/config/agents') {
       for (const t of tabs) {
-        if (t.path === '/ops/cdc' && t.key !== key) dispatch(closeTab(t.key))
+        if (t.path === path && t.key !== key) dispatch(closeTab(t.key))
+        if (path === '/config/agents' && t.path === '/config/sql-executors') dispatch(closeTab(t.key))
       }
     }
     const exists = tabs.some((t) => t.key === key)
     if (exists) {
-      if (activeKey !== key) dispatch(activateTab(key))
+      if (path === '/config/agents') {
+        dispatch(openTab({ path, search: tabSearch, title: titleForPath(path, menus), menus }))
+      } else if (activeKey !== key) {
+        dispatch(activateTab(key))
+      }
       return
     }
     dispatch(

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { Alert, Button, Form, Input, Modal, Select, Space, Switch, Tag, Typography, message } from 'antd'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import api from '../../api/request'
@@ -37,6 +37,10 @@ export default function SqlExecutors() {
   const [rows, setRows] = useState<Row[]>([])
   const [deploys, setDeploys] = useState<DeployRow[]>([])
   const [envs, setEnvs] = useState<EnvOpt[]>([])
+  const [hosts, setHosts] = useState<{ id: string; host?: string; domain_name?: string; domains?: string[] }[]>([])
+  const [filterEnv, setFilterEnv] = useState('')
+  const [filterAddr, setFilterAddr] = useState('')
+  const [page, setPage] = useState(1)
   const [localCodes, setLocalCodes] = useState<string[]>([])
   const [visible, setVisible] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -45,21 +49,32 @@ export default function SqlExecutors() {
   const [form] = Form.useForm()
 
   async function load() {
-    const [{ data }, envRes, depRes] = await Promise.all([
-      api.get('/sql-executors'),
-      api.get('/environments'),
-      api.get('/sql-executors/deploys', { silent: true }).catch(() => api.get('/platform/agents/sql-executors/deploys')).catch(() => ({ data: { data: [] } })),
-    ])
-    setRows(data.data || [])
-    setDeploys(
-      (depRes.data.data || []).filter((d: DeployRow) => d.status === 'success' && d.base_url && d.agent_id),
-    )
-    setLocalCodes(data.local_idc_codes || [])
-    setEnvs(envRes.data.data || [])
+    try {
+      const [{ data }, envRes] = await Promise.all([
+        api.get('/sql-executors', { silent: true }),
+        api.get('/environments', { silent: true }).catch(() => ({ data: { data: [] } })),
+      ])
+      setRows(data.data || [])
+      setLocalCodes(data.local_idc_codes || [])
+      setEnvs(envRes.data.data || [])
+    } catch (e: any) {
+      message.error(e?.response?.data?.message || '执行器列表加载失败')
+    }
+    void api.get('/sql-executors/deploys', { silent: true })
+      .catch(() => api.get('/platform/agents/sql-executors/deploys', { silent: true }))
+      .then((depRes) => {
+        setDeploys(
+          (depRes?.data?.data || []).filter((d: DeployRow) => d.status === 'success' && d.base_url && d.agent_id),
+        )
+      })
+      .catch(() => {})
+    void api.get('/instances', { params: { db_type: 'host' }, silent: true })
+      .then((hostRes) => setHosts(hostRes.data?.data || []))
+      .catch(() => {})
   }
 
   useEffect(() => {
-    load().catch((e) => message.error(e?.response?.data?.message || '加载失败'))
+    void load()
   }, [])
 
   function open(row?: Row) {
@@ -192,6 +207,22 @@ export default function SqlExecutors() {
   }
 
   const envOptions = envs.map((e) => ({ value: e.code, label: e.name ? `${e.name}（${e.code}）` : e.code }))
+  const filteredRows = useMemo(() => {
+    const q = filterAddr.trim().toLowerCase()
+    return rows.filter((row) => {
+      if (filterEnv) {
+        const codes = [
+          ...(row.env_codes || []),
+          ...(row.environments || []).map((e) => e.code || ''),
+        ].filter(Boolean)
+        if (!codes.includes(filterEnv)) return false
+      }
+      if (!q) return true
+      const host = row.host_instance_id ? hosts.find((h) => h.id === row.host_instance_id) : undefined
+      const parts = [row.name, row.base_url, host?.host, host?.domain_name, ...(host?.domains || [])]
+      return parts.some((p) => String(p || '').toLowerCase().includes(q))
+    })
+  }, [rows, hosts, filterEnv, filterAddr])
 
   return (
     <div>
@@ -203,8 +234,8 @@ export default function SqlExecutors() {
         description={
           <div>
             <div>1. 先在「环境管理」确认海外环境已经存在，实例的机房使用这些环境的编码。</div>
-            <div>2. 到「平台 Agent」把 sql-agent 下发到能直连这些库的机器。下发成功后会登记地址。数据库账号只在实例管理填写。</div>
-            <div>3. 回到本页新增，选择一条下发成功记录，地址会自动带出。再填名称、绑定环境并保存。这里不填写账号和密码。</div>
+            <div>2. 点本页上方「下发」，把 sql-agent 下到能直连这些库的机器。下发成功后会登记地址。数据库账号只在实例管理填写。</div>
+            <div>3. 在下方新增，选择一条下发成功记录，地址会自动带出。再填名称、绑定环境并保存。这里不填写账号和密码。</div>
             <div>4. 点探活。通过后，这些环境上的 DDL/DML 才交给这台执行器。失败时会写明是地址不通，还是环境已经绑在另一台执行器上。</div>
             <div>本服务所在环境不用装执行器。请在下方选上本机所在环境：选中的继续本进程直连。选上之后，其它没有绑定执行器的环境会记失败，不会再从本机直连过去。</div>
           </div>
@@ -224,11 +255,27 @@ export default function SqlExecutors() {
         <Button type="primary" onClick={() => open()}>
           新增执行器
         </Button>
+        <Select
+          allowClear
+          placeholder="环境"
+          style={{ width: 180 }}
+          value={filterEnv || undefined}
+          options={envOptions}
+          onChange={(v) => { setFilterEnv(v || ''); setPage(1) }}
+        />
+        <Input
+          allowClear
+          placeholder="地址：主机、域名或 URL"
+          style={{ width: 240 }}
+          value={filterAddr}
+          onChange={(e) => { setFilterAddr(e.target.value); setPage(1) }}
+        />
       </Space>
       <ResponsiveTable
         rowKey="id"
-        dataSource={rows}
-        locale={{ emptyText: '还没有执行器。请先到平台 Agent 下发，再在这里选择成功记录登记。' }}
+        dataSource={filteredRows}
+        pagination={{ current: page, pageSize: 10, onChange: (p) => setPage(p) }}
+        locale={{ emptyText: '还没有执行器。请先用本页上方「下发」，再在这里选择成功记录登记。' }}
         columns={[
           { title: '名称', dataIndex: 'name' },
           { title: '地址', dataIndex: 'base_url' },
@@ -293,7 +340,7 @@ export default function SqlExecutors() {
       >
         <Form form={form} labelCol={{ style: { width: 96 } }}>
           {!editingId && deploys.length === 0 ? (
-            <Alert type="warning" showIcon style={{ marginBottom: 12 }} message="还没有下发成功的记录，请先到平台 Agent 下发 SQL 执行器。" />
+            <Alert type="warning" showIcon style={{ marginBottom: 12 }} message="还没有下发成功的记录，请先用本页上方「下发」。" />
           ) : null}
           <Form.Item label="名称" name="name" rules={[{ required: true, message: '请填写名称' }]}>
             <Input placeholder="如 欧洲执行器" />

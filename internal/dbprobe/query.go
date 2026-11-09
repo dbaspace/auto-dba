@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -82,7 +83,9 @@ func IsReadOnlySQL(raw string) error {
 	}
 	kw := firstSQLKeyword(rest)
 	switch kw {
-	case "SELECT", "WITH", "SHOW", "EXPLAIN", "DESC", "DESCRIBE":
+	case "SELECT", "WITH", "EXPLAIN":
+		return rejectNestedWrite(rest)
+	case "SHOW", "DESC", "DESCRIBE":
 		return nil
 	case "TRUNCATE", "INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE",
 		"REPLACE", "MERGE", "GRANT", "REVOKE", "CALL", "DO", "LOAD", "COPY",
@@ -123,6 +126,77 @@ func firstSQLKeyword(s string) string {
 			continue
 		}
 		break
+	}
+	return b.String()
+}
+
+var reNestedWrite = regexp.MustCompile(`(?i)\b(INSERT|UPDATE|DELETE|MERGE|TRUNCATE|CREATE|DROP|ALTER|GRANT|COPY|INTO)\b`)
+
+// rejectNestedWrite 拦住第一条关键字是 SELECT/WITH/EXPLAIN、正文里仍有写操作的语句。
+func rejectNestedWrite(sql string) error {
+	if reNestedWrite.MatchString(maskSQLLiterals(sql)) {
+		return fmt.Errorf("查询接口仅允许只读语句，禁止 DDL/DML")
+	}
+	return nil
+}
+
+func maskSQLLiterals(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		if strings.HasPrefix(s[i:], "--") {
+			if nl := strings.IndexByte(s[i:], '\n'); nl >= 0 {
+				i += nl + 1
+			} else {
+				i = len(s)
+			}
+			b.WriteByte(' ')
+			continue
+		}
+		if strings.HasPrefix(s[i:], "/*") {
+			if end := strings.Index(s[i+2:], "*/"); end >= 0 {
+				i += 2 + end + 2
+			} else {
+				i = len(s)
+			}
+			b.WriteByte(' ')
+			continue
+		}
+		if s[i] == '\'' || s[i] == '"' || s[i] == '`' {
+			q := s[i]
+			i++
+			for i < len(s) {
+				if s[i] == q {
+					if q == '\'' && i+1 < len(s) && s[i+1] == '\'' {
+						i += 2
+						continue
+					}
+					i++
+					break
+				}
+				i++
+			}
+			b.WriteByte(' ')
+			continue
+		}
+		if s[i] == '$' {
+			j := i + 1
+			for j < len(s) && (s[j] == '_' || (s[j] >= 'a' && s[j] <= 'z') || (s[j] >= 'A' && s[j] <= 'Z') || (s[j] >= '0' && s[j] <= '9')) {
+				j++
+			}
+			if j < len(s) && s[j] == '$' {
+				tag := s[i : j+1]
+				i = j + 1
+				if k := strings.Index(s[i:], tag); k >= 0 {
+					i += k + len(tag)
+				} else {
+					i = len(s)
+				}
+				b.WriteByte(' ')
+				continue
+			}
+		}
+		b.WriteByte(s[i])
+		i++
 	}
 	return b.String()
 }

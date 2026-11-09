@@ -38,7 +38,6 @@ import MigrationSchemaCompare from '../views/ops/MigrationSchemaCompare'
 import Flashback from '../views/flashback/Flashback'
 import FlashbackCloud from '../views/flashback/FlashbackCloud'
 import Environments from '../views/config/Environments'
-import SqlExecutors from '../views/config/SqlExecutors'
 import DnsRecords from '../views/dns/DnsRecords'
 import DnsZones from '../views/dns/DnsZones'
 import DnsNodes from '../views/dns/DnsNodes'
@@ -96,7 +95,7 @@ import K8sResources from '../views/k8s/Resources'
 import K8sOperators from '../views/k8s/Operators'
 import K8sDBClusters from '../views/k8s/DBClusters'
 import K8sApps from '../views/k8s/Apps'
-import PlatformAgent from '../views/config/PlatformAgent'
+import AgentManage from '../views/config/AgentManage'
 import OssUpload from '../views/config/OssUpload'
 import CmdbAssets from '../views/cmdb/Assets'
 import CmdbTopology from '../views/cmdb/Topology'
@@ -291,7 +290,7 @@ export function TabPagePanel({ pathname, search }: { pathname: string; search?: 
       <Route path="/config/instances" element={<Instances />} />
       <Route path="/config/regions" element={<Regions />} />
       <Route path="/config/environments" element={<Environments />} />
-      <Route path="/config/sql-executors" element={<SqlExecutors />} />
+      <Route path="/config/sql-executors" element={<Navigate to="/config/agents?tab=sql" replace />} />
       <Route path="/dns" element={<Navigate to="/dns/records" replace />} />
       <Route path="/dns/records" element={<DnsRecords />} />
       <Route path="/dns/zones" element={<DnsZones />} />
@@ -302,7 +301,7 @@ export function TabPagePanel({ pathname, search }: { pathname: string; search?: 
       <Route path="/config/dns" element={<Navigate to="/dns/records" replace />} />
       <Route path="/config/tags" element={<Navigate to="/cmdb/tags" replace />} />
       <Route path="/config/connectors" element={<Connectors />} />
-      <Route path="/config/agents" element={<PlatformAgent />} />
+      <Route path="/config/agents" element={<AgentManage />} />
       <Route path="/config/oss" element={<OssUpload />} />
       <Route path="/config/monitor-targets" element={<MonitorTargets />} />
       <Route path="/config/fe-admin" element={<FeAdmin />} />

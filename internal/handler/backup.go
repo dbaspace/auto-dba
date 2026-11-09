@@ -511,33 +511,43 @@ func (h *BackupHandler) ProbeAgent(c *gin.Context) {
 }
 
 // ListAgentStatus GET /backup/agents/status — 批量探活运行状态。
+// 整批最多 8 秒，跟随本次请求取消。单台失败或超时记为未知，不拖住整页。
 func (h *BackupHandler) ListAgentStatus(c *gin.Context) {
 	list, err := h.Store.ListBackupAgentsInTenant(effectiveListTenantID(h.Store, c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
+	parent, cancel := context.WithTimeout(c.Request.Context(), 8*time.Second)
+	defer cancel()
 	eng := h.eng()
-	type item struct {
-		st backup.AgentRuntimeStatus
-	}
-	ch := make(chan item, len(list))
+	ch := make(chan backup.AgentRuntimeStatus, len(list))
 	for i := range list {
 		id := list[i].ID
 		go func(agentID string) {
 			a, _ := h.Store.GetBackupAgent(agentID)
 			if a == nil {
-				ch <- item{st: backup.AgentRuntimeStatus{ID: agentID, Status: backup.AgentStatusUnknown, Message: "不存在"}}
+				ch <- backup.AgentRuntimeStatus{ID: agentID, Status: backup.AgentStatusUnknown, Message: "不存在"}
 				return
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-			defer cancel()
-			ch <- item{st: eng.ProbeAgentStatus(ctx, a)}
+			ctx, probeCancel := context.WithTimeout(parent, 4*time.Second)
+			defer probeCancel()
+			ch <- eng.ProbeAgentStatus(ctx, a)
 		}(id)
 	}
+	got := map[string]backup.AgentRuntimeStatus{}
+	for _, st := range takeN(parent, ch, len(list)) {
+		got[st.ID] = st
+	}
 	out := make([]backup.AgentRuntimeStatus, 0, len(list))
-	for range list {
-		out = append(out, (<-ch).st)
+	for i := range list {
+		if st, ok := got[list[i].ID]; ok {
+			out = append(out, st)
+			continue
+		}
+		out = append(out, backup.AgentRuntimeStatus{
+			ID: list[i].ID, Status: backup.AgentStatusUnknown, BaseURL: list[i].BaseURL, Message: "探活超时",
+		})
 	}
 	c.JSON(http.StatusOK, gin.H{"data": out})
 }

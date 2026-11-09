@@ -90,7 +90,7 @@ export default function BackupSettings() {
       <div className="backup-toolbar">
         <h2>备份存储</h2>
         <span className="backup-hint">
-          平台 Agent 请在 <Link to="/config/agents">配置中心 → 平台 Agent</Link> 定义（勾选「备份控制」归属后可被策略引用）。
+          平台 Agent 请在 <Link to="/config/agents?tab=platform">配置中心 → Agent管理</Link> 定义（勾选「备份控制」归属后可被策略引用）。
         </span>
         <Button
           type="primary"

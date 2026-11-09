@@ -113,7 +113,7 @@ export const PAGE_ROUTES = [
   { path: '/dns/inspect', title: '解析体检' },
   { path: '/config/tags', title: '标签管理' },
   { path: '/config/connectors', title: '连接器' },
-  { path: '/config/agents', title: '平台 Agent' },
+  { path: '/config/agents', title: 'Agent管理' },
   { path: '/config/oss', title: '对象存储' },
   { path: '/config/monitor-targets', title: '监控目标注册' },
   { path: '/config/fe-admin', title: 'FE管理' },

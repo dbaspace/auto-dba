@@ -20,7 +20,6 @@ import {
 import {
   ChangeConfRollbackModal, ConfApplyConfirmModal, ConfHistoryPanel, keySummary, type ConfPatchPlan,
 } from './SrConfDiff'
-import { activeDeployHostIds, isAgentDeployActive, useAgentDeployTracker } from './agentDeployTracker'
 import { ensureAgentForHost, matchAgentByHost } from './ensureAgentForHost'
 import './SrCluster.css'
 
@@ -171,18 +170,12 @@ type MonitorPreview = {
   endpoints?: string[]
   labels?: Record<string, string>
 }
-type HostInst = { id: string; name: string; host?: string; domain_name?: string; domains?: string[]; port?: number }
-type SrAgentDeploy = {
-  id: string
-  host_instance_id: string
-  agent_id?: string
-  status: string
-  listen_port: number
-  remote_dir: string
-  base_url?: string
-  log_text?: string
-  created_at?: string
-  finished_at?: string
+type HostInst = { id: string; name: string; host?: string; domain_name?: string; domains?: string[]; port?: number; env_id?: string }
+type EnvRecord = { id: string; code?: string; name?: string }
+
+function envRecordLabel(e: { id?: string; code?: string; name?: string }): string {
+  if (e.name && e.code && e.name !== e.code) return `${e.name} (${e.code})`
+  return e.name || e.code || e.id || ''
 }
 
 function endpointHost(ep: string): string {
@@ -404,23 +397,12 @@ export default function SrClusterPage() {
   const [nodeSubmitBusy, setNodeSubmitBusy] = useState(false)
   const nodeApprovers = useHostApprovers()
   const ticketApprovers = useHostApprovers()
-  const [agentModal, setAgentModal] = useState(false)
-  /** 快速登记后回填到集群表单某一行 */
-  const [agentBindTarget, setAgentBindTarget] = useState<{ list: 'fe_nodes' | 'be_nodes'; index: number } | null>(null)
-  const [deployModal, setDeployModal] = useState(false)
-  const [deploySource, setDeploySource] = useState<'host' | 'monitor'>('monitor')
-  const [deployMonTask, setDeployMonTask] = useState<string | undefined>()
-  const [deployMonRows, setDeployMonRows] = useState<{ host: string; hostId?: string; name?: string }[]>([])
-  const [deployMonSelected, setDeployMonSelected] = useState<string[]>([])
   const [layoutDefaults, setLayoutDefaults] = useState({
     fe_software_base: '/home/dorisdb_base',
     be_software_base: '/home/dorisdb_base',
     be_data_root: '/data',
   })
-  const [deployBusy, setDeployBusy] = useState(false)
   const [hosts, setHosts] = useState<HostInst[]>([])
-  const [deploys, setDeploys] = useState<SrAgentDeploy[]>([])
-  const [deployLog, setDeployLog] = useState<SrAgentDeploy | null>(null)
   const [releaseModal, setReleaseModal] = useState(false)
   const [artifactModal, setArtifactModal] = useState<SrRelease | null>(null)
   const [syncBusyId, setSyncBusyId] = useState('')
@@ -455,10 +437,13 @@ export default function SrClusterPage() {
   const [tplBe, setTplBe] = useState('')
   const [tplBusy, setTplBusy] = useState(false)
   const [envOptions, setEnvOptions] = useState<{ value: string; label: string }[]>([])
+  const [envRecords, setEnvRecords] = useState<EnvRecord[]>([])
+  const [agentEnvId, setAgentEnvId] = useState('')
+  const [agentAddr, setAgentAddr] = useState('')
+  const [agentPage, setAgentPage] = useState(1)
+  const [agentPageSize, setAgentPageSize] = useState(10)
   const [clusterForm] = Form.useForm()
   const [nodeForm] = Form.useForm()
-  const [agentForm] = Form.useForm()
-  const [deployForm] = Form.useForm()
   const [ossForm] = Form.useForm()
   const [layoutForm] = Form.useForm()
   const [releaseForm] = Form.useForm()
@@ -811,28 +796,6 @@ export default function SrClusterPage() {
       setHosts([])
     }
   }, [])
-  const loadDeploys = useCallback(async () => {
-    try {
-      const res = await api.get('/sr-cluster/agents/deploys', { params: { limit: 200 } })
-      setDeploys(res.data?.data || [])
-    } catch {
-      setDeploys([])
-    }
-  }, [])
-  const deployTracker = useAgentDeployTracker<SrAgentDeploy>({
-    basePath: '/sr-cluster/agents/deploys',
-    agentName: 'Node Agent',
-    hostLabel: (id) => {
-      const h = hosts.find((x) => x.id === id)
-      return h ? `${h.name} (${h.host || h.domain_name || '-'})` : id
-    },
-    onShowLog: (row) => setDeployLog(row),
-    onFinished: () => { void loadAgents() },
-    refreshList: () => { void loadDeploys() },
-  })
-  const { trackFromList: trackDeploysFromList } = deployTracker
-  useEffect(() => { trackDeploysFromList(deploys) }, [deploys, trackDeploysFromList])
-  const deployingHostIds = useMemo(() => activeDeployHostIds(deploys), [deploys])
   const loadChanges = useCallback(async (clusterId?: string) => {
     const res = await api.get('/sr-cluster/changes', { params: { cluster_id: clusterId || undefined, limit: 50 } })
     setChanges(res.data?.data || [])
@@ -954,13 +917,14 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
   const loadEnvironments = useCallback(async () => {
     try {
       const res = await api.get('/environments')
-      const list = res.data?.data || []
+      const list: EnvRecord[] = res.data?.data || []
+      setEnvRecords(list.filter((e) => e.id))
       let opts = list
-        .map((e: { code?: string; name?: string }) => ({
+        .map((e) => ({
           value: e.code || e.name || '',
-          label: e.name && e.code && e.name !== e.code ? `${e.name} (${e.code})` : (e.name || e.code || ''),
+          label: envRecordLabel(e),
         }))
-        .filter((e: { value: string }) => e.value)
+        .filter((e) => e.value)
       if (!opts.length) {
         opts = [
           { value: 'test', label: '测试 (test)' },
@@ -969,6 +933,7 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
       }
       setEnvOptions(opts)
     } catch {
+      setEnvRecords([])
       setEnvOptions([
         { value: 'test', label: '测试 (test)' },
         { value: 'prod', label: '生产 (prod)' },
@@ -1093,8 +1058,8 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
   }
 
   useEffect(() => {
-    loadClusters(); loadAgents(); loadChanges(); loadReleases(); loadOSS(); loadLayoutDefaults(); loadHosts(); loadDeploys(); loadConfTemplates(); loadEnvironments()
-  }, [loadClusters, loadAgents, loadChanges, loadReleases, loadOSS, loadLayoutDefaults, loadHosts, loadDeploys, loadConfTemplates, loadEnvironments])
+    loadClusters(); loadAgents(); loadChanges(); loadReleases(); loadOSS(); loadLayoutDefaults(); loadHosts(); loadConfTemplates(); loadEnvironments()
+  }, [loadClusters, loadAgents, loadChanges, loadReleases, loadOSS, loadLayoutDefaults, loadHosts, loadConfTemplates, loadEnvironments])
 
   useEffect(() => {
     if (!changeDetail?.id) return
@@ -1393,9 +1358,26 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
     [agents],
   )
 
+  const envLabelById = useMemo(() => {
+    const m = new Map<string, string>()
+    envRecords.forEach((e) => { if (e.id) m.set(e.id, envRecordLabel(e)) })
+    return m
+  }, [envRecords])
+
+  const filteredAgents = useMemo(() => {
+    const q = agentAddr.trim().toLowerCase()
+    return agents.filter((a) => {
+      const host = a.host_instance_id ? hosts.find((h) => h.id === a.host_instance_id) : undefined
+      if (agentEnvId && host?.env_id !== agentEnvId) return false
+      if (!q) return true
+      const parts = [a.base_url, host?.host, host?.domain_name, ...(host?.domains || [])]
+      return parts.some((p) => String(p || '').toLowerCase().includes(q))
+    })
+  }, [agents, hosts, agentEnvId, agentAddr])
+
   const goNodeAgentTab = () => {
     setClusterModal(false)
-    setTab('agents')
+    navigate('/config/agents?tab=node')
   }
 
   const nodeHostId = Form.useWatch('host_instance_id', nodeForm) as string | undefined
@@ -1477,13 +1459,7 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
       message.warning('请先填写该行 Host')
       return
     }
-    setAgentBindTarget({ list, index })
-    agentForm.resetFields()
-    agentForm.setFieldsValue({
-      name: `sr-${h}`,
-      base_url: `http://${h}:8091`,
-    })
-    setAgentModal(true)
+    navigate('/config/agents?tab=node')
   }
 
   const applyMonitorImport = () => {
@@ -1540,7 +1516,7 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
     if (ver) parts.push(`版本 ${ver}${matchedRelease ? '（已匹配制品目录）' : ''}`)
     else parts.push('监控目标无 version 标签，请手工填写版本')
     if (autoBound > 0) parts.push(`已按 host 自动绑定 ${autoBound} 个 Node Agent`)
-    else parts.push('Agent 可暂空，登记后到 Node Agent Tab 批量下发再补绑')
+    else parts.push('Agent 可暂空，登记后到配置中心 → Agent管理 → Node Agent 批量下发再补绑')
     message.success(parts.join('；'))
     void resolveFePasswordFromAdmin({ silent: true }).then((pwd) => {
       if (pwd) message.info('已从 FE 管理自动填入密码', 3)
@@ -2615,259 +2591,19 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
             key: 'agents',
             label: 'Node Agent',
             children: (
-              <Space direction="vertical" style={{ width: '100%' }} size="middle">
-                <Alert
-                  type="info"
-                  showIcon
-                  message="StarRocks Node Agent 下发与登记（本页完成）"
-                  description={(
-                    <>
-                      SSH 下发
-                      {' '}
-                      <code>deploy/node-agent</code>
-                      {' '}
-                      到 host 实例（默认
-                      {' '}
-                      <code>:8091</code>
-                      ，
-                      {' '}
-                      <code>/v1/sr/*</code>
-                      ）。成功后自动写入本表，供集群绑定。
-                      <strong>不是</strong>
-                      配置中心「平台 Agent」(:8090)。下发前请在控制面机器执行
-                      {' '}
-                      <code>cd deploy/node-agent && ./build.sh</code>
-                      。对已有集群：下发
-                      <strong>仅安装/重启 Agent 自身</strong>
-                      ，不启停 FE/BE、不改业务 systemd/二进制/数据盘。
-                    </>
-                  )}
-                />
-                <Space wrap>
-                  <Button type="primary" onClick={async () => {
-                    deployForm.resetFields()
-                    deployForm.setFieldsValue({
-                      listen_port: 8091,
-                      remote_dir: '/home/sysadmin/auto-dba/node-agent',
-                      escalate: false,
-                      host_instance_ids: [],
-                    })
-                    setDeploySource('monitor')
-                    setDeployMonTask(undefined)
-                    setDeployMonRows([])
-                    setDeployMonSelected([])
-                    loadHosts()
-                    try {
-                      const [feRes, beRes] = await Promise.all([
-                        api.get('/monitor-targets/preview', { params: { kind: 'starrocks-fe' } }),
-                        api.get('/monitor-targets/preview', { params: { kind: 'starrocks-be' } }),
-                      ])
-                      setFePreview(feRes.data?.data || [])
-                      setBePreview(beRes.data?.data || [])
-                    } catch {
-                      setFePreview([])
-                      setBePreview([])
-                    }
-                    setDeployModal(true)
-                  }}
-                  >
-                    SSH 下发
-                  </Button>
-                  <Button onClick={() => {
-                    setAgentBindTarget(null)
-                    agentForm.resetFields()
-                    setAgentModal(true)
-                  }}
-                  >
-                    手工登记
-                  </Button>
-                  <Button onClick={() => { loadAgents(); loadDeploys() }}>刷新</Button>
-                </Space>
-                <Table
-                  rowKey="id"
-                  size="small"
-                  title={() => '已登记 Agent'}
-                  dataSource={agents}
-                  pagination={{
-                    pageSize: 10, size: 'small', showSizeChanger: true, pageSizeOptions: [10, 20, 50],
-                    showTotal: (t) => `共 ${t} 个`,
-                  }}
-                  columns={[
-                    { title: '名称', dataIndex: 'name' },
-                    { title: 'URL', dataIndex: 'base_url' },
-                    {
-                      title: '状态',
-                      width: 100,
-                      render: (_: unknown, row: SrAgent) => {
-                        const st = agentStatus[row.id]?.status || 'unknown'
-                        const color = st === 'running' ? 'success' : st === 'stopped' ? 'default' : 'warning'
-                        const label = st === 'running' ? '运行中' : st === 'stopped' ? '已停止' : '未知'
-                        return <Tag color={color} title={agentStatus[row.id]?.message}>{label}</Tag>
-                      },
-                    },
-                    {
-                      title: '来源',
-                      width: 100,
-                      render: (_: unknown, row: SrAgent) => (row.host_instance_id
-                        ? <Tag color="blue">SSH 下发</Tag>
-                        : <Tag>手工</Tag>),
-                    },
-                    {
-                      title: '操作',
-                      width: 280,
-                      render: (_: unknown, row: SrAgent) => {
-                        const busy = agentActingId === row.id
-                        const deployed = !!row.host_instance_id
-                        const running = agentStatus[row.id]?.status === 'running'
-                        const applyStatus = (st: { id?: string; status?: string; message?: string } | undefined) => {
-                          if (st?.id) setAgentStatus((m) => ({ ...m, [st.id!]: { status: st.status || 'unknown', message: st.message } }))
-                        }
-                        return (
-                          <Space wrap size={0}>
-                            <Button
-                              type="link"
-                              size="small"
-                              loading={busy}
-                              onClick={async () => {
-                                setAgentActingId(row.id)
-                                try {
-                                  const res = await api.post(`/sr-cluster/agents/${row.id}/probe`)
-                                  const st = res.data?.data
-                                  applyStatus(st)
-                                  if (st?.status === 'running') message.success('运行中')
-                                  else message.warning(st?.message || '未运行')
-                                } catch (e: any) {
-                                  message.error(e?.response?.data?.message || e.message)
-                                } finally {
-                                  setAgentActingId('')
-                                }
-                              }}
-                            >
-                              刷新状态
-                            </Button>
-                            {deployed ? (
-                              running ? (
-                                <Button
-                                  type="link"
-                                  size="small"
-                                  danger
-                                  loading={busy}
-                                  onClick={async () => {
-                                    setAgentActingId(row.id)
-                                    try {
-                                      const res = await api.post(`/sr-cluster/agents/${row.id}/stop`)
-                                      message.success('已停止')
-                                      applyStatus(res.data?.data)
-                                    } catch (e: any) {
-                                      message.error(e?.response?.data?.message || e.message)
-                                    } finally {
-                                      setAgentActingId('')
-                                    }
-                                  }}
-                                >
-                                  停止
-                                </Button>
-                              ) : (
-                                <Button
-                                  type="link"
-                                  size="small"
-                                  loading={busy}
-                                  onClick={async () => {
-                                    setAgentActingId(row.id)
-                                    try {
-                                      const res = await api.post(`/sr-cluster/agents/${row.id}/start`)
-                                      message.success('已启动')
-                                      applyStatus(res.data?.data)
-                                    } catch (e: any) {
-                                      message.error(e?.response?.data?.message || e.message)
-                                    } finally {
-                                      setAgentActingId('')
-                                    }
-                                  }}
-                                >
-                                  启动
-                                </Button>
-                              )
-                            ) : null}
-                            <Button
-                              type="link"
-                              danger
-                              size="small"
-                              onClick={async () => {
-                                Modal.confirm({
-                                  title: '删除 Agent',
-                                  content: `确认删除「${row.name || row.base_url}」登记？删除后，该主机上的集群节点将无法通过 Agent 运维；在该主机重新下发 Agent 后会自动恢复绑定。`,
-                                  okType: 'danger',
-                                  onOk: async () => {
-                                    let affected: { name: string; detail?: string }[] = []
-                                    try {
-                                      const res = await api.delete(`/sr-cluster/agents/${row.id}`)
-                                      affected = res.data?.affected_nodes || []
-                                    } catch {
-                                      return
-                                    }
-                                    if (affected.length) {
-                                      message.warning(
-                                        `已删除。以下节点需重新下发 Agent 后才能运维：${affected
-                                          .map((n) => (n.detail ? `${n.name}（${n.detail}）` : n.name))
-                                          .join('、')}`,
-                                        6,
-                                      )
-                                    } else {
-                                      message.success('已删除')
-                                    }
-                                    loadAgents()
-                                  },
-                                })
-                              }}
-                            >
-                              删除
-                            </Button>
-                          </Space>
-                        )
-                      },
-                    },
-                  ]}
-                />
-                <Table
-                  rowKey="id"
-                  size="small"
-                  title={() => '下发记录'}
-                  dataSource={deploys}
-                  pagination={{
-                    pageSize: 10, size: 'small', showSizeChanger: true, pageSizeOptions: [10, 20, 50],
-                    showTotal: (t) => `共 ${t} 条`,
-                  }}
-                  columns={[
-                    {
-                      title: '主机',
-                      dataIndex: 'host_instance_id',
-                      render: (id: string) => {
-                        const h = hosts.find((x) => x.id === id)
-                        return h ? `${h.name} (${h.host || h.domain_name || '-'})` : id
-                      },
-                    },
-                    {
-                      title: '状态',
-                      dataIndex: 'status',
-                      width: 110,
-                      render: (s: string, row: SrAgentDeploy) => (
-                        <Tag color={statusColor[s] || 'default'} icon={isAgentDeployActive(row) ? <SyncOutlined spin /> : undefined}>{s}</Tag>
-                      ),
-                    },
-                    { title: '端口', dataIndex: 'listen_port', width: 70 },
-                    { title: 'Base URL', dataIndex: 'base_url', ellipsis: true },
-                    { title: '时间', dataIndex: 'created_at', width: 180 },
-                    {
-                      title: '操作',
-                      width: 80,
-                      render: (_: unknown, row: SrAgentDeploy) => (
-                        <Button type="link" size="small" onClick={() => setDeployLog(row)}>日志</Button>
-                      ),
-                    },
-                  ]}
-                />
-              </Space>
+              <Alert
+                type="info"
+                showIcon
+                message="Node Agent 已集中到配置中心"
+                description={(
+                  <>
+                    手工登记、下发、启停都在
+                    {' '}
+                    <Link to="/config/agents?tab=node">配置中心 → Agent管理 → Node Agent</Link>
+                    。这里仍按主机选择已登记的 Agent，匹配规则不变。
+                  </>
+                )}
+              />
             ),
           },
         ]}
@@ -3144,7 +2880,7 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                 <>
                   先保存拓扑与 FE 凭据；Agent（
                   <code>:8091</code>
-                  ）可稍后在「Node Agent」Tab 从监控批量下发后再绑。填 Host 时若已有匹配 Agent 会自动选中。
+                  ）可稍后在「配置中心 → Agent管理 → Node Agent」从监控批量下发后再绑。填 Host 时若已有匹配 Agent 会自动选中。
                 </>
               )}
             />
@@ -3161,7 +2897,7 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                   <code>:8091</code>
                   ）。请
                   {' '}
-                  <Button type="link" size="small" style={{ padding: 0 }} onClick={goNodeAgentTab}>打开 Node Agent Tab</Button>
+                  <Button type="link" size="small" style={{ padding: 0 }} onClick={goNodeAgentTab}>去 Agent管理</Button>
                   {' '}
                   或点「按主机登记」。
                 </>
@@ -3359,7 +3095,7 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
             extra={nodeHostInst && nodeAgentOptions.length === 0 ? (
               <span>
                 该主机尚无 Node Agent（:8091），
-                <Button type="link" size="small" style={{ padding: 0 }} onClick={() => { setNodeModal(false); setTab('agents') }}>去下发 Agent</Button>
+                <Button type="link" size="small" style={{ padding: 0 }} onClick={() => { setNodeModal(false); navigate('/config/agents?tab=node') }}>去下发 Agent</Button>
               </span>
             ) : '只列出与所选主机地址一致的 Agent'}
           >
@@ -3417,289 +3153,6 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
           <Form.Item name="description" label="事由"><Input.TextArea rows={2} /></Form.Item>
         </Form>
         <NodePrecheckPanel result={nodePrecheck} busy={nodePrecheckBusy} />
-      </Modal>
-
-      <Modal
-        title="SSH 下发 Node Agent"
-        open={deployModal}
-        confirmLoading={deployBusy}
-        width={720}
-        onCancel={() => setDeployModal(false)}
-        onOk={async () => {
-          const v = await deployForm.validateFields()
-          let ids: string[] = []
-          if (deploySource === 'monitor') {
-            ids = deployMonSelected.filter(Boolean)
-            if (!ids.length) {
-              message.warning('请勾选已匹配到主机实例的节点')
-              return
-            }
-          } else {
-            ids = (v.host_instance_ids || []).filter(Boolean)
-            if (!ids.length) {
-              message.warning('请选择至少一台目标主机')
-              return
-            }
-          }
-          setDeployBusy(true)
-          try {
-            const res = await api.post('/sr-cluster/agents/deploy-batch', {
-              host_instance_ids: ids,
-              listen_port: v.listen_port || 8091,
-              remote_dir: v.remote_dir,
-              escalate: v.escalate ? 'sudo_su' : '',
-            })
-            const d = res.data?.data || {}
-            const results: { host_instance_id: string; deploy_id?: string; error?: string }[] = d.results || []
-            for (const r of results) {
-              if (r.deploy_id) deployTracker.track(r.deploy_id)
-            }
-            message.success(`已提交：成功 ${d.ok_count || 0}，失败 ${d.fail_count || 0}（进度见下发记录）`)
-            if (d.fail_count > 0) {
-              Modal.warning({
-                title: '部分主机下发失败',
-                content: (
-                  <ul style={{ margin: 0, paddingLeft: 18, maxHeight: 240, overflow: 'auto' }}>
-                    {results.filter((r) => r.error).map((r) => (
-                      <li key={r.host_instance_id}>{r.host_instance_id}：{r.error}</li>
-                    ))}
-                  </ul>
-                ),
-              })
-            }
-            setDeployModal(false)
-            loadDeploys()
-          } catch (e: any) {
-            message.error(e?.response?.data?.message || e.message)
-          } finally {
-            setDeployBusy(false)
-          }
-        }}
-        destroyOnClose
-        okText="开始下发"
-      >
-        <Alert
-          type="warning"
-          showIcon
-          style={{ marginBottom: 12 }}
-          message="下发前请确认控制面已构建制品；对已运行集群安全"
-          description={(
-            <>
-              <div><code>cd deploy/node-agent && ./build.sh</code></div>
-              <div style={{ marginTop: 6 }}>
-                仅安装/重启 Node Agent，不启停 FE/BE、不装包、不 init 盘。监听端口请用 8091（约定 8090–8199），禁止填 9030/8030/8040 等业务端口。
-              </div>
-            </>
-          )}
-        />
-        <Form form={deployForm} layout="vertical" initialValues={{ listen_port: 8091, remote_dir: '/home/sysadmin/auto-dba/node-agent', escalate: false }}>
-          <Form.Item label="目标来源">
-            <Select
-              value={deploySource}
-              onChange={(v) => {
-                setDeploySource(v)
-                setDeployMonSelected([])
-                deployForm.setFieldsValue({ host_instance_ids: [] })
-              }}
-              options={[
-                { value: 'monitor', label: '从监控目标（StarRocks FE/BE）批量' },
-                { value: 'host', label: '从已登记主机多选' },
-              ]}
-            />
-          </Form.Item>
-          {deploySource === 'monitor' ? (
-            <>
-              <Form.Item label="监控任务" required>
-                <Select
-                  showSearch
-                  allowClear
-                  placeholder="选择 StarRocks 监控任务"
-                  value={deployMonTask}
-                  options={Array.from(new Set([
-                    ...fePreview.map((p) => p.task_name),
-                    ...bePreview.map((p) => p.task_name),
-                  ].filter(Boolean) as string[])).map((t) => ({ value: t, label: t }))}
-                  onChange={(task) => {
-                    setDeployMonTask(task)
-                    const eps = new Set<string>()
-                    for (const p of [...fePreview, ...bePreview]) {
-                      if (p.task_name !== task) continue
-                      for (const e of p.endpoints || []) {
-                        const h = endpointHost(e) || String(e || '').trim()
-                        if (h) eps.add(h)
-                      }
-                    }
-                    const rows = [...eps].sort().map((host) => {
-                      const hn = host.toLowerCase()
-                      const inst = hosts.find((x) => hostAddrs(x).includes(hn))
-                      return {
-                        host,
-                        hostId: inst && !deployingHostIds.has(inst.id) ? inst.id : undefined,
-                        name: inst?.name,
-                      }
-                    })
-                    setDeployMonRows(rows)
-                    setDeployMonSelected(rows.filter((r) => r.hostId).map((r) => r.hostId!))
-                  }}
-                />
-              </Form.Item>
-              <Form.Item
-                label="节点主机"
-                extra="仅「已匹配主机实例」可下发；未登记请先到实例管理登记 host 并配置 SSH"
-              >
-                {deployMonRows.length === 0 ? (
-                  <span className="muted">请先选择监控任务</span>
-                ) : (
-                  <>
-                    <Space style={{ marginBottom: 8 }}>
-                      <Button
-                        size="small"
-                        onClick={() => setDeployMonSelected(deployMonRows.filter((r) => r.hostId).map((r) => r.hostId!))}
-                      >
-                        全选
-                      </Button>
-                      <Button
-                        size="small"
-                        onClick={() => {
-                          const matched = deployMonRows.filter((r) => r.hostId).map((r) => r.hostId!)
-                          const cur = new Set(deployMonSelected)
-                          setDeployMonSelected(matched.filter((id) => !cur.has(id)))
-                        }}
-                      >
-                        反选
-                      </Button>
-                    </Space>
-                    <Checkbox.Group
-                      style={{ width: '100%' }}
-                      value={deployMonSelected}
-                      onChange={(vals) => setDeployMonSelected(vals as string[])}
-                    >
-                    <Space direction="vertical" style={{ width: '100%' }}>
-                      {deployMonRows.map((r) => (
-                        <Checkbox
-                          key={r.host}
-                          value={r.hostId || `__miss__${r.host}`}
-                          disabled={!r.hostId}
-                        >
-                          {r.host}
-                          {r.hostId
-                            ? <Tag color="blue" style={{ marginLeft: 8 }}>{r.name || r.hostId}</Tag>
-                            : <Tag color="error" style={{ marginLeft: 8 }}>未登记主机实例</Tag>}
-                        </Checkbox>
-                      ))}
-                    </Space>
-                    </Checkbox.Group>
-                  </>
-                )}
-              </Form.Item>
-            </>
-          ) : (
-            <Form.Item
-              name="host_instance_ids"
-              label="目标主机"
-              rules={[{ required: true, type: 'array', min: 1, message: '请选择至少一台主机' }]}
-              extra="须在实例管理登记类型为 host；按主机环境（idc）选用 Nacos SSH 密钥档案，未配置则用全局密钥。"
-            >
-              <Select
-                mode="multiple"
-                showSearch
-                optionFilterProp="label"
-                placeholder={hosts.length ? '选择一台或多台主机' : '暂无 host 实例'}
-                options={hosts.map((h) => ({
-                  value: h.id,
-                  disabled: deployingHostIds.has(h.id),
-                  label: `${h.name} — ${h.host || h.domain_name || '-'} :${h.port || 22}${deployingHostIds.has(h.id) ? '（下发中）' : ''}`,
-                }))}
-              />
-            </Form.Item>
-          )}
-          <Form.Item name="escalate" label="提权执行（sudo su -）" valuePropName="checked">
-            <Switch checkedChildren="开" unCheckedChildren="关" />
-          </Form.Item>
-          <Form.Item
-            name="listen_port"
-            label="监听端口"
-            extra="默认 8091；勿与平台 Agent 8090 / 业务端口（9030、8030、8040 等）冲突"
-            rules={[{ required: true, type: 'number', min: 1024, max: 65535, message: '端口须在 1024–65535' }]}
-          >
-            <InputNumber min={1024} max={65535} style={{ width: '100%' }} />
-          </Form.Item>
-          <Form.Item name="remote_dir" label="远程目录">
-            <Input placeholder="/home/sysadmin/auto-dba/node-agent" />
-          </Form.Item>
-        </Form>
-      </Modal>
-
-      <Modal
-        title="下发日志"
-        open={!!deployLog}
-        onCancel={() => setDeployLog(null)}
-        footer={<Button onClick={() => setDeployLog(null)}>关闭</Button>}
-        width={720}
-      >
-        {deployLog && (
-          <>
-            <p>
-              状态
-              {' '}
-              <Tag color={statusColor[deployLog.status] || 'default'}>{deployLog.status}</Tag>
-              {' '}
-              {deployLog.base_url || ''}
-            </p>
-            <pre style={{ maxHeight: 420, overflow: 'auto', background: '#111', color: '#eee', padding: 12, fontSize: 12 }}>
-              {deployLog.log_text || '（无日志）'}
-            </pre>
-          </>
-        )}
-      </Modal>
-
-      <Modal
-        title="登记 Node Agent"
-        open={agentModal}
-        onOk={async () => {
-          const v = await agentForm.validateFields()
-          const res = await api.post('/sr-cluster/agents', v)
-          const created = res.data?.data as SrAgent | undefined
-          message.success('已登记')
-          setAgentModal(false)
-          await loadAgents()
-          if (agentBindTarget && created?.id) {
-            clusterForm.setFieldValue(
-              [agentBindTarget.list, agentBindTarget.index, 'agent_id'],
-              created.id,
-            )
-          }
-          setAgentBindTarget(null)
-        }}
-        onCancel={() => { setAgentModal(false); setAgentBindTarget(null) }}
-        destroyOnClose
-      >
-        <Alert
-          type="info"
-          showIcon
-          style={{ marginBottom: 12 }}
-          message="StarRocks Node Agent（默认 :8091）"
-          description={(
-            <>
-              须部署
-              {' '}
-              <code>deploy/node-agent</code>
-              {' '}
-              并提供
-              {' '}
-              <code>/v1/sr/*</code>
-              。配置中心「平台 Agent」(:8090) 不能用于本下拉。
-            </>
-          )}
-        />
-        <Form form={agentForm} layout="vertical">
-          <Form.Item name="name" label="名称"><Input /></Form.Item>
-          <Form.Item name="base_url" label="Base URL" rules={[{ required: true }]} extra="推荐 http://主机:8091">
-            <Input placeholder="http://host:8091" />
-          </Form.Item>
-          <Form.Item name="username" label="用户"><Input /></Form.Item>
-          <Form.Item name="password" label="密码"><Input.Password /></Form.Item>
-        </Form>
       </Modal>
 
       <Modal title="登记版本" open={releaseModal} onOk={async () => {

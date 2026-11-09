@@ -12,6 +12,7 @@
 | 方法 | 路径 |
 |------|------|
 | POST | `/api/v1/query` |
+| GET | `/api/v1/query/catalog` |
 | POST | `/api/v1/query/table-info` |
 | GET | `/api/v1/databases/:id/tables` |
 | GET | `/api/v1/query/favorites`、`/history` |

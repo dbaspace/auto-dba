@@ -42,7 +42,6 @@ import MigrationSchemaCompare from '../views/ops/MigrationSchemaCompare'
 import Flashback from '../views/flashback/Flashback'
 import FlashbackCloud from '../views/flashback/FlashbackCloud'
 import Environments from '../views/config/Environments'
-import SqlExecutors from '../views/config/SqlExecutors'
 import DnsRecords from '../views/dns/DnsRecords'
 import DnsZones from '../views/dns/DnsZones'
 import DnsNodes from '../views/dns/DnsNodes'
@@ -92,7 +91,7 @@ import ClusterDeployEngine from '../views/ops/ClusterDeployEngine'
 import BackupPolicies from '../views/backup/Policies'
 import BackupRuns from '../views/backup/Runs'
 import BackupSettings from '../views/backup/Settings'
-import PlatformAgent from '../views/config/PlatformAgent'
+import AgentManage from '../views/config/AgentManage'
 import OssUpload from '../views/config/OssUpload'
 import CmdbAssets from '../views/cmdb/Assets'
 import CmdbTopology from '../views/cmdb/Topology'
@@ -262,7 +261,7 @@ const router = createHashRouter([
       { path: 'config/instances', element: <Instances /> },
       { path: 'config/regions', element: <Regions /> },
       { path: 'config/environments', element: <Environments /> },
-      { path: 'config/sql-executors', element: <SqlExecutors /> },
+      { path: 'config/sql-executors', element: <Navigate to="/config/agents?tab=sql" replace /> },
       { path: 'dns', element: <Navigate to="/dns/records" replace /> },
       { path: 'dns/records', element: <DnsRecords /> },
       { path: 'dns/zones', element: <DnsZones /> },
@@ -273,7 +272,7 @@ const router = createHashRouter([
       { path: 'config/dns', element: <Navigate to="/dns/records" replace /> },
       { path: 'config/tags', element: <Navigate to="/cmdb/tags" replace /> },
       { path: 'config/connectors', element: <Connectors /> },
-      { path: 'config/agents', element: <PlatformAgent /> },
+      { path: 'config/agents', element: <AgentManage /> },
       { path: 'config/oss', element: <OssUpload /> },
       { path: 'config/monitor-targets', element: <MonitorTargets /> },
       { path: 'config/fe-admin', element: <FeAdmin /> },

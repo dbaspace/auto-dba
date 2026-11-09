@@ -129,15 +129,10 @@ export default function ClusterDeployHub() {
       {
         title: '登记 / 下发',
         dataIndex: 'where',
-        render: (v: string, r: AgentInfo) => {
-          if (r.kind === 'platform') {
-            return (
-              <span>
-                <Link to="/config/agents">配置中心 → 平台 Agent</Link>
-              </span>
-            )
-          }
-          return v || '-'
+        render: (_v: string, r: AgentInfo) => {
+          const tab = r.kind === 'node' ? 'node' : r.kind === 'db' ? 'db' : 'platform'
+          const label = r.kind === 'node' ? 'Agent管理 → Node Agent' : r.kind === 'db' ? 'Agent管理 → DB Agent' : 'Agent管理 → 平台 Agent'
+          return <Link to={`/config/agents?tab=${tab}`}>{label}</Link>
         },
       },
     ],

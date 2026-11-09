@@ -321,13 +321,14 @@ type sqlRuntimeStatus struct {
 }
 
 // ListStatus GET /platform/agents/sql-executors/status — 批量探活，不改启用状态。
+// 整批最多 8 秒。单台超时记为未知，不等待全部拨号结束。
 func (h *SQLExecutorHandler) ListStatus(c *gin.Context) {
 	list, err := h.Store.ListSQLExecutors()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
-	parent, cancel := context.WithTimeout(c.Request.Context(), 12*time.Second)
+	parent, cancel := context.WithTimeout(c.Request.Context(), 8*time.Second)
 	defer cancel()
 	ch := make(chan sqlRuntimeStatus, len(list))
 	for i := range list {
@@ -336,9 +337,19 @@ func (h *SQLExecutorHandler) ListStatus(c *gin.Context) {
 			ch <- h.probeSQLStatus(parent, &e)
 		}(row)
 	}
+	got := map[string]sqlRuntimeStatus{}
+	for _, st := range takeN(parent, ch, len(list)) {
+		got[st.ID] = st
+	}
 	out := make([]sqlRuntimeStatus, 0, len(list))
-	for range list {
-		out = append(out, <-ch)
+	for i := range list {
+		if st, ok := got[list[i].ID]; ok {
+			out = append(out, st)
+			continue
+		}
+		out = append(out, sqlRuntimeStatus{
+			ID: list[i].ID, Status: "unknown", BaseURL: list[i].BaseURL, Message: "探活超时",
+		})
 	}
 	c.JSON(http.StatusOK, gin.H{"data": out})
 }
@@ -363,7 +374,7 @@ func (h *SQLExecutorHandler) probeSQLStatus(ctx context.Context, e *store.SQLExe
 		}
 		pass = dec
 	}
-	pctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	pctx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
 	if err := sqlexec.Probe(pctx, e.BaseURL, e.Username, pass); err != nil {
 		out.Status = "stopped"

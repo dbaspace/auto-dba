@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, Button, Checkbox, Form, Input, InputNumber, Modal, Select, Space, Switch, Tag, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import ResponsiveTable from '../../components/ResponsiveTable'
@@ -47,9 +47,13 @@ function runtimeTag(status?: string) {
 }
 
 /** 配置中心 · 平台 Agent：定义归属后供备份 / RDB / 高可用等模块引用 */
-export default function PlatformAgent() {
+export default function PlatformAgent({ part = 'all' }: { part?: 'platform' | 'sql' | 'all' }) {
   const [agents, setAgents] = useState<any[]>([])
   const [hosts, setHosts] = useState<any[]>([])
+  const [envs, setEnvs] = useState<{ id: string; code?: string; name?: string }[]>([])
+  const [agentEnvId, setAgentEnvId] = useState('')
+  const [agentAddr, setAgentAddr] = useState('')
+  const [agentPage, setAgentPage] = useState(1)
   const [deploys, setDeploys] = useState<any[]>([])
   const [sqlExecs, setSqlExecs] = useState<any[]>([])
   const [envOptions, setEnvOptions] = useState<{ value: string; label: string }[]>([])
@@ -57,7 +61,9 @@ export default function PlatformAgent() {
   const [agentStatus, setAgentStatus] = useState<Record<string, string>>({})
   const [sqlStatus, setSqlStatus] = useState<Record<string, string>>({})
   const [actingId, setActingId] = useState('')
-  const [loading, setLoading] = useState(false)
+  const [agentLoading, setAgentLoading] = useState(part !== 'sql')
+  const [sqlLoading, setSqlLoading] = useState(part === 'all')
+  const [deployLoading, setDeployLoading] = useState(true)
   const [agOpen, setAgOpen] = useState(false)
   const [depOpen, setDepOpen] = useState(false)
   const [logOpen, setLogOpen] = useState(false)
@@ -75,6 +81,7 @@ export default function PlatformAgent() {
   const [depForm] = Form.useForm()
   const [sqlForm] = Form.useForm()
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const loadSeq = useRef(0)
   const activeKey = useAppSelector((s) => s.tabs.activeKey)
   const tabActive = activeKey.split('?')[0] === '/config/agents'
   const agGroups: string[] = Form.useWatch('enabled_groups', agForm) || []
@@ -95,11 +102,28 @@ export default function PlatformAgent() {
     setDeployBusy(false)
   }
 
+  function hostRows(list: any[]) {
+    return (list || []).filter((it: any) => {
+      const t = String(it.db_type || '').toLowerCase()
+      return t === 'host' || t === 'os' || t === '主机'
+    })
+  }
+
   async function refreshDeployList() {
-    const { data } = await api.get('/platform/agents/deploys', { params: { limit: 50 } })
+    const { data } = await api.get('/platform/agents/deploys', { params: { limit: 50 }, silent: true })
     const list = data.data || []
     setDeploys(list)
     return list as any[]
+  }
+
+  async function ensureHosts() {
+    if (hosts.length) return
+    try {
+      const { data } = await api.get('/instances', { params: { db_type: 'host' }, silent: true })
+      setHosts(hostRows(data.data || []))
+    } catch {
+      message.error('主机列表加载失败')
+    }
   }
 
   async function loadFormCatalog() {
@@ -133,7 +157,7 @@ export default function PlatformAgent() {
     for (const r of rows) checking[r.id] = 'checking'
     setSqlStatus((prev) => ({ ...prev, ...checking }))
     try {
-      const { data } = await api.get('/platform/agents/sql-executors/status')
+      const { data } = await api.get('/platform/agents/sql-executors/status', { silent: true })
       const map: Record<string, string> = {}
       for (const it of data.data || []) map[it.id] = it.status || 'unknown'
       setSqlStatus(map)
@@ -154,7 +178,7 @@ export default function PlatformAgent() {
     for (const r of rows) checking[r.id] = 'checking'
     setAgentStatus((prev) => ({ ...prev, ...checking }))
     try {
-      const { data } = await api.get('/platform/agents/status')
+      const { data } = await api.get('/platform/agents/status', { silent: true })
       const map: Record<string, string> = {}
       for (const it of data.data || []) {
         map[it.id] = it.status || 'unknown'
@@ -168,24 +192,60 @@ export default function PlatformAgent() {
   }
 
   async function load() {
-    setLoading(true)
-    try {
-      const [a, h] = await Promise.all([
-        api.get('/platform/agents'),
-        api.get('/instances', { params: { db_type: 'host' } }),
-      ])
-      const agentList = a.data.data || []
-      setAgents(agentList)
-      const all = h.data.data || []
-      setHosts(all.filter((it: any) => {
-        const t = String(it.db_type || '').toLowerCase()
-        return t === 'host' || t === 'os' || t === '主机'
-      }))
-      const execs = await loadDeploys()
-      await Promise.all([refreshAgentStatus(agentList), refreshSqlStatus(execs)])
-    } finally {
-      setLoading(false)
-    }
+    const seq = ++loadSeq.current
+    const wantPlatform = part !== 'sql'
+    const wantSqlList = part === 'all'
+    setDeployLoading(true)
+    if (wantPlatform) setAgentLoading(true)
+    if (wantSqlList) setSqlLoading(true)
+
+    const deployJob = refreshDeployList()
+      .catch(() => {
+        message.error('下发记录加载失败')
+        return [] as any[]
+      })
+      .finally(() => {
+        if (seq === loadSeq.current) setDeployLoading(false)
+      })
+
+    const platformJob = wantPlatform
+      ? (async () => {
+          try {
+            const { data } = await api.get('/platform/agents', { silent: true })
+            if (seq !== loadSeq.current) return
+            const agentList = data.data || []
+            setAgents(agentList)
+            void refreshAgentStatus(agentList)
+          } catch {
+            message.error('平台 Agent 加载失败')
+          } finally {
+            if (seq === loadSeq.current) setAgentLoading(false)
+          }
+          const [hostRes, envRes] = await Promise.all([
+            api.get('/instances', { params: { db_type: 'host' }, silent: true }).catch(() => ({ data: { data: [] } })),
+            api.get('/environments', { silent: true }).catch(() => ({ data: { data: [] } })),
+          ])
+          if (seq !== loadSeq.current) return
+          setEnvs(envRes.data?.data || [])
+          setHosts(hostRows(hostRes.data?.data || []))
+        })()
+      : Promise.resolve()
+
+    const sqlJob = wantSqlList
+      ? (async () => {
+          try {
+            const execs = await loadFormCatalog()
+            if (seq !== loadSeq.current) return
+            void refreshSqlStatus(execs)
+          } catch {
+            message.error('SQL 执行器加载失败')
+          } finally {
+            if (seq === loadSeq.current) setSqlLoading(false)
+          }
+        })()
+      : Promise.resolve()
+
+    await Promise.all([deployJob, platformJob, sqlJob])
   }
 
   useEffect(() => {
@@ -656,17 +716,37 @@ export default function PlatformAgent() {
     },
   ]
 
+  const shownDeploys = part === 'sql'
+    ? deploys.filter((d) => d.kind === 'sql')
+    : part === 'platform'
+      ? deploys.filter((d) => d.kind !== 'sql')
+      : deploys
+  const showPlatform = part !== 'sql'
+  const showSql = part !== 'platform'
+  const filteredAgents = useMemo(() => {
+    const q = agentAddr.trim().toLowerCase()
+    return agents.filter((row) => {
+      const host = row.host_instance_id ? hosts.find((h) => h.id === row.host_instance_id) : undefined
+      if (agentEnvId && host?.env_id !== agentEnvId) return false
+      if (!q) return true
+      const parts = [row.name, row.base_url]
+      if (host) parts.push(host.host, host.domain_name, ...(host.domains || []))
+      return parts.some((p) => String(p || '').toLowerCase().includes(q))
+    })
+  }, [agents, hosts, agentEnvId, agentAddr])
+
   return (
     <div className="backup-page">
-      <div className="backup-toolbar">
+      {showPlatform ? <div className="backup-toolbar">
         <h2>平台 Agent</h2>
         <span className="backup-hint">
           平台级执行面：定义时勾选归属（备份 / Redis RDB / 高可用 / K8s 反向隧道），业务模块按归属引用。
         </span>
         <Space>
-          <Button onClick={() => { void refreshAgentStatus(); void refreshSqlStatus() }}>刷新状态</Button>
+          <Button onClick={() => { void refreshAgentStatus(); if (part === 'all') void refreshSqlStatus() }}>刷新状态</Button>
           <Button
             onClick={() => {
+              void ensureHosts()
               depForm.resetFields()
               depForm.setFieldsValue({
                 listen_port: 8090,
@@ -679,7 +759,7 @@ export default function PlatformAgent() {
               setDepOpen(true)
             }}
           >
-            下发到主机
+            下发
           </Button>
           <Button
             type="primary"
@@ -692,18 +772,37 @@ export default function PlatformAgent() {
               setAgOpen(true)
             }}
           >
-            手动登记
+            手工登记
           </Button>
+          <Select
+            allowClear
+            placeholder="环境"
+            style={{ width: 180 }}
+            value={agentEnvId || undefined}
+            options={envs.map((e) => ({
+              value: e.id,
+              label: e.name && e.code && e.name !== e.code ? `${e.name} (${e.code})` : (e.name || e.code || e.id),
+            }))}
+            onChange={(v) => { setAgentEnvId(v || ''); setAgentPage(1) }}
+          />
+          <Input
+            allowClear
+            placeholder="地址：主机、域名或 URL"
+            style={{ width: 240 }}
+            value={agentAddr}
+            onChange={(e) => { setAgentAddr(e.target.value); setAgentPage(1) }}
+          />
         </Space>
-      </div>
-      <ResponsiveTable rowKey="id" loading={loading} columns={agCols} dataSource={agents} />
-      <div className="backup-toolbar" style={{ marginTop: 24 }}>
+      </div> : null}
+      {showPlatform ? <ResponsiveTable rowKey="id" loading={agentLoading} columns={agCols} dataSource={filteredAgents} pagination={{ current: agentPage, pageSize: 10, onChange: (p) => setAgentPage(p) }} /> : null}
+      {showSql ? <div className="backup-toolbar" style={{ marginTop: showPlatform ? 24 : 0 }}>
         <h3>SQL 执行器</h3>
         <span className="backup-hint">独立进程，默认端口 8093。下发成功后按所选环境登记，工单按实例环境发到这里。不并进上面的备份 / 高可用 Agent。</span>
         <Space>
           <Button onClick={() => void refreshSqlStatus()}>刷新状态</Button>
           <Button
             onClick={() => {
+              void ensureHosts()
               sqlForm.resetFields()
               sqlForm.setFieldsValue({
                 listen_port: 8093,
@@ -715,13 +814,13 @@ export default function PlatformAgent() {
               setSqlOpen(true)
             }}
           >
-            下发到主机
+            下发
           </Button>
         </Space>
-      </div>
-      <ResponsiveTable
+      </div> : null}
+      {showSql && part === 'all' ? <ResponsiveTable
         rowKey="id"
-        loading={loading}
+        loading={sqlLoading}
         dataSource={sqlExecs}
         locale={{ emptyText: '还没有 SQL 执行器。在能连上目标库的主机下发 sql-agent。' }}
         columns={[
@@ -768,11 +867,11 @@ export default function PlatformAgent() {
             },
           },
         ]}
-      />
+      /> : null}
       <div className="backup-toolbar" style={{ marginTop: 24 }}>
         <h3>下发记录</h3>
       </div>
-      <ResponsiveTable rowKey="id" loading={loading} columns={depCols} dataSource={deploys} pagination={{ pageSize: 10 }} />
+      <ResponsiveTable rowKey="id" loading={deployLoading} columns={depCols} dataSource={shownDeploys} pagination={{ pageSize: 10 }} />
 
       <Modal title="手动登记 Agent" open={agOpen} onCancel={() => setAgOpen(false)} onOk={saveAgent} destroyOnClose>
         <Form

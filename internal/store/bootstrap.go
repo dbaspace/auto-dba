@@ -215,6 +215,9 @@ func (d *DB) seedFast() error {
 			if err := d.ensureConfigCenterGroups(now); err != nil {
 				return err
 			}
+			if err := d.ensurePlatformAgentMenu(now); err != nil {
+				return err
+			}
 			if err := d.ensureSystemNoticeMenu(now); err != nil {
 				return err
 			}

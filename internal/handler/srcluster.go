@@ -306,12 +306,31 @@ func (h *SrClusterHandler) ListAgentStatus(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
+	parent, cancel := context.WithTimeout(c.Request.Context(), 8*time.Second)
+	defer cancel()
+	eng := h.eng()
+	ch := make(chan srcluster.AgentRuntimeStatus, len(list))
+	for i := range list {
+		row := list[i]
+		go func(a store.SrAgent) {
+			ctx, probeCancel := context.WithTimeout(parent, 3*time.Second)
+			defer probeCancel()
+			ch <- eng.ProbeAgentStatus(ctx, &a)
+		}(row)
+	}
+	got := map[string]srcluster.AgentRuntimeStatus{}
+	for _, st := range takeN(parent, ch, len(list)) {
+		got[st.ID] = st
+	}
 	out := make([]srcluster.AgentRuntimeStatus, 0, len(list))
 	for i := range list {
-		ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
-		st := h.eng().ProbeAgentStatus(ctx, &list[i])
-		cancel()
-		out = append(out, st)
+		if st, ok := got[list[i].ID]; ok {
+			out = append(out, st)
+			continue
+		}
+		out = append(out, srcluster.AgentRuntimeStatus{
+			ID: list[i].ID, Status: srcluster.AgentStatusUnknown, BaseURL: list[i].BaseURL, Message: "探活超时",
+		})
 	}
 	c.JSON(http.StatusOK, gin.H{"data": out})
 }
