@@ -7,15 +7,19 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+
+	"auto-dba/internal/clientaccess"
 )
 
 const (
 	ArgClientAccessEnabled           = "client_access_enabled"
 	ArgClientAccessEnforceMachinePAT = "client_access_enforce_machine_pat"
+	ArgClientAccessTrustedProxies    = "client_access_trusted_proxies"
 
 	ClientAccessStatusActive  = "active"
 	ClientAccessStatusRevoked = "revoked"
@@ -28,18 +32,19 @@ const (
 
 // ClientAccessGrant 用户本地 AI/CLI/MCP 访问授权。
 type ClientAccessGrant struct {
-	ID        string `json:"id"`
-	UserID    string `json:"user_id"`
-	Username  string `json:"username,omitempty"`
-	Display   string `json:"display_name,omitempty"`
-	TenantID  string `json:"tenant_id,omitempty"`
-	Scopes    string `json:"scopes"` // 逗号分隔，默认 query
-	ExpiresAt string `json:"expires_at,omitempty"`
-	CreatedBy string `json:"created_by"`
-	Status    string `json:"status"`
-	Remark    string `json:"remark,omitempty"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
+	ID          string `json:"id"`
+	UserID      string `json:"user_id"`
+	Username    string `json:"username,omitempty"`
+	Display     string `json:"display_name,omitempty"`
+	TenantID    string `json:"tenant_id,omitempty"`
+	Scopes      string `json:"scopes"` // 逗号分隔，默认 query
+	ExpiresAt   string `json:"expires_at,omitempty"`
+	CreatedBy   string `json:"created_by"`
+	Status      string `json:"status"`
+	Remark      string `json:"remark,omitempty"`
+	SourceCIDRs string `json:"source_cidrs,omitempty"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
 }
 
 // ClientPAT 个人访问令牌（仅存哈希；创建时一次性返回明文）。
@@ -86,10 +91,14 @@ func (d *DB) ensureClientAccessSchema() error {
 		created_by TEXT NOT NULL DEFAULT '',
 		status TEXT NOT NULL DEFAULT 'active',
 		remark TEXT NOT NULL DEFAULT '',
+		source_cidrs TEXT NOT NULL DEFAULT '',
 		created_at TEXT NOT NULL,
 		updated_at TEXT NOT NULL
 	)`)
 	if err != nil {
+		return err
+	}
+	if err = d.ensureColumnIfMissing("tbl_client_access_grants", "source_cidrs", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
 	if _, err = d.db.Exec(`CREATE INDEX IF NOT EXISTS idx_client_access_grants_user ON tbl_client_access_grants(user_id, status)`); err != nil {
@@ -226,6 +235,11 @@ func (d *DB) ClientAccessEnabled() bool {
 	return v == "1" || v == "true" || v == "yes" || v == "on"
 }
 
+func (d *DB) ClientAccessTrustedProxyNets() []*net.IPNet {
+	raw, _ := d.GetGlobalArg(ArgClientAccessTrustedProxies)
+	return clientaccess.ParseTrustedProxies(raw)
+}
+
 func (d *DB) ClientAccessEnforceMachinePAT() bool {
 	v, _ := d.GetGlobalArg(ArgClientAccessEnforceMachinePAT)
 	v = strings.ToLower(strings.TrimSpace(v))
@@ -265,11 +279,38 @@ func (d *DB) CreateClientAccessGrant(it *ClientAccessGrant) error {
 	it.ExpiresAt = strings.TrimSpace(it.ExpiresAt)
 	it.CreatedBy = strings.TrimSpace(it.CreatedBy)
 	it.Remark = strings.TrimSpace(it.Remark)
+	normalized, nerr := clientaccess.NormalizeSourceCIDRs(it.SourceCIDRs)
+	if nerr != nil {
+		return nerr
+	}
+	it.SourceCIDRs = normalized
 	_, err := d.Exec(`INSERT INTO tbl_client_access_grants(
-		id, user_id, tenant_id, scopes, expires_at, created_by, status, remark, created_at, updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?)`,
-		it.ID, it.UserID, it.TenantID, it.Scopes, it.ExpiresAt, it.CreatedBy, it.Status, it.Remark, it.CreatedAt, it.UpdatedAt)
+		id, user_id, tenant_id, scopes, expires_at, created_by, status, remark, source_cidrs, created_at, updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+		it.ID, it.UserID, it.TenantID, it.Scopes, it.ExpiresAt, it.CreatedBy, it.Status, it.Remark, it.SourceCIDRs, it.CreatedAt, it.UpdatedAt)
 	return err
+}
+
+func (d *DB) UpdateClientAccessGrantSources(id, raw string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return errors.New("id required")
+	}
+	normalized, err := clientaccess.NormalizeSourceCIDRs(raw)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	res, err := d.Exec(`UPDATE tbl_client_access_grants SET source_cidrs=?, updated_at=? WHERE id=? AND status=?`,
+		normalized, now, id, ClientAccessStatusActive)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return errors.New("授权不存在或已吊销")
+	}
+	return nil
 }
 
 func (d *DB) RevokeClientAccessGrant(id, by string) error {
@@ -288,7 +329,7 @@ func (d *DB) RevokeClientAccessGrant(id, by string) error {
 }
 
 func (d *DB) GetClientAccessGrant(id string) (*ClientAccessGrant, error) {
-	row := d.QueryRow(`SELECT id, user_id, tenant_id, scopes, expires_at, created_by, status, remark, created_at, updated_at
+	row := d.QueryRow(`SELECT id, user_id, tenant_id, scopes, expires_at, created_by, status, remark, source_cidrs, created_at, updated_at
 		FROM tbl_client_access_grants WHERE id=?`, strings.TrimSpace(id))
 	return scanClientAccessGrant(row)
 }
@@ -317,7 +358,7 @@ func (d *DB) ListClientAccessGrants(username, status string, page, pageSize int)
 		return nil, 0, err
 	}
 	q := `SELECT g.id, g.user_id, COALESCE(u.username,''), COALESCE(u.display_name,''),
-		g.tenant_id, g.scopes, g.expires_at, g.created_by, g.status, g.remark, g.created_at, g.updated_at
+		g.tenant_id, g.scopes, g.expires_at, g.created_by, g.status, g.remark, g.source_cidrs, g.created_at, g.updated_at
 		FROM tbl_client_access_grants g
 		LEFT JOIN tbl_users u ON u.id=g.user_id ` + where + ` ORDER BY g.created_at DESC LIMIT ? OFFSET ?`
 	args = append(args, pageSize, (page-1)*pageSize)
@@ -330,7 +371,7 @@ func (d *DB) ListClientAccessGrants(username, status string, page, pageSize int)
 	for rows.Next() {
 		var it ClientAccessGrant
 		if err := rows.Scan(&it.ID, &it.UserID, &it.Username, &it.Display, &it.TenantID, &it.Scopes,
-			&it.ExpiresAt, &it.CreatedBy, &it.Status, &it.Remark, &it.CreatedAt, &it.UpdatedAt); err != nil {
+			&it.ExpiresAt, &it.CreatedBy, &it.Status, &it.Remark, &it.SourceCIDRs, &it.CreatedAt, &it.UpdatedAt); err != nil {
 			return nil, 0, err
 		}
 		out = append(out, it)
@@ -344,7 +385,7 @@ func (d *DB) ActiveClientAccessGrantForUser(userID string) (*ClientAccessGrant, 
 	if userID == "" {
 		return nil, nil
 	}
-	rows, err := d.Query(`SELECT id, user_id, tenant_id, scopes, expires_at, created_by, status, remark, created_at, updated_at
+	rows, err := d.Query(`SELECT id, user_id, tenant_id, scopes, expires_at, created_by, status, remark, source_cidrs, created_at, updated_at
 		FROM tbl_client_access_grants WHERE user_id=? AND status=? ORDER BY created_at DESC`, userID, ClientAccessStatusActive)
 	if err != nil {
 		return nil, err
@@ -352,7 +393,7 @@ func (d *DB) ActiveClientAccessGrantForUser(userID string) (*ClientAccessGrant, 
 	defer rows.Close()
 	for rows.Next() {
 		var it ClientAccessGrant
-		if err := rows.Scan(&it.ID, &it.UserID, &it.TenantID, &it.Scopes, &it.ExpiresAt, &it.CreatedBy, &it.Status, &it.Remark, &it.CreatedAt, &it.UpdatedAt); err != nil {
+		if err := rows.Scan(&it.ID, &it.UserID, &it.TenantID, &it.Scopes, &it.ExpiresAt, &it.CreatedBy, &it.Status, &it.Remark, &it.SourceCIDRs, &it.CreatedAt, &it.UpdatedAt); err != nil {
 			return nil, err
 		}
 		if !grantExpired(it.ExpiresAt) {
@@ -364,7 +405,7 @@ func (d *DB) ActiveClientAccessGrantForUser(userID string) (*ClientAccessGrant, 
 
 func scanClientAccessGrant(row *sql.Row) (*ClientAccessGrant, error) {
 	var it ClientAccessGrant
-	err := row.Scan(&it.ID, &it.UserID, &it.TenantID, &it.Scopes, &it.ExpiresAt, &it.CreatedBy, &it.Status, &it.Remark, &it.CreatedAt, &it.UpdatedAt)
+	err := row.Scan(&it.ID, &it.UserID, &it.TenantID, &it.Scopes, &it.ExpiresAt, &it.CreatedBy, &it.Status, &it.Remark, &it.SourceCIDRs, &it.CreatedAt, &it.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}

@@ -219,6 +219,7 @@
 | 全局参数 | 配置中心 | 审批开关、空闲登出、白名单等 |
 | 区域 / 环境 | 配置中心 | 业务标签；**不是** Nacos Namespace |
 | 对象存储 / Agent | 配置中心 | 迁移中转、备份、下发 |
+| 客户端访问 / PAT | 用户权限 | 管理员开通授权，用户签发 PAT 后用 CLI 查询。步骤见 [client-access-cli.md](client-access-cli.md) |
 
 生产敏感配置（DSN、JWT、SSH 私钥）建议放 **Nacos**，本地只留引导：见 [nacos-config.md](nacos-config.md)。
 

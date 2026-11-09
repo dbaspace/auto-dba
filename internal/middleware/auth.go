@@ -150,6 +150,10 @@ func pickAuthCredential(path, authHeader, cookie, query string) string {
 	if ck != "" {
 		return ck
 	}
+	// PAT 只接受 Authorization，不从 URL 读取，避免令牌进入访问日志。
+	if strings.HasPrefix(q, store.PATPrefix) {
+		return ""
+	}
 	return q
 }
 

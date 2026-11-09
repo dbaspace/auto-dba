@@ -41,6 +41,12 @@ func TestPickAuthCredentialEmbedPrefersCookieEvenIfAuthIsJWT(t *testing.T) {
 	if got != platform {
 		t.Fatalf("non-jwt header should fall back to cookie on normal path, got %q", got)
 	}
+	if got := pickAuthCredential("/api/v1/query/catalog", "", "", "adba_pat_abc"); got != "" {
+		t.Fatalf("PAT in query string must be ignored, got %q", got)
+	}
+	if got := pickAuthCredential("/api/v1/query", "Bearer adba_pat_abc", "", "adba_pat_other"); got != "adba_pat_abc" {
+		t.Fatalf("header PAT stays, got %q", got)
+	}
 }
 
 func TestAuthNacosProxyAcceptsPlatformCookieWhenAuthIsNacosJWT(t *testing.T) {

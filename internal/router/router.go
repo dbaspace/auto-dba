@@ -201,6 +201,7 @@ func Init(e *gin.Engine, d Deps) {
 		ca := secured.Group("/client-access")
 		ca.GET("/grants", d.ClientAccess.ListGrants)
 		ca.POST("/grants", d.ClientAccess.CreateGrant)
+		ca.PUT("/grants/:id/sources", d.ClientAccess.UpdateGrantSources)
 		ca.DELETE("/grants/:id", d.ClientAccess.RevokeGrant)
 		ca.GET("/me", d.ClientAccess.MyStatus)
 		ca.GET("/pats", d.ClientAccess.ListMyPATs)

@@ -103,6 +103,7 @@ func (d *DB) seed() error {
 		{Key: "cmdb_webhook_url", Value: "", Description: "CMDB CI/关系变更 Webhook URL（空则关闭）"},
 		{Key: ArgClientAccessEnabled, Value: "true", Description: "本地 AI/CLI/MCP 访问授权能力总开关：true=启用授权与 PAT 通道（不拦截浏览器 JWT）"},
 		{Key: ArgClientAccessEnforceMachinePAT, Value: "true", Description: "机器通道（X-Client-Type=mcp|cli|local_ai 或 PAT）是否强制个人访问令牌：true=禁止用登录 JWT 冒充机器客户端"},
+		{Key: ArgClientAccessTrustedProxies, Value: "", Description: "PAT 来源判断信任的反向代理 IP 或网段，逗号或换行分隔。为空则只认 TCP 对端，忽略 X-Forwarded-For"},
 		{Key: ArgHardenViewCredential, Value: "false", Description: "二期加固：查看账号明文需 view_credential/账号菜单权限；开启后创建响应不再回传 real_password"},
 		{Key: ArgHardenStepUp, Value: "false", Description: "二期加固：查看明文前须 POST /auth/step-up 二次验证（约 10 分钟有效）"},
 		{Key: ArgHardenTicketExecute, Value: "false", Description: "二期加固：工单执行须为提交人/审批人/特权角色或持有 um.action.tickets.execute"},

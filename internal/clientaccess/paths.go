@@ -48,10 +48,13 @@ func WhitelistOK(method, path string) bool {
 	return WhitelistOKWithOpts(method, path, WhitelistOpts{})
 }
 
-// WhitelistOKWithOpts 一期 query + 二期 Redis/Kafka；可选 credential。
+// WhitelistOKWithOpts 一期 query + 二期 Redis/Kafka。敏感路径先拒绝，白名单写宽也不放行。
 func WhitelistOKWithOpts(method, path string, opts WhitelistOpts) bool {
 	method = strings.ToUpper(strings.TrimSpace(method))
 	path = strings.TrimSpace(path)
+	if PATDenied(path) {
+		return false
+	}
 	switch {
 	case method == "POST" && path == "/api/v1/query":
 		return true
@@ -88,4 +91,80 @@ func instanceSubPath(path, suffix string) bool {
 	mid := strings.TrimPrefix(path, "/api/v1/instances/")
 	mid = strings.TrimSuffix(mid, suffix)
 	return mid != "" && !strings.Contains(mid, "/")
+}
+
+// PATDenied 这些路径对 PAT 恒拒绝，先于白名单判断。
+func PATDenied(path string) bool {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return false
+	}
+	if strings.Contains(path, "/upload") || strings.HasSuffix(path, "/open-terminal") {
+		return true
+	}
+	if strings.HasPrefix(path, "/api/v1/roles/") && strings.HasSuffix(path, "/users") {
+		return true
+	}
+	if patInstanceAccountPath(path) {
+		return true
+	}
+	prefixes := []string{
+		"/api/v1/users",
+		"/api/v1/auth/me",
+		"/api/v1/db-accounts",
+		"/api/v1/dcl-grants",
+		"/api/v1/nacosadmin",
+		"/api/v1/nacos-console",
+		"/api/v1/nacos-proxy",
+		"/api/v1/settings",
+		"/api/v1/global-args",
+		"/api/v1/feadmin",
+		"/api/v1/dsadmin",
+		"/api/v1/k8s",
+		"/api/v1/oss-settings",
+		"/api/v1/oss-uploads",
+		"/api/v1/backup",
+		"/api/v1/platform/agents",
+		"/api/v1/tickets",
+		"/api/v1/create-db",
+		"/api/v1/redis-rdb",
+	}
+	for _, p := range prefixes {
+		if path == p || strings.HasPrefix(path, p+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func patInstanceAccountPath(path string) bool {
+	const p = "/api/v1/instances"
+	if path == p {
+		return true
+	}
+	if !strings.HasPrefix(path, p+"/") {
+		return false
+	}
+	rest := strings.TrimPrefix(path, p+"/")
+	return rest != "" && !strings.Contains(rest, "/")
+}
+
+// ScriptFileName 判断 Content-Disposition 里的文件名是不是脚本。
+func ScriptFileName(disposition string) bool {
+	lower := strings.ToLower(strings.TrimSpace(disposition))
+	i := strings.Index(lower, "filename=")
+	if i < 0 {
+		return false
+	}
+	name := lower[i+len("filename="):]
+	if semi := strings.IndexByte(name, ';'); semi >= 0 {
+		name = name[:semi]
+	}
+	name = strings.Trim(name, ` "'`)
+	for _, ext := range []string{".mjs", ".js", ".sql", ".txt", ".sh"} {
+		if strings.HasSuffix(name, ext) {
+			return true
+		}
+	}
+	return false
 }

@@ -253,8 +253,8 @@ Publication 与 Debezium connector 同名。未改名时为 `rt_{环境}_{库名
 | 菜单管理 | `/config/menus` | 维护侧栏页面与操作权限节点 |
 | 登录日志 | `/config/login-logs` | 登录成功与失败记录 |
 | 登录会话 | `/config/login-sessions` | 以 Redis 为准展示仍有效的登录。有效期内再次访问会把过期时间续到当前时间 + 会话 TTL（默认 1 天）；到期后需重新登录。与闲置退出是两套规则 |
-| 客户端访问授权 | `/config/client-access` | 管理员开通本地 AI / CLI / MCP 访问（从平台用户列表选择登录名）；接口审计。见 [client-access.md](client-access.md) |
-| 我的访问令牌 | `/config/my-access-tokens` | 用户签发与吊销个人访问令牌（PAT） |
+| 客户端访问授权 | `/config/client-access` | 管理员开通本地 AI / CLI / MCP 访问（从平台用户列表选择登录名）；接口审计。见 [client-access.md](client-access.md)、[CLI 操作](client-access-cli.md) |
+| 我的访问令牌 | `/config/my-access-tokens` | 用户签发与吊销个人访问令牌（PAT）。CLI 用法见 [client-access-cli.md](client-access-cli.md) |
 | 认证配置 | `/config/ldap` | LDAP、SSO、邮件、通知四个配置页 |
 | 查询审计 | `/config/query-audits` | 数据库、Kafka、Redis 查询语句的审计检索；可按客户端类型筛选 |
 

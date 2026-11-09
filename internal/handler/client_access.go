@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"auto-dba/internal/clientaccess"
 	"auto-dba/internal/middleware"
 	"auto-dba/internal/store"
 )
@@ -17,13 +18,14 @@ type ClientAccessHandler struct {
 }
 
 type createGrantReq struct {
-	UserID    string `json:"user_id"`
-	Username  string `json:"username"`
-	TenantID  string `json:"tenant_id"`
-	Scopes    string `json:"scopes"`
-	ExpiresAt string `json:"expires_at"`
-	Remark    string `json:"remark"`
-	Days      int    `json:"days"` // >0 时按天计算过期
+	UserID      string `json:"user_id"`
+	Username    string `json:"username"`
+	TenantID    string `json:"tenant_id"`
+	Scopes      string `json:"scopes"`
+	ExpiresAt   string `json:"expires_at"`
+	Remark      string `json:"remark"`
+	SourceCIDRs string `json:"source_cidrs"`
+	Days        int    `json:"days"` // >0 时按天计算过期
 }
 
 func (h *ClientAccessHandler) ListGrants(c *gin.Context) {
@@ -72,19 +74,43 @@ func (h *ClientAccessHandler) CreateGrant(c *gin.Context) {
 			tid = ts[0].ID
 		}
 	}
+	sources, err := clientaccess.NormalizeSourceCIDRs(req.SourceCIDRs)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
 	it := &store.ClientAccessGrant{
-		UserID:    uid,
-		TenantID:  tid,
-		Scopes:    req.Scopes,
-		ExpiresAt: expires,
-		CreatedBy: middleware.Username(c),
-		Remark:    req.Remark,
+		UserID:      uid,
+		TenantID:    tid,
+		Scopes:      req.Scopes,
+		ExpiresAt:   expires,
+		CreatedBy:   middleware.Username(c),
+		Remark:      req.Remark,
+		SourceCIDRs: sources,
 	}
 	if err := h.Store.CreateClientAccessGrant(it); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": it})
+}
+
+func (h *ClientAccessHandler) UpdateGrantSources(c *gin.Context) {
+	if !requireAdminViewer(h.Store, c, "仅管理员可管理客户端访问授权") {
+		return
+	}
+	var req struct {
+		SourceCIDRs string `json:"source_cidrs"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	if err := h.Store.UpdateClientAccessGrantSources(c.Param("id"), req.SourceCIDRs); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "ok"})
 }
 
 func (h *ClientAccessHandler) RevokeGrant(c *gin.Context) {

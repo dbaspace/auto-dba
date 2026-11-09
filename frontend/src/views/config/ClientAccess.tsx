@@ -17,6 +17,7 @@ interface GrantRow {
   created_by?: string
   status?: string
   remark?: string
+  source_cidrs?: string
   created_at?: string
 }
 
@@ -54,6 +55,9 @@ function GrantsPanel() {
   const [formUser, setFormUser] = useState<string | undefined>()
   const [formDays, setFormDays] = useState<number | null>(90)
   const [formRemark, setFormRemark] = useState('')
+  const [formSources, setFormSources] = useState('')
+  const [editID, setEditID] = useState('')
+  const [editSources, setEditSources] = useState('')
   const [userOptionsLoading, setUserOptionsLoading] = useState(false)
   const [platformUsers, setPlatformUsers] = useState<PlatformUser[]>([])
 
@@ -119,6 +123,7 @@ function GrantsPanel() {
     setFormUser(undefined)
     setFormRemark('')
     setFormDays(90)
+    setFormSources('')
     setOpen(true)
     void ensurePlatformUsers()
   }
@@ -129,12 +134,17 @@ function GrantsPanel() {
       message.warning('请选择登录用户名')
       return
     }
+    if (!formSources.trim()) {
+      message.warning('请填写来源地址')
+      return
+    }
     try {
       await api.post('/client-access/grants', {
         username,
         days: formDays || 0,
         remark: formRemark.trim(),
         scopes: 'query',
+        source_cidrs: formSources.trim(),
       })
       message.success('已开通授权，请对方登录后在「我的访问令牌」中自行签发')
       setOpen(false)
@@ -144,6 +154,22 @@ function GrantsPanel() {
       setPage(1)
     } catch (e: any) {
       message.error(e?.response?.data?.message || '开通失败')
+    }
+  }
+
+  async function saveSources() {
+    if (!editID) return
+    if (!editSources.trim()) {
+      message.warning('请填写来源地址')
+      return
+    }
+    try {
+      await api.put('/client-access/grants/' + editID + '/sources', { source_cidrs: editSources.trim() })
+      message.success('已更新来源地址')
+      setEditID('')
+      void load(page)
+    } catch (e: any) {
+      message.error(e?.response?.data?.message || '保存失败')
     }
   }
 
@@ -215,6 +241,7 @@ function GrantsPanel() {
         columns={[
           { title: '用户', dataIndex: 'username', render: (_: any, r: GrantRow) => r.display_name ? `${r.username}（${r.display_name}）` : r.username },
           { title: '范围', dataIndex: 'scopes', width: 100 },
+          { title: '来源地址', dataIndex: 'source_cidrs', width: 180, ellipsis: true, render: (v: string) => v || '未设置' },
           {
             title: '状态',
             dataIndex: 'status',
@@ -227,14 +254,26 @@ function GrantsPanel() {
           { title: '备注', dataIndex: 'remark', ellipsis: true },
           {
             title: '操作',
-            width: 90,
+            width: 140,
             render: (_: any, r: GrantRow) =>
               r.status === 'active' ? (
-                <Popconfirm title="确认吊销？关联 PAT 将立即失效" onConfirm={() => revoke(r.id)}>
-                  <Button type="link" danger size="small">
-                    吊销
+                <Space size={0}>
+                  <Button
+                    type="link"
+                    size="small"
+                    onClick={() => {
+                      setEditID(r.id || '')
+                      setEditSources(r.source_cidrs || '')
+                    }}
+                  >
+                    来源
                   </Button>
-                </Popconfirm>
+                  <Popconfirm title="确认吊销？关联 PAT 将立即失效" onConfirm={() => revoke(r.id)}>
+                    <Button type="link" danger size="small">
+                      吊销
+                    </Button>
+                  </Popconfirm>
+                </Space>
               ) : (
                 '-'
               ),
@@ -289,7 +328,21 @@ function GrantsPanel() {
             onChange={(v) => setFormDays(v)}
           />
           <Input.TextArea placeholder="备注" value={formRemark} onChange={(e) => setFormRemark(e.target.value)} rows={2} />
+          <Input.TextArea
+            placeholder={'来源地址，每行一个 IP 或网段\n例如 61.49.49.50 或 10.0.0.0/8'}
+            value={formSources}
+            onChange={(e) => setFormSources(e.target.value)}
+            rows={3}
+          />
         </Space>
+      </Modal>
+      <Modal title="修改来源地址" open={!!editID} onCancel={() => setEditID('')} onOk={saveSources} okText="保存">
+        <Input.TextArea
+          placeholder={'每行一个 IP 或网段\n例如 61.49.49.50 或 10.0.0.0/8'}
+          value={editSources}
+          onChange={(e) => setEditSources(e.target.value)}
+          rows={4}
+        />
       </Modal>
     </>
   )

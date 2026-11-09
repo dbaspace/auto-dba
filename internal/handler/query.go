@@ -140,6 +140,11 @@ func (h *DatabaseHandler) Query(c *gin.Context) {
 		return
 	}
 	if middleware.IsPATAuth(c) {
+		if _, msg, blocked := dbprobe.PATQueryBlocked(stmts); blocked {
+			h.auditSubmittedQuery(c, req.SQL, strings.TrimSpace(req.DatabaseID), msg, nil, false, 0, 0, reqID)
+			c.JSON(http.StatusBadRequest, gin.H{"message": msg})
+			return
+		}
 		if idx, missing := dbprobe.MissingPATSelectLimit(stmts); missing {
 			msg := dbprobe.PATSelectLimitMessage(idx, len(stmts))
 			h.auditSubmittedQuery(c, req.SQL, strings.TrimSpace(req.DatabaseID), msg, nil, false, 0, 0, reqID)

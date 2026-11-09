@@ -1,0 +1,146 @@
+package dbprobe
+
+import (
+	"fmt"
+	"regexp"
+	"strings"
+	"unicode"
+)
+
+const (
+	patShowDeniedHint = "PAT 查询不允许该 SHOW 语句"
+	patSecretReadHint = "PAT 查询不允许读取账号、口令或服务器文件"
+	patMetaTableHint  = "PAT 查询不允许读取平台登记信息"
+)
+
+var (
+	rePATSecretRead = regexp.MustCompile(`(?i)(^|[^a-z0-9_])(pg_authid|pg_shadow|pg_read_file|pg_read_binary_file|lo_import|lo_export|dblink_exec|dblink|load_file)([^a-z0-9_]|$)`)
+	rePATMySQLUser  = regexp.MustCompile(`(?i)(^|[^a-z0-9_])mysql\s*\.\s*user([^a-z0-9_]|$)`)
+	rePATMetaTable  = regexp.MustCompile(`(?i)(^|[^a-z0-9_])(tbl_users|tbl_instances|tbl_db_accounts|tbl_client_pats|tbl_global_args|tbl_nacos_admin|tbl_oss_settings)([^a-z0-9_]|$)`)
+)
+
+// PATQueryBlocked 返回第一条 PAT 不能执行的语句。浏览器查询不调用。
+func PATQueryBlocked(stmts []string) (idx int, msg string, blocked bool) {
+	for i, stmt := range stmts {
+		if reason := patQueryBlockReason(stmt); reason != "" {
+			if len(stmts) > 1 {
+				reason = fmt.Sprintf("第 %d 条 SQL：%s", i+1, reason)
+			}
+			return i, reason, true
+		}
+	}
+	return 0, "", false
+}
+
+func patQueryBlockReason(stmt string) string {
+	body := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(stmt), ";"))
+	if body == "" {
+		return ""
+	}
+	scanned := stripIdentQuotes(maskSQLCommentsAndStrings(body))
+	if rePATMetaTable.MatchString(scanned) {
+		return patMetaTableHint
+	}
+	if rePATSecretRead.MatchString(scanned) || rePATMySQLUser.MatchString(scanned) {
+		return patSecretReadHint
+	}
+	switch firstSQLKeyword(body) {
+	case "SHOW":
+		if !patShowAllowed(scanned) {
+			return patShowDeniedHint
+		}
+	}
+	return ""
+}
+
+func patShowAllowed(scanned string) bool {
+	fields := strings.Fields(scanned)
+	if len(fields) < 2 || !strings.EqualFold(fields[0], "SHOW") {
+		return false
+	}
+	i := 1
+	if strings.EqualFold(fields[i], "FULL") {
+		i++
+		if i >= len(fields) {
+			return false
+		}
+	}
+	switch strings.ToUpper(fields[i]) {
+	case "TABLES", "DATABASES", "SCHEMAS", "COLUMNS", "INDEX", "INDEXES":
+		return true
+	case "CREATE":
+		return i+1 < len(fields) && (strings.EqualFold(fields[i+1], "TABLE") || strings.EqualFold(fields[i+1], "VIEW"))
+	default:
+		return false
+	}
+}
+
+func stripIdentQuotes(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '`' || r == '"' {
+			return ' '
+		}
+		return r
+	}, s)
+}
+
+// maskSQLCommentsAndStrings 去掉注释、单引号字符串和 dollar-quote，保留双引号与反引号里的标识符。
+func maskSQLCommentsAndStrings(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		if strings.HasPrefix(s[i:], "--") {
+			if nl := strings.IndexByte(s[i:], '\n'); nl >= 0 {
+				i += nl + 1
+			} else {
+				i = len(s)
+			}
+			b.WriteByte(' ')
+			continue
+		}
+		if strings.HasPrefix(s[i:], "/*") {
+			if end := strings.Index(s[i+2:], "*/"); end >= 0 {
+				i += 2 + end + 2
+			} else {
+				i = len(s)
+			}
+			b.WriteByte(' ')
+			continue
+		}
+		if s[i] == '\'' {
+			i++
+			for i < len(s) {
+				if s[i] == '\'' {
+					if i+1 < len(s) && s[i+1] == '\'' {
+						i += 2
+						continue
+					}
+					i++
+					break
+				}
+				i++
+			}
+			b.WriteByte(' ')
+			continue
+		}
+		if s[i] == '$' {
+			j := i + 1
+			for j < len(s) && (s[j] == '_' || unicode.IsLetter(rune(s[j])) || unicode.IsDigit(rune(s[j]))) {
+				j++
+			}
+			if j < len(s) && s[j] == '$' {
+				tag := s[i : j+1]
+				i = j + 1
+				if k := strings.Index(s[i:], tag); k >= 0 {
+					i += k + len(tag)
+				} else {
+					i = len(s)
+				}
+				b.WriteByte(' ')
+				continue
+			}
+		}
+		b.WriteByte(s[i])
+		i++
+	}
+	return b.String()
+}

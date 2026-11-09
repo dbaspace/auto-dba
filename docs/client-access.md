@@ -1,5 +1,7 @@
 # 本地 AI / CLI / MCP 客户端访问
 
+开通授权后，用户如何签发 PAT 并用 CLI 查询，见 [client-access-cli.md](client-access-cli.md)。
+
 ## 一期（已交付）
 
 - 管理员开通 **客户端访问授权**；用户签发 **PAT**。
@@ -20,9 +22,9 @@
 | GET | `/api/v1/instances/:id/kafka/topics` |
 | GET | `/api/v1/instances/:id/kafka/topics/:topic/messages` |
 
-可选（须全局参数 `client_access_allow_credential_scope=true` 且 PAT 含 `credential`）：
+PAT 不调用看密接口。`GET /api/v1/db-accounts/:id` 不在白名单，即使允许 credential 范围也不返回账号明文。
 
-- `GET /api/v1/db-accounts/:id?view_credential=1`
+开通授权必须填写来源地址（IP 或网段）。名单为空时 PAT 拒绝。来源只认 TCP 对端；平台前面有反向代理时，在全局参数 `client_access_trusted_proxies` 登记代理地址后才读取 `X-Forwarded-For`。客户端访问总开关关闭时，PAT 同样拒绝。令牌只放在 `Authorization` 头，不接受 URL 参数。
 
 ### 豁免
 
