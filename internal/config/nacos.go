@@ -184,7 +184,44 @@ func fetchNacosConfigSDK(nc NacosConfig) (string, error) {
 	}
 	log.Printf("已从 Nacos 加载配置 dataId=%s group=%s namespace=%s servers=%s",
 		nc.DataID, nc.Group, nc.Namespace, nc.ServerAddr)
+	logNacosNamespaceScope(nc)
 	return content, nil
+}
+
+func logNacosNamespaceScope(nc NacosConfig) {
+	ns := strings.TrimSpace(nc.Namespace)
+	if ns != "" && !strings.EqualFold(ns, "public") {
+		return
+	}
+	log.Printf("nacos: namespace 为 public，未单独指定命名空间的进程会读同一份 dataId=%s group=%s", nc.DataID, nc.Group)
+}
+
+func logMaterializedSSHKeys(cfg *Config) {
+	if cfg == nil {
+		return
+	}
+	logOneSSHIdentity("全局", "", cfg.Terminal.SSHIdentityFile)
+	for _, p := range cfg.Terminal.SSHKeyProfiles {
+		logOneSSHIdentity("档案 "+p.Name, strings.Join(p.EnvCodes, ","), p.SSHIdentityFile)
+	}
+}
+
+func logOneSSHIdentity(kind, envs, path string) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		log.Printf("ssh 身份 %s env=%s 文件 %s 不可读: %v", kind, envs, path, err)
+		return
+	}
+	label, err := publicKeyLabel(string(raw))
+	if err != nil {
+		log.Printf("ssh 身份 %s env=%s 文件 %s 无法解析公钥: %v", kind, envs, path, err)
+		return
+	}
+	log.Printf("ssh 身份 %s env=%s 文件 %s 公钥 %s", kind, envs, path, label)
 }
 
 // nacosCacheFileName 与 nacos-sdk-go 落盘命名一致：dataId@@group@@tenant

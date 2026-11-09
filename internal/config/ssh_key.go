@@ -129,6 +129,19 @@ func sshKeyFingerprint(pemText string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// publicKeyLabel 返回算法和 OpenSSH 指纹，便于和 ssh-keygen -lf 对照。不含私钥内容。
+func publicKeyLabel(pemText string) (string, error) {
+	signer, err := ssh.ParsePrivateKey([]byte(pemText))
+	if err != nil {
+		return "", err
+	}
+	pub := signer.PublicKey()
+	if pub == nil {
+		return "", fmt.Errorf("无私钥对应的公钥")
+	}
+	return pub.Type() + " " + ssh.FingerprintSHA256(pub), nil
+}
+
 // yamlSSHPrivateKeyHint 在远程 YAML 解析失败时附加运维提示。
 func yamlSSHPrivateKeyHint(remoteYAML string, parseErr error) string {
 	if parseErr == nil {

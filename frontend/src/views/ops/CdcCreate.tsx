@@ -27,6 +27,7 @@ import {
   Tooltip,
   message,
 } from 'antd'
+import type { InputRef } from 'antd'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import { SearchOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
@@ -258,6 +259,8 @@ export default function CdcCreate() {
   const [connectors, setConnectors] = useState<any[]>([])
   const [parentTasks, setParentTasks] = useState<any[]>([])
   const [sourceDbs, setSourceDbs] = useState<string[]>([])
+  const [sourceDbFilter, setSourceDbFilter] = useState('')
+  const sourceDbFilterRef = useRef<InputRef>(null)
   const [tables, setTables] = useState<string[]>([])
   const [defaultReviewers, setDefaultReviewers] = useState<string[]>([])
   const [mappings, setMappings] = useState<CdcMapping[]>([])
@@ -905,6 +908,7 @@ export default function CdcCreate() {
     })
     setTables([])
     setMappings([])
+    setSourceDbFilter('')
     await loadSourceDbs(instId)
   }
 
@@ -2201,7 +2205,7 @@ export default function CdcCreate() {
                 </Form.Item>
                 <Form.Item label={form.source_scope_mode === 'multi_db' ? '代表库' : '数据库'} required>
                   <Select
-                    showSearch
+                    showSearch={false}
                     mode="tags"
                     maxCount={1}
                     disabled={!form.source_instance_id}
@@ -2210,7 +2214,46 @@ export default function CdcCreate() {
                     style={{ width: 320 }}
                     value={form.source_db ? [form.source_db] : []}
                     onChange={(v: string[]) => onSourceDbChange(v[v.length - 1] || '')}
-                    options={sourceDbs.map((d) => ({ value: d, label: d }))}
+                    onDropdownVisibleChange={(open) => {
+                      if (!open) setSourceDbFilter('')
+                      else queueMicrotask(() => sourceDbFilterRef.current?.focus({ preventScroll: true }))
+                    }}
+                    notFoundContent={sourceDbFilter.trim() ? '无匹配库，回车可使用输入的库名' : '暂无库'}
+                    dropdownRender={(menu) => (
+                      <div>
+                        <div
+                          style={{ padding: '8px 12px' }}
+                          onMouseDown={(e) => {
+                            e.preventDefault()
+                            e.stopPropagation()
+                            queueMicrotask(() => sourceDbFilterRef.current?.focus({ preventScroll: true }))
+                          }}
+                        >
+                          <Input
+                            ref={sourceDbFilterRef}
+                            allowClear
+                            value={sourceDbFilter}
+                            placeholder="输入库名过滤，回车可手输库名"
+                            onChange={(e) => setSourceDbFilter(e.target.value)}
+                            onMouseDown={(e) => e.stopPropagation()}
+                            onKeyDown={(e) => {
+                              e.stopPropagation()
+                              if (e.key !== 'Enter') return
+                              const name = sourceDbFilter.trim()
+                              if (!name) return
+                              const hit = sourceDbs.find((d) => d.toLowerCase() === name.toLowerCase())
+                              if (hit) return
+                              onSourceDbChange(name)
+                              setSourceDbFilter('')
+                            }}
+                          />
+                        </div>
+                        {menu}
+                      </div>
+                    )}
+                    options={sourceDbs
+                      .filter((d) => d.toLowerCase().includes(sourceDbFilter.trim().toLowerCase()))
+                      .map((d) => ({ value: d, label: d }))}
                   />
                   {form.source_scope_mode === 'multi_db' && (
                     <div className="form-extra">代表库用于探测表结构，同构分库字段应一致。</div>

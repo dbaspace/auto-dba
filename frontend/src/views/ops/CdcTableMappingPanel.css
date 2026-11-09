@@ -68,6 +68,17 @@
   width: 48px;
   flex-shrink: 0;
 }
+.target-name {
+  flex: 1 1 120px;
+  min-width: 120px;
+}
+.target-name .ant-input {
+  width: 100%;
+}
+.mode-lab {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
 .map-body {
   margin-top: 10px;
   padding-top: 10px;

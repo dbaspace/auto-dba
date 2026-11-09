@@ -109,6 +109,10 @@ func Dial(host string, port int, cfg Config) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	signer, err = authSigner(signer)
+	if err != nil {
+		return nil, err
+	}
 	callback, err := hostKeyCallback(cfg)
 	if err != nil {
 		return nil, err
@@ -122,9 +126,27 @@ func Dial(host string, port int, cfg Config) (*Client, error) {
 	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
 	conn, err := ssh.Dial("tcp", addr, sshCfg)
 	if err != nil {
-		return nil, fmt.Errorf("SSH 连接 %s 失败: %w", addr, err)
+		return nil, fmt.Errorf("SSH 连接 %s 失败（用户 %s，私钥 %s）: %w", addr, cfg.User, cfg.IdentityFile, err)
 	}
 	return &Client{cfg: cfg, conn: conn}, nil
+}
+
+// authSigner 让 RSA 私钥同时提供 rsa-sha2-256、rsa-sha2-512 和 ssh-rsa。
+// golang.org/x/crypto 默认只签前两种；只收 ssh-rsa 的 sshd 会拒绝，系统 ssh 仍能登录。
+// 其它算法原样返回。
+func authSigner(signer ssh.Signer) (ssh.Signer, error) {
+	if signer == nil || signer.PublicKey() == nil || signer.PublicKey().Type() != ssh.KeyAlgoRSA {
+		return signer, nil
+	}
+	alg, ok := signer.(ssh.AlgorithmSigner)
+	if !ok {
+		return signer, nil
+	}
+	return ssh.NewSignerWithAlgorithms(alg, []string{
+		ssh.KeyAlgoRSASHA256,
+		ssh.KeyAlgoRSASHA512,
+		ssh.KeyAlgoRSA,
+	})
 }
 
 func hostKeyCallback(cfg Config) (ssh.HostKeyCallback, error) {

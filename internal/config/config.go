@@ -283,6 +283,7 @@ func Load(path string) (*Config, error) {
 	if err := materializeSSHKeyProfiles(cfg, path); err != nil {
 		return nil, err
 	}
+	logMaterializedSSHKeys(cfg)
 	BindLive(cfg)
 	PublishJWT(cfg.App.JWTSecret)
 	SyncFieldCrypto(cfg)

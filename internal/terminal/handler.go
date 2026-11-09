@@ -205,7 +205,7 @@ func (h *Handler) createSession(user, tenantID, instanceID, host, sshUser string
 		Args:        []string{script, host, sshUser, key, fmt.Sprintf("%d", sshPort)},
 		Envs:        envs,
 		PermitWrite: true,
-		Title:       "Node Terminal — " + host,
+		Title:       "Node Terminal — " + host + " — " + filepath.Base(key),
 		MaxLifetime: tc.MaxLifetimeSec,
 	}
 	raw, _ := json.Marshal(ec)
@@ -333,12 +333,12 @@ func (h *Handler) WS(c *gin.Context) {
 		return
 	}
 	if sess.Status == store.TermStatusExpired || sess.Status == store.TermStatusFailed {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "session " + sess.Status})
+		h.writeTerminalNotice(c, sess, sess.Status)
 		return
 	}
 	if exp, err := time.Parse(time.RFC3339, sess.ExpiresAt); err == nil && time.Now().UTC().After(exp) {
 		_ = h.Store.UpdateTerminalSessionStatus(sess.ID, store.TermStatusExpired)
-		c.JSON(http.StatusBadRequest, gin.H{"message": "session expired"})
+		h.writeTerminalNotice(c, sess, store.TermStatusExpired)
 		return
 	}
 
@@ -392,6 +392,42 @@ func (h *Handler) WS(c *gin.Context) {
 		return
 	}
 	_ = h.Store.UpdateTerminalSessionStatus(sess.ID, store.TermStatusFinished)
+}
+
+// writeTerminalNotice 把已结束会话的原因写进已升级的 WebSocket。
+// 升级前直接返回 4xx 时，页面会当成「一次都没 OPEN」并盖上红条，ssh 的真实报错看不到。
+func (h *Handler) writeTerminalNotice(c *gin.Context, sess *store.TerminalSession, status string) {
+	ws, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+	if err != nil {
+		return
+	}
+	defer ws.Close()
+	_, _ = conn.WrapperWs(ws).Write(conn.Output, []byte(terminalNotice(sess, status)))
+}
+
+func terminalNotice(sess *store.TerminalSession, status string) string {
+	host, user, key := "", "", ""
+	if sess != nil {
+		host = sess.Host
+		var ec execContent
+		if json.Unmarshal([]byte(sess.ExecContent), &ec) == nil {
+			if len(ec.Args) > 0 {
+				host = ec.Args[0]
+			}
+			if len(ec.Args) > 1 {
+				user = ec.Args[1]
+			}
+			if len(ec.Args) > 2 {
+				key = ec.Args[2]
+			}
+		}
+	}
+	switch status {
+	case store.TermStatusExpired:
+		return fmt.Sprintf("终端已超过最长存活时间，不是平台登录过期。主机 %s，用户 %s，私钥 %s。请从主机列表重新打开。\r\n", host, user, key)
+	default:
+		return fmt.Sprintf("远端 SSH 已退出，会话标为失败。这不是平台登录过期。主机 %s，用户 %s，私钥 %s。请用这把私钥核对目标机 authorized_keys，再从主机列表重新打开。\r\n", host, user, key)
+	}
 }
 
 // keepAliveWS 发协议层 Ping，不依赖前台标签页里的 JS 定时器。返回停止函数。

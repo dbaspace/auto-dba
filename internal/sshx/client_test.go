@@ -3,6 +3,7 @@ package sshx
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/rsa"
 	"net"
 	"os"
 	"path/filepath"
@@ -122,5 +123,51 @@ func TestSetDefaultsApplied(t *testing.T) {
 	policy, _, _ = resolveHostKeySettings(Config{HostKeyPolicy: HostKeyAcceptNew})
 	if policy != HostKeyAcceptNew {
 		t.Fatalf("Config.HostKeyPolicy 应覆盖默认值，实际 %s", policy)
+	}
+}
+
+func TestAuthSignerRSAOffersLegacy(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := ssh.NewSignerFromKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := authSigner(signer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	multi, ok := got.(ssh.MultiAlgorithmSigner)
+	if !ok {
+		t.Fatal("RSA 应返回可声明算法的签名器")
+	}
+	algos := strings.Join(multi.Algorithms(), ",")
+	for _, want := range []string{ssh.KeyAlgoRSASHA256, ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSA} {
+		if !strings.Contains(algos, want) {
+			t.Fatalf("缺少 %s，实际 %s", want, algos)
+		}
+	}
+}
+
+func TestAuthSignerEd25519Unchanged(t *testing.T) {
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := ssh.NewSignerFromKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := authSigner(signer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != signer {
+		t.Fatal("ed25519 不应改签名算法")
+	}
+	if _, ok := got.(ssh.MultiAlgorithmSigner); ok && strings.Contains(strings.Join(got.(ssh.MultiAlgorithmSigner).Algorithms(), ","), ssh.KeyAlgoRSA) {
+		t.Fatal("ed25519 不应提供 ssh-rsa")
 	}
 }

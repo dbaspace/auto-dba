@@ -50,7 +50,7 @@
   function showSessionDeadTip() {
     if (tipShown) return;
     tipShown = true;
-    var msg = "终端会话已失效，请重新从平台打开";
+    var msg = "终端 WebSocket 没有连上，请从主机列表重新打开。这不是平台登录过期";
     try {
       document.title = msg;
       var el = document.createElement("div");

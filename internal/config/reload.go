@@ -106,6 +106,7 @@ func MergeRemoteYAML(configPath, remoteContent string) (*Config, error) {
 	if err := materializeSSHKeyProfiles(next, configPath); err != nil {
 		return nil, err
 	}
+	logMaterializedSSHKeys(next)
 	return next, nil
 }
 

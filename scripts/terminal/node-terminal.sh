@@ -9,6 +9,7 @@ HOST=$1
 USER=$2
 SSHKEY=$3
 PORT=${4:-22}
+printf 'ssh %s@%s port %s identity %s\n' "$USER" "$HOST" "$PORT" "$SSHKEY"
 exec ssh -tt -p "$PORT" \
   -o StrictHostKeyChecking=no \
   -o UserKnownHostsFile=/dev/null \

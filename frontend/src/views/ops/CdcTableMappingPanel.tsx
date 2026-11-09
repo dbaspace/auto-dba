@@ -604,23 +604,25 @@ export default function CdcTableMappingPanel({
                 </div>
                 <div className="target-row" onClick={(e) => e.stopPropagation()}>
                   <span className="muted target-lab">目标表</span>
-                  <TargetNameInput value={m.target_table || ''} onCommit={(v) => patch(m.key, { target_table: v })} />
+                  <span className="target-name">
+                    <TargetNameInput value={m.target_table || ''} onCommit={(v) => patch(m.key, { target_table: v })} />
+                  </span>
+                  {showSyncMode && (
+                    <>
+                      <span className="muted mode-lab">同步模式</span>
+                      <Select
+                        size="small"
+                        style={{ width: 160, flexShrink: 0 }}
+                        value={normalizeSyncTableMode(m.sync_table_mode)}
+                        onChange={(v) => patch(m.key, { sync_table_mode: v })}
+                        options={[
+                          { value: 'incremental', label: '增量' },
+                          { value: 'initialization', label: '初始化' },
+                        ]}
+                      />
+                    </>
+                  )}
                 </div>
-                {showSyncMode && (
-                  <div className="target-row" onClick={(e) => e.stopPropagation()}>
-                    <span className="muted target-lab">同步模式</span>
-                    <Select
-                      size="small"
-                      style={{ width: 160 }}
-                      value={normalizeSyncTableMode(m.sync_table_mode)}
-                      onChange={(v) => patch(m.key, { sync_table_mode: v })}
-                      options={[
-                        { value: 'incremental', label: '增量' },
-                        { value: 'initialization', label: '初始化' },
-                      ]}
-                    />
-                  </div>
-                )}
                 {isOpen(m.key) && (
                   <div className="map-body" onClick={(e) => e.stopPropagation()}>
                     <div className="key-bar">
