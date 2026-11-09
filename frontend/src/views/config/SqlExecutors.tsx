@@ -41,11 +41,11 @@ export default function SqlExecutors() {
   const [filterEnv, setFilterEnv] = useState('')
   const [filterAddr, setFilterAddr] = useState('')
   const [page, setPage] = useState(1)
-  const [localCodes, setLocalCodes] = useState<string[]>([])
   const [visible, setVisible] = useState(false)
   const [saving, setSaving] = useState(false)
   const [editingId, setEditingId] = useState('')
   const [actingId, setActingId] = useState('')
+  const [statusMap, setStatusMap] = useState<Record<string, { status: string; message?: string }>>({})
   const [form] = Form.useForm()
 
   async function load() {
@@ -54,9 +54,10 @@ export default function SqlExecutors() {
         api.get('/sql-executors', { silent: true }),
         api.get('/environments', { silent: true }).catch(() => ({ data: { data: [] } })),
       ])
-      setRows(data.data || [])
-      setLocalCodes(data.local_idc_codes || [])
+      const list = data.data || []
+      setRows(list)
       setEnvs(envRes.data.data || [])
+      void refreshStatus(list)
     } catch (e: any) {
       message.error(e?.response?.data?.message || '执行器列表加载失败')
     }
@@ -71,6 +72,26 @@ export default function SqlExecutors() {
     void api.get('/instances', { params: { db_type: 'host' }, silent: true })
       .then((hostRes) => setHosts(hostRes.data?.data || []))
       .catch(() => {})
+  }
+
+  async function refreshStatus(list: Row[]) {
+    if (!list.length) {
+      setStatusMap({})
+      return
+    }
+    const checking: Record<string, { status: string }> = {}
+    for (const row of list) checking[row.id] = { status: 'checking' }
+    setStatusMap((prev) => ({ ...prev, ...checking }))
+    try {
+      const { data } = await api.get('/platform/agents/sql-executors/status', { silent: true })
+      const map: Record<string, { status: string; message?: string }> = {}
+      for (const it of data.data || []) map[it.id] = { status: it.status || 'unknown', message: it.message }
+      setStatusMap(map)
+    } catch {
+      const fail: Record<string, { status: string; message?: string }> = {}
+      for (const row of list) fail[row.id] = { status: 'unknown', message: '状态获取失败' }
+      setStatusMap(fail)
+    }
   }
 
   useEffect(() => {
@@ -112,20 +133,13 @@ export default function SqlExecutors() {
     }
   }
 
-  async function saveLocal(codes: string[]) {
-    setLocalCodes(codes)
-    try {
-      await api.put('/sql-executors/local-idc', { codes })
-    } catch (e: any) {
-      message.error(e?.response?.data?.message || '保存本服务环境失败')
-    }
-  }
-
   async function probe(row: Row) {
     try {
       const { data } = await api.post(`/sql-executors/${row.id}/probe`)
+      setStatusMap((prev) => ({ ...prev, [row.id]: { status: 'running', message: data.message } }))
       message.success(data.message || '探活通过')
     } catch (e: any) {
+      setStatusMap((prev) => ({ ...prev, [row.id]: { status: 'stopped', message: e?.response?.data?.message } }))
       message.error(e?.response?.data?.message || '探活失败')
     }
   }
@@ -230,31 +244,16 @@ export default function SqlExecutors() {
         type="info"
         showIcon
         style={{ marginBottom: 16 }}
-        message="执行器要按这个顺序做一次，平台不会自动创建"
+        message="执行器随上方下发登记"
         description={
           <div>
             <div>1. 先在「环境管理」确认海外环境已经存在，实例的机房使用这些环境的编码。</div>
-            <div>2. 点本页上方「下发」，把 sql-agent 下到能直连这些库的机器。下发成功后会登记地址。数据库账号只在实例管理填写。</div>
-            <div>3. 在下方新增，选择一条下发成功记录，地址会自动带出。再填名称、绑定环境并保存。这里不填写账号和密码。</div>
-            <div>4. 点探活。通过后，这些环境上的 DDL/DML 才交给这台执行器。失败时会写明是地址不通，还是环境已经绑在另一台执行器上。</div>
-            <div>本服务所在环境不用装执行器。请在下方选上本机所在环境：选中的继续本进程直连。选上之后，其它没有绑定执行器的环境会记失败，不会再从本机直连过去。</div>
+            <div>2. 点本页上方「下发」，把 sql-agent 下到能直连这些库的机器。下发时填写名称和绑定环境，成功后登记到下方列表。数据库账号只在实例管理填写。</div>
+            <div>3. 点探活。通过后，这些环境上的 DDL/DML 才交给这台执行器。失败时会写明是地址不通，还是环境已经绑在另一台执行器上。需要改名称或环境时点「编辑」。</div>
           </div>
         }
       />
       <Space style={{ marginBottom: 16 }} wrap>
-        <span>本服务所在环境</span>
-        <Select
-          mode="multiple"
-          allowClear
-          style={{ minWidth: 280 }}
-          placeholder="选择后，这些环境继续本机直连"
-          value={localCodes}
-          options={envOptions}
-          onChange={(v) => saveLocal(v)}
-        />
-        <Button type="primary" onClick={() => open()}>
-          新增执行器
-        </Button>
         <Select
           allowClear
           placeholder="环境"
@@ -275,7 +274,7 @@ export default function SqlExecutors() {
         rowKey="id"
         dataSource={filteredRows}
         pagination={{ current: page, pageSize: 10, onChange: (p) => setPage(p) }}
-        locale={{ emptyText: '还没有执行器。请先用本页上方「下发」，再在这里选择成功记录登记。' }}
+        locale={{ emptyText: '还没有执行器。请先用本页上方「下发」。' }}
         columns={[
           { title: '名称', dataIndex: 'name' },
           { title: '地址', dataIndex: 'base_url' },
@@ -289,9 +288,15 @@ export default function SqlExecutors() {
                   )),
           },
           {
-            title: '启用',
-            width: 80,
-            render: (_, row) => (row.enabled ? '是' : '否'),
+            title: '状态',
+            width: 100,
+            render: (_, row) => {
+              if (row.enabled === false) return <Tag title="已禁用，工单不会发到这里">已禁用</Tag>
+              const st = statusMap[row.id]?.status || 'checking'
+              const color = st === 'running' ? 'success' : st === 'stopped' ? 'default' : st === 'checking' ? 'processing' : 'warning'
+              const label = st === 'running' ? '运行中' : st === 'stopped' ? '已停止' : st === 'checking' ? '检测中' : '未知'
+              return <Tag color={color} title={statusMap[row.id]?.message}>{label}</Tag>
+            },
           },
           {
             title: '操作',

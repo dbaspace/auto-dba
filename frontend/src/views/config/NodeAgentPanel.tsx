@@ -196,9 +196,6 @@ export default function NodeAgentPanel() {
         )}
       />
       <Space wrap>
-        <Button type="primary" onClick={() => { void openDeploy() }}>下发</Button>
-        <Button onClick={() => { agentForm.resetFields(); setRegisterOpen(true) }}>手工登记</Button>
-        <Button onClick={() => { void loadAgents(); void loadDeploys() }}>刷新</Button>
         <Select
           allowClear
           placeholder="环境"
@@ -214,6 +211,9 @@ export default function NodeAgentPanel() {
           value={agentAddr}
           onChange={(e) => { setAgentAddr(e.target.value); setAgentPage(1) }}
         />
+        <Button onClick={() => { void loadAgents(); void loadDeploys() }}>刷新</Button>
+        <Button type="primary" onClick={() => { void openDeploy() }}>下发</Button>
+        <Button onClick={() => { agentForm.resetFields(); setRegisterOpen(true) }}>手工登记</Button>
       </Space>
       <Table
         rowKey="id"

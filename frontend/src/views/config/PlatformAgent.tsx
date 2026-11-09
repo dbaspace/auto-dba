@@ -738,11 +738,25 @@ export default function PlatformAgent({ part = 'all', children }: { part?: 'plat
   return (
     <div className="backup-page">
       {showPlatform ? <div className="backup-toolbar">
-        <h2>平台 Agent</h2>
-        <span className="backup-hint">
-          平台级执行面：定义时勾选归属（备份 / Redis RDB / 高可用 / K8s 反向隧道），业务模块按归属引用。
-        </span>
         <Space>
+          <Select
+            allowClear
+            placeholder="环境"
+            style={{ width: 180 }}
+            value={agentEnvId || undefined}
+            options={envs.map((e) => ({
+              value: e.id,
+              label: e.name && e.code && e.name !== e.code ? `${e.name} (${e.code})` : (e.name || e.code || e.id),
+            }))}
+            onChange={(v) => { setAgentEnvId(v || ''); setAgentPage(1) }}
+          />
+          <Input
+            allowClear
+            placeholder="地址：主机、域名或 URL"
+            style={{ width: 240 }}
+            value={agentAddr}
+            onChange={(e) => { setAgentAddr(e.target.value); setAgentPage(1) }}
+          />
           <Button onClick={() => { void refreshAgentStatus(); if (part === 'all') void refreshSqlStatus() }}>刷新状态</Button>
           <Button
             onClick={() => {
@@ -774,24 +788,6 @@ export default function PlatformAgent({ part = 'all', children }: { part?: 'plat
           >
             手工登记
           </Button>
-          <Select
-            allowClear
-            placeholder="环境"
-            style={{ width: 180 }}
-            value={agentEnvId || undefined}
-            options={envs.map((e) => ({
-              value: e.id,
-              label: e.name && e.code && e.name !== e.code ? `${e.name} (${e.code})` : (e.name || e.code || e.id),
-            }))}
-            onChange={(v) => { setAgentEnvId(v || ''); setAgentPage(1) }}
-          />
-          <Input
-            allowClear
-            placeholder="地址：主机、域名或 URL"
-            style={{ width: 240 }}
-            value={agentAddr}
-            onChange={(e) => { setAgentAddr(e.target.value); setAgentPage(1) }}
-          />
         </Space>
       </div> : null}
       {showPlatform ? <ResponsiveTable rowKey="id" loading={agentLoading} columns={agCols} dataSource={filteredAgents} pagination={{ current: agentPage, pageSize: 10, onChange: (p) => setAgentPage(p) }} /> : null}
