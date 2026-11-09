@@ -1155,8 +1155,20 @@ export default function CommonQuery() {
 
   const envPeers = useMemo(() => {
     if (!current) return []
-    return databases.filter((d) => d.db_name === current.dbName)
-  }, [current, databases])
+    const rows = databases.filter((d) => d.db_name === current.dbName)
+    rows.sort((a, b) => {
+      const ia = instMap[a.instance_id]
+      const ib = instMap[b.instance_id]
+      const ea = resolveDbEnv(a, ia)
+      const eb = resolveDbEnv(b, ib)
+      if (!ea && eb) return 1
+      if (ea && !eb) return -1
+      const byEnv = cmpName(ea, eb)
+      if (byEnv) return byEnv
+      return cmpName(peerMark(a, ia), peerMark(b, ib))
+    })
+    return rows
+  }, [current, databases, instMap])
 
   const currentEnvShown = useMemo(() => {
     if (!current) return null
