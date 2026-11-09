@@ -318,6 +318,43 @@ function resolveDbEnv(db: any, inst?: any): string {
   return String(inst?.idc || '').trim()
 }
 
+/** 同名库里分开相同环境名：实例 domain=、库域名、实例域名、实例名，取第一个非空值。 */
+function peerMark(db: any, inst?: any): string {
+  const fromTag = firstTagValue(inst, 'domain')
+  if (fromTag) return fromTag
+  const domains = Array.isArray(db?.domains) ? db.domains : []
+  for (const raw of domains) {
+    const v = String(raw || '').trim()
+    if (v) return v
+  }
+  const domainName = String(inst?.domain_name || '').trim()
+  if (domainName) return domainName
+  return String(inst?.name || '').trim()
+}
+
+function firstTagValue(source: any, key: string): string {
+  const want = key.toLowerCase()
+  for (const raw of dbTags(source)) {
+    const i = raw.indexOf('=')
+    if (i <= 0) continue
+    if (raw.slice(0, i).trim().toLowerCase() !== want) continue
+    const v = raw.slice(i + 1).trim()
+    if (v) return v
+  }
+  return ''
+}
+
+function peerEnvLabel(db: any, inst: any, peers: any[], instOf: (row: any) => any): { env: string; label: string; title: string } {
+  const env = resolveDbEnv(db, inst) || '—'
+  const mark = peerMark(db, inst)
+  const instName = String(inst?.name || '').trim()
+  const same = peers.filter((row) => (resolveDbEnv(row, instOf(row)) || '—') === env).length
+  const label = same > 1 && mark ? `${env} · ${mark}` : env
+  const extra = [mark, instName && instName !== mark ? instName : ''].filter(Boolean)
+  const title = extra.length ? [env, ...extra].join(' · ') : env
+  return { env, label, title }
+}
+
 /** 查询树短展示名：优先 alias=，兼容 label=；无则空（不拼接整段 tags）。 */
 function dbAliasFromTags(db: any): string {
   let fromLabel = ''
@@ -1120,6 +1157,17 @@ export default function CommonQuery() {
     if (!current) return []
     return databases.filter((d) => d.db_name === current.dbName)
   }, [current, databases])
+
+  const currentEnvShown = useMemo(() => {
+    if (!current) return null
+    const db = databases.find((d) => d.id === current.dbId) || {
+      id: current.dbId,
+      db_name: current.dbName,
+      instance_id: current.instanceId,
+      tags: current.env ? [`idc=${current.env}`] : [],
+    }
+    return peerEnvLabel(db, instMap[current.instanceId], envPeers, (row) => instMap[row.instance_id])
+  }, [current, databases, envPeers, instMap])
 
   useEffect(() => {
     setEnvPickOpen(false)
@@ -2134,26 +2182,29 @@ export default function CommonQuery() {
                         content={(
                           <div className="env-pick">
                             {envPeers.map((d) => {
-                              const env = resolveDbEnv(d, instMap[d.instance_id]) || '—'
+                              const shown = peerEnvLabel(d, instMap[d.instance_id], envPeers, (row) => instMap[row.instance_id])
                               const on = d.id === current?.dbId
                               return (
                                 <Tag
                                   key={d.id}
-                                  color={envTagColor(env)}
+                                  color={envTagColor(shown.env)}
+                                  title={shown.title}
                                   className={on ? 'env-pick-item on' : 'env-pick-item'}
                                   onClick={() => {
                                     switchEnv(d)
                                     setEnvPickOpen(false)
                                   }}
                                 >
-                                  {env}
+                                  {shown.label}
                                 </Tag>
                               )
                             })}
                           </div>
                         )}
                       >
-                        <Tag color={envTagColor(current?.env)} className="env-tag-btn">{current?.env || '—'}</Tag>
+                        <Tag color={envTagColor(current?.env)} className="env-tag-btn" title={currentEnvShown?.title}>
+                          {currentEnvShown?.label || current?.env || '—'}
+                        </Tag>
                       </Popover>
                     ) : (
                       <Tag color={envTagColor(current?.env)}>{current?.env || '—'}</Tag>

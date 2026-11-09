@@ -224,11 +224,18 @@
 }
 .db-name { font-size: 14px; color: var(--app-text, #111827); }
 .env-tag-btn { cursor: pointer; }
+.db-meta .env-tag-btn.ant-tag,
+.env-pick .env-pick-item.ant-tag {
+  white-space: normal;
+  height: auto;
+  line-height: 20px;
+  max-width: 100%;
+}
 .env-pick {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  max-width: 280px;
+  max-width: 420px;
 }
 .env-pick-item { cursor: pointer; margin: 0; }
 .env-pick-item.on {
