@@ -47,7 +47,7 @@ function runtimeTag(status?: string) {
 }
 
 /** 配置中心 · 平台 Agent：定义归属后供备份 / RDB / 高可用等模块引用 */
-export default function PlatformAgent({ part = 'all' }: { part?: 'platform' | 'sql' | 'all' }) {
+export default function PlatformAgent({ part = 'all', children }: { part?: 'platform' | 'sql' | 'all'; children?: React.ReactNode }) {
   const [agents, setAgents] = useState<any[]>([])
   const [hosts, setHosts] = useState<any[]>([])
   const [envs, setEnvs] = useState<{ id: string; code?: string; name?: string }[]>([])
@@ -868,6 +868,7 @@ export default function PlatformAgent({ part = 'all' }: { part?: 'platform' | 's
           },
         ]}
       /> : null}
+      {children}
       <div className="backup-toolbar" style={{ marginTop: 24 }}>
         <h3>下发记录</h3>
       </div>

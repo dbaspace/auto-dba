@@ -52,10 +52,9 @@ export default function AgentManage() {
             key: 'sql',
             label: 'SQL 执行器',
             children: (
-              <>
-                <PlatformAgent part="sql" />
+              <PlatformAgent part="sql">
                 <SqlExecutors />
-              </>
+              </PlatformAgent>
             ),
           },
           { key: 'node', label: 'Node Agent', children: <NodeAgentPanel /> },
