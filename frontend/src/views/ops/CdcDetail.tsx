@@ -173,6 +173,22 @@ export default function CdcDetail() {
   const sourceScopeLabel = formatSourceScopeLabel(task.source_db, extra.source_db_prefix, extra.source_db_names)
   const source = instances.find((i) => i.id === task.source_instance_id) || task.source_instance
   const target = instances.find((i) => i.id === task.target_instance_id) || task.target_instance
+  const repairAddressOptions = useMemo(() => {
+    const seen = new Set<string>()
+    const out: { value: string; label: string }[] = []
+    const add = (addr?: string, name?: string) => {
+      const value = String(addr || '').trim()
+      const key = value.toLowerCase()
+      if (!value || seen.has(key)) return
+      seen.add(key)
+      const title = String(name || '').trim()
+      out.push({ value, label: title && title.toLowerCase() !== key ? `${value} — ${title}` : value })
+    }
+    add(source?.domain_name, source?.name)
+    add(source?.host, source?.name)
+    for (const d of source?.domains || []) add(d, source?.name)
+    return out
+  }, [source])
   const reviewerOptions = useMemo(() => defaultReviewers, [defaultReviewers])
   const issueReady = approvalIssue?.status === 'pending' && !!approvalIssue.id
   const isInit = task.task_type === 'init'
@@ -1853,13 +1869,14 @@ export default function CdcDetail() {
           <AutoComplete
             style={{ width: '100%' }}
             value={repairHost}
-            options={Array.from(
-              new Set(
-                [source?.domain_name, source?.host, ...(source?.domains || [])]
-                  .map((s) => String(s || '').trim())
-                  .filter(Boolean),
-              ),
-            ).map((d) => ({ value: d }))}
+            options={repairAddressOptions}
+            filterOption={(input, option) => {
+              const q = String(input || '').trim().toLowerCase()
+              if (!q) return true
+              const value = String(option?.value || '').toLowerCase()
+              const label = String(option?.label ?? '').toLowerCase()
+              return value.includes(q) || label.includes(q)
+            }}
             onChange={(v) => setRepairHost(v)}
             placeholder="选择或填写域名或 IP"
           />
