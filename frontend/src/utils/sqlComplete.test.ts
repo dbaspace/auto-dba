@@ -152,6 +152,30 @@ describe('sqlContext', () => {
     expect(labels(sql)).toContain('name')
   })
 
+  it('opens columns right after WHERE', () => {
+    const sql = 'SELECT * from db_ods.ods_bo_shop_tbl_area where '
+    const ctx = sqlContext(sql, sql.length)
+    expect(ctx.kind).toBe('column')
+    expect(ctx.tables.map((t) => t.name)).toContain('db_ods.ods_bo_shop_tbl_area')
+    expect(suggestAnchor(sql, sql.length, ctx)).toBe('clause')
+    const cols = buildSuggestions({
+      ctx: { ...ctx, prefix: '', from: sql.length, to: sql.length },
+      tableNames: ['ods_bo_shop_tbl_area'],
+      columns: { ods_bo_shop_tbl_area: [{ name: 'area_id', comment: '区域' }] },
+      dialect: 'mysql',
+    })
+    expect(cols.some((item) => item.insert === 'area_id' && item.label === 'area_id-区域')).toBe(true)
+    const glued = 'SELECT * from db_ods.ods_bo_shop_tbl_area where'
+    const gluedCtx = sqlContext(glued, glued.length)
+    expect(suggestAnchor(glued, glued.length, gluedCtx)).toBe('clause')
+    const placed = applySuggestion(glued, { ...gluedCtx, prefix: '', from: glued.length, to: glued.length }, 'area_id')
+    expect(placed.sql).toBe(glued + 'area_id')
+    const broken = 'SELECT * from db_ods.ods_bo_shop_tbl_area where\n'
+    expect(suggestAnchor(broken, broken.length, sqlContext(broken, broken.length))).toBe('none')
+    const finished = 'select * from t where name '
+    expect(suggestAnchor(finished, finished.length, sqlContext(finished, finished.length))).toBe('none')
+  })
+
   it('stops when the column name is already complete', () => {
     const sql = 'select id from t where name'
     const ctx = sqlContext(sql, sql.length)

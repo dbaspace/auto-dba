@@ -111,7 +111,7 @@ export function useQuerySuggest(envRef: { current: SuggestEnv }, getBox: () => H
         : ctx.tables
       for (const ref of names) loadColumns(env.dbId, ref.name)
     }
-    const useCtx = anchor === 'semi' ? { ...ctx, prefix: '', from: cursor, to: cursor } : ctx
+    const useCtx = anchor === 'semi' || anchor === 'clause' ? { ...ctx, prefix: '', from: cursor, to: cursor } : ctx
     const next = buildSuggestions({
       ctx: useCtx,
       tableNames: env.tableNames,

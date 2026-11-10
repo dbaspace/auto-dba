@@ -522,17 +522,33 @@ function rankItems(items: SuggestItem[], prefix: string): SuggestItem[] {
   return scored.map((row) => row.item)
 }
 
-export type SuggestAnchor = 'type' | 'dot' | 'semi' | 'none'
+export type SuggestAnchor = 'type' | 'dot' | 'semi' | 'clause' | 'none'
 
-// 自动打开只贴着当前语句：正在输入的名字、刚写完的点号，或同一行分号之前。
+const CLAUSE_OPEN = new Set(['where', 'and', 'or', 'having', 'on', 'using', 'from', 'join', 'select', 'by'])
+
+// 自动打开只贴着当前语句：正在输入的名字、刚写完的点号、刚写完的关键字，或同一行分号之前。
 export function suggestAnchor(sql: string, cursor: number, ctx: SqlContext): SuggestAnchor {
   if (ctx.kind === 'none') return 'none'
   const inGap = cursor < sql.length && (sql[cursor] === ' ' || sql[cursor] === '\t')
   if (inGap && beforeStatementSemicolon(sql, cursor)) return 'semi'
+  if (afterClauseKeyword(sql, cursor)) return 'clause'
   if (ctx.prefix && /[A-Za-z0-9_\u00A0-\uFFFF]$/.test(ctx.prefix)) return 'type'
   if (!ctx.prefix && cursor > 0 && sql[cursor - 1] === '.') return 'dot'
   if (beforeStatementSemicolon(sql, cursor)) return 'semi'
   return 'none'
+}
+
+// 光标贴在 WHERE、FROM 这类关键字末尾，或只隔着同一行空格，且后面还没写别的名字。
+function afterClauseKeyword(sql: string, cursor: number): boolean {
+  let i = cursor
+  while (i > 0 && (sql[i - 1] === ' ' || sql[i - 1] === '\t')) i--
+  let start = i
+  while (start > 0 && /[A-Za-z0-9_\u00A0-\uFFFF]/.test(sql[start - 1])) start--
+  const word = sql.slice(start, i).toLowerCase()
+  if (!CLAUSE_OPEN.has(word)) return false
+  let j = cursor
+  while (j < sql.length && (sql[j] === ' ' || sql[j] === '\t')) j++
+  return j >= sql.length || sql[j] === '\n' || sql[j] === '\r' || sql[j] === ';'
 }
 
 function beforeStatementSemicolon(sql: string, cursor: number): boolean {
