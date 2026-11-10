@@ -192,6 +192,43 @@
   display: flex;
   flex-direction: column;
 }
+.sql-suggest {
+  position: fixed;
+  z-index: 30;
+  min-width: 220px;
+  max-width: 420px;
+  max-height: 240px;
+  overflow: auto;
+  background: #fff;
+  border: 1px solid #d9d9d9;
+  border-radius: 6px;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
+  padding: 4px 0;
+}
+.sql-suggest-item {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-family: Menlo, Consolas, Monaco, monospace;
+  font-size: 12px;
+}
+.sql-suggest-item.on {
+  background: #e6f4ff;
+}
+.sql-suggest-detail {
+  color: #6b7280;
+  font-family: inherit;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sql-suggest-loading {
+  padding: 4px 10px;
+  color: #6b7280;
+  font-size: 12px;
+}
 .tool-bar {
   display: flex;
   align-items: center;

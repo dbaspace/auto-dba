@@ -118,6 +118,45 @@ func (h *DatabaseHandler) ListTables(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": tables})
 }
 
+// ListColumns GET /databases/:id/columns?table=
+// 查询窗口补全用。先确认库可见，不支持的类型不连库。一张表只发一条字典查询。
+func (h *DatabaseHandler) ListColumns(c *gin.Context) {
+	raw := strings.TrimSpace(c.Query("table"))
+	if raw == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "表名不能为空"})
+		return
+	}
+	schema, table := dbprobe.SplitHintTable(raw)
+	if table == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "表名不能为空"})
+		return
+	}
+	rec, inst, password, err := h.resolveVisibleDB(c, c.Param("id"))
+	if err != nil {
+		writeQueryErr(c, err)
+		return
+	}
+	if !dbprobe.HintColumnsSupported(inst.DBType) {
+		c.JSON(http.StatusOK, gin.H{"data": gin.H{
+			"schema": schema, "table": table, "columns": []dbprobe.HintColumn{},
+		}})
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	defer cancel()
+	outSchema, cols, err := dbprobe.ListHintColumns(ctx, inst, password, rec.DBName, schema, table)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	if cols == nil {
+		cols = []dbprobe.HintColumn{}
+	}
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{
+		"schema": outSchema, "table": table, "columns": cols,
+	}})
+}
+
 type queryReq struct {
 	DatabaseID      string `json:"database_id"`
 	SQL             string `json:"sql"`

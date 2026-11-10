@@ -24,6 +24,50 @@ const cloudRegionOptions = [
 
 type Opt = { id: string; code?: string; name?: string }
 
+const FOLD_PREVIEW = 2
+
+function FoldTags({ items }: { items: string[] }) {
+  const [open, setOpen] = useState(false)
+  const list = items.map((s) => String(s || '').trim()).filter(Boolean)
+  if (!list.length) return <>—</>
+  const fold = list.length > FOLD_PREVIEW
+  const shown = fold && !open ? list.slice(0, FOLD_PREVIEW) : list
+  const rest = list.length - FOLD_PREVIEW
+  return (
+    <Space size={4} wrap>
+      {shown.map((s, i) => <Tag key={`${s}-${i}`}>{s}</Tag>)}
+      {fold ? (
+        <Button type="link" size="small" style={{ padding: 0, height: 'auto' }} onClick={() => setOpen((v) => !v)}>
+          {open ? '收起' : `展开其余 ${rest} 个`}
+        </Button>
+      ) : null}
+    </Space>
+  )
+}
+
+function FoldSecret({ value }: { value?: string }) {
+  const [open, setOpen] = useState(false)
+  const text = String(value || '').trim()
+  if (!text) return <>—</>
+  const long = text.length > 16
+  return (
+    <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start', maxWidth: 200, gap: 2 }}>
+      <span
+        style={long && !open
+          ? { display: 'block', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
+          : { display: 'block', wordBreak: 'break-all' }}
+      >
+        {text}
+      </span>
+      {long ? (
+        <Button type="link" size="small" style={{ padding: 0, height: 'auto' }} onClick={() => setOpen((v) => !v)}>
+          {open ? '收起' : '展开'}
+        </Button>
+      ) : null}
+    </span>
+  )
+}
+
 export default function CloudAccounts() {
   const [rows, setRows] = useState<any[]>([])
   const [users, setUsers] = useState<any[]>([])
@@ -99,25 +143,21 @@ export default function CloudAccounts() {
         columns={[
           { title: '名称', dataIndex: 'name' },
           { title: '厂商', dataIndex: 'vendor', render: (v) => vendors.find((x) => x.value === v)?.label || v },
-          { title: '云地域', dataIndex: 'regions', render: (v) => (v || []).join(', ') || '—' },
+          { title: '云地域', dataIndex: 'regions', render: (v) => <FoldTags items={v || []} /> },
           {
             title: '平台区域',
             dataIndex: 'platform_region_ids',
-            render: (ids: string[]) => (ids || []).length
-              ? (ids || []).map((id) => <Tag key={id}>{regionLabel(id)}</Tag>)
-              : '—',
+            render: (ids: string[]) => <FoldTags items={(ids || []).map((id) => regionLabel(id))} />,
           },
           {
             title: '平台环境',
             dataIndex: 'env_ids',
-            render: (ids: string[]) => (ids || []).length
-              ? (ids || []).map((id) => <Tag key={id}>{envLabel(id)}</Tag>)
-              : '—',
+            render: (ids: string[]) => <FoldTags items={(ids || []).map((id) => envLabel(id))} />,
           },
           { title: '启用', dataIndex: 'enabled', render: (v) => (v === false ? <Tag>停用</Tag> : <Tag color="green">启用</Tag>) },
           { title: '只读', dataIndex: 'has_readonly', render: (v) => v ? <Tag color="green">已登记</Tag> : <Tag>未登记</Tag> },
           { title: '变更', dataIndex: 'has_operate', render: (v) => v ? <Tag color="blue">已登记</Tag> : <Tag>未登记</Tag> },
-          { title: 'SecretId', dataIndex: 'secret_id', render: (v) => v || '—' },
+          { title: 'SecretId', dataIndex: 'secret_id', render: (v) => <FoldSecret value={v} /> },
           {
             title: '操作',
             render: (_, row) => (

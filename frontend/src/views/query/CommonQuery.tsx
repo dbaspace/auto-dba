@@ -50,6 +50,7 @@ import { prefetchQueryCatalog, readQueryTreeCache, refreshQueryCatalog } from '.
 import { queryFavoriteKey, queryHistoryKey, queryWorkspaceKey } from './querySession'
 import DbTypeIcon from '../../components/DbTypeIcon'
 import SqlEditor from '../../components/SqlEditor'
+import { useQuerySuggest, type SuggestEnv } from './useQuerySuggest'
 import { formatSqlContent } from '../../utils/formatSql'
 import {
   buildExportContent,
@@ -495,6 +496,15 @@ export default function CommonQuery() {
   const [running, setRunning] = useState(false)
   const queryAbortRef = useRef<AbortController | null>(null)
   const sqlBoxRef = useRef<HTMLTextAreaElement | null>(null)
+  const suggestEnv = useRef<SuggestEnv>({
+    sql: '',
+    dbId: '',
+    dbType: '',
+    tableNames: [],
+    ensureTables: () => {},
+    apply: () => {},
+  })
+  const suggest = useQuerySuggest(suggestEnv, () => sqlBoxRef.current)
   const clickSelectionRef = useRef<{ start: number; end: number; text: string; sql: string; key: string } | null>(null)
   const runPointerDownRef = useRef(false)
   const selectionRestoreRef = useRef<{ start: number; end: number; sql: string } | null>(null)
@@ -1354,8 +1364,10 @@ export default function CommonQuery() {
   }
 
   function onSqlKey(e: React.KeyboardEvent) {
+    if (suggest.onKeyDown(e)) return
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
+      suggest.close()
       runSQL()
     }
   }
@@ -1963,6 +1975,25 @@ export default function CommonQuery() {
     }
   }
 
+  suggestEnv.current = {
+    sql: current?.sql || '',
+    dbId: current?.dbId || '',
+    dbType: current?.dbType || '',
+    tableNames: current?.dbId ? tablesMap[current.dbId] || [] : [],
+    ensureTables: () => {
+      if (current?.dbId) void fetchTables(current.dbId)
+    },
+    apply: (sql, cursor) => {
+      updateCurrent({ sql })
+      setTimeout(() => {
+        const el = sqlBoxRef.current
+        if (!el) return
+        el.focus()
+        el.setSelectionRange(cursor, cursor)
+      }, 0)
+    },
+  }
+
   const hasTreeData = treeData.length > 0
   const boundFav = current?.favId
     ? favorites.find((f) => f.id === current.favId)
@@ -2237,9 +2268,37 @@ export default function CommonQuery() {
                     spellCheck={false}
                     minRows={8}
                     placeholder="输入 SQL，Ctrl / ⌘ + Enter 运行；有多条且选中一段时只执行选中"
-                    onChange={(v) => updateCurrent({ sql: v })}
+                    onChange={(v) => {
+                      suggestEnv.current.sql = v
+                      updateCurrent({ sql: v })
+                      suggest.onInput()
+                    }}
                     onKeyDown={onSqlKey}
+                    onKeyUp={(e) => {
+                      if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) suggest.onInput()
+                    }}
+                    onClick={() => suggest.onInput()}
+                    onScroll={() => suggest.onScroll()}
                   />
+                  {suggest.open ? (
+                    <div className="sql-suggest" style={{ top: suggest.pos.top, left: suggest.pos.left }}>
+                      {suggest.loading ? <div className="sql-suggest-loading">读取字段</div> : null}
+                      {suggest.items.map((item, i) => (
+                        <div
+                          key={item.group + item.insert + i}
+                          className={i === suggest.active ? 'sql-suggest-item on' : 'sql-suggest-item'}
+                          onMouseDown={(e) => {
+                            e.preventDefault()
+                            suggest.accept(i)
+                          }}
+                          onMouseEnter={() => suggest.setActive(i)}
+                        >
+                          <span>{item.label}</span>
+                          {item.detail ? <span className="sql-suggest-detail">{item.detail}</span> : null}
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
                 <div className="gutter-x inner" onMouseDown={(e) => startDrag('hist', e)} />
                 <div className="hist-col" style={{ width: histWidth }}>

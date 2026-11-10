@@ -302,6 +302,9 @@ func (h *SlotHandler) restartOneSlot(ctx context.Context, tid string, item slotR
 	slotName := strings.TrimSpace(slot.SlotName)
 	label = fmt.Sprintf("%s slot=%s (%s)", taskName, slotName, hostDB)
 	if connName == "" || connectBase == "" {
+		if strings.TrimSpace(slot.ConnectMetaBase) == "" && strings.TrimSpace(slot.ConnectMetaName) == "" && strings.TrimSpace(slot.ConnectMetaTask) == "" {
+			return label, "skip", fmt.Sprintf("跳过：槽 %s、库 %s 还没有 connector，请先点刷新采集，让 Connect 补齐 connector 后再重启", slotName, slot.Database)
+		}
 		return label, "skip", fmt.Sprintf("跳过：未匹配到槽 %s、库 %s 对应的 connector", slotName, slot.Database)
 	}
 	if strings.HasSuffix(strings.ToLower(connName), "-add") {

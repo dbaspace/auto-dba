@@ -173,8 +173,21 @@ func (d *DB) ListSlots() ([]SyncSlot, error) {
 	return d.ListSlotsInTenant("")
 }
 
+// syncSlotCols 列表和按键读取共用。重启必须带上采集补齐的 connector，否则本地没有 CDC 任务的槽会全部跳过。
+const syncSlotCols = `id, host, port, slot_name, database_name, active, COALESCE(active_pid,0), restart_lsn, COALESCE(confirmed_flush_lsn,''), COALESCE(lag_bytes,0), plugin, updated_at, COALESCE(connect_base,''), COALESCE(connector_name,''), COALESCE(task_name,''), COALESCE(topic,'')`
+
+func scanSyncSlot(row interface{ Scan(...any) error }) (*SyncSlot, error) {
+	s := &SyncSlot{}
+	var active int
+	if err := row.Scan(&s.ID, &s.Host, &s.Port, &s.SlotName, &s.Database, &active, &s.ActivePID, &s.RestartLSN, &s.ConfirmedFlushLSN, &s.LagBytes, &s.Plugin, &s.UpdatedAt, &s.ConnectMetaBase, &s.ConnectMetaName, &s.ConnectMetaTask, &s.ConnectMetaTopic); err != nil {
+		return nil, err
+	}
+	s.Active = active == 1
+	return s, nil
+}
+
 func (d *DB) ListSlotsInTenant(tenantID string) ([]SyncSlot, error) {
-	q := `SELECT id, host, port, slot_name, database_name, active, COALESCE(active_pid,0), restart_lsn, COALESCE(confirmed_flush_lsn,''), COALESCE(lag_bytes,0), plugin, updated_at, COALESCE(connect_base,''), COALESCE(connector_name,''), COALESCE(task_name,''), COALESCE(topic,'') FROM tbl_sync_slots WHERE 1=1`
+	q := `SELECT ` + syncSlotCols + ` FROM tbl_sync_slots WHERE 1=1`
 	args := []any{}
 	q, args = appendTenantFilter(q, args, tenantID)
 	q += ` ORDER BY host, slot_name`
@@ -185,13 +198,11 @@ func (d *DB) ListSlotsInTenant(tenantID string) ([]SyncSlot, error) {
 	defer rows.Close()
 	var out []SyncSlot
 	for rows.Next() {
-		var s SyncSlot
-		var active int
-		if err := rows.Scan(&s.ID, &s.Host, &s.Port, &s.SlotName, &s.Database, &active, &s.ActivePID, &s.RestartLSN, &s.ConfirmedFlushLSN, &s.LagBytes, &s.Plugin, &s.UpdatedAt, &s.ConnectMetaBase, &s.ConnectMetaName, &s.ConnectMetaTask, &s.ConnectMetaTopic); err != nil {
+		s, err := scanSyncSlot(rows)
+		if err != nil {
 			return nil, err
 		}
-		s.Active = active == 1
-		out = append(out, s)
+		out = append(out, *s)
 	}
 	return out, rows.Err()
 }
@@ -295,18 +306,11 @@ func (d *DB) DeleteSlot(id string) error {
 }
 
 func (d *DB) GetSyncSlot(id string) (*SyncSlot, error) {
-	s := &SyncSlot{}
-	var active int
-	err := d.QueryRow(`SELECT id, host, port, slot_name, database_name, active, COALESCE(active_pid,0), restart_lsn, COALESCE(confirmed_flush_lsn,''), COALESCE(lag_bytes,0), plugin, updated_at FROM tbl_sync_slots WHERE id=?`, id).
-		Scan(&s.ID, &s.Host, &s.Port, &s.SlotName, &s.Database, &active, &s.ActivePID, &s.RestartLSN, &s.ConfirmedFlushLSN, &s.LagBytes, &s.Plugin, &s.UpdatedAt)
+	s, err := scanSyncSlot(d.QueryRow(`SELECT `+syncSlotCols+` FROM tbl_sync_slots WHERE id=?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
-	if err != nil {
-		return nil, err
-	}
-	s.Active = active == 1
-	return s, nil
+	return s, err
 }
 
 func (d *DB) DeleteSlotsByName(name string) error {
@@ -477,19 +481,11 @@ func (d *DB) GetSyncSlotByKey(host string, port int, slotName string) (*SyncSlot
 	if host == "" || port <= 0 || slotName == "" {
 		return nil, nil
 	}
-	s := &SyncSlot{}
-	var active int
-	err := d.QueryRow(`SELECT id, host, port, slot_name, database_name, active, COALESCE(active_pid,0), restart_lsn, COALESCE(confirmed_flush_lsn,''), COALESCE(lag_bytes,0), plugin, updated_at FROM tbl_sync_slots WHERE host=? AND port=? AND slot_name=?`,
-		host, port, slotName).
-		Scan(&s.ID, &s.Host, &s.Port, &s.SlotName, &s.Database, &active, &s.ActivePID, &s.RestartLSN, &s.ConfirmedFlushLSN, &s.LagBytes, &s.Plugin, &s.UpdatedAt)
+	s, err := scanSyncSlot(d.QueryRow(`SELECT `+syncSlotCols+` FROM tbl_sync_slots WHERE host=? AND port=? AND slot_name=?`, host, port, slotName))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
-	if err != nil {
-		return nil, err
-	}
-	s.Active = active == 1
-	return s, nil
+	return s, err
 }
 
 func (d *DB) CreateArchive(t *ArchiveTask) error {

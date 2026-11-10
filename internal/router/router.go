@@ -309,6 +309,7 @@ func Init(e *gin.Engine, d Deps) {
 	secured.POST("/databases/batch-access-users", requireURN(store.URNDatabasesEdit), d.DB.BatchAccessUsers)
 	secured.POST("/databases/batch-delete", requireURN(store.URNDatabasesDelete), d.DB.DeleteBatch)
 	secured.GET("/databases/:id/tables", d.DB.ListTables)
+	secured.GET("/databases/:id/columns", d.DB.ListColumns)
 	secured.PUT("/databases/:id", requireURN(store.URNDatabasesEdit), d.DB.Update)
 	secured.POST("/databases/:id/assign-tenant", requireURN(store.URNTenantsImpersonate), d.DB.AssignTenant)
 	secured.DELETE("/databases/:id", requireURN(store.URNDatabasesDelete), d.DB.Delete)

@@ -98,3 +98,44 @@ func TestReplaceHostSlotsUpdatesBySlotName(t *testing.T) {
 		t.Fatalf("meta upsert overwrote collect fields: %+v", after)
 	}
 }
+
+func TestGetSyncSlotByKeyReadsConnectMeta(t *testing.T) {
+	dsn := os.Getenv("AUTO_DBA_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set AUTO_DBA_TEST_DSN to run")
+	}
+	d, err := Open("postgres", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Close() })
+
+	slotName := "test_slot_connect_" + uuid.NewString()
+	id := uuid.NewString()
+	host := "pg.connect.test"
+	t.Cleanup(func() {
+		_, _ = d.Exec(`DELETE FROM tbl_sync_slots WHERE id=?`, id)
+	})
+	if err := d.UpsertSlot(&SyncSlot{
+		ID: id, Host: host, Port: 5432, SlotName: slotName, Database: "db_front", Plugin: "pgoutput",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.UpdateSlotConnectMeta(id, "http://10.1.2.3:8083", "conn_db_front", "topic_db_front"); err != nil {
+		t.Fatal(err)
+	}
+
+	byKey, err := d.GetSyncSlotByKey(host, 5432, slotName)
+	if err != nil || byKey == nil {
+		t.Fatalf("by key: %v", err)
+	}
+	byID, err := d.GetSyncSlot(id)
+	if err != nil || byID == nil {
+		t.Fatalf("by id: %v", err)
+	}
+	for _, got := range []*SyncSlot{byKey, byID} {
+		if got.ConnectMetaBase != "http://10.1.2.3:8083" || got.ConnectMetaName != "conn_db_front" || got.ConnectMetaTask != "conn_db_front" || got.ConnectMetaTopic != "topic_db_front" {
+			t.Fatalf("connect meta = %+v", got)
+		}
+	}
+}

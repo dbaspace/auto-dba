@@ -10,6 +10,9 @@ export type SqlEditorProps = {
   minRows?: number
   disabled?: boolean
   onKeyDown?: React.KeyboardEventHandler<HTMLTextAreaElement>
+  onKeyUp?: React.KeyboardEventHandler<HTMLTextAreaElement>
+  onClick?: React.MouseEventHandler<HTMLTextAreaElement>
+  onScroll?: React.UIEventHandler<HTMLTextAreaElement>
   spellCheck?: boolean
 }
 
@@ -23,6 +26,9 @@ const SqlEditor = forwardRef<HTMLTextAreaElement, SqlEditorProps>(function SqlEd
     minRows = 16,
     disabled,
     onKeyDown,
+    onKeyUp,
+    onClick,
+    onScroll,
     spellCheck = false,
   },
   ref,
@@ -69,8 +75,13 @@ const SqlEditor = forwardRef<HTMLTextAreaElement, SqlEditorProps>(function SqlEd
         spellCheck={spellCheck}
         placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
-        onScroll={syncScroll}
+        onScroll={(e) => {
+          syncScroll()
+          onScroll?.(e)
+        }}
         onKeyDown={onKeyDown}
+        onKeyUp={onKeyUp}
+        onClick={onClick}
       />
     </div>
   )
