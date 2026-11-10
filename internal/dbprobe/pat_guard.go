@@ -8,15 +8,25 @@ import (
 )
 
 const (
-	patShowDeniedHint = "PAT 查询不允许该 SHOW 语句"
-	patSecretReadHint = "PAT 查询不允许读取账号、口令或服务器文件"
-	patMetaTableHint  = "PAT 查询不允许读取平台登记信息"
+	patShowDeniedHint    = "PAT 查询不允许该 SHOW 语句"
+	patShowStarRocksHint = "仅 StarRocks 可以执行该 SHOW"
+	patSecretReadHint    = "PAT 查询不允许读取账号、口令或服务器文件"
+	patMetaTableHint     = "PAT 查询不允许读取平台登记信息"
 )
 
 var (
 	rePATSecretRead = regexp.MustCompile(`(?i)(^|[^a-z0-9_])(pg_authid|pg_shadow|pg_read_file|pg_read_binary_file|lo_import|lo_export|dblink_exec|dblink|load_file)([^a-z0-9_]|$)`)
 	rePATMySQLUser  = regexp.MustCompile(`(?i)(^|[^a-z0-9_])mysql\s*\.\s*user([^a-z0-9_]|$)`)
 	rePATMetaTable  = regexp.MustCompile(`(?i)(^|[^a-z0-9_])(tbl_users|tbl_instances|tbl_db_accounts|tbl_client_pats|tbl_global_args|tbl_nacos_admin|tbl_oss_settings)([^a-z0-9_]|$)`)
+	rePATShowWrite  = regexp.MustCompile(`(?i)(^|[^a-z0-9_])(into|outfile|dumpfile)([^a-z0-9_]|$)`)
+)
+
+type patShowClass int
+
+const (
+	patShowDeny patShowClass = iota
+	patShowAny
+	patShowStarRocks
 )
 
 // PATQueryBlocked 返回第一条 PAT 不能执行的语句。浏览器查询不调用。
@@ -28,6 +38,24 @@ func PATQueryBlocked(stmts []string) (idx int, msg string, blocked bool) {
 			}
 			return i, reason, true
 		}
+	}
+	return 0, "", false
+}
+
+// PATStarRocksShowOnly 在已经知道目标库引擎后调用。StarRocks 专有 SHOW 落到其它引擎时拒绝。
+func PATStarRocksShowOnly(stmts []string, dbType string) (idx int, msg string, blocked bool) {
+	if normType(dbType) == "starrocks" {
+		return 0, "", false
+	}
+	for i, stmt := range stmts {
+		if classifyPATShow(stmt) != patShowStarRocks {
+			continue
+		}
+		reason := patShowStarRocksHint
+		if len(stmts) > 1 {
+			reason = fmt.Sprintf("第 %d 条 SQL：%s", i+1, reason)
+		}
+		return i, reason, true
 	}
 	return 0, "", false
 }
@@ -44,35 +72,121 @@ func patQueryBlockReason(stmt string) string {
 	if rePATSecretRead.MatchString(scanned) || rePATMySQLUser.MatchString(scanned) {
 		return patSecretReadHint
 	}
-	switch firstSQLKeyword(body) {
-	case "SHOW":
-		if !patShowAllowed(scanned) {
+	switch classifyPATShow(body) {
+	case patShowDeny:
+		if firstSQLKeyword(body) == "SHOW" {
+			return patShowDeniedHint
+		}
+	case patShowAny, patShowStarRocks:
+		if rePATShowWrite.MatchString(scanned) {
 			return patShowDeniedHint
 		}
 	}
 	return ""
 }
 
-func patShowAllowed(scanned string) bool {
+func classifyPATShow(stmt string) patShowClass {
+	body := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(stmt), ";"))
+	scanned := stripIdentQuotes(maskSQLCommentsAndStrings(body))
 	fields := strings.Fields(scanned)
 	if len(fields) < 2 || !strings.EqualFold(fields[0], "SHOW") {
-		return false
+		return patShowDeny
 	}
 	i := 1
 	if strings.EqualFold(fields[i], "FULL") {
 		i++
 		if i >= len(fields) {
+			return patShowDeny
+		}
+	}
+	rest := fields[i:]
+	if hasShowPrefix(rest, "CREATE", "USER") ||
+		hasShowPrefix(rest, "CREATE", "STORAGE", "VOLUME") ||
+		hasShowPrefix(rest, "GRANTS") ||
+		hasShowPrefix(rest, "USERS") ||
+		hasShowPrefix(rest, "ROLES") ||
+		hasShowPrefix(rest, "PROPERTY") ||
+		hasShowPrefix(rest, "AUTHENTICATION") ||
+		hasShowPrefix(rest, "REPOSITORIES") ||
+		hasShowPrefix(rest, "STORAGE", "VOLUMES") ||
+		hasShowPrefix(rest, "STORAGE", "VOLUME") ||
+		hasShowPrefix(rest, "WHITELIST") ||
+		hasShowPrefix(rest, "SQLBLACKLIST") {
+		return patShowDeny
+	}
+	if hasShowPrefix(rest, "TABLES") ||
+		hasShowPrefix(rest, "DATABASES") ||
+		hasShowPrefix(rest, "SCHEMAS") ||
+		hasShowPrefix(rest, "COLUMNS") ||
+		hasShowPrefix(rest, "FIELDS") ||
+		hasShowPrefix(rest, "INDEX") ||
+		hasShowPrefix(rest, "INDEXES") ||
+		hasShowPrefix(rest, "KEYS") ||
+		hasShowPrefix(rest, "CREATE", "TABLE") ||
+		hasShowPrefix(rest, "CREATE", "VIEW") {
+		return patShowAny
+	}
+	if hasShowPrefix(rest, "TEMPORARY", "PARTITIONS") ||
+		hasShowPrefix(rest, "PARTITIONS") ||
+		hasShowPrefix(rest, "TABLE", "STATUS") ||
+		hasShowPrefix(rest, "TABLET") ||
+		hasShowPrefix(rest, "DATA") ||
+		hasShowPrefix(rest, "CREATE", "MATERIALIZED", "VIEW") ||
+		hasShowPrefix(rest, "MATERIALIZED", "VIEWS") ||
+		hasShowPrefix(rest, "MATERIALIZED", "VIEW") ||
+		hasShowPrefix(rest, "DYNAMIC", "PARTITION", "TABLES") ||
+		hasShowPrefix(rest, "BACKENDS") ||
+		hasShowPrefix(rest, "FRONTENDS") ||
+		hasShowPrefix(rest, "COMPUTE", "NODES") ||
+		hasShowPrefix(rest, "BROKER") ||
+		hasShowPrefix(rest, "PROC") ||
+		hasShowPrefix(rest, "ROUTINE", "LOAD", "TASK") ||
+		hasShowPrefix(rest, "ROUTINE", "LOAD") ||
+		hasShowPrefix(rest, "LOAD") ||
+		hasShowPrefix(rest, "EXPORT") ||
+		hasShowPrefix(rest, "ALTER", "MATERIALIZED", "VIEW") ||
+		hasShowPrefix(rest, "ALTER", "TABLE") ||
+		hasShowPrefix(rest, "ALTER") ||
+		hasShowPrefix(rest, "DELETE") ||
+		hasShowPrefix(rest, "TRANSACTION") ||
+		hasShowPrefix(rest, "PIPES") ||
+		hasShowPrefix(rest, "PIPE") ||
+		hasShowPrefix(rest, "RESOURCE", "GROUPS") ||
+		hasShowPrefix(rest, "RESOURCE", "GROUP") ||
+		hasShowPrefix(rest, "RESOURCES") ||
+		hasShowPrefix(rest, "RESOURCE") ||
+		hasShowPrefix(rest, "CREATE", "CATALOG") ||
+		hasShowPrefix(rest, "CATALOGS") ||
+		hasShowPrefix(rest, "PLUGINS") ||
+		hasShowPrefix(rest, "FUNCTIONS") ||
+		hasShowPrefix(rest, "VARIABLES") ||
+		hasShowPrefix(rest, "PROCESSLIST") ||
+		hasShowPrefix(rest, "RUNNING", "QUERIES") ||
+		hasShowPrefix(rest, "PROFILELIST") ||
+		hasShowPrefix(rest, "QUERY", "PROFILE") ||
+		hasShowPrefix(rest, "WARNINGS") ||
+		hasShowPrefix(rest, "ERRORS") ||
+		hasShowPrefix(rest, "CHARSET") ||
+		hasShowPrefix(rest, "COLLATION") ||
+		hasShowPrefix(rest, "ENGINES") ||
+		hasShowPrefix(rest, "BACKUP") ||
+		hasShowPrefix(rest, "RESTORE") ||
+		hasShowPrefix(rest, "SNAPSHOT") {
+		return patShowStarRocks
+	}
+	return patShowDeny
+}
+
+func hasShowPrefix(fields []string, prefix ...string) bool {
+	if len(fields) < len(prefix) {
+		return false
+	}
+	for i, word := range prefix {
+		if !strings.EqualFold(fields[i], word) {
 			return false
 		}
 	}
-	switch strings.ToUpper(fields[i]) {
-	case "TABLES", "DATABASES", "SCHEMAS", "COLUMNS", "INDEX", "INDEXES":
-		return true
-	case "CREATE":
-		return i+1 < len(fields) && (strings.EqualFold(fields[i+1], "TABLE") || strings.EqualFold(fields[i+1], "VIEW"))
-	default:
-		return false
-	}
+	return true
 }
 
 func stripIdentQuotes(s string) string {

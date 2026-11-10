@@ -197,6 +197,13 @@ func (h *DatabaseHandler) Query(c *gin.Context) {
 		writeQueryErr(c, err)
 		return
 	}
+	if middleware.IsPATAuth(c) {
+		if _, msg, blocked := dbprobe.PATStarRocksShowOnly(stmts, inst.DBType); blocked {
+			h.auditSubmittedQuery(c, req.SQL, rec.DBName, msg, inst, false, 0, 0, reqID)
+			c.JSON(http.StatusBadRequest, gin.H{"message": msg})
+			return
+		}
+	}
 	defLimit, maxLimit := dbprobe.DefaultQueryLimit, dbprobe.MaxQueryLimit
 	if h.Store != nil {
 		defLimit = h.Store.QueryDefaultLimit()

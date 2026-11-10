@@ -41,3 +41,49 @@ func TestPATQueryBlocked(t *testing.T) {
 		t.Fatal("second statement")
 	}
 }
+
+func TestPATStarRocksShow(t *testing.T) {
+	allowed := []string{
+		"SHOW TABLET FROM db_ods.ods_tbl_coupon_code WHERE indexname = 'ods_tbl_coupon_code' ORDER BY TabletId",
+		"SHOW PARTITIONS FROM ods_tbl_coupon_code",
+		"SHOW BACKENDS",
+		"SHOW PROC '/frontends'",
+		"SHOW ROUTINE LOAD",
+		"SHOW DATA FROM t",
+		"SHOW TEMPORARY PARTITIONS FROM t",
+		"SHOW COMPUTE NODES",
+		"SHOW CREATE MATERIALIZED VIEW mv",
+		"SHOW RUNNING QUERIES",
+	}
+	for _, sql := range allowed {
+		if _, msg, blocked := PATQueryBlocked([]string{sql}); blocked {
+			t.Fatalf("%s blocked before engine check: %s", sql, msg)
+		}
+		if _, msg, blocked := PATStarRocksShowOnly([]string{sql}, "starrocks"); blocked {
+			t.Fatalf("starrocks %s blocked: %s", sql, msg)
+		}
+		if _, msg, blocked := PATStarRocksShowOnly([]string{sql}, "mysql"); !blocked || msg != patShowStarRocksHint {
+			t.Fatalf("mysql %s got blocked=%v msg=%q", sql, blocked, msg)
+		}
+	}
+	if _, _, blocked := PATStarRocksShowOnly([]string{"SHOW TABLES"}, "mysql"); blocked {
+		t.Fatal("SHOW TABLES is not starrocks-only")
+	}
+	denied := []string{
+		"SHOW TABLET FROM t INTO OUTFILE '/tmp/a'",
+		"SHOW REPOSITORIES",
+		"SHOW CREATE STORAGE VOLUME v",
+		"SHOW STORAGE VOLUMES",
+		"SHOW USERS",
+		"SHOW ROLES",
+		"SHOW PROPERTY",
+		"SHOW AUTHENTICATION",
+		"SHOW WHITELIST",
+		"SHOW SQLBLACKLIST",
+	}
+	for _, sql := range denied {
+		if _, msg, blocked := PATQueryBlocked([]string{sql}); !blocked || msg != patShowDeniedHint {
+			t.Fatalf("%s got blocked=%v msg=%q", sql, blocked, msg)
+		}
+	}
+}
