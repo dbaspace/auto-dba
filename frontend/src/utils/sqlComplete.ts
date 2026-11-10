@@ -99,15 +99,12 @@ export function sqlContext(sql: string, cursor: number): SqlContext {
   const prev = previousToken(tokens, edit ? edit.start : cursor)
   if (prev && prev.text === '.') {
     const qual = previousToken(tokens, prev.start)
-    return {
-      kind: 'qual',
-      prefix,
-      from,
-      to,
-      tables,
-      qualifier: qual && qual.kind === 'ident' ? qual.text : '',
-      clause: 'other',
+    const qualifier = qual && qual.kind === 'ident' ? qual.text : ''
+    const before = modeAt(tokens, qual ? qual.start : prev.start)
+    if (before.kind === 'table') {
+      return { kind: 'table', prefix, from, to, tables, qualifier, clause: 'from' }
     }
+    return { kind: 'qual', prefix, from, to, tables, qualifier, clause: before.clause }
   }
   const mode = modeAt(tokens, edit ? edit.start : cursor)
   return { kind: mode.kind, prefix, from, to, tables, qualifier: '', clause: mode.clause }
@@ -523,6 +520,37 @@ function rankItems(items: SuggestItem[], prefix: string): SuggestItem[] {
     return a.item.label.localeCompare(b.item.label)
   })
   return scored.map((row) => row.item)
+}
+
+export type SuggestAnchor = 'type' | 'dot' | 'semi' | 'none'
+
+// 自动打开只贴着当前语句：正在输入的名字、刚写完的点号，或同一行分号之前。
+export function suggestAnchor(sql: string, cursor: number, ctx: SqlContext): SuggestAnchor {
+  if (ctx.kind === 'none') return 'none'
+  const inGap = cursor < sql.length && (sql[cursor] === ' ' || sql[cursor] === '\t')
+  if (inGap && beforeStatementSemicolon(sql, cursor)) return 'semi'
+  if (ctx.prefix && /[A-Za-z0-9_\u00A0-\uFFFF]$/.test(ctx.prefix)) return 'type'
+  if (!ctx.prefix && cursor > 0 && sql[cursor - 1] === '.') return 'dot'
+  if (beforeStatementSemicolon(sql, cursor)) return 'semi'
+  return 'none'
+}
+
+function beforeStatementSemicolon(sql: string, cursor: number): boolean {
+  let i = cursor
+  while (i < sql.length && (sql[i] === ' ' || sql[i] === '\t')) i++
+  return i < sql.length && sql[i] === ';'
+}
+
+// 当前名字还能不能再长出别的候选项。已经写完整时没有更长的名字。
+export function extendsPrefix(items: Pick<SuggestItem, 'insert'>[], prefix: string): boolean {
+  const p = prefix.toLowerCase()
+  if (!p) return items.length > 0
+  return items.some((item) => {
+    const raw = item.insert.toLowerCase()
+    const name = raw.split('.').pop() || raw
+    const bare = name.endsWith('(') ? name.slice(0, -1) : name
+    return bare.startsWith(p) && bare.length > p.length
+  })
 }
 
 export function applySuggestion(sql: string, ctx: SqlContext, insert: string): { sql: string; cursor: number } {

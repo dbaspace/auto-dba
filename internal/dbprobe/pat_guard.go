@@ -85,10 +85,18 @@ func patQueryBlockReason(stmt string) string {
 	return ""
 }
 
+func isAdminShow(sql string) bool {
+	fields := strings.Fields(stripIdentQuotes(maskSQLCommentsAndStrings(sql)))
+	return len(fields) >= 2 && strings.EqualFold(fields[0], "ADMIN") && strings.EqualFold(fields[1], "SHOW")
+}
+
 func classifyPATShow(stmt string) patShowClass {
 	body := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(stmt), ";"))
 	scanned := stripIdentQuotes(maskSQLCommentsAndStrings(body))
 	fields := strings.Fields(scanned)
+	if isAdminShow(body) {
+		return patShowStarRocks
+	}
 	if len(fields) < 2 || !strings.EqualFold(fields[0], "SHOW") {
 		return patShowDeny
 	}
@@ -126,55 +134,7 @@ func classifyPATShow(stmt string) patShowClass {
 		hasShowPrefix(rest, "CREATE", "VIEW") {
 		return patShowAny
 	}
-	if hasShowPrefix(rest, "TEMPORARY", "PARTITIONS") ||
-		hasShowPrefix(rest, "PARTITIONS") ||
-		hasShowPrefix(rest, "TABLE", "STATUS") ||
-		hasShowPrefix(rest, "TABLET") ||
-		hasShowPrefix(rest, "DATA") ||
-		hasShowPrefix(rest, "CREATE", "MATERIALIZED", "VIEW") ||
-		hasShowPrefix(rest, "MATERIALIZED", "VIEWS") ||
-		hasShowPrefix(rest, "MATERIALIZED", "VIEW") ||
-		hasShowPrefix(rest, "DYNAMIC", "PARTITION", "TABLES") ||
-		hasShowPrefix(rest, "BACKENDS") ||
-		hasShowPrefix(rest, "FRONTENDS") ||
-		hasShowPrefix(rest, "COMPUTE", "NODES") ||
-		hasShowPrefix(rest, "BROKER") ||
-		hasShowPrefix(rest, "PROC") ||
-		hasShowPrefix(rest, "ROUTINE", "LOAD", "TASK") ||
-		hasShowPrefix(rest, "ROUTINE", "LOAD") ||
-		hasShowPrefix(rest, "LOAD") ||
-		hasShowPrefix(rest, "EXPORT") ||
-		hasShowPrefix(rest, "ALTER", "MATERIALIZED", "VIEW") ||
-		hasShowPrefix(rest, "ALTER", "TABLE") ||
-		hasShowPrefix(rest, "ALTER") ||
-		hasShowPrefix(rest, "DELETE") ||
-		hasShowPrefix(rest, "TRANSACTION") ||
-		hasShowPrefix(rest, "PIPES") ||
-		hasShowPrefix(rest, "PIPE") ||
-		hasShowPrefix(rest, "RESOURCE", "GROUPS") ||
-		hasShowPrefix(rest, "RESOURCE", "GROUP") ||
-		hasShowPrefix(rest, "RESOURCES") ||
-		hasShowPrefix(rest, "RESOURCE") ||
-		hasShowPrefix(rest, "CREATE", "CATALOG") ||
-		hasShowPrefix(rest, "CATALOGS") ||
-		hasShowPrefix(rest, "PLUGINS") ||
-		hasShowPrefix(rest, "FUNCTIONS") ||
-		hasShowPrefix(rest, "VARIABLES") ||
-		hasShowPrefix(rest, "PROCESSLIST") ||
-		hasShowPrefix(rest, "RUNNING", "QUERIES") ||
-		hasShowPrefix(rest, "PROFILELIST") ||
-		hasShowPrefix(rest, "QUERY", "PROFILE") ||
-		hasShowPrefix(rest, "WARNINGS") ||
-		hasShowPrefix(rest, "ERRORS") ||
-		hasShowPrefix(rest, "CHARSET") ||
-		hasShowPrefix(rest, "COLLATION") ||
-		hasShowPrefix(rest, "ENGINES") ||
-		hasShowPrefix(rest, "BACKUP") ||
-		hasShowPrefix(rest, "RESTORE") ||
-		hasShowPrefix(rest, "SNAPSHOT") {
-		return patShowStarRocks
-	}
-	return patShowDeny
+	return patShowStarRocks
 }
 
 func hasShowPrefix(fields []string, prefix ...string) bool {

@@ -87,6 +87,11 @@ func IsReadOnlySQL(raw string) error {
 		return rejectNestedWrite(rest)
 	case "SHOW", "DESC", "DESCRIBE":
 		return nil
+	case "ADMIN":
+		if isAdminShow(rest) {
+			return nil
+		}
+		return fmt.Errorf("查询接口仅允许只读语句，禁止 %s/DDL/DML", kw)
 	case "TRUNCATE", "INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE",
 		"REPLACE", "MERGE", "GRANT", "REVOKE", "CALL", "DO", "LOAD", "COPY",
 		"VACUUM", "ANALYZE", "REINDEX", "CLUSTER", "COMMENT", "SET", "RESET",

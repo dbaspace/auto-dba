@@ -4,7 +4,9 @@ import {
   applySuggestion,
   buildSuggestions,
   dialectOf,
+  extendsPrefix,
   sqlContext,
+  suggestAnchor,
   type HintCol,
   type SqlContext,
   type SuggestItem,
@@ -94,8 +96,8 @@ export function useQuerySuggest(envRef: { current: SuggestEnv }, getBox: () => H
     const sql = el.value
     const cursor = el.selectionStart ?? sql.length
     const ctx = sqlContext(sql, cursor)
-    const typed = /[A-Za-z0-9_\u00A0-\uFFFF]$/.test(ctx.prefix) || ctx.kind === 'qual' || ctx.kind === 'column'
-    if (ctx.kind === 'none' || (reason === 'type' && !typed)) {
+    const anchor = suggestAnchor(sql, cursor, ctx)
+    if (ctx.kind === 'none' || (reason === 'type' && anchor === 'none')) {
       close()
       return
     }
@@ -109,8 +111,9 @@ export function useQuerySuggest(envRef: { current: SuggestEnv }, getBox: () => H
         : ctx.tables
       for (const ref of names) loadColumns(env.dbId, ref.name)
     }
+    const useCtx = anchor === 'semi' ? { ...ctx, prefix: '', from: cursor, to: cursor } : ctx
     const next = buildSuggestions({
-      ctx,
+      ctx: useCtx,
       tableNames: env.tableNames,
       columns: columnsRecord(),
       dialect: dialectOf(env.dbType),
@@ -120,7 +123,11 @@ export function useQuerySuggest(envRef: { current: SuggestEnv }, getBox: () => H
       close()
       return
     }
-    ctxRef.current = ctx
+    if (reason === 'type' && anchor === 'type' && !extendsPrefix(next, ctx.prefix)) {
+      close()
+      return
+    }
+    ctxRef.current = useCtx
     setItems(next)
     if (reason !== 'cache') setActive(0)
     setOpen(true)

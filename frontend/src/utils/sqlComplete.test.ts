@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applySuggestion, buildSuggestions, quoteIdent, sqlContext } from './sqlComplete'
+import { applySuggestion, buildSuggestions, extendsPrefix, quoteIdent, sqlContext, suggestAnchor } from './sqlComplete'
 
 const cols = {
   debezium_signal: [
@@ -128,6 +128,55 @@ describe('sqlContext', () => {
       dialect: 'mysql',
     })
     expect(byComment.some((item) => item.insert === 'id')).toBe(false)
+  })
+
+  it('suggests tables after a database dot in FROM', () => {
+    const sql = 'select * from db_ods.'
+    const ctx = sqlContext(sql, sql.length)
+    expect(ctx.kind).toBe('table')
+    expect(ctx.prefix).toBe('')
+    const got = labels(sql)
+    expect(got).toContain('debezium_signal')
+    expect(got).not.toContain('id')
+    const typed = 'select * from db_ods.de'
+    expect(sqlContext(typed, typed.length).kind).toBe('table')
+    expect(sqlContext(typed, typed.length).prefix).toBe('de')
+    expect(labels(typed)[0]).toBe('debezium_signal')
+    const next = applySuggestion(typed, sqlContext(typed, typed.length), 'debezium_signal')
+    expect(next.sql).toBe('select * from db_ods.debezium_signal')
+  })
+
+  it('keeps columns after an alias dot', () => {
+    const sql = 'select id from t s where s.'
+    expect(sqlContext(sql, sql.length).kind).toBe('qual')
+    expect(labels(sql)).toContain('name')
+  })
+
+  it('stops when the column name is already complete', () => {
+    const sql = 'select id from t where name'
+    const ctx = sqlContext(sql, sql.length)
+    const items = buildSuggestions({ ctx, tableNames: ['t'], columns: cols, dialect: 'mysql' })
+    expect(extendsPrefix(items, ctx.prefix)).toBe(false)
+    expect(extendsPrefix(items, 'n')).toBe(true)
+  })
+
+  it('opens only beside the current statement', () => {
+    const done = 'select id from t where name ;'
+    const semi = done.indexOf(';')
+    expect(suggestAnchor(done, semi, sqlContext(done, semi))).toBe('semi')
+    const one = 'select id from t ;'
+    const oneSpace = one.indexOf(';') - 1
+    expect(suggestAnchor(one, oneSpace, sqlContext(one, oneSpace))).toBe('semi')
+    const spaced = 'select id from t  ;'
+    const atSpace = spaced.indexOf(';') - 1
+    expect(suggestAnchor(spaced, atSpace, sqlContext(spaced, atSpace))).toBe('semi')
+    const blank = 'select id from t\n\n'
+    expect(suggestAnchor(blank, blank.length, sqlContext(blank, blank.length))).toBe('none')
+    const after = 'select id from t;\n'
+    expect(suggestAnchor(after, after.length, sqlContext(after, after.length))).toBe('none')
+    const mid = 'select * from t where  id = 1'
+    const gap = mid.indexOf('  ') + 1
+    expect(suggestAnchor(mid, gap + 1, sqlContext(mid, gap + 1))).toBe('none')
   })
 
   it('replaces the typed prefix', () => {

@@ -54,6 +54,13 @@ func TestPATStarRocksShow(t *testing.T) {
 		"SHOW COMPUTE NODES",
 		"SHOW CREATE MATERIALIZED VIEW mv",
 		"SHOW RUNNING QUERIES",
+		"SHOW SESSION VARIABLES",
+		"SHOW GLOBAL VARIABLES",
+		"SHOW STATS META",
+		"SHOW HISTOGRAM META",
+		"SHOW ANALYZE JOB",
+		"ADMIN SHOW CONFIG",
+		"ADMIN SHOW REPLICA STATUS FROM t",
 	}
 	for _, sql := range allowed {
 		if _, msg, blocked := PATQueryBlocked([]string{sql}); blocked {
@@ -80,10 +87,17 @@ func TestPATStarRocksShow(t *testing.T) {
 		"SHOW AUTHENTICATION",
 		"SHOW WHITELIST",
 		"SHOW SQLBLACKLIST",
+		"ADMIN SHOW CONFIG INTO OUTFILE '/tmp/a'",
 	}
 	for _, sql := range denied {
 		if _, msg, blocked := PATQueryBlocked([]string{sql}); !blocked || msg != patShowDeniedHint {
 			t.Fatalf("%s got blocked=%v msg=%q", sql, blocked, msg)
 		}
+	}
+	if err := IsReadOnlySQL("ADMIN SET FRONTEND CONFIG ('x' = 'y')"); err == nil {
+		t.Fatal("ADMIN SET must stay rejected")
+	}
+	if err := IsReadOnlySQL("ADMIN SHOW CONFIG"); err != nil {
+		t.Fatal(err)
 	}
 }
