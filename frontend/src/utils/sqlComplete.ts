@@ -501,20 +501,37 @@ function equalitySnippets(tables: SqlTableRef[], columns: Record<string, HintCol
   return out
 }
 
+function bareIdent(item: Pick<SuggestItem, 'insert'>): string {
+  const raw = item.insert.toLowerCase()
+  const name = raw.split('.').pop() || raw
+  return name.endsWith('(') ? name.slice(0, -1) : name
+}
+
+// 0 开头，1 下划线分段开头，2 名字中间包含。对不上返回 -1。
+function identTier(bare: string, prefix: string): number {
+  if (!prefix || bare.startsWith(prefix)) return 0
+  if (bare.split('_').some((part) => part.startsWith(prefix))) return 1
+  if (bare.includes(prefix)) return 2
+  return -1
+}
+
 function rankItems(items: SuggestItem[], prefix: string): SuggestItem[] {
   const p = prefix.toLowerCase()
   const order: Record<SuggestGroup, number> = { keyword: 0, table: 1, column: 2, snippet: 3 }
   const emptyOrder: Record<SuggestGroup, number> = { column: 0, table: 1, snippet: 2, keyword: 3 }
   const scored = items.map((item) => {
+    if (item.group === 'table' || item.group === 'column') {
+      const tier = identTier(bareIdent(item), p)
+      return { item, tier, has: tier >= 0 }
+    }
     const label = item.label.toLowerCase()
     const insert = item.insert.toLowerCase()
-    const name = item.group === 'column' ? (insert.split('.').pop() || insert) : label
-    const head = name.startsWith(p) || insert.startsWith(p)
-    const has = !p || head || (item.group !== 'column' && label.includes(p)) || insert.includes(p)
-    return { item, head, has }
+    const head = !p || label.startsWith(p) || insert.startsWith(p)
+    const has = head || label.includes(p) || insert.includes(p)
+    return { item, tier: head ? 0 : 2, has }
   }).filter((row) => row.has)
   scored.sort((a, b) => {
-    if (a.head !== b.head) return a.head ? -1 : 1
+    if (a.tier !== b.tier) return a.tier - b.tier
     const g = (p ? order : emptyOrder)[a.item.group] - (p ? order : emptyOrder)[b.item.group]
     if (g) return g
     return a.item.label.localeCompare(b.item.label)
@@ -557,16 +574,21 @@ function beforeStatementSemicolon(sql: string, cursor: number): boolean {
   return i < sql.length && sql[i] === ';'
 }
 
-// 当前名字还能不能再长出别的候选项。已经写完整时没有更长的名字。
+// 还有更长的开头，或名字中间仍包含这段输入时保持打开。输入已经等于某个候选、且没有更长的开头时关掉。
 export function extendsPrefix(items: Pick<SuggestItem, 'insert'>[], prefix: string): boolean {
   const p = prefix.toLowerCase()
   if (!p) return items.length > 0
-  return items.some((item) => {
-    const raw = item.insert.toLowerCase()
-    const name = raw.split('.').pop() || raw
-    const bare = name.endsWith('(') ? name.slice(0, -1) : name
-    return bare.startsWith(p) && bare.length > p.length
-  })
+  let exact = false
+  let longerPrefix = false
+  let contain = false
+  for (const item of items) {
+    const bare = bareIdent(item)
+    if (bare === p) exact = true
+    else if (bare.startsWith(p)) longerPrefix = true
+    else if (bare.includes(p)) contain = true
+  }
+  if (longerPrefix) return true
+  return contain && !exact
 }
 
 export function applySuggestion(sql: string, ctx: SqlContext, insert: string): { sql: string; cursor: number } {

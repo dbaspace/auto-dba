@@ -176,12 +176,59 @@ describe('sqlContext', () => {
     expect(suggestAnchor(finished, finished.length, sqlContext(finished, finished.length))).toBe('none')
   })
 
+  it('matches a table name by a middle segment', () => {
+    const sql = 'select * from shop'
+    const ctx = sqlContext(sql, sql.length)
+    const tables = ['dim_item_commission_user', 'dim_shop_real_item_prep_station', 'ods_bo_shop_tbl_area', 'ods_corporation']
+    const items = buildSuggestions({ ctx, tableNames: tables, columns: {}, dialect: 'mysql' })
+    const names = items.filter((item) => item.group === 'table').map((item) => item.insert)
+    expect(names).toContain('dim_shop_real_item_prep_station')
+    expect(names).toContain('ods_bo_shop_tbl_area')
+    expect(names).not.toContain('ods_corporation')
+    expect(extendsPrefix(items, 'shop')).toBe(true)
+  })
+
+  it('ranks prefix table names before names that only contain the text', () => {
+    const sql = 'select * from dim'
+    const ctx = sqlContext(sql, sql.length)
+    const items = buildSuggestions({
+      ctx,
+      tableNames: ['tbl_dim_area_view', 'dim_item_commission_user', 'ods_corporation'],
+      columns: {},
+      dialect: 'mysql',
+    })
+    const names = items.filter((item) => item.group === 'table').map((item) => item.insert)
+    expect(names.indexOf('dim_item_commission_user')).toBeLessThan(names.indexOf('tbl_dim_area_view'))
+    expect(names).not.toContain('ods_corporation')
+  })
+
+  it('matches a column by the middle of its name', () => {
+    const sql = 'select * from t where discount'
+    const ctx = sqlContext(sql, sql.length)
+    const items = buildSuggestions({
+      ctx,
+      tableNames: ['t'],
+      columns: { t: [{ name: 'actual_discount_amount', comment: '优惠' }, { name: 'id' }] },
+      dialect: 'mysql',
+    })
+    expect(items.some((item) => item.insert === 'actual_discount_amount')).toBe(true)
+    expect(items.some((item) => item.insert === 'id')).toBe(false)
+    expect(extendsPrefix(items, 'discount')).toBe(true)
+  })
+
   it('stops when the column name is already complete', () => {
     const sql = 'select id from t where name'
     const ctx = sqlContext(sql, sql.length)
     const items = buildSuggestions({ ctx, tableNames: ['t'], columns: cols, dialect: 'mysql' })
     expect(extendsPrefix(items, ctx.prefix)).toBe(false)
     expect(extendsPrefix(items, 'n')).toBe(true)
+    const withLonger = buildSuggestions({
+      ctx,
+      tableNames: ['t'],
+      columns: { t: [{ name: 'name' }, { name: 'username' }] },
+      dialect: 'mysql',
+    })
+    expect(extendsPrefix(withLonger, 'name')).toBe(false)
   })
 
   it('opens only beside the current statement', () => {
