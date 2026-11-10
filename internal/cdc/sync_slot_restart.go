@@ -19,28 +19,55 @@ const (
 	connectTask0HTTPTimeout = 30 * time.Second
 )
 
-// DatabaseDialHost 取该库在实例上登记的域名。没有登记则失败，不回退连接主机。
-func DatabaseDialHost(dbs []store.Database, instanceID, dbName string) (string, error) {
-	instanceID = strings.TrimSpace(instanceID)
-	dbName = strings.TrimSpace(dbName)
-	if instanceID == "" || dbName == "" {
-		return "", fmt.Errorf("库 %s 未登记域名", dbName)
-	}
+// FillSlotBoundHosts 按已登记库给每条槽填展示用的绑定域名。对不上或库没有绑定时留空，不回退连接主机和实例域名列表。
+func FillSlotBoundHosts(rows []SlotRow, insts []store.Instance, dbs []store.Database) []SlotRow {
+	byInst := map[string]map[string]string{}
 	for _, db := range dbs {
-		if db.InstanceID != instanceID || !strings.EqualFold(strings.TrimSpace(db.DBName), dbName) {
+		host := databaseBoundHost(db)
+		instID := strings.TrimSpace(db.InstanceID)
+		name := strings.ToLower(strings.TrimSpace(db.DBName))
+		if host == "" || instID == "" || name == "" {
 			continue
 		}
-		for _, d := range db.Domains {
-			if s := strings.TrimSpace(d); s != "" {
-				return s, nil
-			}
+		m := byInst[instID]
+		if m == nil {
+			m = map[string]string{}
+			byInst[instID] = m
 		}
-		return "", fmt.Errorf("库 %s 未登记域名", dbName)
+		if _, ok := m[name]; !ok {
+			m[name] = host
+		}
 	}
-	return "", fmt.Errorf("库 %s 未登记域名", dbName)
+	for i := range rows {
+		rows[i].BoundHost = ""
+		inst := FindInstanceForSlot(rows[i].SyncSlot, insts)
+		if inst == nil {
+			continue
+		}
+		rows[i].BoundHost = byInst[inst.ID][strings.ToLower(strings.TrimSpace(rows[i].Database))]
+	}
+	return rows
 }
 
-// RestartSyncSlotItem 同步列表单条重启：按库域名连业务库写 heartbeat，再 POST .../tasks/0/restart。
+// databaseBoundHost 只取该库自己的绑定：先 domains，再标签 domain=。
+func databaseBoundHost(db store.Database) string {
+	for _, d := range db.Domains {
+		if s := strings.TrimSpace(d); s != "" {
+			return s
+		}
+	}
+	for _, raw := range db.Tags {
+		k, v, ok := splitInstanceTag(raw)
+		if ok && strings.EqualFold(k, "domain") {
+			if s := strings.TrimSpace(v); s != "" {
+				return s
+			}
+		}
+	}
+	return ""
+}
+
+// RestartSyncSlotItem 同步列表单条重启：按连接主机连业务库写 heartbeat，再 POST .../tasks/0/restart。
 // 不走 CDC 编排，也不调用 includeTasks 全量重启，不改实例连接主机和 CDC 任务记录。
 func RestartSyncSlotItem(ctx context.Context, inst *store.Instance, secret, dbName, connectBase, connectorName, dialHost string) error {
 	dbName = strings.TrimSpace(dbName)
@@ -56,7 +83,7 @@ func RestartSyncSlotItem(ctx context.Context, inst *store.Instance, secret, dbNa
 		return fmt.Errorf("connector 名称为空")
 	}
 	if dialHost == "" {
-		return fmt.Errorf("库 %s 未登记域名", dbName)
+		return fmt.Errorf("未配置连接主机")
 	}
 	base := NormalizeConnectBaseURL(connectBase)
 	if base == "" {

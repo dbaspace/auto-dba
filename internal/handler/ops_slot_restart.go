@@ -214,11 +214,6 @@ func (h *SlotHandler) runSlotRestart(parent context.Context, tid string, job *sl
 		h.finishRestartJob(tid, job, fmt.Sprintf("加载实例失败：%v", err))
 		return
 	}
-	dbs, err := h.Store.ListDatabasesInTenant(tid, "", "")
-	if err != nil {
-		h.finishRestartJob(tid, job, fmt.Sprintf("加载已登记库失败：%v", err))
-		return
-	}
 
 	for i := range items {
 		if i > 0 {
@@ -231,7 +226,7 @@ func (h *SlotHandler) runSlotRestart(parent context.Context, tid string, job *sl
 		default:
 		}
 
-		label, result, detail := h.restartOneSlot(ctx, tid, items[i], tasks, insts, dbs)
+		label, result, detail := h.restartOneSlot(ctx, tid, items[i], tasks, insts)
 		job.mu.Lock()
 		job.Done = i + 1
 		if job.Total > 0 {
@@ -284,7 +279,7 @@ func (h *SlotHandler) finishRestartJob(tid string, job *slotRestartJob, msg stri
 }
 
 // restartOneSlot 返回展示名、结果(ok|skip|fail)、日志详情。
-func (h *SlotHandler) restartOneSlot(ctx context.Context, tid string, item slotRestartItem, tasks []store.CDCTask, insts []store.Instance, dbs []store.Database) (label, result, detail string) {
+func (h *SlotHandler) restartOneSlot(ctx context.Context, tid string, item slotRestartItem, tasks []store.CDCTask, insts []store.Instance) (label, result, detail string) {
 	slot, how, errMsg := h.resolveRestartSlot(tid, item)
 	if slot == nil {
 		label = restartItemLabel(item)
@@ -314,7 +309,7 @@ func (h *SlotHandler) restartOneSlot(ctx context.Context, tid string, item slotR
 	if inst == nil {
 		return label, "fail", "失败：未找到匹配实例凭证"
 	}
-	dialHost, derr := cdc.DatabaseDialHost(dbs, inst.ID, slot.Database)
+	dialHost, derr := cdc.CollectHost(inst)
 	if derr != nil {
 		return label, "fail", "失败：" + derr.Error()
 	}

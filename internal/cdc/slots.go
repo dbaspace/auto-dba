@@ -52,6 +52,8 @@ type SlotRow struct {
 	TaskID        string `json:"task_id,omitempty"`
 	Topic         string `json:"topic,omitempty"`
 	Heartbeat     string `json:"heartbeat,omitempty"`
+	// BoundHost 只给列表展示该库已登记的绑定域名。槽的 Host 仍是连接主机，重启查找不使用本字段。
+	BoundHost string `json:"bound_host,omitempty"`
 }
 
 // SlotTagDomain 采集拨号地址只取实例标签 domain=。有多条时用第一条非空值。没有则失败，不读连接主机。
@@ -80,7 +82,7 @@ func splitInstanceTag(raw string) (key, value string, ok bool) {
 	return strings.TrimSpace(raw[:i]), strings.TrimSpace(raw[i+1:]), true
 }
 
-// CollectHost 采集拨号只用连接主机的第一段。没有连接主机就失败，不用域名。
+// CollectHost 只取连接主机的第一段。没有连接主机就失败，不读域名列表。
 func CollectHost(inst *store.Instance) (string, error) {
 	if inst == nil {
 		return "", fmt.Errorf("实例不存在")
@@ -95,18 +97,33 @@ func CollectHost(inst *store.Instance) (string, error) {
 	return h, nil
 }
 
+// collectDialHost 采集只拨两处地址：连接主机优先；没有连接主机时才用标签里第一条 domain=。
+// 实例域名列表、domain_name、已登记库绑定域名都不能拿来采集，否则同一台库会被连几十次。
+func collectDialHost(inst *store.Instance) (string, error) {
+	if inst == nil {
+		return "", fmt.Errorf("实例不存在")
+	}
+	if h, err := CollectHost(inst); err == nil {
+		return h, nil
+	}
+	if v, err := SlotTagDomain(inst); err == nil {
+		return v, nil
+	}
+	return "", fmt.Errorf("未配置连接主机，标签也没有 domain")
+}
+
 // SlotCollectPlan 是一次采集里某台实例要不要连。同一连接主机和端口只采第一次。
 type SlotCollectPlan struct {
 	Host string
 	Skip string
 }
 
-// PlanSlotCollect 按连接主机加端口去重。没有连接主机、或该地址已经排过的实例记入 Skip。
+// PlanSlotCollect 按采集拨号地址加端口去重。域名列表不参与，同一地址只采第一次。
 func PlanSlotCollect(insts []store.Instance) []SlotCollectPlan {
 	out := make([]SlotCollectPlan, len(insts))
 	seen := map[string]string{}
 	for i := range insts {
-		host, err := CollectHost(&insts[i])
+		host, err := collectDialHost(&insts[i])
 		if err != nil {
 			out[i].Skip = err.Error()
 			continue
@@ -127,32 +144,28 @@ func PlanSlotCollect(insts []store.Instance) []SlotCollectPlan {
 	return out
 }
 
-// CollectReplaceAliases 覆盖槽行时带上连接主机、域名和标签 domain=，好把以前按域名记下的同名槽改回来。
+// CollectReplaceAliases 覆盖旧槽时只认连接主机和标签 domain=。不把域名列表放进别名，避免按每个域名再对一次槽。
 func CollectReplaceAliases(inst *store.Instance) []string {
-	out := InstanceHostAliases(inst)
-	seen := map[string]struct{}{}
-	for _, h := range out {
-		seen[strings.ToLower(h)] = struct{}{}
-	}
-	add := func(raw string) {
-		raw = strings.TrimSpace(raw)
-		if raw == "" {
-			return
-		}
-		key := strings.ToLower(raw)
-		if _, ok := seen[key]; ok {
-			return
-		}
-		seen[key] = struct{}{}
-		out = append(out, raw)
-	}
 	if inst == nil {
-		return out
+		return nil
 	}
-	for _, d := range inst.Domains {
-		add(d)
+	var out []string
+	seen := map[string]struct{}{}
+	add := func(raw string) {
+		for _, p := range strings.Split(raw, ",") {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			key := strings.ToLower(p)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, p)
+		}
 	}
-	add(inst.DomainName)
+	add(inst.Host)
 	for _, raw := range inst.Tags {
 		k, v, ok := splitInstanceTag(raw)
 		if ok && strings.EqualFold(k, "domain") {
@@ -163,9 +176,9 @@ func CollectReplaceAliases(inst *store.Instance) []string {
 }
 
 // CollectInstanceSlots 对单个实例只建一条连接，读完即关。dbNames 是 postgres 库连不上时的备选库，仍只查复制槽目录。
-// 拨号地址用连接主机，不用域名。
+// 拨号地址与 PlanSlotCollect 相同：连接主机，没有时才用标签 domain=。
 func CollectInstanceSlots(ctx context.Context, inst *store.Instance, secret string, dbNames []string) ([]store.SyncSlot, error) {
-	host, err := CollectHost(inst)
+	host, err := collectDialHost(inst)
 	if err != nil {
 		return nil, err
 	}

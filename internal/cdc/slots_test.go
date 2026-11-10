@@ -150,6 +150,51 @@ func TestPlanSlotCollectOncePerHost(t *testing.T) {
 	}
 }
 
+func TestPlanSlotCollectIgnoresDomainList(t *testing.T) {
+	domains := []string{"pg.delay.bj.restosuite.shop", "pg.bill.bj.restosuite.shop", "pg.report.bj.restosuite.shop"}
+	insts := []store.Instance{{
+		ID: "ai", Name: "ai-beijing-pg", Host: "10.72.0.5", Port: 5432,
+		Domains: domains, DomainName: "pg.bj.restosuite.shop",
+		Tags: []string{"domain=pg.bj.restosuite.shop", "idc=ai-beijing"},
+	}}
+	plans := PlanSlotCollect(insts)
+	if len(plans) != 1 || plans[0].Skip != "" || plans[0].Host != "10.72.0.5" {
+		t.Fatalf("plan = %+v", plans)
+	}
+	for _, name := range append(append([]string{}, domains...), "pg.bj.restosuite.shop") {
+		if plans[0].Host == name {
+			t.Fatalf("dialed domain %s", name)
+		}
+	}
+	aliases := CollectReplaceAliases(&insts[0])
+	joined := strings.ToLower(strings.Join(aliases, ","))
+	if !strings.Contains(joined, "10.72.0.5") || !strings.Contains(joined, "pg.bj.restosuite.shop") {
+		t.Fatalf("aliases = %v", aliases)
+	}
+	for _, name := range domains {
+		if strings.Contains(joined, strings.ToLower(name)) {
+			t.Fatalf("domain list leaked into aliases: %v", aliases)
+		}
+	}
+}
+
+func TestPlanSlotCollectUsesTagDomainWhenNoHost(t *testing.T) {
+	insts := []store.Instance{{
+		ID: "x", Name: "nohost", Port: 5432,
+		Domains: []string{"pg.report.bj.restosuite.shop", "pg.bill.bj.restosuite.shop"},
+		Tags:    []string{"domain=pg.bj.restosuite.shop"},
+	}}
+	plans := PlanSlotCollect(insts)
+	if plans[0].Skip != "" || plans[0].Host != "pg.bj.restosuite.shop" {
+		t.Fatalf("tag fallback = %+v", plans[0])
+	}
+	for _, name := range insts[0].Domains {
+		if plans[0].Host == name {
+			t.Fatalf("used domain list entry %s", name)
+		}
+	}
+}
+
 func TestResolveSlotConnectorUsesConnectMeta(t *testing.T) {
 	slot := store.SyncSlot{
 		Host: "pg.bj.restosuite.cn", Port: 5432, SlotName: "bj_slot_db_data_front", Database: "db_data_front",

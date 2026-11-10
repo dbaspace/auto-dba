@@ -21,6 +21,7 @@ type SlotRow = {
   connect_base?: string
   task_name?: string
   topic?: string
+  bound_host?: string
 }
 
 type CollectJob = {
@@ -360,7 +361,7 @@ export default function SlotList() {
         const mb = Number(row.lag_bytes || 0) / 1024 / 1024
         if (mb < applied.lag) return false
       }
-      if (host && !`${row.host || ''}`.toLowerCase().includes(host)) return false
+      if (host && !`${row.bound_host || ''}`.toLowerCase().includes(host)) return false
       if (task && !`${row.task_name || ''}`.toLowerCase().includes(task)) return false
       return true
     })
@@ -499,7 +500,7 @@ export default function SlotList() {
               onHeaderCell: () => ({ className: 'slot-host-col' }),
               onCell: () => ({ className: 'slot-peek-cell slot-host-col' }),
               render: (_, row: SlotRow) => (
-                <SlotPeek title="实例(主机:端口)" value={row.host ? `${row.host}:${row.port}` : ''} onView={openCell} />
+                <SlotPeek title="实例(主机:端口)" value={row.bound_host ? `${row.bound_host}:${row.port}` : ''} onView={openCell} />
               ),
             },
             {
