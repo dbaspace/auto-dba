@@ -450,11 +450,9 @@ export function buildSuggestions(opts: {
       const dup = (seen.get(col.name.toLowerCase()) || 0) > 1 && ctx.kind !== 'qual'
       const qual = ref.alias || ref.name
       const insert = dup ? quoteIdent(qual, dialect) + '.' + quoteIdent(col.name, dialect) : quoteIdent(col.name, dialect)
-      const bits = [col.data_type || '', col.nullable ? '可空' : '', col.comment || ''].filter(Boolean)
       items.push({
         group: 'column',
-        label: dup ? `${col.name}  ${qual}` : col.name,
-        detail: bits.join(' · '),
+        label: columnSuggestLabel(col.name, col.comment, dup ? qual : ''),
         insert,
       })
     }
@@ -462,7 +460,16 @@ export function buildSuggestions(opts: {
       items.push(...equalitySnippets(ctx.tables, opts.columns, dialect))
     }
   }
+  if (!prefix && opts.loading && (ctx.kind === 'column' || ctx.kind === 'qual') && !items.some((item) => item.group === 'column')) {
+    return []
+  }
   return rankItems(items, prefix).slice(0, 50)
+}
+
+function columnSuggestLabel(name: string, comment: string | undefined, qual: string): string {
+  const note = String(comment || '').trim()
+  const base = note ? `${name}-${note}` : name
+  return qual ? `${base}  ${qual}` : base
 }
 
 function matchQualifier(tables: SqlTableRef[], qualifier: string): SqlTableRef[] {
@@ -500,16 +507,18 @@ function equalitySnippets(tables: SqlTableRef[], columns: Record<string, HintCol
 function rankItems(items: SuggestItem[], prefix: string): SuggestItem[] {
   const p = prefix.toLowerCase()
   const order: Record<SuggestGroup, number> = { keyword: 0, table: 1, column: 2, snippet: 3 }
+  const emptyOrder: Record<SuggestGroup, number> = { column: 0, table: 1, snippet: 2, keyword: 3 }
   const scored = items.map((item) => {
     const label = item.label.toLowerCase()
     const insert = item.insert.toLowerCase()
-    const head = label.startsWith(p) || insert.startsWith(p) || insert.split('.').pop()!.startsWith(p)
-    const has = !p || head || label.includes(p) || insert.includes(p)
+    const name = item.group === 'column' ? (insert.split('.').pop() || insert) : label
+    const head = name.startsWith(p) || insert.startsWith(p)
+    const has = !p || head || (item.group !== 'column' && label.includes(p)) || insert.includes(p)
     return { item, head, has }
   }).filter((row) => row.has)
   scored.sort((a, b) => {
     if (a.head !== b.head) return a.head ? -1 : 1
-    const g = order[a.item.group] - order[b.item.group]
+    const g = (p ? order : emptyOrder)[a.item.group] - (p ? order : emptyOrder)[b.item.group]
     if (g) return g
     return a.item.label.localeCompare(b.item.label)
   })

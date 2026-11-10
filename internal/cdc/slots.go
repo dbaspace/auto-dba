@@ -367,14 +367,14 @@ func AttachSlotCDC(slots []store.SyncSlot, tasks []store.CDCTask, insts []store.
 			if !slotHostMatches(slot.Host, slot.Port, c.inst) {
 				continue
 			}
-			name, base, topic, score := matchTaskSlot(slot, c.task, c.extra)
+			name, publication, base, topic, score := matchTaskSlot(slot, c.task, c.extra)
 			rank := slotTaskRank(c.task.TaskType, score)
 			if rank <= best || name == "" {
 				continue
 			}
 			best = rank
 			row.TaskID = c.task.ID
-			row.TaskName = c.task.Name
+			row.TaskName = publication
 			row.ConnectorName = name
 			row.ConnectBase = base
 			row.Connector = connectorLabel(base)
@@ -426,7 +426,7 @@ func slotHostMatches(host string, port int, inst *store.Instance) bool {
 	return false
 }
 
-func matchTaskSlot(slot store.SyncSlot, task *store.CDCTask, extra map[string]string) (name, base, topic string, score int) {
+func matchTaskSlot(slot store.SyncSlot, task *store.CDCTask, extra map[string]string) (name, publication, base, topic string, score int) {
 	bindings := ParseShardBindings(extra)
 	for _, b := range bindings {
 		if !strings.EqualFold(strings.TrimSpace(b.SlotName), strings.TrimSpace(slot.SlotName)) {
@@ -447,6 +447,10 @@ func matchTaskSlot(slot store.SyncSlot, task *store.CDCTask, extra map[string]st
 			name = ""
 			continue
 		}
+		publication = strings.TrimSpace(b.PublicationName)
+		if publication == "" && slotDBMatchesSource(slot, task) {
+			publication = strings.TrimSpace(extra["publication_name"])
+		}
 		score = 2
 		if strings.EqualFold(b.DbName, slot.Database) && slot.Database != "" {
 			score = 3
@@ -455,23 +459,27 @@ func matchTaskSlot(slot store.SyncSlot, task *store.CDCTask, extra map[string]st
 	}
 	if score == 0 && strings.EqualFold(strings.TrimSpace(extra["slot_name"]), strings.TrimSpace(slot.SlotName)) {
 		if !slotDBMatchesSource(slot, task) {
-			return "", "", "", 0
+			return "", "", "", "", 0
 		}
 		name = strings.TrimSpace(extra["connector_name"])
+		publication = strings.TrimSpace(extra["publication_name"])
 		score = 2
 		if slot.Database != "" && strings.EqualFold(task.SourceDB, slot.Database) {
 			score = 3
 		}
 	}
 	if name == "" || childTaskNameUsedAsConnector(task, name) {
-		return "", "", "", 0
+		return "", "", "", "", 0
+	}
+	if publication == "" {
+		publication = name
 	}
 	base = strings.TrimSpace(extra["connect_base_url"])
 	if base == "" {
 		base = strings.TrimSpace(extra["worker_url"])
 	}
 	topic = strings.TrimSpace(extra["topic_prefix"])
-	return name, base, topic, score
+	return name, publication, base, topic, score
 }
 
 // slotDBMatchesSource 任务级 connector 只代表 SourceDB。槽上有库名时，两者必须相同。

@@ -19,7 +19,7 @@ func TestAttachSlotCDC(t *testing.T) {
 		{Host: "10.0.0.8", Port: 5432, SlotName: "other_slot", Database: "orders"},
 		{Host: "10.9.9.9", Port: 5432, SlotName: "dbz_orders", Database: "orders"},
 	}, tasks, []store.Instance{inst})
-	if rows[0].TaskName != "订单同步" || rows[0].Connector != "10.1.2.3:8083" || rows[0].Topic != "orders" || rows[0].ConnectorName != "conn-orders" {
+	if rows[0].TaskName != "conn-orders" || rows[0].Connector != "10.1.2.3:8083" || rows[0].Topic != "orders" || rows[0].ConnectorName != "conn-orders" {
 		t.Fatalf("matched row = %+v", rows[0])
 	}
 	if rows[1].TaskName != "" || rows[2].TaskName != "" {
@@ -36,7 +36,7 @@ func TestAttachSlotCDCShardBinding(t *testing.T) {
 	rows := AttachSlotCDC([]store.SyncSlot{
 		{Host: "10.0.0.8", Port: 5432, SlotName: "slot_1", Database: "db_1"},
 	}, tasks, []store.Instance{inst})
-	if rows[0].ConnectorName != "conn-1" || rows[0].TaskName != "分库" || rows[0].Topic != "shard" {
+	if rows[0].ConnectorName != "conn-1" || rows[0].TaskName != "conn-1" || rows[0].Topic != "shard" {
 		t.Fatalf("shard row = %+v", rows[0])
 	}
 }
@@ -57,7 +57,7 @@ func TestAttachSlotCDCIndexedManyTasks(t *testing.T) {
 	rows := AttachSlotCDC([]store.SyncSlot{
 		{Host: "10.0.0.8", Port: 5432, SlotName: "dbz_orders", Database: "orders"},
 	}, tasks, []store.Instance{inst})
-	if rows[0].TaskName != "目标" || rows[0].ConnectorName != "conn-orders" {
+	if rows[0].TaskName != "conn-orders" || rows[0].ConnectorName != "conn-orders" {
 		t.Fatalf("indexed match = %+v", rows[0])
 	}
 }
@@ -79,6 +79,24 @@ func TestAttachSlotCDCPrefersInitOverAdd(t *testing.T) {
 	}}, tasks, []store.Instance{inst})
 	if rows[0].TaskName != "rt_bj_db_member_004" || rows[0].ConnectorName != "rt_bj_db_member_004" {
 		t.Fatalf("init should own the member slot, got %+v", rows[0])
+	}
+}
+
+func TestAttachSlotCDCUsesPublicationName(t *testing.T) {
+	inst := store.Instance{ID: "i1", Host: "pg.apaas.bj.restosuite.shop", Port: 5432}
+	tasks := []store.CDCTask{{
+		ID: "t1", Name: "监听-bj-db-apaas", TaskType: "init", SourceID: "i1", SourceDB: "db_apaas",
+		Description: `-- auto-dba-cdc:{"slot_name":"slot_ai_beijing_db_apaas","publication_name":"beijing_db_apaas_monitor","connector_name":"beijing_db_apaas_monitor","connect_base_url":"http://10.74.0.18:8083","shard_db_bindings":[{"db_name":"db_bill_62","slot_name":"slot_ai_sea_db_bill_62","publication_name":"ai_sea_db_bill_62","connector_name":"ai_sea_db_bill_62"}]}`,
+	}}
+	rows := AttachSlotCDC([]store.SyncSlot{
+		{Host: inst.Host, Port: 5432, SlotName: "slot_ai_beijing_db_apaas", Database: "db_apaas"},
+		{Host: inst.Host, Port: 5432, SlotName: "slot_ai_sea_db_bill_62", Database: "db_bill_62"},
+	}, tasks, []store.Instance{inst})
+	if rows[0].TaskName != "beijing_db_apaas_monitor" || rows[0].TaskName == tasks[0].Name {
+		t.Fatalf("publication should be the list name, got %+v", rows[0])
+	}
+	if rows[1].TaskName != "ai_sea_db_bill_62" || rows[1].ConnectorName != "ai_sea_db_bill_62" {
+		t.Fatalf("shard publication = %+v", rows[1])
 	}
 }
 

@@ -6,6 +6,7 @@ import React, {
   useRef,
   useState,
 } from 'react'
+import { createPortal } from 'react-dom'
 import {
   useLocation,
   useNavigate } from 'react-router-dom'
@@ -2280,7 +2281,7 @@ export default function CommonQuery() {
                     onClick={() => suggest.onInput()}
                     onScroll={() => suggest.onScroll()}
                   />
-                  {suggest.open ? (
+                  {suggest.open ? createPortal(
                     <div className="sql-suggest" style={{ top: suggest.pos.top, left: suggest.pos.left }}>
                       {suggest.loading ? <div className="sql-suggest-loading">读取字段</div> : null}
                       {suggest.items.map((item, i) => (
@@ -2297,7 +2298,8 @@ export default function CommonQuery() {
                           {item.detail ? <span className="sql-suggest-detail">{item.detail}</span> : null}
                         </div>
                       ))}
-                    </div>
+                    </div>,
+                    document.body,
                   ) : null}
                 </div>
                 <div className="gutter-x inner" onMouseDown={(e) => startDrag('hist', e)} />

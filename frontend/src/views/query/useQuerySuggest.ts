@@ -27,7 +27,6 @@ export function useQuerySuggest(envRef: { current: SuggestEnv }, getBox: () => H
   const [active, setActive] = useState(0)
   const [loading, setLoading] = useState(false)
   const [pos, setPos] = useState<Pos>({ top: 0, left: 0 })
-  const movedRef = useRef(false)
   const ctxRef = useRef<SqlContext | null>(null)
   const cacheRef = useRef(new Map<string, HintCol[]>())
   const pendingRef = useRef(new Set<string>())
@@ -49,13 +48,19 @@ export function useQuerySuggest(envRef: { current: SuggestEnv }, getBox: () => H
     const el = getBox()
     if (!el) return
     const caret = caretViewport(el)
-    setPos({ top: caret.top + 18, left: Math.min(caret.left, window.innerWidth - 280) })
+    const boxWidth = 280
+    const boxHeight = 240
+    const margin = 8
+    let left = caret.left
+    let top = caret.top + 18
+    if (left + boxWidth > window.innerWidth - margin) left = Math.max(margin, window.innerWidth - boxWidth - margin)
+    if (top + boxHeight > window.innerHeight - margin) top = Math.max(margin, window.innerHeight - boxHeight - margin)
+    setPos({ top, left })
   }
 
   function close() {
     setOpen(false)
     setItems([])
-    movedRef.current = false
     forcedRef.current = false
     ctxRef.current = null
   }
@@ -89,7 +94,7 @@ export function useQuerySuggest(envRef: { current: SuggestEnv }, getBox: () => H
     const sql = el.value
     const cursor = el.selectionStart ?? sql.length
     const ctx = sqlContext(sql, cursor)
-    const typed = /[A-Za-z0-9_\u00A0-\uFFFF]$/.test(ctx.prefix) || ctx.kind === 'qual'
+    const typed = /[A-Za-z0-9_\u00A0-\uFFFF]$/.test(ctx.prefix) || ctx.kind === 'qual' || ctx.kind === 'column'
     if (ctx.kind === 'none' || (reason === 'type' && !typed)) {
       close()
       return
@@ -117,10 +122,7 @@ export function useQuerySuggest(envRef: { current: SuggestEnv }, getBox: () => H
     }
     ctxRef.current = ctx
     setItems(next)
-    if (reason !== 'cache') {
-      setActive(0)
-      movedRef.current = false
-    }
+    if (reason !== 'cache') setActive(0)
     setOpen(true)
     place()
   }
@@ -153,27 +155,25 @@ export function useQuerySuggest(envRef: { current: SuggestEnv }, getBox: () => H
     if (e.key === 'ArrowDown') {
       e.preventDefault()
       if (!items.length) return true
-      movedRef.current = true
       setActive((i) => Math.min(items.length - 1, i + 1))
       return true
     }
     if (e.key === 'ArrowUp') {
       e.preventDefault()
-      movedRef.current = true
       setActive((i) => Math.max(0, i - 1))
       return true
     }
-    if (e.key === 'Tab') {
+    if (e.key === 'Tab' || e.key === 'Enter') {
+      if (e.nativeEvent.isComposing) return false
+      if (e.key === 'Enter' && (e.shiftKey || e.altKey || e.ctrlKey || e.metaKey)) return false
+      if (e.key === 'Enter' && !items[active]) {
+        close()
+        return false
+      }
       e.preventDefault()
       accept()
       return true
     }
-    if (e.key === 'Enter' && movedRef.current) {
-      e.preventDefault()
-      accept()
-      return true
-    }
-    if (e.key === 'Enter') close()
     return false
   }
 

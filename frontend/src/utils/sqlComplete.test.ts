@@ -96,6 +96,40 @@ describe('sqlContext', () => {
     expect(labels(sql)).toContain('name')
   })
 
+  it('lists columns after WHERE and a space, with comment in the label', () => {
+    const sql = 'select * from ods_tbl_l18n_text where '
+    const ctx = sqlContext(sql, sql.length)
+    expect(ctx.kind).toBe('column')
+    expect(ctx.tables.map((t) => t.name)).toEqual(['ods_tbl_l18n_text'])
+    const items = buildSuggestions({
+      ctx,
+      tableNames: ['ods_tbl_l18n_text'],
+      columns: {
+        ods_tbl_l18n_text: [
+          { name: 'id', data_type: 'bigint', comment: ' 主键 ' },
+          { name: 'text', data_type: 'text', nullable: true, comment: '   ' },
+          { name: 'lang', data_type: 'varchar' },
+        ],
+      },
+      dialect: 'mysql',
+    })
+    const id = items.find((item) => item.insert === 'id')
+    const text = items.find((item) => item.insert === 'text')
+    const lang = items.find((item) => item.insert === 'lang')
+    expect(id?.label).toBe('id-主键')
+    expect(text?.label).toBe('text')
+    expect(lang?.label).toBe('lang')
+    expect(items.filter((item) => item.insert === 'id').every((item) => !item.label.includes('bigint'))).toBe(true)
+    expect(items.findIndex((item) => item.group === 'column')).toBeLessThan(items.findIndex((item) => item.group === 'keyword'))
+    const byComment = buildSuggestions({
+      ctx: { ...ctx, prefix: '主键' },
+      tableNames: ['ods_tbl_l18n_text'],
+      columns: { ods_tbl_l18n_text: [{ name: 'id', comment: '主键' }] },
+      dialect: 'mysql',
+    })
+    expect(byComment.some((item) => item.insert === 'id')).toBe(false)
+  })
+
   it('replaces the typed prefix', () => {
     const sql = 'select * from de'
     const ctx = sqlContext(sql, sql.length)

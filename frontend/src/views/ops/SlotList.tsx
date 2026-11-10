@@ -66,8 +66,12 @@ function lagMB(bytes?: number) {
   return `${mb.toFixed(2)} MB`
 }
 
+function slotSyncName(row: SlotRow) {
+  return String(row.task_name || row.connector_name || '').trim()
+}
+
 function canRestart(row: SlotRow) {
-  return !!(row.connect_base || row.connector) && !!(row.connector_name || row.task_name)
+  return !!(row.connect_base || row.connector) && !!slotSyncName(row)
 }
 
 function SlotPeek({
@@ -238,7 +242,7 @@ export default function SlotList() {
       message.warning(`有 ${invalid.length} 条缺少 Kafka 连接器或任务名，无法重启，请调整勾选`)
       return
     }
-    const names = records.map((r) => r.task_name || r.connector_name || r.slot_name)
+    const names = records.map((r) => slotSyncName(r) || r.slot_name)
     Modal.confirm({
       title: `确认批量重启 ${records.length} 个同步任务？`,
       content: (
@@ -369,7 +373,7 @@ export default function SlotList() {
         if (mb < applied.lag) return false
       }
       if (host && !`${row.bound_host || ''}`.toLowerCase().includes(host)) return false
-      if (task && !`${row.task_name || ''}`.toLowerCase().includes(task)) return false
+      if (task && !slotSyncName(row).toLowerCase().includes(task)) return false
       return true
     })
   }, [rows, applied])
@@ -522,7 +526,7 @@ export default function SlotList() {
               dataIndex: 'task_name',
               width: 160,
               onCell: () => ({ className: 'slot-peek-cell', style: { maxWidth: 160 } }),
-              render: (v: string) => <SlotPeek title="任务名" value={v} onView={openCell} />,
+              render: (_: string, row: SlotRow) => <SlotPeek title="任务名" value={slotSyncName(row)} onView={openCell} />,
             },
             {
               title: '数据槽',
