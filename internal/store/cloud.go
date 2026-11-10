@@ -527,31 +527,32 @@ func (d *DB) FindCloudAccountByName(tenantID, vendor, name string) (*CloudAccoun
 }
 
 type CloudInstance struct {
-	ID           string         `json:"id"`
-	TenantID     string         `json:"tenant_id"`
-	Vendor       string         `json:"vendor"`
-	Engine       string         `json:"engine"`
-	AccountID    string         `json:"account_id"`
-	AccountName  string         `json:"account_name,omitempty"`
-	CloudID      string         `json:"cloud_instance_id"`
-	Name         string         `json:"name"`
-	Region       string         `json:"region"`
-	Status       string         `json:"status"`
-	CPU          int            `json:"cpu"`
-	MemoryMB     int            `json:"memory_mb"`
-	DiskGB       int            `json:"disk_gb"`
-	DiskUsedGB   int            `json:"disk_used_gb"`
-	Version      string         `json:"version"`
-	Zone         string         `json:"zone"`
-	PayType      string         `json:"pay_type"`
-	ExpireAt     string         `json:"expire_at"`
-	InstanceID   string         `json:"instance_id"`
-	InstanceName string         `json:"instance_name,omitempty"`
-	Reconcile    string         `json:"reconcile"`
-	Intranet     string         `json:"intranet,omitempty"`
-	Port         int            `json:"port,omitempty"`
-	Extras       map[string]any `json:"extras,omitempty"`
-	SyncedAt     string         `json:"synced_at"`
+	ID            string         `json:"id"`
+	TenantID      string         `json:"tenant_id"`
+	Vendor        string         `json:"vendor"`
+	Engine        string         `json:"engine"`
+	AccountID     string         `json:"account_id"`
+	AccountName   string         `json:"account_name,omitempty"`
+	CloudID       string         `json:"cloud_instance_id"`
+	Name          string         `json:"name"`
+	Region        string         `json:"region"`
+	Status        string         `json:"status"`
+	CPU           int            `json:"cpu"`
+	MemoryMB      int            `json:"memory_mb"`
+	DiskGB        int            `json:"disk_gb"`
+	DiskUsedGB    int            `json:"disk_used_gb"`
+	Version       string         `json:"version"`
+	Zone          string         `json:"zone"`
+	PayType       string         `json:"pay_type"`
+	ExpireAt      string         `json:"expire_at"`
+	InstanceID    string         `json:"instance_id"`
+	InstanceName  string         `json:"instance_name,omitempty"`
+	Reconcile     string         `json:"reconcile"`
+	ReconcileNote string         `json:"reconcile_note,omitempty"`
+	Intranet      string         `json:"intranet,omitempty"`
+	Port          int            `json:"port,omitempty"`
+	Extras        map[string]any `json:"extras,omitempty"`
+	SyncedAt      string         `json:"synced_at"`
 }
 
 func (d *DB) UpsertCloudInstance(it *CloudInstance) error {

@@ -36,6 +36,8 @@ var symptomLex = []struct {
 	{[]string{"wal", "pg_wal"}, "wal"},
 	{[]string{"死锁", "deadlock"}, "死锁"},
 	{[]string{"膨胀", "bloat"}, "膨胀"},
+	{[]string{"冻结高", "冻结", "datfrozenxid", "relfrozenxid", "wraparound", "xid_age"}, "冻结"},
+	{[]string{"cache lookup failed"}, "cache lookup failed"},
 	{[]string{"复制延迟", "主从延迟"}, "延迟"},
 	{[]string{"binlog"}, "binlog"},
 	{[]string{"oomkilled", "oom"}, "oom"},

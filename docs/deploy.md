@@ -27,13 +27,13 @@ KeePlus（进程 `auto-dba`）支持多种打包方式。**构建在有 Node 18+
 
 一体包与后端包解压后工作目录须为**包根**（存在 `deploy/node-agent/bin/node-agent`、`deploy/sql-agent/bin/sql-agent` 等），集群部署和 SQL 执行器 SSH 下发无需再本机构建。
 
-可选环境变量：`GOOS` `GOARCH`（默认 `linux`/`amd64`）、`STAMP`（默认时间戳；发版用 `STAMP=v1.12.109`）、`IMAGE_TAG`、`SKIP_PNPM_INSTALL=1`（已有 `node_modules` 时）。
+可选环境变量：`GOOS` `GOARCH`（默认 `linux`/`amd64`）、`STAMP`（默认时间戳；发版用 `STAMP=v1.12.110`）、`IMAGE_TAG`、`SKIP_PNPM_INSTALL=1`（已有 `node_modules` 时）。
 
 ```bash
-STAMP=v1.12.109 ./scripts/pack_release.sh all
-STAMP=v1.12.109 ./scripts/pack_release.sh backend
-STAMP=v1.12.109 ./scripts/pack_release.sh frontend
-IMAGE_TAG=auto-dba:v1.12.109 ./scripts/pack_release.sh docker
+STAMP=v1.12.110 ./scripts/pack_release.sh all
+STAMP=v1.12.110 ./scripts/pack_release.sh backend
+STAMP=v1.12.110 ./scripts/pack_release.sh frontend
+IMAGE_TAG=auto-dba:v1.12.110 ./scripts/pack_release.sh docker
 ```
 
 ## 发布到 GitHub Release（固定流程）
@@ -46,13 +46,13 @@ IMAGE_TAG=auto-dba:v1.12.109 ./scripts/pack_release.sh docker
 # 已 push 的提交 + 写好 docs/changelog-vX.Y.Z.md 后：
 
 # 推荐：打包 + 打 tag + 创建 Release（一体包）
-PACK=1 ./scripts/publish_github_release.sh v1.12.109
+PACK=1 ./scripts/publish_github_release.sh v1.12.110
 
-# 已有 dist/*-v1.12.109.tgz 时只发版
-./scripts/publish_github_release.sh v1.12.109
+# 已有 dist/*-v1.12.110.tgz 时只发版
+./scripts/publish_github_release.sh v1.12.110
 
 # 发版前顺带删若干旧 Release（不删受仓库 Rules 保护的 tag）
-DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12.109
+DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12.110
 ```
 
 前提：本机能 `git push origin HEAD`；已安装 `gh`。若 Keychain 无凭据，先手动 push 一次或导出 `GH_TOKEN=...`。
@@ -61,7 +61,8 @@ DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12
 
 | 版本 | 要点 |
 |------|------|
-| [v1.12.109](changelog-v1.12.109.md) | **当前推荐**。查询窗口按表名和字段名中间的内容提示 |
+| [v1.12.110](changelog-v1.12.110.md) | **当前推荐**。云资源对账说明账号不一致，补齐 PG 冻结年龄知识 |
+| [v1.12.109](changelog-v1.12.109.md) | 查询窗口按表名和字段名中间的内容提示 |
 | [v1.12.108](changelog-v1.12.108.md) | 查询窗口在 WHERE 等关键字后面提示字段 |
 | [v1.12.107](changelog-v1.12.107.md) | CDC 修复源端的地址下拉显示实例名，可按地址或实例名筛选 |
 | [v1.12.106](changelog-v1.12.106.md) | 查询补全按库名点号提示表，PAT 在 StarRocks 上放行其余 SHOW |

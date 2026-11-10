@@ -206,19 +206,26 @@ func PostgresKnowledgeCases() []KnowledgeCase {
 		},
 		{
 			Fingerprint: "xid_age|warning|above", MetricKey: "xid_age",
-			Severity: "warning", Direction: "above", Title: "PG 事务 ID 年龄偏高",
-			RootCauseTemplate: "库/表 XID 年龄约 {value}：接近 wraparound 时会拒绝写入以保护数据；prepared xact、复制槽与超长事务都会卡住冻结。",
-			ActionTemplate: "查 pg_database.age(datfrozenxid) 与最老 relfrozenxid；分级监控（如 3亿/8亿/15亿）；清僵尸 prepared xact 与废弃槽；对最老表 VACUUM (FREEZE)。",
+			Severity: "warning", Direction: "above", Title: "PG 事务冻结年龄偏高",
+			RootCauseTemplate: "库或表冻结年龄约 {value}。xid_age = age(datfrozenxid)，是该库最老未冻结事务号到当前事务号的距离；上限 2147483647（2^31-1），usage_pct 即年龄占这个上限的百分比。年龄升高表示 datfrozenxid 推不走，不是冻结做得太多。两类原因：防回卷 autovacuum 没跑完（关闭、worker 打满、cost_delay 过大、拿不到锁，或把 autovacuum_freeze_max_age 调到十亿级）；或者 vacuum 在跑但 xmin 视野被按住（失效复制槽尤其逻辑槽 catalog_xmin、idle in transaction、pg_prepared_xacts、备库 hot_standby_feedback、过大的 vacuum_defer_cleanup_age）。实例倒计时由最老的那个库决定。",
+			ActionTemplate: "1) 查各库：SELECT datname, datfrozenxid, age(datfrozenxid) AS xid_age, datallowconn FROM pg_database ORDER BY 3 DESC。默认 autovacuum_freeze_max_age=2亿，超过即应强制 aggressive vacuum；PG14+ vacuum_failsafe_age=16亿。" +
+				"2) 先查谁按住视野再 vacuum：pg_replication_slots 的 age(xmin)/age(catalog_xmin)、pg_stat_activity.backend_xmin、pg_prepared_xacts。" +
+				"3) 最老库里只读 pg_class 查表，不要调用 pg_total_relation_size，也不要把 oid 转成 regclass：SELECT n.nspname, c.relname, c.oid, age(c.relfrozenxid) AS xid_age FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relkind IN ('r','m','t') AND c.relfrozenxid<>0 ORDER BY 4 DESC LIMIT 30。" +
+				"4) 不要把 autovacuum_freeze_max_age 再调大。分级关注约 3亿 / 8亿 / 15亿。",
 			AlertNames: []string{"PGLongTransaction"}, Engine: "postgres",
-			Tags: []string{"xid", "wraparound", "vacuum"},
+			Tags: []string{"xid", "wraparound", "vacuum", "冻结", "冻结高", "datfrozenxid", "relfrozenxid", "usage_pct"},
 		},
 		{
 			Fingerprint: "xid_age|critical|above", MetricKey: "xid_age",
-			Severity: "critical", Direction: "above", Title: "PG XID wraparound 危急",
-			RootCauseTemplate: "XID 年龄 {value} 危急：临近或已触发 wraparound 保护，写入可能被拒绝。",
-			ActionTemplate: "按 P0 处理：立即对最老库/表 freeze；清 pg_prepared_xacts 与废弃槽；确认 autovacuum 未关闭；事后把年龄告警做成监控而非事后查文档。",
+			Severity: "critical", Direction: "above", Title: "PG 冻结年龄顶到回卷线",
+			RootCauseTemplate: "XID 年龄 {value} 已进入回卷保护线。2147483647-1000000=2146483647，usage 约 99.95% 表示该库只剩约 100 万个事务号，日志对应 must be vacuumed within 1000000 transactions。只读查询仍可执行，新事务会被拒绝。多个库同时超过 17 亿，说明最近约 17 亿个事务里没有任何库做完库级冻结，这是集群级停住；最老库若再比第二名老出数亿（例如 3.46 亿），说明该库还有额外阻塞。年龄只差几千的两行，是同一次冻结停住的。",
+			ActionTemplate: "1) 先解除视野再冻结，否则 VACUUM FREEZE 也不前进：确认没有存活订阅或备库后删除失效槽；取消 idle in transaction；COMMIT PREPARED 或 ROLLBACK PREPARED。单用户模式不会忽略复制槽。" +
+				"2) 对最老库里 age(relfrozenxid) 最高的普通表执行 VACUUM (INDEX_CLEANUP OFF, FREEZE)。不要用 VACUUM FULL，不要先调高 autovacuum_freeze_max_age。" +
+				"3) 查最老表若报 SQLSTATE XX000 cache lookup failed for index：pg_total_relation_size 或 regclass 打开了该索引，pg_class 有此行但 pg_index 按 INDEXRELID 查不到可见行。改用上一条只读 pg_class 的查询。再核对 SELECT oid, relname, relkind FROM pg_class WHERE oid=<索引oid> 与 SELECT indexrelid, indrelid, indisvalid, indisready FROM pg_index WHERE indexrelid=<索引oid>。pg_class 有而 pg_index 无，是残缺索引（常见于 CREATE INDEX CONCURRENTLY 失败），用 pg_depend 的 objid/refobjid 找父表；两边都有则多半是查询期间并发 DROP INDEX。不要在回卷临界手工 DELETE 系统表。索引本身没有 relfrozenxid，它挡住的是算大小，不是冻结年龄。" +
+				"4) 主库已报 database is not accepting commands to avoid wraparound data loss 时，停 postmaster，单用户模式对最老库 VACUUM 后再启动。" +
+				"5) 看 pg_stat_progress_vacuum 是否长时间扫不动，并核对 autovacuum、autovacuum_freeze_max_age、autovacuum_vacuum_cost_delay。",
 			AlertNames: []string{"PGLongTransaction"}, Engine: "postgres",
-			Tags: []string{"xid", "wraparound", "incident"},
+			Tags: []string{"xid", "wraparound", "incident", "冻结", "冻结高", "datfrozenxid", "cache lookup failed"},
 		},
 		{
 			Fingerprint: "lock_waiters|warning|above", MetricKey: "lock_waiters",

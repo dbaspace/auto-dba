@@ -177,6 +177,7 @@ var ragStopwords = map[string]struct{}{
 var ragTechBoost = map[string]float64{
 	"wal": 4, "pg_wal": 4, "pgwal": 4, "槽": 3, "slot": 3, "replication": 2.5,
 	"xid": 3.5, "wraparound": 3.5, "vacuum": 3, "autovacuum": 3, "膨胀": 3, "bloat": 3,
+	"冻结": 3.5, "datfrozenxid": 4, "relfrozenxid": 3.5,
 	"死锁": 3, "deadlock": 3, "连接": 3, "打满": 3.5, "max_connections": 3,
 	"缓存": 2.5, "cache": 2.5, "慢查询": 3, "归档": 3, "archive": 3,
 	"复制": 2.5, "lag": 2.5, "checkpoint": 2.5, "锁等待": 3,
@@ -201,6 +202,10 @@ var ragSynonyms = map[string][]string{
 	"复制槽":                  {"slot", "wal", "replication"},
 	"磁盘满":                  {"存储", "disk", "pg_wal"},
 	"wraparound":           {"xid", "冻结", "vacuum"},
+	"冻结":                   {"xid", "datfrozenxid", "relfrozenxid", "wraparound", "xid_age"},
+	"冻结高":                  {"xid", "datfrozenxid", "relfrozenxid", "wraparound", "xid_age"},
+	"回卷":                   {"xid", "wraparound", "datfrozenxid", "冻结"},
+	"datfrozenxid":         {"xid", "冻结", "wraparound", "relfrozenxid"},
 	"wal":                  {"pg_wal", "wal_retain_bytes", "复制槽"},
 	"wal大":                 {"wal", "pg_wal", "wal_retain_bytes", "复制槽"},
 	"wal高":                 {"wal", "pg_wal", "wal_retain_bytes", "复制槽"},

@@ -50,6 +50,14 @@ func (h *InstanceHandler) SyncCloud(c *gin.Context) {
 		return
 	}
 	got := cloud.FillFromInventory(host, req.CloudVendor, cloudIDIn, req.CloudRegion, refs)
+	if cloud.ShouldFallbackTenant(exist.TenantID, store.DefaultTenantID, got) {
+		refs, err = h.cloudFillRefs(store.DefaultTenantID, engine, cloudIDIn)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+			return
+		}
+		got = cloud.FillFromInventory(host, req.CloudVendor, cloudIDIn, req.CloudRegion, refs)
+	}
 	if !got.OK {
 		c.JSON(http.StatusBadRequest, gin.H{"message": got.Message})
 		return

@@ -3,6 +3,7 @@ package cloud
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -133,6 +134,48 @@ func TestFillFromInventory(t *testing.T) {
 	}
 	if many := FillFromInventory("10.0.0.1", "", "", "", dup); many.OK {
 		t.Fatalf("ambiguous %#v", many)
+	}
+}
+
+func TestShouldFallbackTenant(t *testing.T) {
+	miss := CloudFill{Message: MsgNoCloudResource}
+	if !ShouldFallbackTenant("tenant-sales", "tenant-default", miss) {
+		t.Fatal("other tenant should fall back when nothing matched")
+	}
+	if ShouldFallbackTenant("tenant-default", "tenant-default", miss) {
+		t.Fatal("default tenant should not fall back to itself")
+	}
+	if ShouldFallbackTenant("", "tenant-default", miss) {
+		t.Fatal("empty tenant already searched without a tenant filter")
+	}
+	hit := CloudFill{OK: true, CloudID: "postgres-a"}
+	if ShouldFallbackTenant("tenant-sales", "tenant-default", hit) {
+		t.Fatal("a hit in the instance tenant must win")
+	}
+	many := CloudFill{Message: MsgManyResources}
+	if ShouldFallbackTenant("tenant-sales", "tenant-default", many) {
+		t.Fatal("ambiguous host must not switch tenant")
+	}
+	own := []InventoryRef{{ID: "own", CloudID: "postgres-own", Intranet: "10.1.1.1", Vendor: "tencent", Region: "ap-beijing"}}
+	def := []InventoryRef{{ID: "def", CloudID: "postgres-def", Intranet: "10.128.19.62", Vendor: "tencent", Region: "ap-beijing"}}
+	first := FillFromInventory("10.128.19.62", "", "", "", own)
+	if !ShouldFallbackTenant("tenant-sales", "tenant-default", first) {
+		t.Fatal(first.Message)
+	}
+	second := FillFromInventory("10.128.19.62", "", "", "", def)
+	if !second.OK || second.CloudID != "postgres-def" {
+		t.Fatalf("default tenant fill %#v", second)
+	}
+}
+
+func TestReconcileConflictNote(t *testing.T) {
+	got := ReconcileConflictNote("resto-专属", "旧账号", 1)
+	if got != "云账号不一致：实例是 旧账号，清单是 resto-专属" {
+		t.Fatal(got)
+	}
+	dup := ReconcileConflictNote("resto-专属", "旧账号", 2)
+	if !strings.Contains(dup, "多个云账号") || !strings.Contains(dup, "旧账号") || !strings.Contains(dup, "resto-专属") {
+		t.Fatal(dup)
 	}
 }
 

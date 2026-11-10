@@ -16,6 +16,32 @@ func TestRAGSearchBuiltin(t *testing.T) {
 	}
 }
 
+func TestRAGSearchXIDFreeze(t *testing.T) {
+	svc := &Service{}
+	q := "PostgreSQL 冻结高是什么原因"
+	hits, err := svc.RAGSearch(nil, q, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) == 0 || hits[0].MetricKey != "xid_age" {
+		t.Fatalf("want xid_age first, got %+v", hits)
+	}
+	ans := FormatRAGAnswer(q, hits)
+	for _, needle := range []string{"知识库直答", "datfrozenxid", "100 万"} {
+		if !strings.Contains(ans, needle) {
+			t.Fatalf("answer missing %q: %s", needle, ans)
+		}
+	}
+
+	hits, err = svc.RAGSearch(nil, "cache lookup failed for index", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) == 0 || !strings.Contains(hits[0].Action, "pg_index") {
+		t.Fatalf("want index lookup runbook, got %+v", hits)
+	}
+}
+
 func TestRAGSearchConnFullNaturalLanguage(t *testing.T) {
 	svc := &Service{}
 	hits, err := svc.RAGSearch(nil, "PostgreSQL 连接打满怎么排查？", 5)

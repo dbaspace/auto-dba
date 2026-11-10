@@ -246,7 +246,16 @@ func (h *CloudHandler) ListPostgres(c *gin.Context) {
 		if list[i].InstanceID != "" {
 			if it, _ := h.Store.GetInstance(list[i].InstanceID); it != nil {
 				list[i].InstanceName = it.Name
+				if list[i].Reconcile == cloud.ReconcileConflict && strings.TrimSpace(it.CloudAccountID) != "" {
+					if bound, _ := h.Store.GetCloudAccount(it.CloudAccountID); bound != nil {
+						list[i].ReconcileNote = bound.Name
+					}
+				}
 			}
+		}
+		if list[i].Reconcile == cloud.ReconcileConflict {
+			copies, _ := h.Store.CountCloudResourcesByCloudID(list[i].Vendor, list[i].Engine, list[i].CloudID)
+			list[i].ReconcileNote = cloud.ReconcileConflictNote(list[i].AccountName, list[i].ReconcileNote, copies)
 		}
 	}
 	caps := map[string]cloud.Caps{}

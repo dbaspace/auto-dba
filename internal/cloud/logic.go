@@ -254,6 +254,42 @@ type CloudFill struct {
 	ResourceIDs []string
 }
 
+const (
+	MsgNoCloudResource = "没有对上云资源。请先在云资源页立即同步，或确认连接主机与云上内网地址一致"
+	MsgCloudIDMissing  = "云清单中没有这个云实例 ID，请先在云资源页立即同步"
+	MsgCloudIDClash    = "云实例 ID 与云清单不一致，未修改"
+	MsgManyResources   = "连接主机对应多条云资源，未修改"
+)
+
+// ShouldFallbackTenant 本租户清单没有这条主机或云实例 ID 时，才再查默认租户。已经对上或对上多条时不换租户。
+func ShouldFallbackTenant(instanceTenant, defaultTenant string, got CloudFill) bool {
+	instanceTenant = strings.TrimSpace(instanceTenant)
+	defaultTenant = strings.TrimSpace(defaultTenant)
+	if instanceTenant == "" || instanceTenant == defaultTenant || got.OK {
+		return false
+	}
+	return got.Message == MsgNoCloudResource || got.Message == MsgCloudIDMissing
+}
+
+// ReconcileConflictNote 对账冲突时说明账号不一致。inventoryCopies 大于 1 表示同一云实例 ID 出现在多个云账号下。
+func ReconcileConflictNote(inventoryAccount, instanceAccount string, inventoryCopies int) string {
+	inv := strings.TrimSpace(inventoryAccount)
+	cur := strings.TrimSpace(instanceAccount)
+	if inv == "" {
+		inv = "未命名账号"
+	}
+	if inventoryCopies > 1 {
+		if cur != "" {
+			return fmt.Sprintf("云账号不一致：同一云实例 ID 在多个云账号下都有清单（实例是 %s，本条清单是 %s）", cur, inv)
+		}
+		return fmt.Sprintf("云账号不一致：同一云实例 ID 在多个云账号下都有清单（本条清单是 %s）", inv)
+	}
+	if cur != "" && cur != inv {
+		return fmt.Sprintf("云账号不一致：实例是 %s，清单是 %s", cur, inv)
+	}
+	return "云账号不一致"
+}
+
 // FillFromInventory 用云实例 ID 或连接主机对照清单。两条都对上时以云实例 ID 为准。只补空项。
 func FillFromInventory(host, vendor, cloudID, region string, rows []InventoryRef) CloudFill {
 	vendor = strings.TrimSpace(vendor)
@@ -270,18 +306,18 @@ func FillFromInventory(host, vendor, cloudID, region string, rows []InventoryRef
 			return filled(vendor, cloudID, region, byID[0], byID)
 		}
 		if len(matchIntranet(host, rows)) > 0 {
-			return CloudFill{Message: "云实例 ID 与云清单不一致，未修改"}
+			return CloudFill{Message: MsgCloudIDClash}
 		}
-		return CloudFill{Message: "云清单中没有这个云实例 ID，请先在云资源页立即同步"}
+		return CloudFill{Message: MsgCloudIDMissing}
 	}
 	hits := matchIntranet(host, rows)
 	switch len(hits) {
 	case 0:
-		return CloudFill{Message: "没有对上云资源。请先在云资源页立即同步，或确认连接主机与云上内网地址一致"}
+		return CloudFill{Message: MsgNoCloudResource}
 	case 1:
 		return filled(vendor, cloudID, region, hits[0], hits)
 	default:
-		return CloudFill{Message: "连接主机对应多条云资源，未修改"}
+		return CloudFill{Message: MsgManyResources}
 	}
 }
 

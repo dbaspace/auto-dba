@@ -306,10 +306,7 @@ func (s *Service) SyncAccountEngine(ctx context.Context, account *store.CloudAcc
 		s.noteSync(account, engine, "inventory", "", err)
 		return regionErrs, err
 	}
-	var plats []store.Instance
-	if strings.TrimSpace(account.TenantID) != "" {
-		plats, _ = s.DB.ListInstancesInTenant(account.TenantID, "", "")
-	}
+	plats, _ := s.instancesForInventoryMatch(account.TenantID)
 	seen := make([]string, 0, len(all))
 	for _, inst := range all {
 		seen = append(seen, inst.CloudID)
@@ -321,6 +318,12 @@ func (s *Service) SyncAccountEngine(ctx context.Context, account *store.CloudAcc
 			PayType: inst.PayType, ExpireAt: inst.ExpireAt, Extras: inst.Extras,
 		}
 		s.bindPlatform(row, prev, inst.Host, plats)
+		if row.Reconcile == cloud.ReconcileConflict && strings.TrimSpace(row.InstanceID) != "" {
+			if err := s.DB.SetInstanceCloudAccount(row.InstanceID, row.AccountID); err != nil {
+				return regionErrs, err
+			}
+			row.Reconcile = cloud.ReconcileLinked
+		}
 		if row.InstanceID != "" && (row.Reconcile == cloud.ReconcileLinked || row.Reconcile == cloud.ReconcileChanged) {
 			s.fillInstanceCloudBlanks(row.InstanceID, row.Vendor, row.CloudID, row.Region)
 		}
@@ -437,6 +440,22 @@ func (s *Service) AssignAccount(resourceID, accountID, username string) (*store.
 	return out, nil
 }
 
+func matchAllTenants(accountTenant string) bool {
+	return strings.TrimSpace(accountTenant) == store.DefaultTenantID
+}
+
+// instancesForInventoryMatch 默认租户的云账号按连接主机对照全部租户的实例。其他租户只对照自己的实例。
+func (s *Service) instancesForInventoryMatch(accountTenant string) ([]store.Instance, error) {
+	accountTenant = strings.TrimSpace(accountTenant)
+	if accountTenant == "" {
+		return nil, nil
+	}
+	if matchAllTenants(accountTenant) {
+		return s.DB.ListInstances("", "")
+	}
+	return s.DB.ListInstancesInTenant(accountTenant, "", "")
+}
+
 func (s *Service) bindPlatform(row *store.CloudInstance, prev *store.CloudInstance, intranet string, plats []store.Instance) {
 	matches, err := s.DB.InstancesByCloudID(row.TenantID, row.Vendor, row.CloudID)
 	if err != nil {
@@ -463,6 +482,7 @@ func (s *Service) bindPlatform(row *store.CloudInstance, prev *store.CloudInstan
 			row.InstanceID = matches[0].ID
 			row.Reconcile = cloud.ReconcileLinked
 		case cloud.BindConflict:
+			// 唯一云实例且账号不同。同步循环会把实例云账号改成这条清单的账号，再标成已关联。
 			row.Reconcile = cloud.ReconcileConflict
 			if len(matches) == 1 {
 				row.InstanceID = matches[0].ID

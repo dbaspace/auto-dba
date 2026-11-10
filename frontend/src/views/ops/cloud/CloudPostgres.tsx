@@ -386,7 +386,12 @@ export default function CloudPostgres({ engine = 'postgres' }: { engine?: string
               ? <Link to="/config/instances">{v || r.instance_id}</Link>
               : '—',
           },
-          { title: '对账', dataIndex: 'reconcile', render: (v) => reconcileLabel[v] || v || '—' },
+          {
+            title: '对账',
+            dataIndex: 'reconcile',
+            width: 280,
+            render: (v, r) => r.reconcile_note || reconcileLabel[v] || v || '—',
+          },
           { title: '同步时间', dataIndex: 'synced_at' },
           {
             title: '操作',
