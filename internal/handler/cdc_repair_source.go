@@ -84,18 +84,23 @@ func (h *CDCHandler) RepairSource(c *gin.Context) {
 	}
 	host := strings.TrimSpace(req.Host)
 	if host == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "域名不能为空"})
+		c.JSON(http.StatusBadRequest, gin.H{"message": "地址不能为空"})
 		return
 	}
 	if req.Port <= 0 || req.Port > 65535 {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "端口无效"})
 		return
 	}
-	inst, err := h.Store.GetInstance(root.SourceID)
-	if err != nil || inst == nil {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "源端实例不存在"})
+	inst, reason, err := h.resolveRepairSource(root, host)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
+	if inst == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": reason})
+		return
+	}
+	rebindSource := strings.TrimSpace(root.SourceID) != strings.TrimSpace(inst.ID)
 	repairOthers := req.RepairOthers != nil && *req.RepairOthers
 	beforeHost := cdcEffectiveSourceHost(root, inst)
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 90*time.Second)
@@ -129,6 +134,18 @@ func (h *CDCHandler) RepairSource(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "同步访问域名失败: " + err.Error()})
 		return
 	}
+	if rebindSource {
+		for _, task := range targets {
+			if task == nil || strings.TrimSpace(task.SourceID) == inst.ID {
+				continue
+			}
+			if err := h.Store.UpdateCDCSourceID(task.ID, inst.ID); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"message": "写回源端实例失败: " + err.Error()})
+				return
+			}
+			task.SourceID = inst.ID
+		}
+	}
 
 	op, ip := cdcRequestActor(c)
 	var warnings []string
@@ -142,6 +159,32 @@ func (h *CDCHandler) RepairSource(c *gin.Context) {
 		msg = "源端地址已更新"
 	}
 	c.JSON(http.StatusOK, gin.H{"message": msg, "warning": strings.Join(warnings, "；")})
+}
+
+func (h *CDCHandler) resolveRepairSource(root *store.CDCTask, host string) (*store.Instance, string, error) {
+	if root == nil {
+		return nil, cdc.SourceUnboundMsg, nil
+	}
+	var bound *store.Instance
+	if id := strings.TrimSpace(root.SourceID); id != "" {
+		inst, err := h.Store.GetInstance(id)
+		if err != nil {
+			return nil, "", err
+		}
+		bound = inst
+	}
+	if bound != nil {
+		return bound, "", nil
+	}
+	extra := cdcExtraMap(root.Description)
+	eff, _ := cdc.EffectiveSourceEndpoint(extra, nil)
+	addrs := []string{host, eff}
+	cands, err := cdc.LookupSourceCandidates(h.Store.ListInstancesByAddr, addrs)
+	if err != nil {
+		return nil, "", err
+	}
+	inst, reason := cdc.PickSourceInstance(nil, cands, root.TenantID, addrs)
+	return inst, reason, nil
 }
 
 func (h *CDCHandler) applySourceEndpoint(ctx context.Context, t *store.CDCTask, host string, port int, operator, ip string) string {

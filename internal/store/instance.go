@@ -298,6 +298,32 @@ func (d *DB) ListInstancesInTenant(tenantID, dbType, q string) ([]Instance, erro
 	return out, rows.Err()
 }
 
+// ListInstancesByAddr 按 host、主域名或附加域名粗查实例。调用方再用精确比较去掉子串误伤。
+func (d *DB) ListInstancesByAddr(addr string) ([]Instance, error) {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return nil, nil
+	}
+	like := "%" + addr + "%"
+	rows, err := d.Query(
+		`SELECT `+instanceCols+` FROM tbl_instances WHERE lower(host)=lower(?) OR lower(domain_name)=lower(?) OR lower(COALESCE(domains,'')) LIKE lower(?) ORDER BY name`,
+		addr, addr, like,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Instance
+	for rows.Next() {
+		it, err := scanInstance(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *it)
+	}
+	return out, rows.Err()
+}
+
 // SampleEncryptedInstancePasswords 抽样已加密的实例密码密文（启动密钥健康检查用）。
 func (d *DB) SampleEncryptedInstancePasswords(limit int) ([]string, error) {
 	if limit <= 0 {

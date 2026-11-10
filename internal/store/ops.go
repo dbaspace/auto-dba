@@ -157,6 +157,12 @@ func (d *DB) UpdateCDCTargetID(id, targetID string) error {
 	return err
 }
 
+func (d *DB) UpdateCDCSourceID(id, sourceID string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := d.Exec(`UPDATE tbl_cdc_tasks SET source_instance_id=?, updated_at=? WHERE id=?`, strings.TrimSpace(sourceID), now, id)
+	return err
+}
+
 func (d *DB) UpdateCDCStatus(id, status, approval string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := d.Exec(`UPDATE tbl_cdc_tasks SET status=?, approval_status=?, updated_at=? WHERE id=?`, status, approval, now, id)

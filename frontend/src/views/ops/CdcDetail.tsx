@@ -258,17 +258,19 @@ export default function CdcDetail() {
     const runningRL = rls.filter((j: any) => String(j.state || '').toUpperCase() === 'RUNNING').length
     const lag = slot.replication_lag_bytes ?? slot.lag_bytes
     const manual = extra.auto_create_table === false
+    const sourceDown = String(pg.state || '').toUpperCase() === 'UNREACHABLE'
+    const pubUnprobed = Boolean(pub.unprobed) || sourceDown
+    const slotUnprobed = Boolean(slot.unprobed) || sourceDown
     return [
       {
         id: 'pg',
         name: 'PG Source',
-        detail:
-          pg.host && pg.port
+        detail: sourceDown
+          ? pg.message || '源端 PG 不可达'
+          : pg.host && pg.port
             ? `${pg.host}:${pg.port}`
-            : pub.name || slot.name
-            ? '源端可达（Publication/Slot 已探测）'
             : pg.message || '等待探测',
-        tone: pipelineNodeTone(pg.state || (pub.name || slot.name ? 'READY' : '')),
+        tone: pipelineNodeTone(pg.state || ''),
         extras: [],
         message: pg.message || '',
       },
@@ -276,10 +278,10 @@ export default function CdcDetail() {
         id: 'publication',
         name: 'Publication',
         detail: pub.name || extra.publication_name || '未上报',
-        tone: pipelineNodeTone(pub.exists ? 'READY' : pub.state || 'UNKNOWN'),
+        tone: pipelineNodeTone(pubUnprobed ? 'UNKNOWN' : pub.exists ? 'READY' : pub.state || 'UNKNOWN'),
         extras: [
-          { label: 'Publication 表', value: String(pub.table_count ?? 0) },
-          { label: '存在', value: pub.exists ? '是' : '否' },
+          { label: 'Publication 表', value: pubUnprobed ? '未探测' : String(pub.table_count ?? 0) },
+          { label: '存在', value: pubUnprobed ? '未探测' : pub.exists ? '是' : '否' },
         ],
         message: pub.message || '',
       },
@@ -287,10 +289,10 @@ export default function CdcDetail() {
         id: 'slot',
         name: 'Replication Slot',
         detail: slot.name || extra.slot_name || '未上报',
-        tone: pipelineNodeTone(slot.active ? 'READY' : slot.state || 'UNKNOWN'),
+        tone: pipelineNodeTone(slotUnprobed ? 'UNKNOWN' : slot.active ? 'READY' : slot.state || 'UNKNOWN'),
         extras: [
-          { label: '状态', value: slot.active ? 'active' : 'inactive' },
-          { label: 'lag', value: formatLagBytes(lag) },
+          { label: '状态', value: slotUnprobed ? '未探测' : slot.active ? 'active' : 'inactive' },
+          { label: 'lag', value: slotUnprobed ? '未探测' : formatLagBytes(lag) },
         ],
         message: slot.message || slot.restart_lsn || '',
       },
@@ -806,7 +808,7 @@ export default function CdcDetail() {
   async function submitRepairSource() {
     const host = repairHost.trim()
     if (!host) {
-      message.warning('请填写域名')
+      message.warning('请填写地址')
       return
     }
     if (!repairPort || repairPort <= 0 || repairPort > 65535) {
@@ -815,11 +817,15 @@ export default function CdcDetail() {
     }
     setRepairing(true)
     try {
-      const { data } = await api.post(`/cdc-sync/tasks/${task.id}/repair-source`, {
-        host,
-        port: repairPort,
-        repair_others: repairOthers,
-      })
+      const { data } = await api.post(
+        `/cdc-sync/tasks/${task.id}/repair-source`,
+        {
+          host,
+          port: repairPort,
+          repair_others: repairOthers,
+        },
+        { silent: true },
+      )
       if (data?.warning) message.warning(`${data.message || '源端地址已更新'}：${data.warning}`)
       else message.success(String(data?.message || '已修复源端'))
       setRepairOpen(false)
@@ -1840,10 +1846,10 @@ export default function CdcDetail() {
           <p>Connector 上的地址：{connectorEndpoint()}</p>
         ) : null}
         <p style={{ color: '#8c8c8c', fontSize: 12 }}>
-          复制槽名、publication、表清单、账号密码都不改。Connect 会更新 database.hostname / database.port，并连同 Task 重启，使已有复制连接切到新域名。
+          复制槽名、publication、表清单、账号密码都不改。Connect 会更新 database.hostname / database.port，并连同 Task 重启，使已有复制连接切到新地址。地址只改这一条任务，不改实例上其它库共用的 Host。
         </p>
         <div style={{ marginBottom: 12 }}>
-          <div style={{ marginBottom: 4 }}>域名</div>
+          <div style={{ marginBottom: 4 }}>地址</div>
           <AutoComplete
             style={{ width: '100%' }}
             value={repairHost}
@@ -1855,7 +1861,7 @@ export default function CdcDetail() {
               ),
             ).map((d) => ({ value: d }))}
             onChange={(v) => setRepairHost(v)}
-            placeholder="选择或填写域名"
+            placeholder="选择或填写域名或 IP"
           />
         </div>
         <div style={{ marginBottom: 12 }}>

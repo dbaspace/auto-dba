@@ -99,6 +99,53 @@ func TestFillSlotBoundHostUsesRegisteredDomain(t *testing.T) {
 	}
 }
 
+func TestFillSlotBoundHostShowsDatabaseDomainNotConnectionHost(t *testing.T) {
+	insts := []store.Instance{{
+		ID: "test-pg", Name: "test-pg", Host: "10.100.112.10", Port: 5432,
+		DomainName: "pg.test.restosuite.ai",
+		Domains:    []string{"pg.test.restosuite.ai", "pg.saler.test.restosuite.ai"},
+		Tags:       []string{"domain=pg.test.restosuite.ai", "idc=test"},
+	}}
+	dbs := []store.Database{{
+		InstanceID: "test-pg", DBName: "db_ai",
+		Domains: []string{"pg.test.restosuite.ai"},
+		Tags:    []string{"idc=test", "domain=pg.test.restosuite.ai", "alias=pg.test"},
+	}, {
+		InstanceID: "test-shop", DBName: "db_apaas",
+		Domains: []string{"pg.test.restosuite.shop"},
+	}}
+	slot := store.SyncSlot{Host: "10.100.112.10", Port: 5432, Database: "db_ai", SlotName: "slot_test_db_ai"}
+	rows := FillSlotBoundHosts([]SlotRow{{SyncSlot: slot}}, insts, dbs)
+	if rows[0].BoundHost != "pg.test.restosuite.ai" || rows[0].Host != "10.100.112.10" {
+		t.Fatalf("display=%q stored=%q", rows[0].BoundHost, rows[0].Host)
+	}
+	if strings.Contains(rows[0].BoundHost, "10.100") || strings.Contains(rows[0].BoundHost, "pg.saler") {
+		t.Fatalf("leaked instance address %q", rows[0].BoundHost)
+	}
+
+	shop := store.Instance{ID: "test-shop", Name: "test-shop", Host: "10.100.112.20", Port: 5432}
+	shopRows := FillSlotBoundHosts([]SlotRow{{SyncSlot: store.SyncSlot{Host: shop.Host, Port: shop.Port, Database: "db_apaas"}}}, append(insts, shop), dbs)
+	if shopRows[0].BoundHost != "pg.test.restosuite.shop" || shopRows[0].Host != "10.100.112.20" {
+		t.Fatalf("shop display=%q stored=%q", shopRows[0].BoundHost, shopRows[0].Host)
+	}
+}
+
+func TestFillSlotBoundHostJoinsDatabaseDomains(t *testing.T) {
+	insts := []store.Instance{{ID: "test-pg", Host: "10.100.112.10", Port: 5432}}
+	dbs := []store.Database{{
+		InstanceID: "test-pg", DBName: "db_ai",
+		Domains: []string{"pg.test.restosuite.ai", " pg.extra.test.restosuite.ai ", "pg.test.restosuite.ai"},
+		Tags:    []string{"domain=pg.saler.test.restosuite.ai"},
+	}}
+	rows := FillSlotBoundHosts([]SlotRow{{SyncSlot: store.SyncSlot{Host: "10.100.112.10", Port: 5432, Database: "db_ai"}}}, insts, dbs)
+	if rows[0].BoundHost != "pg.test.restosuite.ai, pg.extra.test.restosuite.ai" {
+		t.Fatalf("joined=%q", rows[0].BoundHost)
+	}
+	if strings.Contains(rows[0].BoundHost, "pg.saler") {
+		t.Fatalf("tag replaced domains: %q", rows[0].BoundHost)
+	}
+}
+
 func TestFindInstanceForSlotByListedDomain(t *testing.T) {
 	insts := []store.Instance{{
 		ID: "i1", Host: "10.0.0.8", Port: 5432, Domains: []string{"pg.bj.restosuite.cn"},

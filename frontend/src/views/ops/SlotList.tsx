@@ -5,6 +5,13 @@ import ResponsiveTable from '../../components/ResponsiveTable'
 import api from '../../api/request'
 import './SlotList.css'
 
+function slotInstanceLabel(row: SlotRow) {
+  const names = String(row.bound_host || '').split(',').map((s) => s.trim()).filter(Boolean)
+  if (!names.length) return ''
+  if (!row.port) return names.join(', ')
+  return names.map((host) => (host.includes(':') ? host : `${host}:${row.port}`)).join(', ')
+}
+
 type SlotRow = {
   id: string
   host: string
@@ -500,7 +507,7 @@ export default function SlotList() {
               onHeaderCell: () => ({ className: 'slot-host-col' }),
               onCell: () => ({ className: 'slot-peek-cell slot-host-col' }),
               render: (_, row: SlotRow) => (
-                <SlotPeek title="实例(主机:端口)" value={row.bound_host ? `${row.bound_host}:${row.port}` : ''} onView={openCell} />
+                <SlotPeek title="实例(主机:端口)" value={slotInstanceLabel(row)} onView={openCell} />
               ),
             },
             {

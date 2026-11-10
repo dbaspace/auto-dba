@@ -84,3 +84,65 @@ func TestApplySourceEndpointOnlyTouchesHostPort(t *testing.T) {
 		t.Fatalf("tables changed: %s", cfg["table.include.list"])
 	}
 }
+
+func TestPickSourceInstance(t *testing.T) {
+	bound := &store.Instance{ID: "bound", Host: "10.0.0.1", TenantID: "t1"}
+	a := store.Instance{ID: "a", Host: "10.128.33.236", DomainName: "pg.mcamunda.bj.restosuite.cn", Domains: []string{"pg-extra.example"}, TenantID: "t1"}
+	b := store.Instance{ID: "b", Host: "10.128.33.237", TenantID: "t1"}
+	other := store.Instance{ID: "c", Host: "10.128.33.236", TenantID: "t2"}
+	prefix := store.Instance{ID: "d", Host: "10.128.33.2360", TenantID: "t1"}
+
+	if got, reason := PickSourceInstance(bound, []store.Instance{a, b}, "t1", []string{"10.128.33.237"}); got == nil || got.ID != "bound" || reason != "" {
+		t.Fatalf("bound id wins, got %#v %q", got, reason)
+	}
+	if got, reason := PickSourceInstance(nil, []store.Instance{a, b, other, prefix}, "t1", []string{"10.128.33.236"}); got == nil || got.ID != "a" || reason != "" {
+		t.Fatalf("host match, got %#v %q", got, reason)
+	}
+	if got, reason := PickSourceInstance(nil, []store.Instance{a}, "t1", []string{"pg.mcamunda.bj.restosuite.cn"}); got == nil || got.ID != "a" || reason != "" {
+		t.Fatalf("primary domain, got %#v %q", got, reason)
+	}
+	if got, reason := PickSourceInstance(nil, []store.Instance{a}, "t1", []string{"PG-EXTRA.EXAMPLE"}); got == nil || got.ID != "a" || reason != "" {
+		t.Fatalf("extra domain, got %#v %q", got, reason)
+	}
+	if got, reason := PickSourceInstance(nil, []store.Instance{prefix}, "t1", []string{"10.128.33.236"}); got != nil || reason != SourceAddrMissMsg {
+		t.Fatalf("prefix must not match, got %#v %q", got, reason)
+	}
+	if got, reason := PickSourceInstance(nil, []store.Instance{a, other}, "t1", []string{"10.128.33.236"}); got == nil || got.ID != "a" || reason != "" {
+		t.Fatalf("other tenant ignored, got %#v %q", got, reason)
+	}
+	dup := store.Instance{ID: "e", DomainName: "10.128.33.236", TenantID: "t1"}
+	if got, reason := PickSourceInstance(nil, []store.Instance{a, dup}, "t1", []string{"10.128.33.236"}); got != nil || reason != SourceAddrMultiMsg {
+		t.Fatalf("duplicate addr, got %#v %q", got, reason)
+	}
+	if got, reason := PickSourceInstance(nil, []store.Instance{a}, "t1", nil); got != nil || reason != SourceUnboundMsg {
+		t.Fatalf("no addr, got %#v %q", got, reason)
+	}
+}
+
+func TestLookupSourceCandidatesDropsSubstring(t *testing.T) {
+	list := func(addr string) ([]store.Instance, error) {
+		return []store.Instance{
+			{ID: "exact", Host: addr},
+			{ID: "longer", Host: addr + "9"},
+		}, nil
+	}
+	got, err := LookupSourceCandidates(list, []string{"10.1.1.1", "10.1.1.1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != "exact" {
+		t.Fatalf("got %#v", got)
+	}
+}
+
+func TestPubAndSlotUnprobedState(t *testing.T) {
+	if pubState(&PipelinePublication{Name: "pub", Unprobed: true, Unreachable: true}) != "UNKNOWN" {
+		t.Fatal("unprobed publication")
+	}
+	if slotState(&PipelineSlot{Name: "slot", Unprobed: true, Message: "未探测"}) != "UNKNOWN" {
+		t.Fatal("unprobed slot")
+	}
+	if slotState(&PipelineSlot{Name: "slot", Active: false}) != "PAUSED" {
+		t.Fatal("probed inactive slot")
+	}
+}

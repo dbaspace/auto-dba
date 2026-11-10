@@ -28,6 +28,7 @@ type PipelinePublication struct {
 	Exists      bool   `json:"exists"`
 	TableCount  int    `json:"table_count"`
 	Unreachable bool   `json:"unreachable,omitempty"`
+	Unprobed    bool   `json:"unprobed,omitempty"`
 	Message     string `json:"message,omitempty"`
 }
 
@@ -37,6 +38,7 @@ type PipelineSlot struct {
 	LagBytes            int64  `json:"lag_bytes"`
 	ReplicationLagBytes int64  `json:"replication_lag_bytes"`
 	RestartLSN          string `json:"restart_lsn,omitempty"`
+	Unprobed            bool   `json:"unprobed,omitempty"`
 	Message             string `json:"message,omitempty"`
 }
 
@@ -86,7 +88,16 @@ func AggregatePipelineStatus(ctx context.Context, st *store.DB, secret string, o
 	publication := &PipelinePublication{Name: pub}
 	var slotInfo *PipelineSlot
 	pgHost, pgPort := "", 0
-	if inst, _ := st.GetInstance(t.SourceID); inst != nil && strings.TrimSpace(t.SourceID) != "" {
+	inst, missReason, instErr := LoadTaskSourceInstance(st, t, extra)
+	if instErr != nil {
+		pg.State = "UNREACHABLE"
+		pg.Message = instErr.Error()
+		markSourceUnprobed(publication, &slotInfo, slot)
+	} else if inst == nil {
+		pg.State = "UNREACHABLE"
+		pg.Message = missReason
+		markSourceUnprobed(publication, &slotInfo, slot)
+	} else {
 		inst = TaskSourceInstance(inst, extra)
 		pgHost, pgPort = inst.Host, inst.Port
 		totalTables := 0
@@ -121,8 +132,7 @@ func AggregatePipelineStatus(ctx context.Context, st *store.DB, secret string, o
 			}
 			pg.State = "UNREACHABLE"
 			pg.Message = msg
-			publication.Unreachable = true
-			publication.Message = msg
+			markSourceUnprobed(publication, &slotInfo, slot)
 		} else {
 			pg.State = "READY"
 			publication.Exists = allExist
@@ -131,11 +141,6 @@ func AggregatePipelineStatus(ctx context.Context, st *store.DB, secret string, o
 				publication.Message = "部分分库 Publication 不存在"
 			}
 		}
-	} else {
-		pg.State = "UNREACHABLE"
-		pg.Message = "源端实例不存在"
-		publication.Unreachable = true
-		publication.Message = pg.Message
 	}
 
 	connStates := make([]map[string]any, 0)
@@ -263,7 +268,10 @@ func AggregatePipelineStatus(ctx context.Context, st *store.DB, secret string, o
 	if !healthy {
 		switch {
 		case pg.State == "UNREACHABLE":
-			reason = "源端 PG 不可达"
+			reason = pg.Message
+			if strings.TrimSpace(reason) == "" || reason == "connect source pg failed" {
+				reason = "源端 PG 不可达"
+			}
 		case !publication.Exists:
 			reason = "Publication 不存在"
 		case worst == PresenceNotFound:
@@ -294,7 +302,10 @@ func AggregatePipelineStatus(ctx context.Context, st *store.DB, secret string, o
 	}
 	slotOut := slotInfo
 	if slotOut == nil && slot != "" {
-		slotOut = &PipelineSlot{Name: slot}
+		slotOut = &PipelineSlot{Name: slot, Unprobed: publication.Unprobed}
+		if publication.Unprobed {
+			slotOut.Message = "未探测"
+		}
 	}
 
 	steps := []PipelineNode{
@@ -446,8 +457,21 @@ func hostPort(host string, port int) string {
 	return host
 }
 
+func markSourceUnprobed(pub *PipelinePublication, slot **PipelineSlot, slotName string) {
+	if pub != nil {
+		pub.Unprobed = true
+		pub.Exists = false
+		pub.Unreachable = true
+		pub.Message = "未探测"
+	}
+	if slot == nil || *slot != nil || strings.TrimSpace(slotName) == "" {
+		return
+	}
+	*slot = &PipelineSlot{Name: strings.TrimSpace(slotName), Unprobed: true, Message: "未探测"}
+}
+
 func pubState(p *PipelinePublication) string {
-	if p == nil {
+	if p == nil || p.Unprobed {
 		return "UNKNOWN"
 	}
 	if p.Unreachable {
@@ -463,7 +487,7 @@ func pubState(p *PipelinePublication) string {
 }
 
 func slotState(s *PipelineSlot) string {
-	if s == nil || s.Name == "" {
+	if s == nil || s.Name == "" || s.Unprobed {
 		return "UNKNOWN"
 	}
 	if s.Message != "" && !s.Active {

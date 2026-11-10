@@ -49,22 +49,39 @@ func FillSlotBoundHosts(rows []SlotRow, insts []store.Instance, dbs []store.Data
 	return rows
 }
 
-// databaseBoundHost 只取该库自己的绑定：先 domains，再标签 domain=。
+// databaseBoundHost 只取该库自己的绑定域名，多个用逗号隔开。
+// 有 domains 时不用标签，也不读实例连接主机和实例域名全集。
 func databaseBoundHost(db store.Database) string {
-	for _, d := range db.Domains {
-		if s := strings.TrimSpace(d); s != "" {
-			return s
-		}
-	}
-	for _, raw := range db.Tags {
-		k, v, ok := splitInstanceTag(raw)
-		if ok && strings.EqualFold(k, "domain") {
-			if s := strings.TrimSpace(v); s != "" {
-				return s
+	names := uniqueBoundNames(db.Domains)
+	if len(names) == 0 {
+		var tagged []string
+		for _, raw := range db.Tags {
+			k, v, ok := splitInstanceTag(raw)
+			if ok && strings.EqualFold(k, "domain") {
+				tagged = append(tagged, v)
 			}
 		}
+		names = uniqueBoundNames(tagged)
 	}
-	return ""
+	return strings.Join(names, ", ")
+}
+
+func uniqueBoundNames(in []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(in))
+	for _, raw := range in {
+		s := strings.TrimSpace(raw)
+		if s == "" {
+			continue
+		}
+		key := strings.ToLower(s)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, s)
+	}
+	return out
 }
 
 // RestartSyncSlotItem 同步列表单条重启：按连接主机连业务库写 heartbeat，再 POST .../tasks/0/restart。
