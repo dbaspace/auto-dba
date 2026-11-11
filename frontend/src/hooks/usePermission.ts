@@ -82,7 +82,10 @@ export const Perm = {
     edit: 'um.action.ldap.edit',
   },
   syncSlots: {
+    view: 'um.sidebar.ops-slots',
     collect: 'um.action.sync-slots.collect',
+    restart: 'um.action.sync-slots.restart',
+    logs: 'um.action.sync-slots.logs',
     delete: 'um.action.sync-slots.delete',
   },
   migration: {
@@ -90,6 +93,7 @@ export const Perm = {
     edit: 'um.action.migration.edit',
     delete: 'um.action.migration.delete',
     approve: 'um.action.migration.approve',
+    settings: 'um.action.migration.settings',
   },
   schemaCompare: {
     create: 'um.action.schema-compare.create',

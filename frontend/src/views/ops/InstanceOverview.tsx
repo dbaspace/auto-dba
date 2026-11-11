@@ -34,6 +34,8 @@ type Sample = {
   storage_rate_known?: boolean
   disk_bytes?: number
   disk_known?: boolean
+  disk_used_rate?: number
+  disk_used_known?: boolean
   tablet_count?: number
   tablet_known?: boolean
   fe_alive?: number
@@ -116,6 +118,7 @@ function storageRateText(s?: Sample) {
 }
 
 function approxTotal(s?: Sample) {
+  if (s?.disk_known && (s.disk_bytes || 0) > 0) return bytesText(s.disk_bytes)
   if (!s?.data_known || !s.storage_rate_known || !s.storage_rate) return '—'
   return bytesText((s.data_bytes || 0) / (s.storage_rate / 100))
 }
@@ -131,7 +134,12 @@ function rateLevel(pct: number): 'ok' | 'warn' | 'danger' {
   return 'ok'
 }
 
-function RateCell({ pct, extra }: { pct: number | null; extra?: string }) {
+function formatRatePct(pct: number, preciseBelowOne?: boolean) {
+  if (preciseBelowOne && pct > 0 && pct < 1) return `${pct.toFixed(1)}%`
+  return `${Math.round(pct)}%`
+}
+
+function RateCell({ pct, extra, preciseBelowOne }: { pct: number | null; extra?: string; preciseBelowOne?: boolean }) {
   if (pct == null || !Number.isFinite(pct)) return <span className="ov-muted">{extra || '—'}</span>
   const lv = rateLevel(pct)
   const width = Math.max(0, Math.min(100, pct))
@@ -140,7 +148,7 @@ function RateCell({ pct, extra }: { pct: number | null; extra?: string }) {
       <div className="ov-bar" aria-hidden>
         <span style={{ width: `${width}%` }} />
       </div>
-      <span className="ov-metric-num">{Math.round(pct)}%</span>
+      <span className="ov-metric-num">{formatRatePct(pct, preciseBelowOne)}</span>
       {extra ? <span className="ov-metric-extra">{extra}</span> : null}
     </div>
   )
@@ -509,9 +517,18 @@ export default function InstanceOverview() {
           return { className: pct == null ? '' : `ov-cell ov-cell-${rateLevel(pct)}` }
         },
         render: (_, row) => {
-          const cell = <RateCell pct={row.sample?.storage_rate_known ? row.sample.storage_rate ?? 0 : null} />
-          const hot = row.sample?.storage_hot_host
-          return hot ? <Tooltip title={`最高 ${hot}`}>{cell}</Tooltip> : cell
+          const cell = (
+            <RateCell
+              pct={row.sample?.storage_rate_known ? row.sample.storage_rate ?? 0 : null}
+              preciseBelowOne
+            />
+          )
+          if (!row.sample?.disk_used_known) return cell
+          const disk = row.sample.disk_used_rate ?? 0
+          const hot = row.sample.storage_hot_host
+          const diskText = Number.isInteger(disk) ? `${disk}%` : `${disk.toFixed(1)}%`
+          const tip = hot ? `整盘最高 ${diskText} · ${hot}` : `整盘最高 ${diskText}`
+          return <Tooltip title={tip}>{cell}</Tooltip>
         },
       },
       {
@@ -721,11 +738,11 @@ export default function InstanceOverview() {
           ? '正在采样，汇总和表格会随结果更新，完成后才是本轮最终数字'
           : `数字是当前一次采样，不是监控图里的区间平均。超过约 5 分钟会变淡。低于 60% 为绿色，60% 起为黄色，80% 起为红色。${
               engine === 'postgres'
-                ? ' 已用存储是各库文件合计。使用率是云监控最近值。大约总量 = 已用存储 / 使用率。'
+                ? ' 已用存储是各库文件合计。使用率是云监控最近值。大约总量优先用已关联云资产的磁盘容量；没有关联时才用已用存储除以使用率。'
                 : engine === 'redis'
                   ? ' Redis CPU 为近 5 分钟 Prometheus 曲线（redis_exporter），旁注为末点占用。'
                   : engine === 'starrocks'
-                    ? ' 数据盘总大小、数据存储是各 BE 之和。数据使用率是单节点最高值，悬停可见该 BE。'
+                    ? ' 数据盘总大小、数据存储是各 BE 之和。数据使用率是数据存储除以数据盘总大小，悬停可见整盘最高使用率。'
                     : ''
             }`}
       </div>

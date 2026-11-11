@@ -11,6 +11,7 @@ export type SqlEditorProps = {
   disabled?: boolean
   onKeyDown?: React.KeyboardEventHandler<HTMLTextAreaElement>
   onKeyUp?: React.KeyboardEventHandler<HTMLTextAreaElement>
+  onBeforeInput?: React.FormEventHandler<HTMLTextAreaElement>
   onClick?: React.MouseEventHandler<HTMLTextAreaElement>
   onScroll?: React.UIEventHandler<HTMLTextAreaElement>
   spellCheck?: boolean
@@ -27,6 +28,7 @@ const SqlEditor = forwardRef<HTMLTextAreaElement, SqlEditorProps>(function SqlEd
     disabled,
     onKeyDown,
     onKeyUp,
+    onBeforeInput,
     onClick,
     onScroll,
     spellCheck = false,
@@ -80,6 +82,7 @@ const SqlEditor = forwardRef<HTMLTextAreaElement, SqlEditorProps>(function SqlEd
           onScroll?.(e)
         }}
         onKeyDown={onKeyDown}
+        onBeforeInput={onBeforeInput}
         onKeyUp={onKeyUp}
         onClick={onClick}
       />

@@ -61,8 +61,12 @@ func TestSummarizeStarRocks(t *testing.T) {
 	if !s.DataKnown || s.DataBytes != int64((10+40)*1024*1024*1024) {
 		t.Fatalf("data=%d", s.DataBytes)
 	}
-	if !s.StorageRateKnown || s.StorageRate != 85.5 || s.StorageHotHost != "10.0.0.12" {
-		t.Fatalf("rate=%v host=%s", s.StorageRate, s.StorageHotHost)
+	wantRate := float64(50) / float64(151) * 100
+	if !s.StorageRateKnown || s.StorageRate != wantRate {
+		t.Fatalf("rate=%v want=%v", s.StorageRate, wantRate)
+	}
+	if !s.DiskUsedKnown || s.DiskUsedRate != 85.5 || s.StorageHotHost != "10.0.0.12" {
+		t.Fatalf("disk used=%v host=%s known=%v", s.DiskUsedRate, s.StorageHotHost, s.DiskUsedKnown)
 	}
 	if !s.TabletKnown || s.TabletCount != 13 {
 		t.Fatalf("tablet=%d known=%v", s.TabletCount, s.TabletKnown)

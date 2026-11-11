@@ -59,7 +59,8 @@
   inset: 0;
   z-index: 1;
   background: transparent;
-  color: transparent;
+  /* color 保持不透明，剪贴板才能复制到原文；真正藏字只靠下面的透明填充。 */
+  color: var(--app-text, #1f2937);
   caret-color: #111827;
   -webkit-text-fill-color: transparent;
 }
@@ -71,7 +72,8 @@
 
 .sql-hl-input::selection {
   background: rgba(22, 119, 255, 0.28);
-  color: transparent;
+  color: var(--app-text, #1f2937);
+  -webkit-text-fill-color: transparent;
 }
 
 .sql-kw {

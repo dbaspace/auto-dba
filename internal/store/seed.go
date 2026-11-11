@@ -299,6 +299,12 @@ func (d *DB) seedRBAC(now string) error {
 	if err := d.ensureScheduledJobsActionMenus(now); err != nil {
 		return err
 	}
+	if err := d.ensureSyncSlotsActionMenus(now); err != nil {
+		return err
+	}
+	if err := d.ensureMigrationSettingsMenu(now); err != nil {
+		return err
+	}
 	if err := d.ensureDNSMenus(now); err != nil {
 		return err
 	}
@@ -1569,6 +1575,63 @@ func (d *DB) ensureScheduledJobsActionMenus(now string) error {
 		}
 	}
 	log.Printf("seed: scheduled-jobs action menus ensured")
+	return nil
+}
+
+func (d *DB) ensureSyncSlotsActionMenus(now string) error {
+	items := []seedMenu{
+		{"m-act-sync-slots-collect", "m-sync-slots", "手动采集", "", URNSyncSlotsCollect, "手动采集同步槽", "upload", 90},
+		{"m-act-sync-slots-restart", "m-sync-slots", "批量重启", "", URNSyncSlotsRestart, "批量重启同步任务", "refresh", 91},
+		{"m-act-sync-slots-logs", "m-sync-slots", "查看操作日志", "", URNSyncSlotsLogs, "查看同步槽采集与重启操作日志", "file", 92},
+		{"m-act-sync-slots-delete", "m-sync-slots", "批量删除", "", URNSyncSlotsDelete, "删除同步列表记录，不删除 PostgreSQL 复制槽", "delete", 93},
+	}
+	for _, it := range items {
+		id := it.ID
+		exist, err := d.GetMenuByURN(it.URN)
+		if err != nil {
+			return err
+		}
+		if exist != nil && strings.TrimSpace(exist.ID) != "" {
+			id = exist.ID
+		}
+		m := &Menu{
+			ID: id, ParentID: it.Parent, Title: it.Title, Path: it.Path,
+			URN: it.URN, PermissionDesc: it.Perm, Icon: it.Icon, SortOrder: it.Sort, Enabled: true,
+			CreatedAt: now, UpdatedAt: now,
+		}
+		if err := d.EnsureMenu(m); err != nil {
+			return err
+		}
+		if err := d.GrantMenuFollowingParent(id, it.Parent); err != nil {
+			return err
+		}
+	}
+	log.Printf("seed: sync-slots action menus ensured")
+	return nil
+}
+
+func (d *DB) ensureMigrationSettingsMenu(now string) error {
+	const idDefault = "m-act-migration-settings"
+	id := idDefault
+	exist, err := d.GetMenuByURN(URNMigrationSettings)
+	if err != nil {
+		return err
+	}
+	if exist != nil && strings.TrimSpace(exist.ID) != "" {
+		id = exist.ID
+	}
+	m := &Menu{
+		ID: id, ParentID: "m-sync-mig", Title: "迁移设置", Path: "",
+		URN: URNMigrationSettings, PermissionDesc: "修改迁移审批与全局性能参数", Icon: "setting",
+		SortOrder: 94, Enabled: true, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := d.EnsureMenu(m); err != nil {
+		return err
+	}
+	if err := d.GrantMenuFollowingParent(id, "m-sync-mig"); err != nil {
+		return err
+	}
+	log.Printf("seed: migration settings action menu ensured")
 	return nil
 }
 

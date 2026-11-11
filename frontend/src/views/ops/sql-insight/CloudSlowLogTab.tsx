@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Button, Input, Modal, Table, Tabs, Typography, message } from 'antd'
+import { Button, Modal, Table, Tabs, Typography, message } from 'antd'
 import type { EChartsCoreOption } from 'echarts'
 import api from '../../../api/request'
 import ChartBox from '../../dashboard/ChartBox'
@@ -139,9 +139,7 @@ export default function CloudSlowLogTab({ filter, active }: { filter: SnapshotFi
   const [trend, setTrend] = useState<any[]>([])
   const [spread, setSpread] = useState<any[]>([])
   const [note, setNote] = useState('')
-  const [db, setDb] = useState('')
-  const [q, setQ] = useState('')
-  const [minMs, setMinMs] = useState('')
+  const [dbFilter, setDbFilter] = useState<string[]>([])
   const [viewSql, setViewSql] = useState('')
   const [slowTab, setSlowTab] = useState('list')
 
@@ -155,9 +153,10 @@ export default function CloudSlowLogTab({ filter, active }: { filter: SnapshotFi
       return
     }
     const { data } = await api.get('/cloud/slow-logs', {
-      params: { instance_id: filter.instanceId, from: filter.startTime, to: filter.endTime, db, q, min_ms: minMs || undefined },
+      params: { instance_id: filter.instanceId, from: filter.startTime, to: filter.endTime },
       silent: true,
     })
+    setDbFilter([])
     setRows(data.data || [])
     setStats(data.stats || [])
     setTrend(data.trend || [])
@@ -173,6 +172,19 @@ export default function CloudSlowLogTab({ filter, active }: { filter: SnapshotFi
 
   const countChart = useMemo(() => trendOption(trend), [trend])
   const durationChart = useMemo(() => spreadOption(spread), [spread])
+  const dbOptions = useMemo(() => {
+    const names = new Set<string>()
+    rows.forEach((row) => {
+      const name = String(row.db_name || '').trim()
+      if (name) names.add(name)
+    })
+    return [...names].sort().map((name) => ({ text: name, value: name }))
+  }, [rows])
+  const listRows = useMemo(() => {
+    if (!dbFilter.length) return rows
+    const picked = new Set(dbFilter)
+    return rows.filter((row) => picked.has(String(row.db_name || '')))
+  }, [rows, dbFilter])
 
   const exportCsv = () => {
     if (slowTab === 'stats') {
@@ -185,23 +197,17 @@ export default function CloudSlowLogTab({ filter, active }: { filter: SnapshotFi
       ]))
       return
     }
-    if (!rows.length) {
+    if (!listRows.length) {
       message.warning('没有可导出的数据')
       return
     }
-    downloadCsv('cloud-slow-log.csv', ['时间', '库', '用户', '客户端', '耗时 ms', 'SQL'], rows.map((row) => [
+    downloadCsv('cloud-slow-log.csv', ['时间', '库', '用户', '客户端', '耗时 ms', 'SQL'], listRows.map((row) => [
       beijingText(row.log_time), row.db_name, row.db_user, row.client, row.duration_ms, row.sql_text,
     ]))
   }
 
   return (
     <div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-        <Input placeholder="库名" value={db} onChange={(e) => setDb(e.target.value)} style={{ width: 120 }} />
-        <Input placeholder="SQL" value={q} onChange={(e) => setQ(e.target.value)} style={{ width: 180 }} />
-        <Input placeholder="最小耗时 ms" value={minMs} onChange={(e) => setMinMs(e.target.value)} style={{ width: 120 }} />
-        <Button onClick={() => void load().catch((e) => setNote(e?.response?.data?.message || '加载失败'))}>查询</Button>
-      </div>
       {note && <p>{note}</p>}
       {(trend.length > 0 || spread.length > 0) && (
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 12 }}>
@@ -229,12 +235,28 @@ export default function CloudSlowLogTab({ filter, active }: { filter: SnapshotFi
                 dataSource={rows}
                 size="small"
                 pagination={slowPage}
+                onChange={(_pagination, filters) => {
+                  const next = filters.db_name
+                  setDbFilter(Array.isArray(next) ? next.map(String) : [])
+                }}
                 columns={[
                   { title: '时间', dataIndex: 'log_time', width: 180, render: (v) => beijingText(v) },
-                  { title: '库', dataIndex: 'db_name', width: 120 },
+                  {
+                    title: '库',
+                    dataIndex: 'db_name',
+                    width: 120,
+                    filters: dbOptions,
+                    filteredValue: dbFilter,
+                    onFilter: (value, record) => String(record.db_name || '') === String(value),
+                  },
                   { title: '用户', dataIndex: 'db_user', width: 100 },
                   { title: '客户端', dataIndex: 'client', width: 140 },
-                  { title: '耗时 ms', dataIndex: 'duration_ms', width: 100 },
+                  {
+                    title: '耗时 ms',
+                    dataIndex: 'duration_ms',
+                    width: 110,
+                    sorter: (a, b) => (Number(a.duration_ms) || 0) - (Number(b.duration_ms) || 0),
+                  },
                   { title: 'SQL', dataIndex: 'sql_text', width: 480, render: (v) => <SlowSqlText sql={String(v || '')} onView={setViewSql} /> },
                 ]}
               />

@@ -18,6 +18,7 @@ import ResponsiveTable from '../../components/ResponsiveTable'
 import type { ColumnsType } from 'antd/es/table'
 import type { Dayjs } from 'dayjs'
 import api from '../../api/request'
+import { Perm, usePermission } from '../../hooks/usePermission'
 import { navigateToWorkOrderCreate } from '../../utils/workOrderDraft'
 import './Migration.css'
 
@@ -141,6 +142,8 @@ interface Filters {
 
 export default function Migration() {
   const navigate = useNavigate()
+  const { hasUrn } = usePermission()
+  const canSettings = hasUrn(Perm.migration.settings)
   const [loading, setLoading] = useState(false)
   const [allRows, setAllRows] = useState<any[]>([])
   const [page, setPage] = useState(1)
@@ -387,7 +390,7 @@ export default function Migration() {
     <div className="mig-page">
       <div className="mig-head">
         <div className="mig-actions">
-          <Button onClick={() => navigate('/ops/migration/settings')}>迁移设置</Button>
+          {canSettings ? <Button onClick={() => navigate('/ops/migration/settings')}>迁移设置</Button> : null}
           <Button type="primary" onClick={goCreate}>
             新建迁移任务
           </Button>

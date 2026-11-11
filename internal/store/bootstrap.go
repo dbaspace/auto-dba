@@ -194,6 +194,13 @@ func (d *DB) seedFast() error {
 			if err := d.ensureScheduledJobsActionMenus(now); err != nil {
 				return err
 			}
+			// 同步列表四个按钮的操作菜单须在 skip 路径幂等补齐，并按 URN 改齐旧标题
+			if err := d.ensureSyncSlotsActionMenus(now); err != nil {
+				return err
+			}
+			if err := d.ensureMigrationSettingsMenu(now); err != nil {
+				return err
+			}
 			if err := d.ensureDNSMenus(now); err != nil {
 				return err
 			}

@@ -233,11 +233,11 @@ func summarizeStarRocks(fe, be []srNode) Sample {
 			s.DataBytes += b
 		}
 		if pct, ok := parsePercent(n.UsedPct); ok {
-			if !s.StorageRateKnown || pct > s.StorageRate {
-				s.StorageRate = pct
+			if !s.DiskUsedKnown || pct > s.DiskUsedRate {
+				s.DiskUsedRate = pct
 				s.StorageHotHost = n.Host
 			}
-			s.StorageRateKnown = true
+			s.DiskUsedKnown = true
 		}
 		if n.Tablet != "" {
 			if v, err := strconv.ParseInt(strings.TrimSpace(n.Tablet), 10, 64); err == nil {
@@ -245,6 +245,10 @@ func summarizeStarRocks(fe, be []srNode) Sample {
 				s.TabletCount += v
 			}
 		}
+	}
+	if s.DiskKnown && s.DataKnown && s.DiskBytes > 0 {
+		s.StorageRate = float64(s.DataBytes) / float64(s.DiskBytes) * 100
+		s.StorageRateKnown = true
 	}
 	return s
 }

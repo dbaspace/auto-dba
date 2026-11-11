@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { Button, DatePicker, Empty, Modal, Select, Space, Switch, Tabs, message } from 'antd'
-import { Link } from 'react-router-dom'
-import { ReloadOutlined, SearchOutlined, SettingOutlined } from '@ant-design/icons'
+import { ReloadOutlined, SearchOutlined } from '@ant-design/icons'
 import dayjs, { Dayjs } from 'dayjs'
 import api from '../../api/request'
 import Auth from '../../components/Auth'
@@ -207,13 +206,6 @@ export default function SqlInsight() {
     return all.filter((item) => allowedTabs.includes(item.key))
   }, [allowedTabs, autoRefresh, draftInstance, draftRange, filter, instances, intervalSec, refreshTick, showSql, visibleTab])
 
-  const settingsTab = useMemo(() => {
-    if (visibleTab === 'space') return 'space'
-    if (visibleTab === 'smart') return 'smart'
-    if (visibleTab === 'awr') return 'awr'
-    return 'awr'
-  }, [visibleTab])
-
   const tabExtra = (
     <Space wrap size="small">
       {visibleTab === 'sql' ? (
@@ -240,39 +232,33 @@ export default function SqlInsight() {
           </Auth>
         </>
       ) : null}
-      <Auth urn={Perm.sqlInsight.settings}>
-        <Link to={`/config/sql-insight?tab=${settingsTab}`}>
-          <Button size="small" icon={<SettingOutlined />}>
-            设置
-          </Button>
-        </Link>
-      </Auth>
     </Space>
   )
 
   return (
     <div className="ops-page">
       <div className="ops-filters">
-        <div className="filter-item" style={{ flex: 1.2 }}>
+        <div className="filter-item" style={{ flex: 'none' }}>
           <Select
             value={draftInstance || undefined}
             showSearch
             allowClear
             placeholder="选择 PostgreSQL 实例"
-            style={{ flex: 1 }}
+            style={{ width: 360 }}
+            popupMatchSelectWidth={false}
             optionFilterProp="label"
             onChange={(v) => setDraftInstance(v || '')}
             options={instances.map((i) => ({ label: instLabel(i), value: i.id }))}
           />
         </div>
-        <div className="filter-item" style={{ flex: 1.6 }}>
+        <div className="filter-item" style={{ flex: 'none' }}>
           <span className="label">时间范围</span>
           <RangePicker
             value={draftRange}
             showTime
             format="YYYY-MM-DD HH:mm:ss"
             placeholder={['开始', '结束']}
-            style={{ width: '100%' }}
+            style={{ width: 380 }}
             onChange={(v) => {
               if (v && v[0] && v[1]) setDraftRange([v[0], v[1]])
             }}
@@ -290,7 +276,7 @@ export default function SqlInsight() {
         <Tabs
           activeKey={visibleTab}
           onChange={(k) => setTab(k as InsightTabKey)}
-          tabBarExtraContent={tabExtra}
+          tabBarExtraContent={visibleTab === 'sql' ? tabExtra : undefined}
           items={tabItems.map(({ key, label, children }) => ({ key, label, children }))}
         />
       )}

@@ -81,6 +81,11 @@ interface QueryResult {
   valid_sql?: string
 }
 
+interface SqlSnap {
+  sql: string
+  cursor: number
+}
+
 interface TabItem {
   key: string
   dbId: string
@@ -497,6 +502,7 @@ export default function CommonQuery() {
   const [running, setRunning] = useState(false)
   const queryAbortRef = useRef<AbortController | null>(null)
   const sqlBoxRef = useRef<HTMLTextAreaElement | null>(null)
+  const sqlUndoRef = useRef<Record<string, { undo: SqlSnap[]; redo: SqlSnap[] }>>({})
   const suggestEnv = useRef<SuggestEnv>({
     sql: '',
     dbId: '',
@@ -1350,6 +1356,70 @@ export default function CommonQuery() {
     switchEnv(next)
   }
 
+  function sqlUndoBucket(key: string) {
+    const all = sqlUndoRef.current
+    if (!all[key]) all[key] = { undo: [], redo: [] }
+    return all[key]
+  }
+
+  function noteSqlEdit(key: string, snap: SqlSnap) {
+    if (!key) return
+    const bucket = sqlUndoBucket(key)
+    const top = bucket.undo[bucket.undo.length - 1]
+    if (top && top.sql === snap.sql && top.cursor === snap.cursor) return
+    bucket.undo.push(snap)
+    if (bucket.undo.length > 100) bucket.undo.shift()
+    bucket.redo = []
+  }
+
+  function noteSqlBeforeInput(e: React.FormEvent<HTMLTextAreaElement>) {
+    if (!current) return
+    const el = e.currentTarget
+    noteSqlEdit(current.key, { sql: el.value, cursor: el.selectionStart ?? 0 })
+  }
+
+  function placeSqlCursor(cursor: number, sql: string) {
+    setTimeout(() => {
+      const el = sqlBoxRef.current
+      if (!el) return
+      const n = Math.max(0, Math.min(cursor, sql.length))
+      el.focus()
+      el.setSelectionRange(n, n)
+    }, 0)
+  }
+
+  function undoSql() {
+    if (!current) return
+    const bucket = sqlUndoBucket(current.key)
+    const prev = bucket.undo.pop()
+    if (!prev) return
+    const el = sqlBoxRef.current
+    bucket.redo.push({
+      sql: current.sql || '',
+      cursor: el ? el.selectionStart ?? (current.sql || '').length : (current.sql || '').length,
+    })
+    if (bucket.redo.length > 100) bucket.redo.shift()
+    suggest.close()
+    updateCurrent({ sql: prev.sql })
+    placeSqlCursor(prev.cursor, prev.sql)
+  }
+
+  function redoSql() {
+    if (!current) return
+    const bucket = sqlUndoBucket(current.key)
+    const next = bucket.redo.pop()
+    if (!next) return
+    const el = sqlBoxRef.current
+    bucket.undo.push({
+      sql: current.sql || '',
+      cursor: el ? el.selectionStart ?? (current.sql || '').length : (current.sql || '').length,
+    })
+    if (bucket.undo.length > 100) bucket.undo.shift()
+    suggest.close()
+    updateCurrent({ sql: next.sql })
+    placeSqlCursor(next.cursor, next.sql)
+  }
+
   function formatSQL() {
     if (!current) return
     const result = formatSqlContent(String(current.sql || ''))
@@ -1361,11 +1431,18 @@ export default function CommonQuery() {
       message.info('SQL 已是规范格式')
       return
     }
+    noteSqlEdit(current.key, { sql: current.sql || '', cursor: sqlBoxRef.current?.selectionStart ?? 0 })
     updateCurrent({ sql: result.text })
   }
 
   function onSqlKey(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (suggest.onKeyDown(e)) return
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'z' && !e.nativeEvent.isComposing) {
+      e.preventDefault()
+      if (e.shiftKey) redoSql()
+      else undoSql()
+      return
+    }
     const el = e.currentTarget
     const plain = !e.metaKey && !e.shiftKey && !e.altKey && !e.nativeEvent.isComposing
     if (plain && e.ctrlKey && e.key.toLowerCase() === 'a') {
@@ -1998,6 +2075,10 @@ export default function CommonQuery() {
       if (current?.dbId) void fetchTables(current.dbId)
     },
     apply: (sql, cursor) => {
+      if (current) {
+        const el = sqlBoxRef.current
+        noteSqlEdit(current.key, { sql: el?.value ?? current.sql ?? '', cursor: el?.selectionStart ?? 0 })
+      }
       updateCurrent({ sql })
       setTimeout(() => {
         const el = sqlBoxRef.current
@@ -2288,6 +2369,7 @@ export default function CommonQuery() {
                       suggest.onInput()
                     }}
                     onKeyDown={onSqlKey}
+                    onBeforeInput={noteSqlBeforeInput}
                     onKeyUp={(e) => {
                       if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) suggest.onInput()
                     }}

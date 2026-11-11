@@ -27,13 +27,13 @@ KeePlus（进程 `auto-dba`）支持多种打包方式。**构建在有 Node 18+
 
 一体包与后端包解压后工作目录须为**包根**（存在 `deploy/node-agent/bin/node-agent`、`deploy/sql-agent/bin/sql-agent` 等），集群部署和 SQL 执行器 SSH 下发无需再本机构建。
 
-可选环境变量：`GOOS` `GOARCH`（默认 `linux`/`amd64`）、`STAMP`（默认时间戳；发版用 `STAMP=v1.12.114`）、`IMAGE_TAG`、`SKIP_PNPM_INSTALL=1`（已有 `node_modules` 时）。
+可选环境变量：`GOOS` `GOARCH`（默认 `linux`/`amd64`）、`STAMP`（默认时间戳；发版用 `STAMP=v1.12.115`）、`IMAGE_TAG`、`SKIP_PNPM_INSTALL=1`（已有 `node_modules` 时）。
 
 ```bash
-STAMP=v1.12.114 ./scripts/pack_release.sh all
-STAMP=v1.12.114 ./scripts/pack_release.sh backend
-STAMP=v1.12.114 ./scripts/pack_release.sh frontend
-IMAGE_TAG=auto-dba:v1.12.114 ./scripts/pack_release.sh docker
+STAMP=v1.12.115 ./scripts/pack_release.sh all
+STAMP=v1.12.115 ./scripts/pack_release.sh backend
+STAMP=v1.12.115 ./scripts/pack_release.sh frontend
+IMAGE_TAG=auto-dba:v1.12.115 ./scripts/pack_release.sh docker
 ```
 
 ## 发布到 GitHub Release（固定流程）
@@ -46,13 +46,13 @@ IMAGE_TAG=auto-dba:v1.12.114 ./scripts/pack_release.sh docker
 # 已 push 的提交 + 写好 docs/changelog-vX.Y.Z.md 后：
 
 # 推荐：打包 + 打 tag + 创建 Release（一体包）
-PACK=1 ./scripts/publish_github_release.sh v1.12.114
+PACK=1 ./scripts/publish_github_release.sh v1.12.115
 
-# 已有 dist/*-v1.12.114.tgz 时只发版
-./scripts/publish_github_release.sh v1.12.114
+# 已有 dist/*-v1.12.115.tgz 时只发版
+./scripts/publish_github_release.sh v1.12.115
 
 # 发版前顺带删若干旧 Release（不删受仓库 Rules 保护的 tag）
-DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12.114
+DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12.115
 ```
 
 前提：本机能 `git push origin HEAD`；已安装 `gh`。若 Keychain 无凭据，先手动 push 一次或导出 `GH_TOKEN=...`。
@@ -61,7 +61,8 @@ DELETE_RELEASES='v2.3.6 v2.3.7' PACK=1 ./scripts/publish_github_release.sh v1.12
 
 | 版本 | 要点 |
 |------|------|
-| [v1.12.114](changelog-v1.12.114.md) | **当前推荐**。SQL 洞察页签按角色授权，工单拒绝不完整 INSERT |
+| [v1.12.115](changelog-v1.12.115.md) | **当前推荐**。实例总览纳入授权实例，同步和迁移按钮按角色授权 |
+| [v1.12.114](changelog-v1.12.114.md) | SQL 洞察页签按角色授权，工单拒绝不完整 INSERT |
 | [v1.12.113](changelog-v1.12.113.md) | 实例总览采集 StarRocks，SQL 审核保持 INSERT SELECT 为一条语句 |
 | [v1.12.112](changelog-v1.12.112.md) | SQL 洞察增加慢日志同步监控，单页超时不再整次失败 |
 | [v1.12.111](changelog-v1.12.111.md) | 云 PostgreSQL 变配合并扩盘，慢日志可走独立 Kafka，查询不再重复拼接 LIMIT |

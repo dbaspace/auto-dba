@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"auto-dba/internal/instoverview"
+	"auto-dba/internal/middleware"
 	"auto-dba/internal/promclient"
 	"auto-dba/internal/store"
 )
@@ -50,7 +51,7 @@ type overviewRow struct {
 
 func (h *OverviewHandler) List(c *gin.Context) {
 	tid := effectiveListTenantID(h.Store, c)
-	rows, err := h.rows(tid, c.Query("db_type"), c.Query("env"), c.Query("q"))
+	rows, err := h.rows(tid, middleware.UserID(c), c.Query("db_type"), c.Query("env"), c.Query("q"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -66,7 +67,7 @@ func (h *OverviewHandler) Collect(c *gin.Context) {
 	}
 	_ = c.ShouldBindJSON(&req)
 	tid := effectiveListTenantID(h.Store, c)
-	rows, err := h.rows(tid, req.DBType, req.Env, req.Q)
+	rows, err := h.rows(tid, middleware.UserID(c), req.DBType, req.Env, req.Q)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -157,10 +158,20 @@ func (h *OverviewHandler) jobView(tid string) overviewJob {
 	return *h.jobs[tid]
 }
 
-func (h *OverviewHandler) rows(tid, dbType, env, q string) ([]overviewRow, error) {
+func (h *OverviewHandler) rows(tid, userID, dbType, env, q string) ([]overviewRow, error) {
 	list, err := h.Store.ListInstancesInTenant(tid, "", "")
 	if err != nil {
 		return nil, err
+	}
+	if strings.TrimSpace(tid) != "" {
+		ids, err := grantedVisibleInstanceIDs(h.Store, tid, userID)
+		if err != nil {
+			return nil, err
+		}
+		list, err = appendInstancesByIDs(h.Store, list, ids, "", "")
+		if err != nil {
+			return nil, err
+		}
 	}
 	envs, err := h.Store.ListEnvironments()
 	if err != nil {
@@ -217,7 +228,74 @@ func (h *OverviewHandler) rows(tid, dbType, env, q string) ([]overviewRow, error
 		}
 		out = append(out, row)
 	}
+	h.attachPostgresCloudDisk(tid, out)
 	return out, nil
+}
+
+// attachPostgresCloudDisk 把已关联云资产的购买磁盘写到返回副本。不改采集缓存。
+func (h *OverviewHandler) attachPostgresCloudDisk(tid string, rows []overviewRow) {
+	if h == nil || h.Store == nil || len(rows) == 0 {
+		return
+	}
+	need := false
+	for _, row := range rows {
+		if row.DBType == "postgres" {
+			need = true
+			break
+		}
+	}
+	if !need {
+		return
+	}
+	list, err := h.Store.ListCloudResources(tid, "postgres", "")
+	if err != nil {
+		log.Printf("instance overview cloud disk: %v", err)
+		return
+	}
+	disks := latestCloudDiskBytes(list)
+	if len(disks) == 0 {
+		return
+	}
+	for i := range rows {
+		if rows[i].DBType != "postgres" {
+			continue
+		}
+		b, ok := disks[rows[i].ID]
+		if !ok || b <= 0 {
+			continue
+		}
+		if rows[i].Sample == nil {
+			rows[i].Sample = &instoverview.Sample{}
+		}
+		rows[i].Sample.DiskBytes = b
+		rows[i].Sample.DiskKnown = true
+	}
+}
+
+// latestCloudDiskBytes 同一平台实例多条云记录时取同步时间最新且 disk_gb > 0 的容量。
+func latestCloudDiskBytes(rows []store.CloudInstance) map[string]int64 {
+	type pick struct {
+		sync  string
+		bytes int64
+	}
+	best := map[string]pick{}
+	for _, it := range rows {
+		id := strings.TrimSpace(it.InstanceID)
+		if id == "" || it.DiskGB <= 0 {
+			continue
+		}
+		b := int64(it.DiskGB) * 1024 * 1024 * 1024
+		cur, ok := best[id]
+		if ok && it.SyncedAt <= cur.sync {
+			continue
+		}
+		best[id] = pick{sync: it.SyncedAt, bytes: b}
+	}
+	out := make(map[string]int64, len(best))
+	for id, p := range best {
+		out[id] = p.bytes
+	}
+	return out
 }
 
 func (h *OverviewHandler) attachStorageRates(tid string, targets []overviewRow) {

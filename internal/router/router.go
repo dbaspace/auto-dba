@@ -666,13 +666,13 @@ func Init(e *gin.Engine, d Deps) {
 	cdc.POST("/tasks/:id/reinit/preview", d.CDC.ReinitPreview)
 	cdc.POST("/tasks/:id/reinit", d.CDC.Reinit)
 
-	secured.GET("/sync-slots", d.Slot.List)
-	secured.POST("/sync-slots/collect", d.Slot.Collect)
-	secured.GET("/sync-slots/collect", d.Slot.CollectProgress)
-	secured.POST("/sync-slots/restart", d.Slot.Restart)
-	secured.GET("/sync-slots/restart", d.Slot.RestartProgress)
-	secured.GET("/sync-slots/logs", d.Slot.OpLogs)
-	secured.POST("/sync-slots/delete", d.Slot.Delete)
+	secured.GET("/sync-slots", requireURN(store.URNSidebarOpsSlots), d.Slot.List)
+	secured.POST("/sync-slots/collect", requireURN(store.URNSyncSlotsCollect), d.Slot.Collect)
+	secured.GET("/sync-slots/collect", requireURN(store.URNSyncSlotsCollect), d.Slot.CollectProgress)
+	secured.POST("/sync-slots/restart", requireURN(store.URNSyncSlotsRestart), d.Slot.Restart)
+	secured.GET("/sync-slots/restart", requireURN(store.URNSyncSlotsRestart), d.Slot.RestartProgress)
+	secured.GET("/sync-slots/logs", requireURN(store.URNSyncSlotsLogs), d.Slot.OpLogs)
+	secured.POST("/sync-slots/delete", requireURN(store.URNSyncSlotsDelete), d.Slot.Delete)
 
 	if d.InstanceOverview != nil {
 		secured.GET("/instance-overview", d.InstanceOverview.List)
@@ -681,8 +681,8 @@ func Init(e *gin.Engine, d Deps) {
 
 	mig := secured.Group("/migration")
 	mig.GET("/settings", d.Migration.GetSettings)
-	mig.PUT("/settings", d.Migration.PutSettings)
-	mig.POST("/oss/test", d.Migration.TestOSS)
+	mig.PUT("/settings", requireURN(store.URNMigrationSettings), d.Migration.PutSettings)
+	mig.POST("/oss/test", requireURN(store.URNMigrationSettings), d.Migration.TestOSS)
 	mig.GET("/tasks", d.Migration.List)
 	mig.POST("/tasks", d.Migration.Create)
 	mig.POST("/tasks/precheck", d.Migration.Precheck)

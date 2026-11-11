@@ -70,13 +70,17 @@ const (
 	URNMenusDelete          = "um.action.menus.delete"
 	URNLdapEdit             = "um.action.ldap.edit"
 
+	URNSidebarOpsSlots  = "um.sidebar.ops-slots"
 	URNSyncSlotsCollect = "um.action.sync-slots.collect"
+	URNSyncSlotsRestart = "um.action.sync-slots.restart"
+	URNSyncSlotsLogs    = "um.action.sync-slots.logs"
 	URNSyncSlotsDelete  = "um.action.sync-slots.delete"
 
-	URNMigrationCreate  = "um.action.migration.create"
-	URNMigrationEdit    = "um.action.migration.edit"
-	URNMigrationDelete  = "um.action.migration.delete"
-	URNMigrationApprove = "um.action.migration.approve"
+	URNMigrationCreate   = "um.action.migration.create"
+	URNMigrationEdit     = "um.action.migration.edit"
+	URNMigrationDelete   = "um.action.migration.delete"
+	URNMigrationApprove  = "um.action.migration.approve"
+	URNMigrationSettings = "um.action.migration.settings"
 
 	URNSchemaCompareCreate = "um.action.schema-compare.create"
 	URNSchemaCompareDelete = "um.action.schema-compare.delete"
@@ -338,12 +342,18 @@ func (d *DB) PermissionLabel(urn string) string {
 		return "删除"
 	case strings.HasSuffix(urn, ".collect"):
 		return "采集"
+	case strings.HasSuffix(urn, ".restart"):
+		return "重启"
+	case strings.HasSuffix(urn, ".logs"):
+		return "日志"
 	case strings.HasSuffix(urn, ".run"):
 		return "执行"
 	case strings.HasSuffix(urn, ".stop"):
 		return "停止"
 	case strings.HasSuffix(urn, ".approve"):
 		return "审批"
+	case strings.HasSuffix(urn, ".settings"):
+		return "设置"
 	case strings.HasSuffix(urn, ".bind"):
 		return "绑定"
 	case strings.HasPrefix(urn, "um.sidebar."):

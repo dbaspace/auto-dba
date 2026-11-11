@@ -14,6 +14,7 @@ import {
   message,
 } from 'antd'
 import api from '../../api/request'
+import { Perm, usePermission } from '../../hooks/usePermission'
 import './MigrationSettings.css'
 
 interface PerfConfig {
@@ -47,6 +48,8 @@ function emptyPerf(): PerfConfig {
 
 export default function MigrationSettings() {
   const navigate = useNavigate()
+  const { hasUrn } = usePermission()
+  const canSettings = hasUrn(Perm.migration.settings)
   const [loading, setLoading] = useState(false)
   const [savingApproval, setSavingApproval] = useState(false)
   const [savingPerf, setSavingPerf] = useState(false)
@@ -99,9 +102,10 @@ export default function MigrationSettings() {
   }
 
   useEffect(() => {
+    if (!canSettings) return
     load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [canSettings])
 
   return (
     <div className="gray-page mig-settings">
@@ -109,6 +113,10 @@ export default function MigrationSettings() {
         <h1>迁移设置</h1>
         <Button onClick={() => navigate('/ops/migration')}>返回列表</Button>
       </div>
+      {!canSettings ? (
+        <Alert type="warning" showIcon message="无迁移设置权限" description="需要操作权限「迁移设置」。" />
+      ) : null}
+      {canSettings ? (
 
       <div className="form-narrow">
         <Card
@@ -208,6 +216,7 @@ export default function MigrationSettings() {
           </Form>
         </Card>
       </div>
+      ) : null}
     </div>
   )
 }

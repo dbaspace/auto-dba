@@ -3,6 +3,7 @@ import { Button, Drawer, Input, InputNumber, Modal, Pagination, Popconfirm, Prog
 import { EyeOutlined } from '@ant-design/icons'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import api from '../../api/request'
+import { Perm, usePermission } from '../../hooks/usePermission'
 import './SlotList.css'
 
 function slotInstanceLabel(row: SlotRow) {
@@ -127,6 +128,11 @@ function SlotPeek({
 }
 
 export default function SlotList() {
+  const { hasUrn } = usePermission()
+  const canCollect = hasUrn(Perm.syncSlots.collect)
+  const canRestart = hasUrn(Perm.syncSlots.restart)
+  const canLogs = hasUrn(Perm.syncSlots.logs)
+  const canDelete = hasUrn(Perm.syncSlots.delete)
   const [rows, setRows] = useState<SlotRow[]>([])
   const [loading, setLoading] = useState(false)
   const [refreshedAt, setRefreshedAt] = useState('')
@@ -210,12 +216,16 @@ export default function SlotList() {
       setJob(data)
       if (data?.started && data?.status === 'running') {
         message.info(data.message || '已开始采集')
-        setLogOpen(true)
-        void loadOpLogs(1)
+        if (canLogs) {
+          setLogOpen(true)
+          void loadOpLogs(1)
+        }
       } else if (data?.status === 'running') {
         message.warning(data.message || '采集进行中')
-        setLogOpen(true)
-        void loadOpLogs(1)
+        if (canLogs) {
+          setLogOpen(true)
+          void loadOpLogs(1)
+        }
       } else if (data?.message) {
         message.info(data.message)
         if (data?.status === 'done') await load(true)
@@ -279,12 +289,16 @@ export default function SlotList() {
       setRestartJob(data)
       if (data?.started && data?.status === 'running') {
         message.info(data.message || '已开始批量重启')
-        setLogOpen(true)
-        void loadOpLogs(1)
+        if (canLogs) {
+          setLogOpen(true)
+          void loadOpLogs(1)
+        }
       } else if (data?.status === 'running') {
         message.warning(data.message || '重启进行中')
-        setLogOpen(true)
-        void loadOpLogs(1)
+        if (canLogs) {
+          setLogOpen(true)
+          void loadOpLogs(1)
+        }
       } else if (data?.message) {
         message.info(data.message)
       }
@@ -306,9 +320,9 @@ export default function SlotList() {
       message.info(job.message || '采集完成')
       setSelected([])
       void load(true)
-      if (logOpen) void loadOpLogs()
+      if (canLogs && logOpen) void loadOpLogs()
     }
-  }, [job, load, logOpen, loadOpLogs])
+  }, [job, load, logOpen, loadOpLogs, canLogs])
 
   useEffect(() => {
     if (restartJob?.status === 'running') wasRestartRunning.current = true
@@ -320,15 +334,16 @@ export default function SlotList() {
       else if (ok === 0 && failed > 0) message.error(restartJob.message || '重启全部失败')
       else message.warning(restartJob.message || '重启已结束')
       void load(true)
-      void loadOpLogs()
+      if (canLogs) void loadOpLogs()
     }
-  }, [restartJob, load, loadOpLogs])
+  }, [restartJob, load, loadOpLogs, canLogs])
 
   useEffect(() => {
     void load()
-    pollCollect().catch(() => {})
-    pollRestart().catch(() => {})
-  }, [load, pollCollect, pollRestart])
+    if (canCollect) pollCollect().catch(() => {})
+    else setCollectKnown(true)
+    if (canRestart) pollRestart().catch(() => {})
+  }, [load, pollCollect, pollRestart, canCollect, canRestart])
 
   useEffect(() => {
     if (job?.status !== 'running') return
@@ -338,7 +353,7 @@ export default function SlotList() {
       if (stop) return
       try {
         const running = await pollCollect()
-        if (logOpen) void loadOpLogs()
+        if (canLogs && logOpen) void loadOpLogs()
         if (!stop && running) timer = window.setTimeout(tick, 1500)
       } catch {
         if (!stop) timer = window.setTimeout(tick, 3000)
@@ -349,7 +364,7 @@ export default function SlotList() {
       stop = true
       window.clearTimeout(timer)
     }
-  }, [job?.status, pollCollect, logOpen, loadOpLogs])
+  }, [job?.status, pollCollect, logOpen, loadOpLogs, canLogs])
 
   useEffect(() => {
     if (restartJob?.status !== 'running') return
@@ -359,7 +374,7 @@ export default function SlotList() {
       if (stop) return
       try {
         const running = await pollRestart()
-        if (logOpen) void loadOpLogs()
+        if (canLogs && logOpen) void loadOpLogs()
         if (!stop && running) timer = window.setTimeout(tick, 1200)
       } catch {
         if (!stop) timer = window.setTimeout(tick, 2500)
@@ -370,7 +385,7 @@ export default function SlotList() {
       stop = true
       window.clearTimeout(timer)
     }
-  }, [restartJob?.status, pollRestart, logOpen, loadOpLogs])
+  }, [restartJob?.status, pollRestart, logOpen, loadOpLogs, canLogs])
 
   const shown = useMemo(() => {
     const host = applied.host.trim().toLowerCase()
@@ -389,7 +404,7 @@ export default function SlotList() {
   }, [rows, applied])
 
   const collectRunning = job?.status === 'running'
-  const restartLocked = !collectKnown || collectRunning
+  const restartLocked = canCollect && (!collectKnown || collectRunning)
   const openCell = useCallback((title: string, text: string) => setCellView({ title, text }), [])
   const restartRunning = restartJob?.status === 'running'
   // line 已含「HH:MM:SS [采集|重启] …」，勿再叠 kind 前缀
@@ -463,34 +478,42 @@ export default function SlotList() {
             <Button loading={loading} disabled={loading} onClick={() => void load()}>
               刷新
             </Button>
-            <Button loading={collectRunning} disabled={restartRunning} onClick={collect}>
-              手动采集
-            </Button>
-            <Button
-              disabled={!selected.length || restartRunning || restartLocked}
-              loading={restartRunning}
-              onClick={() => confirmRestart(selected)}
-            >
-              批量重启
-            </Button>
-            {collectRunning ? (
+            {canCollect ? (
+              <Button loading={collectRunning} disabled={restartRunning} onClick={collect}>
+                手动采集
+              </Button>
+            ) : null}
+            {canRestart ? (
+              <Button
+                disabled={!selected.length || restartRunning || restartLocked}
+                loading={restartRunning}
+                onClick={() => confirmRestart(selected)}
+              >
+                批量重启
+              </Button>
+            ) : null}
+            {canCollect && collectRunning ? (
               <span className="hint">{job?.message || '采集进行中，请等待完成后再重启'}</span>
-            ) : !collectKnown ? (
+            ) : canCollect && !collectKnown ? (
               <span className="hint">正在确认采集进度</span>
             ) : null}
-            <Button
-              onClick={() => {
-                setLogOpen(true)
-                void loadOpLogs(1)
-              }}
-            >
-              查看操作日志
-            </Button>
-            <Popconfirm title="只删除同步列表记录，不删除 PostgreSQL 复制槽" onConfirm={() => remove(selected)} disabled={!selected.length}>
-              <Button danger disabled={!selected.length}>
-                批量删除
+            {canLogs ? (
+              <Button
+                onClick={() => {
+                  setLogOpen(true)
+                  void loadOpLogs(1)
+                }}
+              >
+                查看操作日志
               </Button>
-            </Popconfirm>
+            ) : null}
+            {canDelete ? (
+              <Popconfirm title="只删除同步列表记录，不删除 PostgreSQL 复制槽" onConfirm={() => remove(selected)} disabled={!selected.length}>
+                <Button danger disabled={!selected.length}>
+                  批量删除
+                </Button>
+              </Popconfirm>
+            ) : null}
           </Space>
           <span className="hint" style={{ marginLeft: 'auto' }}>
             刷新时间：{refreshedAt || '—'}

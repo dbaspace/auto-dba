@@ -34,9 +34,12 @@ export function actionVerbLabel(urn?: string): string | null {
   if (u.endsWith('.edit')) return '编辑'
   if (u.endsWith('.delete')) return '删除'
   if (u.endsWith('.collect')) return '采集'
+  if (u.endsWith('.restart')) return '重启'
+  if (u.endsWith('.logs')) return '日志'
   if (u.endsWith('.run')) return '执行'
   if (u.endsWith('.stop')) return '停止'
   if (u.endsWith('.approve')) return '审批'
+  if (u.endsWith('.settings')) return '设置'
   if (u.startsWith('um.action.')) return '操作'
   return null
 }
@@ -51,11 +54,11 @@ export function ActionVerbTag({ urn }: { urn?: string }) {
   const label = actionVerbLabel(urn)
   if (!label) return null
   const color =
-    label === '查看'
+    label === '查看' || label === '日志'
       ? 'blue'
       : label === '新建'
         ? 'green'
-        : label === '编辑' || label === '采集' || label === '执行' || label === '审批'
+        : label === '编辑' || label === '采集' || label === '执行' || label === '审批' || label === '重启' || label === '设置'
           ? 'orange'
           : label === '删除' || label === '停止'
             ? 'red'

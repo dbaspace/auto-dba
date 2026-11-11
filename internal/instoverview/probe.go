@@ -38,17 +38,20 @@ type Sample struct {
 	DataKnown        bool    `json:"data_known,omitempty"`
 	StorageRate      float64 `json:"storage_rate,omitempty"`
 	StorageRateKnown bool    `json:"storage_rate_known,omitempty"`
-	// StarRocks：数据盘总大小为各 BE TotalCapacity 之和；使用率是单节点最高 UsedPct。
-	DiskBytes         int64  `json:"disk_bytes,omitempty"`
-	DiskKnown         bool   `json:"disk_known,omitempty"`
-	TabletCount       int64  `json:"tablet_count,omitempty"`
-	TabletKnown       bool   `json:"tablet_known,omitempty"`
-	FEAlive           int    `json:"fe_alive,omitempty"`
-	FETotal           int    `json:"fe_total,omitempty"`
-	BEAlive           int    `json:"be_alive,omitempty"`
-	BETotal           int    `json:"be_total,omitempty"`
-	BEDecommissioning bool   `json:"be_decommissioning,omitempty"`
-	StorageHotHost    string `json:"storage_hot_host,omitempty"`
+	// StarRocks：数据盘总大小为各 BE TotalCapacity 之和。使用率是数据存储 / 数据盘总大小。
+	// 整盘最高 UsedPct 单独放在 DiskUsedRate，悬停用。
+	DiskBytes         int64   `json:"disk_bytes,omitempty"`
+	DiskKnown         bool    `json:"disk_known,omitempty"`
+	DiskUsedRate      float64 `json:"disk_used_rate,omitempty"`
+	DiskUsedKnown     bool    `json:"disk_used_known,omitempty"`
+	TabletCount       int64   `json:"tablet_count,omitempty"`
+	TabletKnown       bool    `json:"tablet_known,omitempty"`
+	FEAlive           int     `json:"fe_alive,omitempty"`
+	FETotal           int     `json:"fe_total,omitempty"`
+	BEAlive           int     `json:"be_alive,omitempty"`
+	BETotal           int     `json:"be_total,omitempty"`
+	BEDecommissioning bool    `json:"be_decommissioning,omitempty"`
+	StorageHotHost    string  `json:"storage_hot_host,omitempty"`
 	// CpuRate / CpuSeries：Redis CPU（Prometheus 近 5 分钟）；Rate 为序列末点百分比。
 	CpuRate     float64    `json:"cpu_rate,omitempty"`
 	CpuKnown    bool       `json:"cpu_known,omitempty"`
