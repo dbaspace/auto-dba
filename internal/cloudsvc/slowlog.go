@@ -198,7 +198,7 @@ func (s *Service) slowAccount(ctx context.Context, account *store.CloudAccount, 
 				n, err := s.slowOne(ctx, reader, c, account, inst, now)
 				mu.Lock()
 				total += n
-				if err != nil && first == nil {
+				if err != nil && !slowCloudTimeout(err) && first == nil {
 					first = err
 				}
 				mu.Unlock()
@@ -262,12 +262,20 @@ func (s *Service) slowOne(ctx context.Context, reader cloud.Reader, cred cloud.C
 	if plan.Gap {
 		advanced = plan.GapTo
 	}
+	resetDone := false
+	resetIngested := func() {
+		if resetDone {
+			return
+		}
+		resetDone = true
+		_ = s.DB.ResetSlowIngested(account.Vendor, "postgres", account.ID, inst.CloudID)
+	}
 	total := 0
 	for _, seg := range plan.Windows {
 		if err := ctx.Err(); err != nil {
 			return total, s.failSlow(row, cur, err, useKafka)
 		}
-		n, err := s.pullSlow(ctx, reader, cred, account, inst, seg, useKafka, publish)
+		n, err := s.pullSlow(ctx, reader, cred, account, inst, seg, useKafka, publish, resetIngested)
 		if err != nil {
 			var send kafkaSendError
 			return total, s.failSlow(row, cur, err, errors.As(err, &send))
@@ -280,15 +288,23 @@ func (s *Service) slowOne(ctx context.Context, reader cloud.Reader, cred cloud.C
 			row.Status = "none"
 		}
 		row.Error = ""
-		row.LastCount = total
 		row.FailCount = 0
 		at := time.Now().UTC().Format(time.RFC3339)
 		row.ProducedAt = at
-		if !useKafka {
-			row.IngestedAt = at
+		if total > 0 {
+			row.LastCount = total
+			if !useKafka {
+				row.IngestedAt = at
+				row.IngestedCount = total
+			}
 		}
 		if err := s.DB.SaveCloudCursor(row); err != nil {
 			return total, err
+		}
+		if total > 0 && !useKafka {
+			if err := s.DB.SetSlowIngested(account.Vendor, "postgres", account.ID, inst.CloudID, total, at); err != nil {
+				return total, err
+			}
 		}
 		cur = row
 	}
@@ -298,7 +314,7 @@ func (s *Service) slowOne(ctx context.Context, reader cloud.Reader, cred cloud.C
 	return total, nil
 }
 
-func (s *Service) pullSlow(ctx context.Context, reader cloud.Reader, cred cloud.Cred, account *store.CloudAccount, inst store.CloudInstance, seg cloud.Window, useKafka bool, publish func(context.Context, []slowbus.Message) error) (int, error) {
+func (s *Service) pullSlow(ctx context.Context, reader cloud.Reader, cred cloud.Cred, account *store.CloudAccount, inst store.CloudInstance, seg cloud.Window, useKafka bool, publish func(context.Context, []slowbus.Message) error, resetIngested func()) (int, error) {
 	offset := 0
 	n := 0
 	for {
@@ -359,10 +375,16 @@ func (s *Service) pullSlow(ctx context.Context, reader cloud.Reader, cred cloud.
 			n++
 		}
 		if useKafka {
+			if len(msgs) > 0 && resetIngested != nil {
+				resetIngested()
+			}
 			if err := publish(ctx, msgs); err != nil {
 				return n, kafkaSendError{err}
 			}
 		} else if len(direct) > 0 {
+			if resetIngested != nil {
+				resetIngested()
+			}
 			if err := s.DB.InsertCloudSlowLogs(direct); err != nil {
 				return n, err
 			}
@@ -381,16 +403,30 @@ type kafkaSendError struct{ error }
 
 func (e kafkaSendError) Unwrap() error { return e.error }
 
+func slowCloudTimeout(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "Client.Timeout") || strings.Contains(msg, "while reading body")
+}
+
 func slowRetry(ctx context.Context, fn func() error) error {
 	delay := time.Second
 	var err error
+	timeouts := 0
 	for i := 0; i < 3; i++ {
 		err = fn()
-		if err == nil || !cloud.IsRateLimit(err) {
-			return err
+		if err == nil {
+			return nil
 		}
-		if i == 2 {
-			break
+		retry := cloud.IsRateLimit(err)
+		if slowCloudTimeout(err) {
+			timeouts++
+			retry = timeouts <= 1
+		}
+		if !retry || i == 2 {
+			return err
 		}
 		t := time.NewTimer(delay)
 		select {
@@ -552,8 +588,14 @@ func (s *Service) insertSlowMessages(ctx context.Context, msgs []slowbus.Message
 		return err
 	}
 	at := time.Now().UTC().Format(time.RFC3339)
-	for _, m := range seen {
-		_ = s.DB.TouchSlowIngested(m.Vendor, "postgres", m.AccountID, m.CloudID, at)
+	counts := map[string]int{}
+	for _, m := range msgs {
+		key := m.Vendor + "\x00" + m.AccountID + "\x00" + m.CloudID
+		counts[key]++
+		seen[key] = m
+	}
+	for key, m := range seen {
+		_ = s.DB.AddSlowIngested(m.Vendor, "postgres", m.AccountID, m.CloudID, counts[key], at)
 	}
 	return nil
 }

@@ -745,6 +745,7 @@ func Init(e *gin.Engine, d Deps) {
 		secured.GET("/cloud/policies", requireURN(store.URNSidebarCloudPolicies), d.Cloud.ListPolicies)
 		secured.PUT("/cloud/policies", submit, d.Cloud.SavePolicy)
 		secured.GET("/cloud/slow-logs", requireURN(store.URNSidebarCloudPostgres), d.Cloud.SlowLogs)
+		secured.GET("/cloud/slow-logs/pipeline", requireURN(store.URNSidebarCloudPostgres), d.Cloud.SlowlogPipeline)
 		secured.POST("/cloud/slow-logs/sync", requireURN(store.URNSqlInsightCloudSlow), d.Cloud.SyncSlow)
 	}
 	fb.GET("/tasks", d.Flashback.List)

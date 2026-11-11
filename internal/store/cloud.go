@@ -114,6 +114,7 @@ func (d *DB) ensureCloudSchema() error {
 		`ALTER TABLE tbl_cloud_sync_cursors ADD COLUMN IF NOT EXISTS gap_to TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE tbl_cloud_sync_cursors ADD COLUMN IF NOT EXISTS produced_at TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE tbl_cloud_sync_cursors ADD COLUMN IF NOT EXISTS ingested_at TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE tbl_cloud_sync_cursors ADD COLUMN IF NOT EXISTS ingested_count INTEGER NOT NULL DEFAULT 0`,
 		`CREATE TABLE IF NOT EXISTS tbl_cloud_slow_logs (
 			id TEXT PRIMARY KEY,
 			tenant_id TEXT NOT NULL DEFAULT '',
@@ -1030,31 +1031,32 @@ func (d *DB) ListEnabledCloudPolicies() ([]CloudPolicy, error) {
 }
 
 type CloudCursor struct {
-	ID         string `json:"id"`
-	TenantID   string `json:"tenant_id"`
-	Vendor     string `json:"vendor"`
-	Engine     string `json:"engine"`
-	AccountID  string `json:"account_id"`
-	CloudID    string `json:"cloud_instance_id"`
-	DataType   string `json:"data_type"`
-	CursorAt   string `json:"cursor_at"`
-	Status     string `json:"status"`
-	Error      string `json:"error"`
-	LastCount  int    `json:"last_count"`
-	FailCount  int    `json:"fail_count"`
-	UpdatedAt  string `json:"updated_at"`
-	GapFrom    string `json:"gap_from,omitempty"`
-	GapTo      string `json:"gap_to,omitempty"`
-	ProducedAt string `json:"produced_at,omitempty"`
-	IngestedAt string `json:"ingested_at,omitempty"`
+	ID            string `json:"id"`
+	TenantID      string `json:"tenant_id"`
+	Vendor        string `json:"vendor"`
+	Engine        string `json:"engine"`
+	AccountID     string `json:"account_id"`
+	CloudID       string `json:"cloud_instance_id"`
+	DataType      string `json:"data_type"`
+	CursorAt      string `json:"cursor_at"`
+	Status        string `json:"status"`
+	Error         string `json:"error"`
+	LastCount     int    `json:"last_count"`
+	FailCount     int    `json:"fail_count"`
+	UpdatedAt     string `json:"updated_at"`
+	GapFrom       string `json:"gap_from,omitempty"`
+	GapTo         string `json:"gap_to,omitempty"`
+	ProducedAt    string `json:"produced_at,omitempty"`
+	IngestedAt    string `json:"ingested_at,omitempty"`
+	IngestedCount int    `json:"ingested_count"`
 }
 
 func (d *DB) GetCloudCursor(vendor, engine, accountID, cloudID, dataType string) (*CloudCursor, error) {
-	row := d.QueryRow(`SELECT id, tenant_id, vendor, engine, account_id, cloud_instance_id, data_type, cursor_at, status, error, last_count, fail_count, updated_at, gap_from, gap_to, produced_at, ingested_at
+	row := d.QueryRow(`SELECT id, tenant_id, vendor, engine, account_id, cloud_instance_id, data_type, cursor_at, status, error, last_count, fail_count, updated_at, gap_from, gap_to, produced_at, ingested_at, ingested_count
 		FROM tbl_cloud_sync_cursors WHERE vendor=? AND engine=? AND account_id=? AND cloud_instance_id=? AND data_type=?`,
 		vendor, engine, accountID, cloudID, dataType)
 	var c CloudCursor
-	err := row.Scan(&c.ID, &c.TenantID, &c.Vendor, &c.Engine, &c.AccountID, &c.CloudID, &c.DataType, &c.CursorAt, &c.Status, &c.Error, &c.LastCount, &c.FailCount, &c.UpdatedAt, &c.GapFrom, &c.GapTo, &c.ProducedAt, &c.IngestedAt)
+	err := row.Scan(&c.ID, &c.TenantID, &c.Vendor, &c.Engine, &c.AccountID, &c.CloudID, &c.DataType, &c.CursorAt, &c.Status, &c.Error, &c.LastCount, &c.FailCount, &c.UpdatedAt, &c.GapFrom, &c.GapTo, &c.ProducedAt, &c.IngestedAt, &c.IngestedCount)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -1072,9 +1074,9 @@ func (d *DB) SaveCloudCursor(c *CloudCursor) error {
 	}
 	if exist == nil {
 		c.ID = uuid.NewString()
-		_, err = d.Exec(`INSERT INTO tbl_cloud_sync_cursors(id, tenant_id, vendor, engine, account_id, cloud_instance_id, data_type, cursor_at, status, error, last_count, fail_count, updated_at, gap_from, gap_to, produced_at, ingested_at)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			c.ID, c.TenantID, c.Vendor, c.Engine, c.AccountID, c.CloudID, c.DataType, c.CursorAt, c.Status, c.Error, c.LastCount, c.FailCount, now, c.GapFrom, c.GapTo, c.ProducedAt, c.IngestedAt)
+		_, err = d.Exec(`INSERT INTO tbl_cloud_sync_cursors(id, tenant_id, vendor, engine, account_id, cloud_instance_id, data_type, cursor_at, status, error, last_count, fail_count, updated_at, gap_from, gap_to, produced_at, ingested_at, ingested_count)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			c.ID, c.TenantID, c.Vendor, c.Engine, c.AccountID, c.CloudID, c.DataType, c.CursorAt, c.Status, c.Error, c.LastCount, c.FailCount, now, c.GapFrom, c.GapTo, c.ProducedAt, c.IngestedAt, c.IngestedCount)
 		return err
 	}
 	c.ID = exist.ID
@@ -1089,9 +1091,21 @@ func (d *DB) SaveCloudCursor(c *CloudCursor) error {
 	return err
 }
 
-func (d *DB) TouchSlowIngested(vendor, engine, accountID, cloudID, at string) error {
-	_, err := d.Exec(`UPDATE tbl_cloud_sync_cursors SET ingested_at=? WHERE vendor=? AND engine=? AND account_id=? AND cloud_instance_id=? AND data_type='slow_log'`,
-		at, vendor, engine, accountID, cloudID)
+func (d *DB) ResetSlowIngested(vendor, engine, accountID, cloudID string) error {
+	_, err := d.Exec(`UPDATE tbl_cloud_sync_cursors SET ingested_count=0, ingested_at='' WHERE vendor=? AND engine=? AND account_id=? AND cloud_instance_id=? AND data_type='slow_log'`,
+		vendor, engine, accountID, cloudID)
+	return err
+}
+
+func (d *DB) SetSlowIngested(vendor, engine, accountID, cloudID string, n int, at string) error {
+	_, err := d.Exec(`UPDATE tbl_cloud_sync_cursors SET ingested_count=?, ingested_at=? WHERE vendor=? AND engine=? AND account_id=? AND cloud_instance_id=? AND data_type='slow_log'`,
+		n, at, vendor, engine, accountID, cloudID)
+	return err
+}
+
+func (d *DB) AddSlowIngested(vendor, engine, accountID, cloudID string, n int, at string) error {
+	_, err := d.Exec(`UPDATE tbl_cloud_sync_cursors SET ingested_count=ingested_count+?, ingested_at=? WHERE vendor=? AND engine=? AND account_id=? AND cloud_instance_id=? AND data_type='slow_log'`,
+		n, at, vendor, engine, accountID, cloudID)
 	return err
 }
 
@@ -1242,8 +1256,48 @@ func appendSlowRange(q string, args []any, from, to string) (string, []any) {
 
 func (d *DB) CountCloudSlowLogsSince(cloudID string, since time.Time) (int, error) {
 	var n int
-	err := d.QueryRow(`SELECT COUNT(*) FROM tbl_cloud_slow_logs WHERE cloud_instance_id=? AND log_time::timestamptz >= ?::timestamptz`, cloudID, since.UTC().Format(time.RFC3339)).Scan(&n)
+	err := d.QueryRow(`SELECT COUNT(*) FROM tbl_cloud_slow_logs WHERE cloud_instance_id=? AND log_time >= ?`, cloudID, since.UTC().Format(time.RFC3339)).Scan(&n)
 	return n, err
+}
+
+func (d *DB) CountCloudSlowLogsSinceIDs(cloudIDs []string, since time.Time) (map[string]int, error) {
+	out := map[string]int{}
+	ids := make([]string, 0, len(cloudIDs))
+	seen := map[string]struct{}{}
+	for _, id := range cloudIDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	q := `SELECT cloud_instance_id, COUNT(*) FROM tbl_cloud_slow_logs WHERE cloud_instance_id IN (?` + strings.Repeat(",?", len(ids)-1) + `) AND log_time >= ? GROUP BY cloud_instance_id`
+	args := make([]any, 0, len(ids)+1)
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	args = append(args, since.UTC().Format(time.RFC3339))
+	rows, err := d.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var n int
+		if err := rows.Scan(&id, &n); err != nil {
+			return nil, err
+		}
+		out[id] = n
+	}
+	return out, rows.Err()
 }
 
 func (d *DB) CloudSlowTrend(cloudID, from, to, unit string) ([]CloudSlowPoint, error) {

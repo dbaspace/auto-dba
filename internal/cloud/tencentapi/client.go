@@ -21,6 +21,7 @@ type Client struct {
 	Host    string
 	Service string
 	Version string
+	Timeout time.Duration
 	Do      func(*http.Request) (*http.Response, error)
 }
 
@@ -44,7 +45,11 @@ func (c *Client) Call(ctx context.Context, cred cloud.Cred, action string, paylo
 	}
 	do := c.Do
 	if do == nil {
-		do = (&http.Client{Timeout: 45 * time.Second}).Do
+		timeout := 45 * time.Second
+		if c.Timeout > 0 {
+			timeout = c.Timeout
+		}
+		do = (&http.Client{Timeout: timeout}).Do
 	}
 	resp, err := do(req)
 	if err != nil {
@@ -53,7 +58,7 @@ func (c *Client) Call(ctx context.Context, cred cloud.Cred, action string, paylo
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%s: %w", action, err)
 	}
 	if resp.StatusCode >= 400 {
 		return nil, fmt.Errorf("%s HTTP %d: %s", action, resp.StatusCode, strings.TrimSpace(string(raw)))

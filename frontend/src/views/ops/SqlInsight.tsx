@@ -14,6 +14,7 @@ import AwrReportTab from './sql-insight/AwrReportTab'
 import PgSpaceTab from './sql-insight/PgSpaceTab'
 import SmartAnalysisTab from './sql-insight/SmartAnalysisTab'
 import CloudSlowLogTab from './sql-insight/CloudSlowLogTab'
+import CloudSlowPipelineTab from './sql-insight/CloudSlowPipelineTab'
 import './SqlInsight.css'
 
 const { RangePicker } = DatePicker
@@ -178,7 +179,6 @@ export default function SqlInsight() {
     <div className="ops-page">
       <div className="ops-filters">
         <div className="filter-item" style={{ flex: 1.2 }}>
-          <span className="label">实例</span>
           <Select
             value={draftInstance || undefined}
             showSearch
@@ -257,6 +257,11 @@ export default function SqlInsight() {
             key: 'cloud',
             label: '云慢日志',
             children: <CloudSlowLogTab filter={buildFilter(draftInstance, draftRange, instances)} active={tab === 'cloud'} />,
+          },
+          {
+            key: 'pipeline',
+            label: '同步监控',
+            children: <CloudSlowPipelineTab active={tab === 'pipeline'} />,
           },
         ]}
       />

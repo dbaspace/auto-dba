@@ -583,6 +583,19 @@ func (h *CloudHandler) SlowLogs(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": list, "cursor": cur, "trend": trend, "spread": spread, "stats": stats, "bus": bus})
 }
 
+func (h *CloudHandler) SlowlogPipeline(c *gin.Context) {
+	if h.Svc == nil {
+		c.JSON(http.StatusOK, gin.H{"data": cloudsvc.SlowPipeline{Items: []cloudsvc.SlowPipelineItem{}}})
+		return
+	}
+	out, err := h.Svc.SlowlogPipeline(effectiveListTenantID(h.Store, c))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": out})
+}
+
 func (h *CloudHandler) SyncSlow(c *gin.Context) {
 	var req struct {
 		InstanceID string `json:"instance_id"`

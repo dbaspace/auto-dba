@@ -22,6 +22,20 @@ func TestSlowRetryStopsAfterThreeRateLimits(t *testing.T) {
 	}
 }
 
+func TestSlowRetryTimeoutOnce(t *testing.T) {
+	n := 0
+	err := slowRetry(context.Background(), func() error {
+		n++
+		return fmt.Errorf("DescribeSlowQueryList: context deadline exceeded (Client.Timeout or context cancellation while reading body)")
+	})
+	if n != 2 {
+		t.Fatalf("attempts %d", n)
+	}
+	if err == nil || !slowCloudTimeout(err) {
+		t.Fatal(err)
+	}
+}
+
 func TestRateLimitDoesNotAdvanceCursor(t *testing.T) {
 	err := fmt.Errorf("RequestLimitExceeded")
 	if !cloud.IsRateLimit(err) {

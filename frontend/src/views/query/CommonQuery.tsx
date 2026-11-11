@@ -1364,8 +1364,21 @@ export default function CommonQuery() {
     updateCurrent({ sql: result.text })
   }
 
-  function onSqlKey(e: React.KeyboardEvent) {
+  function onSqlKey(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (suggest.onKeyDown(e)) return
+    const el = e.currentTarget
+    const plain = !e.metaKey && !e.shiftKey && !e.altKey && !e.nativeEvent.isComposing
+    if (plain && e.ctrlKey && e.key.toLowerCase() === 'a') {
+      e.preventDefault()
+      el.setSelectionRange(0, el.value.length)
+      return
+    }
+    if (plain && !e.ctrlKey && e.key === 'Escape' && el.selectionStart !== el.selectionEnd) {
+      e.preventDefault()
+      const end = el.selectionEnd
+      el.setSelectionRange(end, end)
+      return
+    }
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       suggest.close()
@@ -2268,7 +2281,7 @@ export default function CommonQuery() {
                     className="sql-box-hl"
                     spellCheck={false}
                     minRows={8}
-                    placeholder="输入 SQL，Ctrl / ⌘ + Enter 运行；有多条且选中一段时只执行选中"
+                    placeholder="输入 SQL，Ctrl / ⌘ + Enter 运行；有多条且选中一段时只执行选中。Ctrl+A 全选，Esc 取消选中"
                     onChange={(v) => {
                       suggestEnv.current.sql = v
                       updateCurrent({ sql: v })

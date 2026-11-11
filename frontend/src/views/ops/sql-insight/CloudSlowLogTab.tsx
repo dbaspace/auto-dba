@@ -1,10 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Button, Input, Space, Table, Tabs, message } from 'antd'
-import { Link } from 'react-router-dom'
+import { Button, Input, Modal, Table, Tabs, Typography, message } from 'antd'
 import type { EChartsCoreOption } from 'echarts'
 import api from '../../../api/request'
-import Auth from '../../../components/Auth'
-import { Perm } from '../../../hooks/usePermission'
 import ChartBox from '../../dashboard/ChartBox'
 import type { SnapshotFilter } from './types'
 
@@ -26,6 +23,46 @@ function beijingText(raw?: string) {
     hourCycle: 'h23',
   }).formatToParts(new Date(t)).map((p) => [p.type, p.value]))
   return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`
+}
+
+const slowPage = {
+  defaultPageSize: 10,
+  pageSizeOptions: ['10', '20', '30', '50', '100'],
+  showSizeChanger: true,
+}
+
+function csvCell(value: unknown) {
+  const text = String(value ?? '')
+  if (/[",\n\r]/.test(text)) return `"${text.replace(/"/g, '""')}"`
+  return text
+}
+
+function downloadCsv(filename: string, headers: string[], rows: unknown[][]) {
+  const body = [headers, ...rows].map((line) => line.map(csvCell).join(',')).join('\r\n')
+  const blob = new Blob([`\uFEFF${body}`], { type: 'text/csv;charset=utf-8' })
+  const link = document.createElement('a')
+  link.href = URL.createObjectURL(blob)
+  link.download = filename
+  link.click()
+  URL.revokeObjectURL(link.href)
+}
+
+function SlowSqlText({ sql, onView }: { sql: string; onView: (sql: string) => void }) {
+  const [cut, setCut] = useState(false)
+  if (!sql) return null
+  return (
+    <div style={{ display: 'flex', alignItems: 'baseline', maxWidth: 480, minWidth: 0 }}>
+      <Typography.Paragraph
+        style={{ marginBottom: 0, flex: 1, minWidth: 0 }}
+        ellipsis={{ rows: 1, onEllipsis: (next) => setCut((prev) => (prev === next ? prev : next)) }}
+      >
+        {sql}
+      </Typography.Paragraph>
+      {cut ? (
+        <Button type="link" size="small" style={{ paddingInline: 4 }} onClick={() => onView(sql)}>查看</Button>
+      ) : null}
+    </div>
+  )
 }
 
 function bucketParts(bucket: string) {
@@ -101,12 +138,12 @@ export default function CloudSlowLogTab({ filter, active }: { filter: SnapshotFi
   const [stats, setStats] = useState<any[]>([])
   const [trend, setTrend] = useState<any[]>([])
   const [spread, setSpread] = useState<any[]>([])
-  const [cursor, setCursor] = useState<any>(null)
   const [note, setNote] = useState('')
   const [db, setDb] = useState('')
   const [q, setQ] = useState('')
   const [minMs, setMinMs] = useState('')
-  const [nowMs, setNowMs] = useState(() => Date.now())
+  const [viewSql, setViewSql] = useState('')
+  const [slowTab, setSlowTab] = useState('list')
 
   async function load() {
     if (!filter.instanceId) {
@@ -114,7 +151,6 @@ export default function CloudSlowLogTab({ filter, active }: { filter: SnapshotFi
       setStats([])
       setTrend([])
       setSpread([])
-      setCursor(null)
       setNote('请先选择 PostgreSQL 实例')
       return
     }
@@ -126,7 +162,6 @@ export default function CloudSlowLogTab({ filter, active }: { filter: SnapshotFi
     setStats(data.stats || [])
     setTrend(data.trend || [])
     setSpread(data.spread || [])
-    setCursor(data.cursor || null)
     setNote(data.message || '')
   }
 
@@ -136,40 +171,37 @@ export default function CloudSlowLogTab({ filter, active }: { filter: SnapshotFi
     })
   }, [active, filter.instanceId, filter.startTime, filter.endTime])
 
-  const syncedAt = cursor?.updated_at ? Date.parse(cursor.updated_at) : Number.NaN
-  const coolUntil = Number.isFinite(syncedAt) ? syncedAt + 5 * 60 * 1000 : 0
-  const cooling = coolUntil > nowMs
-  useEffect(() => {
-    if (!cooling) return
-    const timer = window.setTimeout(() => setNowMs(Date.now()), Math.max(coolUntil - Date.now(), 0) + 200)
-    return () => window.clearTimeout(timer)
-  }, [cooling, coolUntil])
-
   const countChart = useMemo(() => trendOption(trend), [trend])
   const durationChart = useMemo(() => spreadOption(spread), [spread])
 
+  const exportCsv = () => {
+    if (slowTab === 'stats') {
+      if (!stats.length) {
+        message.warning('没有可导出的数据')
+        return
+      }
+      downloadCsv('cloud-slow-stats.csv', ['最后执行', '次数', '总耗时 ms', '平均 ms', '库', '用户', '客户端', 'SQL'], stats.map((row) => [
+        beijingText(row.last_time), row.calls, row.total_ms, row.avg_ms, row.db_name, row.db_user, row.client, row.sql_text,
+      ]))
+      return
+    }
+    if (!rows.length) {
+      message.warning('没有可导出的数据')
+      return
+    }
+    downloadCsv('cloud-slow-log.csv', ['时间', '库', '用户', '客户端', '耗时 ms', 'SQL'], rows.map((row) => [
+      beijingText(row.log_time), row.db_name, row.db_user, row.client, row.duration_ms, row.sql_text,
+    ]))
+  }
+
   return (
     <div>
-      <Space style={{ marginBottom: 12 }} wrap>
-        <span>已发到 Kafka {beijingText(cursor?.produced_at)} 已入库 {beijingText(cursor?.ingested_at)} 游标 {beijingText(cursor?.cursor_at)} {cursor?.status || ''} {cursor?.last_count ?? ''} {cursor?.error || ''}</span>
-        {cursor?.gap_from ? <span>缺口 {beijingText(cursor.gap_from)} ~ {beijingText(cursor.gap_to)}</span> : null}
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 12 }}>
         <Input placeholder="库名" value={db} onChange={(e) => setDb(e.target.value)} style={{ width: 120 }} />
         <Input placeholder="SQL" value={q} onChange={(e) => setQ(e.target.value)} style={{ width: 180 }} />
         <Input placeholder="最小耗时 ms" value={minMs} onChange={(e) => setMinMs(e.target.value)} style={{ width: 120 }} />
         <Button onClick={() => void load().catch((e) => setNote(e?.response?.data?.message || '加载失败'))}>查询</Button>
-        <Auth urn={Perm.sqlInsight.cloudSlowSync}>
-          <Button
-            type="primary"
-            disabled={cooling || !filter.instanceId}
-            onClick={() => api.post('/cloud/slow-logs/sync', { instance_id: filter.instanceId || '' }).then(({ data }) => {
-              message.success(data?.message || '已发出')
-              setNowMs(Date.now())
-              void load()
-            }).catch((e) => message.error(e?.response?.data?.message || '同步失败'))}
-          >立即同步</Button>
-        </Auth>
-        <Link to="/config/sql-insight?tab=cloud">同步设置</Link>
-      </Space>
+      </div>
       {note && <p>{note}</p>}
       {(trend.length > 0 || spread.length > 0) && (
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 12 }}>
@@ -184,6 +216,9 @@ export default function CloudSlowLogTab({ filter, active }: { filter: SnapshotFi
         </div>
       )}
       <Tabs
+        activeKey={slowTab}
+        onChange={setSlowTab}
+        tabBarExtraContent={<Button onClick={exportCsv}>导出</Button>}
         items={[
           {
             key: 'list',
@@ -193,13 +228,14 @@ export default function CloudSlowLogTab({ filter, active }: { filter: SnapshotFi
                 rowKey="id"
                 dataSource={rows}
                 size="small"
+                pagination={slowPage}
                 columns={[
                   { title: '时间', dataIndex: 'log_time', width: 180, render: (v) => beijingText(v) },
                   { title: '库', dataIndex: 'db_name', width: 120 },
                   { title: '用户', dataIndex: 'db_user', width: 100 },
                   { title: '客户端', dataIndex: 'client', width: 140 },
                   { title: '耗时 ms', dataIndex: 'duration_ms', width: 100 },
-                  { title: 'SQL', dataIndex: 'sql_text' },
+                  { title: 'SQL', dataIndex: 'sql_text', width: 480, render: (v) => <SlowSqlText sql={String(v || '')} onView={setViewSql} /> },
                 ]}
               />
             ),
@@ -212,6 +248,7 @@ export default function CloudSlowLogTab({ filter, active }: { filter: SnapshotFi
                 rowKey="fingerprint"
                 dataSource={stats}
                 size="small"
+                pagination={slowPage}
                 columns={[
                   { title: '最后执行', dataIndex: 'last_time', width: 180, render: (v) => beijingText(v) },
                   { title: '次数', dataIndex: 'calls', width: 80 },
@@ -220,13 +257,22 @@ export default function CloudSlowLogTab({ filter, active }: { filter: SnapshotFi
                   { title: '库', dataIndex: 'db_name', width: 120 },
                   { title: '用户', dataIndex: 'db_user', width: 100 },
                   { title: '客户端', dataIndex: 'client', width: 140 },
-                  { title: 'SQL', dataIndex: 'sql_text' },
+                  { title: 'SQL', dataIndex: 'sql_text', width: 480, render: (v) => <SlowSqlText sql={String(v || '')} onView={setViewSql} /> },
                 ]}
               />
             ),
           },
         ]}
       />
+      <Modal
+        title="SQL"
+        open={Boolean(viewSql)}
+        onCancel={() => setViewSql('')}
+        footer={<Button onClick={() => setViewSql('')}>关闭</Button>}
+        width={760}
+      >
+        <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: 480, overflow: 'auto' }}>{viewSql}</pre>
+      </Modal>
     </div>
   )
 }

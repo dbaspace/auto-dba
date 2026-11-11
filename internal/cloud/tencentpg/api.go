@@ -231,13 +231,13 @@ func (r Reader) ListSlowLogs(ctx context.Context, cred cloud.Cred, cloudID strin
 	if limit <= 0 || limit > 100 {
 		limit = 100
 	}
-	raw, err := r.call(ctx, cred, "DescribeSlowQueryList", map[string]any{
+	raw, err := r.callTimeout(ctx, cred, "DescribeSlowQueryList", map[string]any{
 		"DBInstanceId": cloudID,
 		"StartTime":    shanghai(from),
 		"EndTime":      shanghai(to),
 		"Limit":        limit,
 		"Offset":       offset,
-	})
+	}, 120*time.Second)
 	if err != nil {
 		return nil, 0, err
 	}

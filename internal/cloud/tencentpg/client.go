@@ -33,7 +33,13 @@ func (c *Client) api() *tencentapi.Client {
 }
 
 func (c *Client) call(ctx context.Context, cred cloud.Cred, action string, payload any) ([]byte, error) {
-	return c.api().Call(ctx, cred, action, payload)
+	return c.callTimeout(ctx, cred, action, payload, 0)
+}
+
+func (c *Client) callTimeout(ctx context.Context, cred cloud.Cred, action string, payload any, timeout time.Duration) ([]byte, error) {
+	api := c.api()
+	api.Timeout = timeout
+	return api.Call(ctx, cred, action, payload)
 }
 
 func TC3Headers(secretID, secretKey, service, host, action, version, region string, payload []byte, ts time.Time) map[string]string {
