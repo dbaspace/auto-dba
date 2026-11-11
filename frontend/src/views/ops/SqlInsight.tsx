@@ -1,11 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { Button, DatePicker, Modal, Select, Space, Switch, Tabs, message } from 'antd'
+import { Button, DatePicker, Empty, Modal, Select, Space, Switch, Tabs, message } from 'antd'
 import { Link } from 'react-router-dom'
 import { ReloadOutlined, SearchOutlined, SettingOutlined } from '@ant-design/icons'
 import dayjs, { Dayjs } from 'dayjs'
 import api from '../../api/request'
 import Auth from '../../components/Auth'
-import { Perm } from '../../hooks/usePermission'
+import { Perm, usePermission } from '../../hooks/usePermission'
 import type { InsightTabKey, SnapshotFilter } from './sql-insight/types'
 import SqlInsightTab from './sql-insight/SqlInsightTab'
 import InsightAnalysisTab from './sql-insight/InsightAnalysisTab'
@@ -68,6 +68,7 @@ function buildFilter(instanceId: string, range: [Dayjs, Dayjs], instances: any[]
 }
 
 export default function SqlInsight() {
+  const { hasUrn } = usePermission()
   const [instances, setInstances] = useState<any[]>([])
   const [draftInstance, setDraftInstance] = useState('')
   const [draftRange, setDraftRange] = useState<[Dayjs, Dayjs]>(defaultRange())
@@ -132,16 +133,90 @@ export default function SqlInsight() {
     })
   }
 
+  const allowedTabs = useMemo(() => {
+    const order: InsightTabKey[] = ['sql', 'analysis', 'visual', 'awr', 'space', 'smart', 'cloud', 'pipeline']
+    const urnOf: Record<InsightTabKey, string> = {
+      sql: Perm.sqlInsight.tab.sql,
+      analysis: Perm.sqlInsight.tab.analysis,
+      visual: Perm.sqlInsight.tab.visual,
+      awr: Perm.sqlInsight.tab.awr,
+      space: Perm.sqlInsight.tab.space,
+      smart: Perm.sqlInsight.tab.smart,
+      cloud: Perm.sqlInsight.tab.cloud,
+      pipeline: Perm.sqlInsight.tab.pipeline,
+    }
+    return order.filter((key) => hasUrn(urnOf[key]))
+  }, [hasUrn])
+
+  const visibleTab = allowedTabs.includes(tab) ? tab : allowedTabs[0]
+
+  const tabItems = useMemo(() => {
+    if (!visibleTab) return []
+    const cloudFilter = buildFilter(draftInstance, draftRange, instances)
+    const all: { key: InsightTabKey; label: string; children: React.ReactNode }[] = [
+      {
+        key: 'sql',
+        label: 'SQL洞察',
+        children: (
+          <SqlInsightTab
+            filter={filter}
+            showSql={showSql}
+            autoRefresh={autoRefresh}
+            intervalSec={intervalSec}
+            refreshTick={refreshTick}
+            active={visibleTab === 'sql'}
+          />
+        ),
+      },
+      {
+        key: 'analysis',
+        label: '洞察分析',
+        children: <InsightAnalysisTab filter={filter} active={visibleTab === 'analysis'} refreshTick={refreshTick} />,
+      },
+      {
+        key: 'visual',
+        label: '可视汇总',
+        children: <VisualSummaryTab filter={filter} active={visibleTab === 'visual'} refreshTick={refreshTick} />,
+      },
+      {
+        key: 'awr',
+        label: 'AWR报告',
+        children: <AwrReportTab filter={filter} active={visibleTab === 'awr'} />,
+      },
+      {
+        key: 'space',
+        label: '表空间分析',
+        children: <PgSpaceTab filter={filter} active={visibleTab === 'space'} />,
+      },
+      {
+        key: 'smart',
+        label: '智能分析',
+        children: <SmartAnalysisTab filter={filter} active={visibleTab === 'smart'} />,
+      },
+      {
+        key: 'cloud',
+        label: '云慢日志',
+        children: <CloudSlowLogTab filter={cloudFilter} active={visibleTab === 'cloud'} />,
+      },
+      {
+        key: 'pipeline',
+        label: '同步监控',
+        children: <CloudSlowPipelineTab active={visibleTab === 'pipeline'} />,
+      },
+    ]
+    return all.filter((item) => allowedTabs.includes(item.key))
+  }, [allowedTabs, autoRefresh, draftInstance, draftRange, filter, instances, intervalSec, refreshTick, showSql, visibleTab])
+
   const settingsTab = useMemo(() => {
-    if (tab === 'space') return 'space'
-    if (tab === 'smart') return 'smart'
-    if (tab === 'awr') return 'awr'
+    if (visibleTab === 'space') return 'space'
+    if (visibleTab === 'smart') return 'smart'
+    if (visibleTab === 'awr') return 'awr'
     return 'awr'
-  }, [tab])
+  }, [visibleTab])
 
   const tabExtra = (
     <Space wrap size="small">
-      {tab === 'sql' ? (
+      {visibleTab === 'sql' ? (
         <>
           <span className="muted">显示 SQL</span>
           <Switch size="small" checked={showSql} onChange={setShowSql} />
@@ -209,62 +284,16 @@ export default function SqlInsight() {
         <Button onClick={resetQuery}>重置</Button>
       </div>
 
-      <Tabs
-        activeKey={tab}
-        onChange={(k) => setTab(k as InsightTabKey)}
-        tabBarExtraContent={tabExtra}
-        items={[
-          {
-            key: 'sql',
-            label: 'SQL洞察',
-            children: (
-              <SqlInsightTab
-                filter={filter}
-                showSql={showSql}
-                autoRefresh={autoRefresh}
-                intervalSec={intervalSec}
-                refreshTick={refreshTick}
-                active={tab === 'sql'}
-              />
-            ),
-          },
-          {
-            key: 'analysis',
-            label: '洞察分析',
-            children: <InsightAnalysisTab filter={filter} active={tab === 'analysis'} refreshTick={refreshTick} />,
-          },
-          {
-            key: 'visual',
-            label: '可视汇总',
-            children: <VisualSummaryTab filter={filter} active={tab === 'visual'} refreshTick={refreshTick} />,
-          },
-          {
-            key: 'awr',
-            label: 'AWR报告',
-            children: <AwrReportTab filter={filter} active={tab === 'awr'} />,
-          },
-          {
-            key: 'space',
-            label: '表空间分析',
-            children: <PgSpaceTab filter={filter} active={tab === 'space'} />,
-          },
-          {
-            key: 'smart',
-            label: '智能分析',
-            children: <SmartAnalysisTab filter={filter} active={tab === 'smart'} />,
-          },
-          {
-            key: 'cloud',
-            label: '云慢日志',
-            children: <CloudSlowLogTab filter={buildFilter(draftInstance, draftRange, instances)} active={tab === 'cloud'} />,
-          },
-          {
-            key: 'pipeline',
-            label: '同步监控',
-            children: <CloudSlowPipelineTab active={tab === 'pipeline'} />,
-          },
-        ]}
-      />
+      {tabItems.length === 0 || !visibleTab ? (
+        <Empty description="当前角色没有可查看的页签" />
+      ) : (
+        <Tabs
+          activeKey={visibleTab}
+          onChange={(k) => setTab(k as InsightTabKey)}
+          tabBarExtraContent={tabExtra}
+          items={tabItems.map(({ key, label, children }) => ({ key, label, children }))}
+        />
+      )}
     </div>
   )
 }

@@ -61,6 +61,93 @@ FROM (VALUES (1), (2), (3)) AS p(id)`
 	}
 }
 
+func TestSplitSQL_OrderDiscountRepairStaysFourStatements(t *testing.T) {
+	sql := `-- 1. 旧优惠失效
+UPDATE public.tbl_order_discount_48 SET is_deleted=TRUE,update_time=CURRENT_TIMESTAMP
+WHERE corporation_id=1 AND is_deleted=FALSE;
+-- 2. 从模板复制
+INSERT INTO public.tbl_order_discount_48(discount_item_id,parent_discount_item_id,order_id,discount_amount,origin_business_date)
+SELECT p.id,p.parent,d.order_id,p.ordinary,d.origin_business_date
+FROM (VALUES (1794381502704,1794381502704,0,0,2998,1794233385472),
+ (1794381502705,1794381502704,20,1794233395752,2998,1794233385476)) p(id,parent,scope,scope_id,ordinary,template)
+JOIN public.tbl_order_discount_48 d ON d.order_id=1 AND d.discount_item_id=p.template
+WHERE d.corporation_id=1 AND d.is_deleted=FALSE
+ AND NOT EXISTS(SELECT 1 FROM public.tbl_order_discount_48 x WHERE x.order_id=d.order_id AND x.discount_item_id=p.id);
+-- 3. 更新商品
+UPDATE public.tbl_order_item_master_48 t SET discount_amount=v.ordinary,actual_amount=0,update_time=CURRENT_TIMESTAMP
+FROM (VALUES (1794233395752,2998,2),
+ (1794233395754,1499,1)) v(id,ordinary,share)
+WHERE t.item_id=v.id AND t.discount_amount=0;
+-- 4. 更新订单
+UPDATE public.tbl_order_master_48 SET update_time=CURRENT_TIMESTAMP
+WHERE order_id=1 AND version=4;`
+	st := SplitSQL(sql)
+	if len(st) != 4 {
+		t.Fatalf("want 4 statements, got %d: %#v", len(st), st)
+	}
+	ins := strings.TrimSpace(st[1])
+	insUpper := strings.ToUpper(ins)
+	if !strings.HasPrefix(insUpper, "INSERT") || !strings.Contains(insUpper, "SELECT") {
+		t.Fatalf("第 2 条应是 INSERT SELECT: %s", ins)
+	}
+	if !strings.Contains(insUpper, "JOIN") || !strings.Contains(insUpper, "NOT EXISTS") {
+		t.Fatalf("查询体应留在 INSERT 里: %s", ins)
+	}
+	if strings.HasSuffix(strings.TrimRight(ins, "; \t\r\n"), ")") && !strings.Contains(insUpper, "SELECT") {
+		t.Fatalf("INSERT 停在列清单: %s", ins)
+	}
+	if !strings.HasPrefix(strings.ToUpper(strings.TrimSpace(st[2])), "UPDATE") || !strings.Contains(strings.ToUpper(st[2]), "VALUES") {
+		t.Fatalf("第 3 条应是 UPDATE FROM VALUES: %s", st[2])
+	}
+	if FirstIncompleteInsert(st) != 0 {
+		t.Fatalf("完整脚本不应有不完整 INSERT")
+	}
+	dml := CheckTicket(sql, "dml", false, false)
+	for _, row := range dml.Statements {
+		if row.ErrorLevel == "ERROR" && (strings.Contains(row.Message, "INSERT 不完整") || strings.Contains(row.Message, "必须是 DML")) {
+			t.Fatalf("完整脚本不应报拆句错误: %+v", row)
+		}
+	}
+}
+
+func TestCheckTicketIncompleteInsert(t *testing.T) {
+	bad := CheckTicket("UPDATE t SET a=1 WHERE id=1;\nINSERT INTO t (a);", "dml", false, false)
+	if bad.OK {
+		t.Fatal("只有列清单的 INSERT 应失败")
+	}
+	var hit bool
+	for _, row := range bad.Statements {
+		if row.ErrorLevel == "ERROR" && strings.Contains(row.Message, "INSERT 不完整：列清单后缺少 VALUES 或 SELECT") {
+			hit = true
+		}
+	}
+	if !hit {
+		t.Fatalf("缺少不完整 INSERT 错误: %+v", bad.Statements)
+	}
+	for _, sql := range []string{
+		`INSERT INTO t (a) VALUES (1)`,
+		"INSERT INTO t (a)\nSELECT 1",
+		`REPLACE INTO t (a) VALUES (1)`,
+	} {
+		res := CheckTicket(sql, "dml", false, false)
+		for _, row := range res.Statements {
+			if strings.Contains(row.Message, "INSERT 不完整") {
+				t.Fatalf("%s 不应判为不完整: %+v", sql, row)
+			}
+		}
+	}
+	rep := CheckTicket("REPLACE INTO t (a)", "dml", false, false)
+	hit = false
+	for _, row := range rep.Statements {
+		if strings.Contains(row.Message, "INSERT 不完整") {
+			hit = true
+		}
+	}
+	if !hit {
+		t.Fatalf("REPLACE 列清单应判为不完整: %+v", rep.Statements)
+	}
+}
+
 func TestSplitSQL_CreateViewUnionAll(t *testing.T) {
 	sql := `CREATE OR REPLACE VIEW db_ods.v AS
 SELECT a FROM t1

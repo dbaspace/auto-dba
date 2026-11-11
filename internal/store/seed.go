@@ -1794,7 +1794,6 @@ func (d *DB) ensureSqlInsightActionMenus(now string) error {
 		{"m-act-si-awr-gen", "m-diag-sql", "手动生成 AWR 报告", "", URNSqlInsightAwrGenerate, "手动触发生成 / 管理 AWR 生成任务", "histogram", 91},
 		{"m-act-si-space-collect", "m-diag-sql", "手动采集表空间", "", URNSqlInsightSpaceCollect, "手动采集表空间快照 / 管理采集任务", "download", 92},
 		{"m-act-si-analyze", "m-diag-sql", "手动智能分析", "", URNSqlInsightAnalyze, "手动触发智能分析运行", "search", 93},
-		{"m-act-si-cloud-slow-sync", "m-diag-sql", "同步云慢日志", "", URNSqlInsightCloudSlow, "手动补齐云数据库慢日志", "cloud", 94},
 	}
 	for _, it := range items {
 		m := &Menu{
@@ -1809,7 +1808,52 @@ func (d *DB) ensureSqlInsightActionMenus(now string) error {
 			return err
 		}
 	}
+	if err := d.ensureSqlInsightTabMenus(now); err != nil {
+		return err
+	}
+	if exist, err := d.GetMenu("m-act-si-cloud-slow-sync"); err != nil {
+		return err
+	} else if exist != nil {
+		if err := d.DeleteMenu(exist.ID); err != nil {
+			return err
+		}
+	}
 	log.Printf("seed: sql-insight action menus ensured")
+	return nil
+}
+
+func (d *DB) ensureSqlInsightTabMenus(now string) error {
+	items := []seedMenu{
+		{"m-act-si-tab-sql", "m-diag-sql", "SQL洞察", "", URNSqlInsightTabSQL, "查看 SQL洞察页签", "eye", 80},
+		{"m-act-si-tab-analysis", "m-diag-sql", "洞察分析", "", URNSqlInsightTabAnalysis, "查看洞察分析页签", "eye", 81},
+		{"m-act-si-tab-visual", "m-diag-sql", "可视汇总", "", URNSqlInsightTabVisual, "查看可视汇总页签", "eye", 82},
+		{"m-act-si-tab-awr", "m-diag-sql", "AWR报告", "", URNSqlInsightTabAwr, "查看 AWR报告页签", "eye", 83},
+		{"m-act-si-tab-space", "m-diag-sql", "表空间分析", "", URNSqlInsightTabSpace, "查看表空间分析页签", "eye", 84},
+		{"m-act-si-tab-smart", "m-diag-sql", "智能分析", "", URNSqlInsightTabSmart, "查看智能分析页签", "eye", 85},
+		{"m-act-si-tab-cloud", "m-diag-sql", "云慢日志", "", URNSqlInsightTabCloud, "查看云慢日志页签", "eye", 86},
+		{"m-act-si-tab-pipeline", "m-diag-sql", "同步监控", "", URNSqlInsightTabPipeline, "查看同步监控页签", "eye", 87},
+	}
+	for _, it := range items {
+		exist, err := d.GetMenu(it.ID)
+		if err != nil {
+			return err
+		}
+		fresh := exist == nil
+		m := &Menu{
+			ID: it.ID, ParentID: it.Parent, Title: it.Title, Path: it.Path,
+			URN: it.URN, PermissionDesc: it.Perm, Icon: it.Icon, SortOrder: it.Sort, Enabled: true,
+			CreatedAt: now, UpdatedAt: now,
+		}
+		if err := d.EnsureMenu(m); err != nil {
+			return err
+		}
+		if !fresh {
+			continue
+		}
+		if err := d.GrantMenuFollowingParent(it.ID, it.Parent); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

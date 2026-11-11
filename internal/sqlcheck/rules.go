@@ -246,6 +246,9 @@ func checkStatement(stmt, issueType, dbType string, byName map[string]Rule, inTx
 		if kw == "REVOKE" || reRevoke.MatchString(upper) {
 			return []*ruleHit{errID("ForbidRevoke", "不允许在工单中执行 REVOKE（权限回收）语句。")}
 		}
+		if (kw == "INSERT" || kw == "REPLACE") && bufferIsInsertAwaitingQuery(stmt) {
+			return []*ruleHit{errID("DMLInsertIncomplete", "INSERT 不完整：列清单后缺少 VALUES 或 SELECT")}
+		}
 	case "dcl":
 		if kw != "GRANT" && kw != "REVOKE" {
 			return []*ruleHit{errID("TicketType", "语句必须是 GRANT/REVOKE")}

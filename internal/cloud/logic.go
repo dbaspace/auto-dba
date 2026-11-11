@@ -39,28 +39,7 @@ const (
 	SlowLogAPILookback = 7 * 24 * time.Hour
 	// SlowLogAPIFallback 是 7 天窗口仍被拒绝时，这一次改拉的最近范围。
 	SlowLogAPIFallback = 24 * time.Hour
-	// SlowSyncCooldown 是手动立即同步的最短间隔。
-	SlowSyncCooldown = 5 * time.Minute
 )
-
-// SlowSyncCooling 表示这条游标刚更新过，5 分钟内不能再手动同步。没有更新时间时允许第一次同步。
-func SlowSyncCooling(updatedAt string, now time.Time) bool {
-	updatedAt = strings.TrimSpace(updatedAt)
-	if updatedAt == "" {
-		return false
-	}
-	at, err := time.Parse(time.RFC3339, updatedAt)
-	if err != nil {
-		at, err = time.Parse(time.RFC3339Nano, updatedAt)
-		if err != nil {
-			return false
-		}
-	}
-	if now.IsZero() {
-		now = time.Now()
-	}
-	return now.Sub(at) < SlowSyncCooldown
-}
 
 type Window struct {
 	From time.Time

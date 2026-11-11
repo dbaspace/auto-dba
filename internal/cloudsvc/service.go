@@ -622,28 +622,6 @@ func (s *Service) noteSync(account *store.CloudAccount, engine, dataType, cloudI
 	_ = s.DB.SaveCloudCursor(cur)
 }
 
-func (s *Service) QueueSlow(cloudID string) error {
-	list, err := s.DB.ListCloudResources("", cloud.EnginePostgres, "")
-	if err != nil {
-		return err
-	}
-	for _, inst := range list {
-		if cloudID != "" && inst.CloudID != cloudID && inst.InstanceID != cloudID {
-			continue
-		}
-		cur, _ := s.DB.GetCloudCursor(inst.Vendor, "postgres", inst.AccountID, inst.CloudID, "slow_log")
-		row := &store.CloudCursor{TenantID: inst.TenantID, Vendor: inst.Vendor, Engine: "postgres", AccountID: inst.AccountID, CloudID: inst.CloudID, DataType: "slow_log", Status: "queued"}
-		if cur != nil {
-			row.CursorAt = cur.CursorAt
-			row.FailCount = cur.FailCount
-		}
-		if err := s.DB.SaveCloudCursor(row); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func atoi(s string) int {
 	n := 0
 	for _, c := range strings.TrimSpace(s) {

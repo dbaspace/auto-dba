@@ -228,6 +228,9 @@ func Run(ctx context.Context, issueType string, sqlContent string, t Target) *Re
 	if len(stmts) == 0 {
 		return fail(res, t, "SQL 不能为空")
 	}
+	if n := sqlcheck.FirstIncompleteInsert(stmts); n > 0 {
+		return fail(res, t, fmt.Sprintf("第 %d 条是不完整的 INSERT：列清单后缺少 VALUES 或 SELECT", n))
+	}
 	// 语句数已超阈值：一开始就按库抽样，避免执行过程中堆出百兆明细。执行器要全量回传，不抽样。
 	if !t.KeepAll && len(stmts) > DetailCompactThreshold {
 		res.enableCompactMode()

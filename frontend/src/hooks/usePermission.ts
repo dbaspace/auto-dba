@@ -117,8 +117,17 @@ export const Perm = {
     awrGenerate: 'um.action.sql-insight.awr-generate',
     spaceCollect: 'um.action.sql-insight.space-collect',
     analyze: 'um.action.sql-insight.analyze',
-    cloudSlowSync: 'um.action.sql-insight.cloud-slow-sync',
     settings: 'um.sidebar.config-sql-insight',
+    tab: {
+      sql: 'um.sidebar.sql-insight.sql',
+      analysis: 'um.sidebar.sql-insight.analysis',
+      visual: 'um.sidebar.sql-insight.visual',
+      awr: 'um.sidebar.sql-insight.awr',
+      space: 'um.sidebar.sql-insight.space',
+      smart: 'um.sidebar.sql-insight.smart',
+      cloud: 'um.sidebar.sql-insight.cloud',
+      pipeline: 'um.sidebar.sql-insight.pipeline',
+    },
   },
   cloud: {
     view: 'um.sidebar.cloud-postgres',

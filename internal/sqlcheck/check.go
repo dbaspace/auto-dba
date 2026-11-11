@@ -611,6 +611,16 @@ func lastTopLevelWord(s, word string) int {
 	return idx
 }
 
+// FirstIncompleteInsert 返回第一条只有列清单、没有 VALUES 或 SELECT 的 INSERT/REPLACE，序号从 1 开始。没有则返回 0。
+func FirstIncompleteInsert(stmts []string) int {
+	for i, stmt := range stmts {
+		if bufferIsInsertAwaitingQuery(stmt) {
+			return i + 1
+		}
+	}
+	return 0
+}
+
 // shouldSuppressMissingSemicolonSplit 在 DDL 多行语句内部子句处不强制分段。
 func shouldSuppressMissingSemicolonSplit(buf string, keyword string, sqlContent string, i int) bool {
 	switch keyword {

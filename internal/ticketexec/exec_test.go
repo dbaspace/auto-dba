@@ -65,6 +65,24 @@ func TestRunMySQLAttemptsConnect(t *testing.T) {
 	}
 }
 
+func TestRunRejectsIncompleteInsertBeforeConnect(t *testing.T) {
+	sql := "UPDATE t SET a=1 WHERE id=1;\nINSERT INTO t (a);"
+	for _, dbType := range []string{"postgres", "mysql"} {
+		res := Run(context.Background(), "dml", sql, Target{
+			Host: "127.0.0.1", Port: 1, Username: "u", DBName: "db", DBType: dbType,
+		})
+		if res == nil || res.Success || res.RolledBack || res.SuccessCount != 0 {
+			t.Fatalf("%s %+v", dbType, res)
+		}
+		if res.Message != "第 2 条是不完整的 INSERT：列清单后缺少 VALUES 或 SELECT" {
+			t.Fatalf("%s message=%q", dbType, res.Message)
+		}
+		if len(res.Records) != 1 || res.Records[0].SQL != PrecheckSQL {
+			t.Fatalf("%s records %+v", dbType, res.Records)
+		}
+	}
+}
+
 func TestRunEmptySQL(t *testing.T) {
 	res := Run(context.Background(), "ddl", "   ", Target{
 		Host: "127.0.0.1", Port: 5432, Username: "u", DBName: "db", DBType: "postgres",

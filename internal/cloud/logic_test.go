@@ -21,19 +21,6 @@ func TestNextWindowFirstAndOverlap(t *testing.T) {
 	}
 }
 
-func TestSlowSyncCooling(t *testing.T) {
-	now := time.Date(2026, 11, 10, 11, 30, 0, 0, time.UTC)
-	if !SlowSyncCooling(now.Add(-4*time.Minute).Format(time.RFC3339), now) {
-		t.Fatal("4 minutes should still be cooling")
-	}
-	if SlowSyncCooling(now.Add(-5*time.Minute).Format(time.RFC3339), now) {
-		t.Fatal("5 minutes should allow another sync")
-	}
-	if SlowSyncCooling("", now) {
-		t.Fatal("missing cursor should allow the first sync")
-	}
-}
-
 func TestClampSlowWindowKeepsAPIStartInsideRetention(t *testing.T) {
 	now := time.Date(2026, 11, 10, 11, 16, 3, 0, time.UTC)
 	wide := NextWindow(time.Time{}, now, 15*24*time.Hour, time.Minute)

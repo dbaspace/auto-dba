@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -594,55 +593,4 @@ func (h *CloudHandler) SlowlogPipeline(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": out})
-}
-
-func (h *CloudHandler) SyncSlow(c *gin.Context) {
-	var req struct {
-		InstanceID string `json:"instance_id"`
-	}
-	_ = c.ShouldBindJSON(&req)
-	user, _ := h.Store.GetUserByUsername(middleware.Username(c))
-	if req.InstanceID != "" {
-		it, _ := h.Store.GetInstance(req.InstanceID)
-		if it == nil || it.CloudAccountID == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"message": cloud.ErrNoAccount.Error()})
-			return
-		}
-		if !cloud.Supported(it.CloudVendor, cloud.EnginePostgres) {
-			c.JSON(http.StatusBadRequest, gin.H{"message": "暂未支持"})
-			return
-		}
-		if user != nil {
-			ok, _ := h.Store.UserBoundToCloudAccount(it.CloudAccountID, user.ID)
-			if !ok {
-				c.JSON(http.StatusForbidden, gin.H{"message": cloud.ErrNotBound.Error()})
-				return
-			}
-		}
-		if it.CloudInstanceID != "" {
-			cur, _ := h.Store.GetCloudCursor(it.CloudVendor, "postgres", it.CloudAccountID, it.CloudInstanceID, "slow_log")
-			if cur != nil && cloud.SlowSyncCooling(cur.UpdatedAt, time.Now()) {
-				c.JSON(http.StatusBadRequest, gin.H{"message": "5分钟内已同步过，请稍后再试"})
-				return
-			}
-		}
-		h.finishSlowSync(c, it.CloudInstanceID)
-		return
-	}
-	h.finishSlowSync(c, "")
-}
-
-func (h *CloudHandler) finishSlowSync(c *gin.Context, cloudID string) {
-	if err := h.Svc.QueueSlow(cloudID); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
-		return
-	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Minute)
-	defer cancel()
-	n, err := h.Svc.SlowlogSync(ctx, cloudID)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error(), "produced": n})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"ok": true, "produced": n, "message": fmt.Sprintf("已发出 %d 条", n)})
 }

@@ -32,7 +32,7 @@ func (s *Service) SlowlogView() map[string]int64 {
 	}
 }
 
-// StartSlowlog 启动消费，并在配置变更后换总线。拉取由定时任务和立即同步触发。
+// StartSlowlog 启动消费，并在配置变更后换总线。拉取由定时任务触发。
 func (s *Service) StartSlowlog(ctx context.Context) {
 	if s == nil {
 		return
@@ -90,16 +90,11 @@ func (s *Service) StopSlowlog() {
 
 // SlowlogAll 给定时任务用。别的副本正在拉时直接返回，不记失败。
 func (s *Service) SlowlogAll(ctx context.Context, onlyCloudID string) error {
-	_, err := s.runSlow(ctx, onlyCloudID, false)
+	_, err := s.runSlow(ctx, onlyCloudID)
 	return err
 }
 
-// SlowlogSync 给立即同步用。锁被占用时返回「排队中」。
-func (s *Service) SlowlogSync(ctx context.Context, onlyCloudID string) (int, error) {
-	return s.runSlow(ctx, onlyCloudID, true)
-}
-
-func (s *Service) runSlow(ctx context.Context, only string, strict bool) (int, error) {
+func (s *Service) runSlow(ctx context.Context, only string) (int, error) {
 	s.slowMu.Lock()
 	if s.stopping {
 		s.slowMu.Unlock()
@@ -117,9 +112,6 @@ func (s *Service) runSlow(ctx context.Context, only string, strict bool) (int, e
 		return 0, err
 	}
 	if !ok {
-		if strict {
-			return 0, fmt.Errorf("排队中")
-		}
 		return 0, nil
 	}
 	defer release()
