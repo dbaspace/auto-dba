@@ -57,6 +57,15 @@ cdc:
   debezium_url: ""
   kafka_brokers: ""
 
+# 平台慢日志总线，与 cdc.kafka_brokers 分开。brokers 为空则直接写元库。
+slowlog_bus:
+  brokers: ""
+  # sasl_mechanism: PLAIN
+  # username: ""
+  # password: ""
+  # tls: false
+  # instances: ""
+
 migration:
   enabled: false
   oss_endpoint: ""

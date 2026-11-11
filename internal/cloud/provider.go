@@ -46,9 +46,11 @@ type Instance struct {
 }
 
 type Spec struct {
-	CPU      int    `json:"cpu"`
-	MemoryMB int    `json:"memory_mb"`
-	Label    string `json:"label"`
+	CPU          int    `json:"cpu"`
+	MemoryMB     int    `json:"memory_mb"`
+	MaxStorageGB int    `json:"max_storage_gb,omitempty"`
+	SpecCode     string `json:"spec_code,omitempty"`
+	Label        string `json:"label"`
 }
 
 type Quote struct {
@@ -83,16 +85,24 @@ type Task struct {
 	Detail string
 }
 
+type Tag struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
 type CreateInput struct {
-	Region   string
-	Zone     string
-	CPU      int
-	MemoryMB int
-	DiskGB   int
-	Name     string
-	Admin    string
-	Password string
-	Period   int
+	Region, Zone, StandbyZone, Name, Admin, Password string
+	CPU, MemoryMB, DiskGB, Period, Count             int
+	SpecCode                                         string
+	ChargeType                                       string
+	DBMajorVersion                                   string
+	VpcID, SubnetID                                  string
+	Charset, SyncMode                                string
+	SecurityGroupID                                  string
+	ProjectID                                        int
+	NeedSupportTDE                                   bool
+	DeletionProtection                               bool
+	Tags                                             []Tag
 }
 
 type SpecInput struct {
@@ -101,6 +111,9 @@ type SpecInput struct {
 	MemoryMB     int
 	DiskGB       int
 	InstanceType string // 主机变配机型，如 S5.MEDIUM4
+	SwitchTag    int
+	SwitchStart  string
+	SwitchEnd    string
 }
 
 // Reader 只包含查询。同步任务的参数类型是 Reader，编译期调不到变更方法。

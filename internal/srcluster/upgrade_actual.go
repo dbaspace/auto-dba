@@ -231,7 +231,7 @@ func mapNodeLive(nodes []store.SrNode, fe, be []procVersionRow) map[string]NodeL
 }
 
 // ClusterLive 集群详情节点表的实时数据（node_id → NodeLive），并删除已缩容完成的 BE 登记（removed）。
-// 生产集群 BE 多，每次请求只解析一次凭据、只建一个 FE 连接，/frontends 与 /backends 各查一次，缩容收尾复用同一份 /backends。
+// 生产集群 BE 多，每次请求只解析一次凭据。/frontends 按 FE 列表换机，跳过已停止的主机；连上后再查 /backends。
 // FE 查询失败返回错误；BE 查询失败时仅返回 FE 部分且不做缩容收尾。
 func (e *Engine) ClusterLive(ctx context.Context, cl *store.SrCluster) (map[string]NodeLive, []store.SrNode, error) {
 	if e == nil || e.Store == nil || cl == nil || e.Cfg.DryRun {
@@ -241,23 +241,10 @@ func (e *Engine) ClusterLive(ctx context.Context, cl *store.SrCluster) (map[stri
 	if err != nil {
 		return nil, nil, err
 	}
-	dsn, err := e.feDSNWithNodes(cl, nodes)
+	fe, be, beErr, err := e.queryLiveProc(ctx, cl, nodes)
 	if err != nil {
 		return nil, nil, err
 	}
-	db, err := sql.Open("mysql", dsn)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer db.Close()
-	db.SetMaxOpenConns(1)
-	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	fe, err := queryProcRowsDB(cctx, db, "/frontends", false)
-	if err != nil {
-		return nil, nil, fmt.Errorf("SHOW PROC '/frontends': %w", err)
-	}
-	be, beErr := queryProcRowsDB(cctx, db, "/backends", false)
 	var removed []store.SrNode
 	if beErr == nil {
 		removed, _ = e.reconcileRemovedWith(cl, nodes, "", func() ([]procVersionRow, error) { return be, nil })
@@ -267,13 +254,87 @@ func (e *Engine) ClusterLive(ctx context.Context, cl *store.SrCluster) (map[stri
 		}
 	}
 	live := mapNodeLive(nodes, fe, be)
-	reconcileNodeReadyFromAlive(e.Store, nodes, live)
+	e.reconcileNodeReadyFromAlive(ctx, nodes, live)
+	e.alignPrimaryToLeader(cl, nodes, live)
 	return live, removed, nil
 }
 
-// reconcileNodeReadyFromAlive：SHOW PROC Alive=true 且库状态为 stopped（非下线中）时写回 ready，避免详情误显「已停止」。
-func reconcileNodeReadyFromAlive(st *store.DB, nodes []store.SrNode, live map[string]NodeLive) {
-	if st == nil || live == nil {
+// feLiveQueryHosts 实时查询要用的 FE 地址：fe_host 优先，其余 FE 随后，已停止的主机跳过。
+func feLiveQueryHosts(cl *store.SrCluster, nodes []store.SrNode) []string {
+	if cl == nil {
+		return nil
+	}
+	stopped := func(host string) bool {
+		for _, n := range nodes {
+			if n.Component != "fe" || n.Status != store.SrNodeStopped {
+				continue
+			}
+			if hostsEqual(n.Host, host) {
+				return true
+			}
+		}
+		return false
+	}
+	var out []string
+	seen := func(host string) bool {
+		for _, h := range out {
+			if hostsEqual(h, host) {
+				return true
+			}
+		}
+		return false
+	}
+	add := func(host string) {
+		host = strings.TrimSpace(host)
+		if host == "" || stopped(host) || seen(host) {
+			return
+		}
+		out = append(out, host)
+	}
+	add(cl.FeHost)
+	for _, n := range nodes {
+		if n.Component == "fe" {
+			add(n.Host)
+		}
+	}
+	return out
+}
+
+// queryLiveProc 依次连接存活 FE，读到 /frontends 即返回；/backends 失败不换机。
+func (e *Engine) queryLiveProc(ctx context.Context, cl *store.SrCluster, nodes []store.SrNode) (fe, be []procVersionRow, beErr error, err error) {
+	hosts := feLiveQueryHosts(cl, nodes)
+	if len(hosts) == 0 {
+		return nil, nil, nil, fmt.Errorf("没有可查询的 FE")
+	}
+	user, pass, credErr := e.feCredentials(cl, nodes, false)
+	if credErr != nil {
+		return nil, nil, nil, credErr
+	}
+	port := feQueryPort(cl)
+	var last error
+	for _, host := range hosts {
+		cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		dsn := buildFEDSN(user, pass, host, port)
+		fe, err = queryProcRowsDSN(cctx, dsn, "/frontends", false)
+		if err != nil {
+			cancel()
+			last = err
+			continue
+		}
+		be, beErr = queryProcRowsDSN(cctx, dsn, "/backends", false)
+		cancel()
+		return fe, be, beErr, nil
+	}
+	if last == nil {
+		last = fmt.Errorf("连接失败")
+	}
+	return nil, nil, nil, fmt.Errorf("SHOW PROC '/frontends': %w", last)
+}
+
+// reconcileNodeReadyFromAlive：库状态为 stopped 时不因 SHOW PROC Alive=true 改回 ready。
+// 只有 systemd 仍是 active，才写回 ready，避免 Leader 停止后心跳滞后把状态盖回运行中。
+func (e *Engine) reconcileNodeReadyFromAlive(ctx context.Context, nodes []store.SrNode, live map[string]NodeLive) {
+	if e == nil || e.Store == nil || live == nil {
 		return
 	}
 	for i := range nodes {
@@ -285,8 +346,83 @@ func reconcileNodeReadyFromAlive(st *store.DB, nodes []store.SrNode, live map[st
 		if !ok || !procTruthy(lv.Alive) || lv.Decommissioned {
 			continue
 		}
+		if !e.systemdUnitActive(ctx, n) {
+			continue
+		}
 		n.Status = store.SrNodeReady
-		_ = st.UpdateSrNode(n)
+		_ = e.Store.UpdateSrNode(n)
+	}
+}
+
+// systemdUnitActive 用已有的 systemctl status 判断单元是否 Active: active。查不到视为未运行。
+func (e *Engine) systemdUnitActive(ctx context.Context, n *store.SrNode) bool {
+	if e == nil || e.Agent == nil || e.Cfg.DryRun || n == nil {
+		return false
+	}
+	if strings.TrimSpace(n.AgentID) == "" || strings.TrimSpace(n.SystemdUnit) == "" {
+		return false
+	}
+	auth, err := e.agentAuth(n.AgentID)
+	if err != nil {
+		return false
+	}
+	cctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	resp, err := e.Agent.SystemdCtrl(cctx, auth, SystemdCtrlReq{Action: "status", Unit: n.SystemdUnit})
+	if err != nil || resp == nil {
+		return false
+	}
+	return systemdReportsActive(resp.Message)
+}
+
+func systemdReportsActive(message string) bool {
+	return strings.Contains(strings.ToLower(message), "active: active")
+}
+
+// primaryLeaderID 集群已就绪且 SHOW PROC 恰好一个 LEADER 时返回该节点 ID。
+func primaryLeaderID(cl *store.SrCluster, nodes []store.SrNode, live map[string]NodeLive) (string, bool) {
+	if cl == nil || cl.Status != store.SrClusterReady || live == nil {
+		return "", false
+	}
+	var id string
+	leaders := 0
+	for _, n := range nodes {
+		if n.Component != "fe" {
+			continue
+		}
+		lv, ok := live[n.ID]
+		if !ok || !strings.EqualFold(strings.TrimSpace(lv.Role), "LEADER") {
+			continue
+		}
+		leaders++
+		id = n.ID
+	}
+	if leaders != 1 {
+		return "", false
+	}
+	return id, true
+}
+
+// alignPrimaryToLeader 把 is_primary_fe 挪到当前 Leader，并清掉其他 FE 上的标记。查询不到唯一 Leader 时不改。
+func (e *Engine) alignPrimaryToLeader(cl *store.SrCluster, nodes []store.SrNode, live map[string]NodeLive) {
+	if e == nil || e.Store == nil {
+		return
+	}
+	leaderID, ok := primaryLeaderID(cl, nodes, live)
+	if !ok {
+		return
+	}
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Component != "fe" {
+			continue
+		}
+		want := n.ID == leaderID
+		if n.IsPrimaryFE == want {
+			continue
+		}
+		n.IsPrimaryFE = want
+		_ = e.Store.UpdateSrNode(n)
 	}
 }
 

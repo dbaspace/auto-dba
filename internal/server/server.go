@@ -242,9 +242,9 @@ func Run(cfg *config.Config, configPath string) {
 			Secret:   func() string { return cfg.App.JWTSecret },
 			Sessions: sessStore,
 		},
-		Ldap:     &handler.LdapHandler{Store: db, Cfg: cfg},
-		Sso:      &handler.SsoHandler{Store: db, Cfg: cfg},
-		SMTP:     &handler.SMTPHandler{Store: db, Cfg: cfg},
+		Ldap:         &handler.LdapHandler{Store: db, Cfg: cfg},
+		Sso:          &handler.SsoHandler{Store: db, Cfg: cfg},
+		SMTP:         &handler.SMTPHandler{Store: db, Cfg: cfg},
 		Notify:       &handler.NotifyHandler{Store: db, Cfg: cfg},
 		SystemNotice: &handler.SystemNoticeHandler{Store: db},
 		Terminal:     &terminal.Handler{Store: db, Cfg: cfg, Secret: fieldCrypto},
@@ -327,6 +327,7 @@ func Run(cfg *config.Config, configPath string) {
 		log.Printf("boot: recovered %d CDC task(s) stuck in reinitializing", n)
 	}
 	jobReg.Start(collectCtx)
+	cloudSvc.StartSlowlog(collectCtx)
 
 	addr := fmt.Sprintf("%s:%d", cfg.HTTP.Host, cfg.HTTP.Port)
 	srv := &http.Server{
@@ -345,6 +346,7 @@ func Run(cfg *config.Config, configPath string) {
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
 	<-ch
+	cloudSvc.StopSlowlog()
 	jobReg.Stop()
 	collectCancel()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

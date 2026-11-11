@@ -1,6 +1,7 @@
 package tencentpg
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -98,7 +99,7 @@ func mapInstance(row map[string]any, region string) cloud.Instance {
 		Region:   region,
 		Status:   cloud.MapInstanceStatus(str(row["DBInstanceStatus"])),
 		CPU:      num(row["DBInstanceCpu"]),
-		MemoryMB: num(row["DBInstanceMemory"]),
+		MemoryMB: memoryMBFromInstanceGB(num(row["DBInstanceMemory"])),
 		DiskGB:   num(row["DBInstanceStorage"]),
 		Version:  str(row["DBVersion"]),
 		Zone:     str(row["Zone"]),
@@ -111,32 +112,84 @@ func mapInstance(row map[string]any, region string) cloud.Instance {
 }
 
 func (r Reader) ListSpecs(ctx context.Context, cred cloud.Cred, zone string) ([]cloud.Spec, error) {
+	if strings.TrimSpace(zone) == "" {
+		return nil, fmt.Errorf("请先选择可用区")
+	}
 	raw, err := r.call(ctx, cred, "DescribeProductConfig", map[string]any{"Zone": zone})
 	if err != nil {
 		return nil, err
 	}
+	return parseProductSpecs(raw, zone)
+}
+
+// parseProductSpecs 读取 DescribeProductConfig。Cpu 和 Memory 在 SpecItemInfoList 里，不在外层。
+func parseProductSpecs(raw []byte, zone string) ([]cloud.Spec, error) {
 	var resp struct {
 		Response struct {
 			SpecInfoList []struct {
-				CPU    int `json:"Cpu"`
-				Memory int `json:"Memory"`
+				Zone             string `json:"Zone"`
+				SpecItemInfoList []struct {
+					CPU        int    `json:"Cpu"`
+					Memory     int    `json:"Memory"`
+					MaxStorage int    `json:"MaxStorage"`
+					SpecCode   string `json:"SpecCode"`
+				} `json:"SpecItemInfoList"`
 			} `json:"SpecInfoList"`
 		} `json:"Response"`
 	}
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil, fmt.Errorf("云接口没有返回内容")
+	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("云接口返回无法解析")
 	}
 	var out []cloud.Spec
-	seen := map[string]bool{}
-	for _, s := range resp.Response.SpecInfoList {
-		key := fmt.Sprintf("%d-%d", s.CPU, s.Memory)
-		if s.CPU == 0 || seen[key] {
+	index := map[string]int{}
+	want := strings.TrimSpace(zone)
+	for _, info := range resp.Response.SpecInfoList {
+		if want != "" && strings.TrimSpace(info.Zone) != "" && info.Zone != want {
 			continue
 		}
-		seen[key] = true
-		out = append(out, cloud.Spec{CPU: s.CPU, MemoryMB: s.Memory, Label: fmt.Sprintf("%d核 %dMB", s.CPU, s.Memory)})
+		for _, s := range info.SpecItemInfoList {
+			key := fmt.Sprintf("%d-%d", s.CPU, s.Memory)
+			if s.CPU == 0 {
+				continue
+			}
+			if i, ok := index[key]; ok {
+				nextMax := tighterStorageMax(out[i].MaxStorageGB, s.MaxStorage)
+				if (nextMax != out[i].MaxStorageGB || out[i].SpecCode == "") && s.SpecCode != "" {
+					out[i].SpecCode = s.SpecCode
+				}
+				out[i].MaxStorageGB = nextMax
+				out[i].Label = specLabel(s.CPU, s.Memory, out[i].MaxStorageGB)
+				continue
+			}
+			index[key] = len(out)
+			out = append(out, cloud.Spec{
+				CPU: s.CPU, MemoryMB: s.Memory, MaxStorageGB: s.MaxStorage, SpecCode: s.SpecCode,
+				Label: specLabel(s.CPU, s.Memory, s.MaxStorage),
+			})
+		}
 	}
 	return out, nil
+}
+
+func tighterStorageMax(cur, next int) int {
+	if next <= 0 {
+		return cur
+	}
+	if cur <= 0 || next < cur {
+		return next
+	}
+	return cur
+}
+
+func specLabel(cpu, memoryMB, maxGB int) string {
+	label := fmt.Sprintf("%d核 %s", cpu, memoryText(memoryMB))
+	if maxGB > 0 {
+		label += fmt.Sprintf("，最大存储 %dGB", maxGB)
+	}
+	return label
 }
 
 func (r Reader) QuoteCreate(ctx context.Context, cred cloud.Cred, in cloud.CreateInput) (cloud.Quote, error) {
@@ -190,31 +243,74 @@ func (r Reader) ListSlowLogs(ctx context.Context, cred cloud.Cred, cloudID strin
 	}
 	var resp struct {
 		Response struct {
-			TotalCount    int              `json:"TotalCount"`
-			SlowQueryList []map[string]any `json:"SlowQueryList"`
+			TotalCount       int              `json:"TotalCount"`
+			RawSlowQueryList []map[string]any `json:"RawSlowQueryList"`
+			SlowQueryList    []map[string]any `json:"SlowQueryList"`
 		} `json:"Response"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return nil, 0, err
 	}
+	rows := resp.Response.RawSlowQueryList
+	if len(rows) == 0 {
+		rows = resp.Response.SlowQueryList
+	}
 	var out []cloud.SlowLog
-	for _, row := range resp.Response.SlowQueryList {
+	for _, row := range rows {
 		sqlText := str(row["NormalQuery"])
 		if sqlText == "" {
 			sqlText = str(row["RawQuery"])
 		}
-		at := tencentapi.ParseShanghai(str(row["LastTime"]))
-		if at.IsZero() {
-			at = tencentapi.ParseShanghai(str(row["FirstTime"]))
+		at := slowTime(row)
+		dur := row["Duration"]
+		if dur == nil {
+			dur = row["QueryTime"]
 		}
 		rawRow, _ := json.Marshal(row)
 		out = append(out, cloud.SlowLog{
 			Time: at, DBName: str(row["DatabaseName"]), User: str(row["UserName"]),
-			Client: str(row["ClientAddr"]), DurationMS: durationMS(row["Duration"]),
+			Client: str(row["ClientAddr"]), DurationMS: durationMS(dur),
 			SQL: sqlText, Raw: string(rawRow),
 		})
 	}
 	return out, resp.Response.TotalCount, nil
+}
+
+func slowTime(row map[string]any) time.Time {
+	for _, key := range []string{"SessionStartTime", "LastTime", "FirstTime", "QueryStartTime", "Timestamp", "CallTime"} {
+		if at := parseSlowTime(str(row[key])); !at.IsZero() {
+			return at
+		}
+	}
+	return time.Time{}
+}
+
+func parseSlowTime(s string) time.Time {
+	s = strings.TrimSpace(s)
+	if i := strings.LastIndex(s, " "); i > 0 {
+		tail := s[i+1:]
+		if len(tail) >= 2 && len(tail) <= 5 && isZoneName(tail) {
+			s = strings.TrimSpace(s[:i])
+		}
+	}
+	if at := tencentapi.ParseShanghai(s); !at.IsZero() {
+		return at
+	}
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02 15:04:05.000", "2006-01-02T15:04:05"} {
+		if at, err := time.Parse(layout, s); err == nil {
+			return at
+		}
+	}
+	return time.Time{}
+}
+
+func isZoneName(s string) bool {
+	for _, r := range s {
+		if r < 'A' || r > 'Z' {
+			return false
+		}
+	}
+	return true
 }
 
 func durationMS(v any) int {
@@ -356,22 +452,82 @@ func (w Writer) ModifyParameters(ctx context.Context, cred cloud.Cred, cloudID s
 }
 
 func createBody(in cloud.CreateInput) map[string]any {
+	count := in.Count
+	if count <= 0 {
+		count = 1
+	}
 	period := in.Period
 	if period <= 0 {
 		period = 1
 	}
-	return map[string]any{
-		"Zone": in.Zone, "SpecCode": "", "Memory": in.MemoryMB, "Storage": in.DiskGB,
-		"InstanceCount": 1, "Period": period, "Name": in.Name,
-		"AdminName": in.Admin, "AdminPassword": in.Password, "Cpu": in.CPU,
-		"InstanceChargeType": "POSTPAID_BY_HOUR",
+	charge := in.ChargeType
+	if charge == "" {
+		charge = "POSTPAID_BY_HOUR"
 	}
+	if charge == "POSTPAID_BY_HOUR" {
+		period = 1
+	}
+	charset := in.Charset
+	if charset == "" {
+		charset = "UTF8"
+	}
+	syncMode := in.SyncMode
+	if syncMode == "" {
+		syncMode = "Semi-sync"
+	}
+	tde := 0
+	if in.NeedSupportTDE {
+		tde = 1
+	}
+	body := map[string]any{
+		"Zone": in.Zone, "SpecCode": in.SpecCode, "Storage": in.DiskGB,
+		"InstanceCount": count, "Period": period, "Charset": charset,
+		"AdminName": in.Admin, "AdminPassword": in.Password,
+		"InstanceChargeType": charge, "DBEngine": "postgresql",
+		"StorageType": "PHYSICAL_LOCAL_SSD", "SyncMode": syncMode,
+		"NeedSupportTDE": tde, "DeletionProtection": in.DeletionProtection,
+	}
+	if in.DBMajorVersion != "" {
+		body["DBMajorVersion"] = in.DBMajorVersion
+	}
+	if in.VpcID != "" {
+		body["VpcId"] = in.VpcID
+	}
+	if in.SubnetID != "" {
+		body["SubnetId"] = in.SubnetID
+	}
+	if strings.TrimSpace(in.Name) != "" {
+		body["Name"] = in.Name
+	}
+	if in.StandbyZone != "" {
+		body["DBNodeSet"] = []map[string]string{
+			{"Role": "Primary", "Zone": in.Zone},
+			{"Role": "Standby", "Zone": in.StandbyZone},
+		}
+	}
+	if in.SecurityGroupID != "" {
+		body["SecurityGroupIds"] = []string{in.SecurityGroupID}
+	}
+	if in.ProjectID > 0 {
+		body["ProjectId"] = in.ProjectID
+	}
+	var tags []map[string]string
+	for _, tag := range in.Tags {
+		if strings.TrimSpace(tag.Key) == "" {
+			continue
+		}
+		tags = append(tags, map[string]string{"TagKey": tag.Key, "TagValue": tag.Value})
+	}
+	if len(tags) > 0 {
+		body["TagList"] = tags
+	}
+	return body
 }
 
 func specBody(in cloud.SpecInput) map[string]any {
 	body := map[string]any{"DBInstanceId": in.CloudID}
 	if in.MemoryMB > 0 {
-		body["Memory"] = in.MemoryMB
+		body["Memory"] = memoryGB(in.MemoryMB)
 	}
 	if in.DiskGB > 0 {
 		body["Storage"] = in.DiskGB
@@ -379,7 +535,39 @@ func specBody(in cloud.SpecInput) map[string]any {
 	if in.CPU > 0 {
 		body["Cpu"] = in.CPU
 	}
+	body["SwitchTag"] = in.SwitchTag
+	if in.SwitchTag == 1 {
+		body["SwitchStartTime"] = strings.TrimSpace(in.SwitchStart)
+		body["SwitchEndTime"] = strings.TrimSpace(in.SwitchEnd)
+	}
 	return body
+}
+
+// DescribeDBInstances 的 DBInstanceMemory 单位是 GB。规格和平台内部用 MB。
+func memoryMBFromInstanceGB(gb int) int {
+	if gb <= 0 {
+		return 0
+	}
+	return gb * 1024
+}
+
+// 创建和变配请求的 Memory 单位是 GB。
+func memoryGB(mb int) int {
+	if mb <= 0 {
+		return 0
+	}
+	gb := mb / 1024
+	if gb == 0 {
+		return 1
+	}
+	return gb
+}
+
+func memoryText(mb int) string {
+	if mb > 0 && mb%1024 == 0 {
+		return fmt.Sprintf("%dGB", mb/1024)
+	}
+	return fmt.Sprintf("%dMB", mb)
 }
 
 func parseTask(raw []byte) cloud.Task {

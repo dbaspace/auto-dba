@@ -238,6 +238,9 @@ func (h *CloudHandler) ListPostgres(c *gin.Context) {
 		return
 	}
 	for i := range list {
+		if list[i].Engine == cloud.EnginePostgres || (list[i].Engine == "" && engine == cloud.EnginePostgres) {
+			list[i].MemoryMB = cloud.NormalizePGMemoryMB(list[i].MemoryMB)
+		}
 		list[i].Intranet, list[i].Port = cloud.NetFromExtras(list[i].Engine, list[i].Extras)
 		list[i].Extras = nil
 		if acc, _ := h.Store.GetCloudAccount(list[i].AccountID); acc != nil {
@@ -361,7 +364,7 @@ func (h *CloudHandler) Quote(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
-	blip, impact := cloud.ImpactOf(p.Action, p.BeforeCPU, p.BeforeMem, p.CPU, p.MemoryMB)
+	blip, impact := cloud.ImpactFor(p, false)
 	c.JSON(http.StatusOK, gin.H{"data": q, "blip": blip, "impact": impact})
 }
 
@@ -471,6 +474,48 @@ func (h *CloudHandler) Specs(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": list, "caps": cap, "scale_disk_down": cap.ScaleDiskDown, "switchover": cap.Switchover})
 }
 
+func (h *CloudHandler) PurchaseOptions(c *gin.Context) {
+	acc, _ := h.Store.GetCloudAccount(c.Query("account_id"))
+	if acc == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": cloud.ErrNoAccount.Error()})
+		return
+	}
+	eng := c.Query("engine")
+	if eng == "" {
+		eng = cloud.EnginePostgres
+	}
+	if acc.Vendor != cloud.VendorTencent || eng != cloud.EnginePostgres {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "只有腾讯云 PostgreSQL 支持按购买页加载选项"})
+		return
+	}
+	region := strings.TrimSpace(c.Query("region"))
+	if region == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "请选择地域"})
+		return
+	}
+	reader, err := cloud.GetReader(acc.Vendor, eng)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	catalog, ok := reader.(cloud.CatalogReader)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "当前引擎没有购买选项"})
+		return
+	}
+	cred, err := h.SvcCred(acc, region)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	got, err := catalog.PurchaseCatalog(c.Request.Context(), cred, strings.TrimSpace(c.Query("vpc_id")))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": got})
+}
+
 func (h *CloudHandler) SvcCred(acc *store.CloudAccount, region string) (cloud.Cred, error) {
 	return h.Svc.Cred(acc, cloud.RoleReadonly, region)
 }
@@ -515,13 +560,27 @@ func (h *CloudHandler) SlowLogs(c *gin.Context) {
 		return
 	}
 	minMS, _ := strconv.Atoi(c.Query("min_ms"))
-	list, err := h.Store.ListCloudSlowLogs(it.CloudInstanceID, c.Query("from"), c.Query("to"), c.Query("db"), c.Query("q"), minMS, 200)
+	from, to := c.Query("from"), c.Query("to")
+	list, err := h.Store.ListCloudSlowLogs(it.CloudInstanceID, from, to, c.Query("db"), c.Query("q"), minMS, 200)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
+	unit := "minute"
+	if start, e1 := time.Parse(time.RFC3339, from); e1 == nil {
+		if end, e2 := time.Parse(time.RFC3339, to); e2 == nil && end.Sub(start) > 6*time.Hour {
+			unit = "hour"
+		}
+	}
+	trend, _ := h.Store.CloudSlowTrend(it.CloudInstanceID, from, to, unit)
+	spread, _ := h.Store.CloudSlowSpread(it.CloudInstanceID, from, to)
+	stats, _ := h.Store.CloudSlowStats(it.CloudInstanceID, from, to)
 	cur, _ := h.Store.GetCloudCursor(it.CloudVendor, "postgres", it.CloudAccountID, it.CloudInstanceID, "slow_log")
-	c.JSON(http.StatusOK, gin.H{"data": list, "cursor": cur})
+	var bus map[string]int64
+	if h.Svc != nil {
+		bus = h.Svc.SlowlogView()
+	}
+	c.JSON(http.StatusOK, gin.H{"data": list, "cursor": cur, "trend": trend, "spread": spread, "stats": stats, "bus": bus})
 }
 
 func (h *CloudHandler) SyncSlow(c *gin.Context) {
@@ -547,18 +606,30 @@ func (h *CloudHandler) SyncSlow(c *gin.Context) {
 				return
 			}
 		}
-		if err := h.Svc.QueueSlow(it.CloudInstanceID); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
-			return
+		if it.CloudInstanceID != "" {
+			cur, _ := h.Store.GetCloudCursor(it.CloudVendor, "postgres", it.CloudAccountID, it.CloudInstanceID, "slow_log")
+			if cur != nil && cloud.SlowSyncCooling(cur.UpdatedAt, time.Now()) {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "5分钟内已同步过，请稍后再试"})
+				return
+			}
 		}
-		go h.Svc.SlowlogAll(context.Background(), it.CloudInstanceID)
-		c.JSON(http.StatusOK, gin.H{"ok": true, "status": "queued"})
+		h.finishSlowSync(c, it.CloudInstanceID)
 		return
 	}
-	if err := h.Svc.QueueSlow(""); err != nil {
+	h.finishSlowSync(c, "")
+}
+
+func (h *CloudHandler) finishSlowSync(c *gin.Context, cloudID string) {
+	if err := h.Svc.QueueSlow(cloudID); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
-	go h.Svc.SlowlogAll(context.Background(), "")
-	c.JSON(http.StatusOK, gin.H{"ok": true, "status": "queued"})
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Minute)
+	defer cancel()
+	n, err := h.Svc.SlowlogSync(ctx, cloudID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error(), "produced": n})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "produced": n, "message": fmt.Sprintf("已发出 %d 条", n)})
 }

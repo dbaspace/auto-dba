@@ -1034,7 +1034,11 @@ func (h *TicketHandler) Approve(c *gin.Context) {
 	user := middleware.Username(c)
 	priv := middleware.IsPrivileged(middleware.Role(c))
 	if !h.actorCanApproveIssue(c, it) {
-		c.JSON(http.StatusForbidden, gin.H{"message": "仅指定审批人、超级审核白名单或管理员可批准"})
+		msg := "仅指定审批人、超级审核白名单或管理员可批准"
+		if store.IsCloudIssueType(it.IssueType) {
+			msg = "云变更只能由平台管理员、dba 租户用户或全局审核白名单审批"
+		}
+		c.JSON(http.StatusForbidden, gin.H{"message": msg})
 		return
 	}
 	viaWhitelist := !priv && !strings.EqualFold(it.AssignedTo, user) && h.Store.IsGlobalApprover(user)
@@ -1158,7 +1162,11 @@ func (h *TicketHandler) Reject(c *gin.Context) {
 	user := middleware.Username(c)
 	priv := middleware.IsPrivileged(middleware.Role(c))
 	if !h.actorCanApproveIssue(c, it) {
-		c.JSON(http.StatusForbidden, gin.H{"message": "仅指定审批人、超级审核白名单或管理员可驳回"})
+		msg := "仅指定审批人、超级审核白名单或管理员可驳回"
+		if store.IsCloudIssueType(it.IssueType) {
+			msg = "云变更只能由平台管理员、dba 租户用户或全局审核白名单审批"
+		}
+		c.JSON(http.StatusForbidden, gin.H{"message": msg})
 		return
 	}
 	viaWhitelist := !priv && !strings.EqualFold(it.AssignedTo, user) && h.Store.IsGlobalApprover(user)
@@ -2148,7 +2156,44 @@ func (h *TicketHandler) actorCanApproveIssue(c *gin.Context, it *store.Issue) bo
 		ok, err := createDBApproverAllowed(h.Store, user)
 		return err == nil && ok
 	}
+	if store.IsCloudIssueType(it.IssueType) {
+		return h.cloudChangeReviewer(c)
+	}
 	return h.Store.CanApproveIssue(it, user, priv)
+}
+
+// cloudChangeReviewer 云变更只能由平台管理员、dba 租户活跃成员或全局审核白名单审批。
+func (h *TicketHandler) cloudChangeReviewer(c *gin.Context) bool {
+	if h == nil || h.Store == nil || c == nil {
+		return false
+	}
+	username := strings.TrimSpace(middleware.Username(c))
+	userID := strings.TrimSpace(middleware.UserID(c))
+	if username == "" {
+		return false
+	}
+	u, _ := h.Store.GetUserByUsername(username)
+	if u != nil && u.IsLoginBlocked() {
+		return false
+	}
+	if h.Store.IsGlobalApprover(username) {
+		return true
+	}
+	if userID == "" && u != nil {
+		userID = u.ID
+	}
+	if userID == "" {
+		return false
+	}
+	if ok, _ := h.Store.UserIsPlatformAdmin(userID); ok {
+		return true
+	}
+	if t, _ := h.Store.GetTenantByCode(store.DBATenantCode); t != nil {
+		if ok, _ := h.Store.IsActiveTenantMember(t.ID, userID); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // actorCanExecuteIssue 加固开启时：提交人、可审批人、特权角色或持有 tickets.execute URN。
@@ -2192,6 +2237,9 @@ func (h *TicketHandler) loadIssueForActor(c *gin.Context, id string) (*store.Iss
 		return raw, nil
 	}
 	if raw.IssueType == store.IssueTypeResourceApply && h.isPlatformResourceApplyReviewer(c) {
+		return raw, nil
+	}
+	if store.IsCloudIssueType(raw.IssueType) && h.cloudChangeReviewer(c) {
 		return raw, nil
 	}
 	return nil, nil

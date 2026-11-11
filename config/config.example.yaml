@@ -73,6 +73,17 @@ cdc:
   debezium_url: ""
   kafka_brokers: ""
 
+# 平台慢日志总线。和上面的 cdc.kafka_brokers 不是一套集群。
+# brokers 为空时慢日志直接写入元库。生产在 Nacos 的 auto-dba.yaml 里填写地址。
+# instances 留空表示全部实例走 Kafka；灰度时填逗号分隔的云实例 ID。
+slowlog_bus:
+  brokers: ""
+  # sasl_mechanism: PLAIN   # PLAIN | SCRAM-SHA-256 | SCRAM-SHA-512
+  # username: ""
+  # password: ""            # 只放 Nacos，不要写进日志
+  # tls: false
+  # instances: ""
+
 migration:
   enabled: false
   oss_endpoint: ""

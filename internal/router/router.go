@@ -739,6 +739,7 @@ func Init(e *gin.Engine, d Deps) {
 		secured.POST("/cloud/postgres/quote", submit, d.Cloud.Quote)
 		secured.POST("/cloud/postgres/tickets", submit, d.Cloud.SubmitTicket)
 		secured.GET("/cloud/postgres/specs", view, d.Cloud.Specs)
+		secured.GET("/cloud/postgres/purchase-options", view, d.Cloud.PurchaseOptions)
 		secured.PUT("/cloud/postgres/resources/:id/account", submit, d.Cloud.AssignAccount)
 		secured.GET("/cloud/postgres/:cloudId/parameters", view, d.Cloud.Parameters)
 		secured.GET("/cloud/policies", requireURN(store.URNSidebarCloudPolicies), d.Cloud.ListPolicies)

@@ -59,6 +59,15 @@ func normalizeInstanceCloud(it *store.Instance) error {
 	return nil
 }
 
+func cloudAccountTenantOK(instanceTenant, accountTenant string) bool {
+	instanceTenant = strings.TrimSpace(instanceTenant)
+	accountTenant = strings.TrimSpace(accountTenant)
+	if instanceTenant == "" || accountTenant == "" || instanceTenant == accountTenant {
+		return true
+	}
+	return accountTenant == store.DefaultTenantID
+}
+
 func (h *InstanceHandler) checkCloudAccountBind(c *gin.Context, it *store.Instance) error {
 	if it == nil || strings.TrimSpace(it.CloudAccountID) == "" {
 		return nil
@@ -67,7 +76,7 @@ func (h *InstanceHandler) checkCloudAccountBind(c *gin.Context, it *store.Instan
 	if err != nil {
 		return err
 	}
-	if acc == nil || (it.TenantID != "" && acc.TenantID != "" && acc.TenantID != it.TenantID) {
+	if acc == nil || !cloudAccountTenantOK(it.TenantID, acc.TenantID) {
 		return fmt.Errorf("云账号不存在或不属于当前租户")
 	}
 	if it.CloudVendor != "" && acc.Vendor != it.CloudVendor {

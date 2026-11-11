@@ -155,6 +155,17 @@ redis:
   max_sessions_per_user: 1   # 已固定为同一账号只保留最新登录（配置项保留兼容，运行时始终踢旧）
   reconcile_interval_min: 5
 
+# 平台慢日志 Kafka。主题名 cloud-pg-slowlog 在代码里，不要在这里改。
+# 与业务 CDC 的 kafka 不是同一套。brokers 留空则直接写元库；清空即回退。
+# password 只放在这份配置里，不要打进日志。
+slowlog_bus:
+  brokers: "10.x.x.1:9092,10.x.x.2:9092"
+  # sasl_mechanism: PLAIN
+  # username: ""
+  # password: ""
+  # tls: false
+  # instances: ""   # 灰度时填云实例 ID，逗号分隔；留空表示全部实例
+
 # 服务监听（启动时 Load 合并后再 Listen；改端口后需重启）
 http:
   host: "0.0.0.0"

@@ -6,6 +6,18 @@ import (
 	"auto-dba/internal/store"
 )
 
+func TestCloudAccountTenantOK(t *testing.T) {
+	if !cloudAccountTenantOK("tenant-sales", store.DefaultTenantID) {
+		t.Fatal("default tenant cloud account can bind to another tenant")
+	}
+	if cloudAccountTenantOK("tenant-sales", "tenant-other") {
+		t.Fatal("business tenant account stays in its own tenant")
+	}
+	if !cloudAccountTenantOK("tenant-sales", "tenant-sales") || !cloudAccountTenantOK("", "tenant-other") {
+		t.Fatal("same or empty tenant should pass")
+	}
+}
+
 func TestNormalizeInstanceCloud(t *testing.T) {
 	it := &store.Instance{DBType: "postgres", CloudVendor: "TENCENT", CloudInstanceID: " postgres-abc ", CloudRegion: " ap-guangzhou "}
 	if err := normalizeInstanceCloud(it); err != nil {

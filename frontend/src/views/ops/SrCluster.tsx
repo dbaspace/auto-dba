@@ -53,6 +53,12 @@ type SrChange = {
   created_by?: string; created_at?: string; updated_at?: string
 }
 
+function nodeProcessRunning(status?: string, alive?: string): boolean {
+  if (status === 'stopped') return false
+  if (alive != null && alive !== '') return String(alive).toLowerCase() === 'true'
+  return status === 'ready'
+}
+
 const CHANGE_TYPE_LABEL: Record<string, string> = {
   cluster_init: '集群初始化', cluster_reinit: '集群重装', add_fe: '扩容 FE', add_be: '扩容 BE',
   restart_node: '重启节点', start_node: '启动节点', stop_node: '停止节点', remove_fe: '下线 FE',
@@ -1012,16 +1018,21 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
     try {
       const res = await api.get(`/sr-cluster/clusters/${clusterId}/live`, { silent: true })
       if (nodeLiveReq.current !== clusterId) return
-      setNodeLive(res.data?.data?.nodes || {})
-      setNodeLiveErr(res.data?.message || '')
+      const failed = String(res.data?.message || '')
+      if (failed) {
+        setNodeLiveErr(failed)
+      } else {
+        setNodeLive(res.data?.data?.nodes || {})
+        setNodeLiveErr('')
+        void reloadClusterDetail(clusterId)
+      }
       const removed: { host: string }[] = res.data?.data?.removed_nodes || []
       if (removed.length > 0) {
         message.info(`BE ${removed.map((n) => n.host).join('、')} 已完成在线缩容并移出集群，已移除节点登记`)
-        void reloadClusterDetail(clusterId)
+        if (failed) void reloadClusterDetail(clusterId)
       }
     } catch (e: any) {
       if (nodeLiveReq.current !== clusterId) return
-      setNodeLive({})
       setNodeLiveErr(e?.response?.data?.message || e.message || '请求失败')
     } finally {
       if (nodeLiveReq.current === clusterId) setNodeLiveLoading(false)
@@ -1764,6 +1775,7 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                     {(() => {
                       const feNodes = nodes.filter((n) => n.component === 'fe')
                       const beNodes = nodes.filter((n) => n.component !== 'fe')
+                      const liveLeaderKnown = feNodes.some((n) => (nodeLive[n.id]?.role || '').trim() !== '')
                       const feRoleCol: ColumnType<SrNode> = {
                         title: '角色',
                         dataIndex: 'fe_role',
@@ -1799,8 +1811,8 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                             <Tooltip title={`软件路径：${row.software_path || `${row.component === 'be' ? layoutDefaults.be_software_base : layoutDefaults.fe_software_base}/${row.component === 'be' ? 'be' : 'fe'}（全局）`}`}>
                               <span>{v}</span>
                             </Tooltip>
-                            {row.is_primary_fe && (
-                              <Tooltip title="集群初始化时第一个启动的 FE，不代表当前 Leader">
+                            {(liveLeaderKnown ? (nodeLive[row.id]?.role || '').toUpperCase() === 'LEADER' : row.is_primary_fe) && (
+                              <Tooltip title={liveLeaderKnown ? '当前 Leader' : '实时角色未读到，保留上次的首 FE'}>
                                 <Tag>首FE</Tag>
                               </Tooltip>
                             )}
@@ -1885,7 +1897,14 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                               </Space>
                             )
                           }
-                          // 有 SHOW PROC 实时数据时以 Alive 为准，避免库里 stopped 误显「已停止」
+                          if (s === 'stopped') {
+                            const stale = live?.alive != null && String(live.alive).toLowerCase() === 'true'
+                            return (
+                              <Tooltip title={stale ? '进程已停止，SHOW PROC 尚未刷新' : '已停止'}>
+                                <Tag>已停止</Tag>
+                              </Tooltip>
+                            )
+                          }
                           if (live?.alive != null && live.alive !== '') {
                             const alive = String(live.alive).toLowerCase() === 'true'
                             return (
@@ -1956,19 +1975,10 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                               <Button
                                 size="small"
                                 type="link"
-                                danger={(() => {
-                                  const live = nodeLive[row.id]
-                                  if (live?.alive != null && live.alive !== '') {
-                                    return String(live.alive).toLowerCase() === 'true'
-                                  }
-                                  return row.status === 'ready'
-                                })()}
+                                danger={nodeProcessRunning(row.status, nodeLive[row.id]?.alive)}
                                 onClick={async () => {
                                   if (!selected) return
-                                  const live = nodeLive[row.id]
-                                  const running = (live?.alive != null && live.alive !== '')
-                                    ? String(live.alive).toLowerCase() === 'true'
-                                    : row.status === 'ready'
+                                  const running = nodeProcessRunning(row.status, nodeLive[row.id]?.alive)
                                   try {
                                     const res = await api.post(
                                       `/sr-cluster/clusters/${selected.id}/nodes/${row.id}/${running ? 'stop' : 'start'}`,
@@ -1985,13 +1995,7 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                                   }
                                 }}
                               >
-                                {(() => {
-                                  const live = nodeLive[row.id]
-                                  if (live?.alive != null && live.alive !== '') {
-                                    return String(live.alive).toLowerCase() === 'true' ? '停止' : '启动'
-                                  }
-                                  return row.status === 'ready' ? '停止' : '启动'
-                                })()}
+                                {nodeProcessRunning(row.status, nodeLive[row.id]?.alive) ? '停止' : '启动'}
                               </Button>
                               <Button size="small" type="link" onClick={async () => {
                                 try {

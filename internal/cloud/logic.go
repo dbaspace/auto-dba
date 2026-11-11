@@ -5,9 +5,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
+
+	"auto-dba/internal/secret"
 )
 
 const (
@@ -31,9 +34,55 @@ const (
 )
 
 // Window 慢日志时间窗。(上次成功, 本次结束]，并向前重叠 overlap。
+const (
+	// SlowLogAPILookback 是腾讯云慢日志默认可查范围。更早的起点会被接口判为参数不合法。
+	SlowLogAPILookback = 7 * 24 * time.Hour
+	// SlowLogAPIFallback 是 7 天窗口仍被拒绝时，这一次改拉的最近范围。
+	SlowLogAPIFallback = 24 * time.Hour
+	// SlowSyncCooldown 是手动立即同步的最短间隔。
+	SlowSyncCooldown = 5 * time.Minute
+)
+
+// SlowSyncCooling 表示这条游标刚更新过，5 分钟内不能再手动同步。没有更新时间时允许第一次同步。
+func SlowSyncCooling(updatedAt string, now time.Time) bool {
+	updatedAt = strings.TrimSpace(updatedAt)
+	if updatedAt == "" {
+		return false
+	}
+	at, err := time.Parse(time.RFC3339, updatedAt)
+	if err != nil {
+		at, err = time.Parse(time.RFC3339Nano, updatedAt)
+		if err != nil {
+			return false
+		}
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	return now.Sub(at) < SlowSyncCooldown
+}
+
 type Window struct {
 	From time.Time
 	To   time.Time
+}
+
+// ClampSlowWindow 把第一次回溯的起点收到云上还能查到的范围内。已落在范围内的增量窗口保持原样。
+func ClampSlowWindow(win Window, now time.Time) Window {
+	if now.IsZero() {
+		now = time.Now()
+	}
+	floor := now.Add(-SlowLogAPILookback)
+	if win.From.Before(floor) {
+		win.From = floor
+	}
+	if !win.From.Before(win.To) {
+		win.From = floor
+		if !win.From.Before(win.To) {
+			win.From = win.To.Add(-time.Minute)
+		}
+	}
+	return win
 }
 
 func NextWindow(last, now time.Time, firstLookback, overlap time.Duration) Window {
@@ -401,29 +450,47 @@ func (a Approval) Valid() bool {
 }
 
 type Payload struct {
-	Action       string   `json:"action"`
-	Vendor       string   `json:"vendor"`
-	Engine       string   `json:"engine"`
-	AccountID    string   `json:"account_id"`
-	CloudID      string   `json:"cloud_instance_id"`
-	Region       string   `json:"region"`
-	BeforeCPU    int      `json:"before_cpu"`
-	BeforeMem    int      `json:"before_memory_mb"`
-	BeforeDisk   int      `json:"before_disk_gb"`
-	CPU          int      `json:"cpu"`
-	MemoryMB     int      `json:"memory_mb"`
-	DiskGB       int      `json:"disk_gb"`
-	Zone         string   `json:"zone,omitempty"`
-	Name         string   `json:"name,omitempty"`
-	InstanceType string   `json:"instance_type,omitempty"`
-	AdminUser    string   `json:"admin_user,omitempty"`
-	PasswordEnc  string   `json:"password_enc,omitempty"`
-	Params       []Param  `json:"params,omitempty"`
-	Quote        Quote    `json:"quote"`
-	Blip         bool     `json:"blip"`
-	Impact       string   `json:"impact"`
-	TaskID       string   `json:"task_id,omitempty"`
-	Approval     Approval `json:"approval"`
+	Action             string   `json:"action"`
+	Vendor             string   `json:"vendor"`
+	Engine             string   `json:"engine"`
+	AccountID          string   `json:"account_id"`
+	CloudID            string   `json:"cloud_instance_id"`
+	Region             string   `json:"region"`
+	BeforeCPU          int      `json:"before_cpu"`
+	BeforeMem          int      `json:"before_memory_mb"`
+	BeforeDisk         int      `json:"before_disk_gb"`
+	CPU                int      `json:"cpu"`
+	MemoryMB           int      `json:"memory_mb"`
+	DiskGB             int      `json:"disk_gb"`
+	Zone               string   `json:"zone,omitempty"`
+	StandbyZone        string   `json:"standby_zone,omitempty"`
+	Name               string   `json:"name,omitempty"`
+	InstanceType       string   `json:"instance_type,omitempty"`
+	AdminUser          string   `json:"admin_user,omitempty"`
+	PasswordEnc        string   `json:"password_enc,omitempty"`
+	ChargeType         string   `json:"charge_type,omitempty"`
+	Period             int      `json:"period,omitempty"`
+	InstanceCount      int      `json:"instance_count,omitempty"`
+	SpecCode           string   `json:"spec_code,omitempty"`
+	DBMajorVersion     string   `json:"db_major_version,omitempty"`
+	VpcID              string   `json:"vpc_id,omitempty"`
+	SubnetID           string   `json:"subnet_id,omitempty"`
+	Charset            string   `json:"charset,omitempty"`
+	SyncMode           string   `json:"sync_mode,omitempty"`
+	SecurityGroupID    string   `json:"security_group_id,omitempty"`
+	ProjectID          int      `json:"project_id,omitempty"`
+	NeedSupportTDE     bool     `json:"need_support_tde,omitempty"`
+	DeletionProtection bool     `json:"deletion_protection,omitempty"`
+	Tags               []Tag    `json:"tags,omitempty"`
+	Params             []Param  `json:"params,omitempty"`
+	Quote              Quote    `json:"quote"`
+	Blip               bool     `json:"blip"`
+	Impact             string   `json:"impact"`
+	TaskID             string   `json:"task_id,omitempty"`
+	SwitchTag          int      `json:"switch_tag,omitempty"`
+	SwitchStart        string   `json:"switch_start,omitempty"`
+	SwitchEnd          string   `json:"switch_end,omitempty"`
+	Approval           Approval `json:"approval"`
 }
 
 func ParsePayload(raw string) (Payload, error) {
@@ -440,6 +507,308 @@ func ParsePayload(raw string) (Payload, error) {
 func (p Payload) JSON() string {
 	b, _ := json.Marshal(p)
 	return string(b)
+}
+
+func (p Payload) ToCreateInput(password string) CreateInput {
+	count := p.InstanceCount
+	if count <= 0 {
+		count = 1
+	}
+	period := p.Period
+	if period <= 0 {
+		period = 1
+	}
+	charge := strings.TrimSpace(p.ChargeType)
+	if charge == "" {
+		charge = "POSTPAID_BY_HOUR"
+	}
+	return CreateInput{
+		Region: p.Region, Zone: p.Zone, StandbyZone: p.StandbyZone,
+		Name: p.Name, Admin: p.AdminUser, Password: password,
+		CPU: p.CPU, MemoryMB: p.MemoryMB, DiskGB: p.DiskGB,
+		Period: period, Count: count, SpecCode: p.SpecCode,
+		ChargeType: charge, DBMajorVersion: p.DBMajorVersion,
+		VpcID: p.VpcID, SubnetID: p.SubnetID,
+		Charset: p.Charset, SyncMode: p.SyncMode,
+		SecurityGroupID: p.SecurityGroupID, ProjectID: p.ProjectID,
+		NeedSupportTDE: p.NeedSupportTDE, DeletionProtection: p.DeletionProtection,
+		Tags: p.Tags,
+	}
+}
+
+func prepaidPeriodOK(n int) bool {
+	return (n >= 1 && n <= 12) || n == 24 || n == 36
+}
+
+// ValidateCreate 只检查 PostgreSQL 资源申请。其他引擎仍用原来的短表单。
+func ValidateCreate(p Payload) error {
+	if p.Action != ActionCreate || (p.Engine != "" && p.Engine != EnginePostgres) {
+		return nil
+	}
+	if strings.TrimSpace(p.Region) == "" {
+		return fmt.Errorf("请选择地域")
+	}
+	if strings.TrimSpace(p.Zone) == "" || strings.TrimSpace(p.StandbyZone) == "" {
+		return fmt.Errorf("请选择主可用区和备可用区")
+	}
+	if strings.TrimSpace(p.VpcID) == "" || strings.TrimSpace(p.SubnetID) == "" {
+		return fmt.Errorf("请选择私有网络和子网")
+	}
+	if strings.TrimSpace(p.DBMajorVersion) == "" {
+		return fmt.Errorf("请选择数据库版本")
+	}
+	if strings.TrimSpace(p.SpecCode) == "" || p.CPU <= 0 || p.MemoryMB <= 0 {
+		return fmt.Errorf("请选择规格")
+	}
+	if p.DiskGB < 10 || p.DiskGB%10 != 0 {
+		return fmt.Errorf("磁盘按 10GB 步进，且不能小于 10GB")
+	}
+	charge := strings.TrimSpace(p.ChargeType)
+	if charge != "PREPAID" && charge != "POSTPAID_BY_HOUR" {
+		return fmt.Errorf("请选择计费模式")
+	}
+	if charge == "PREPAID" && !prepaidPeriodOK(p.Period) {
+		return fmt.Errorf("包年包月时长只支持 1 到 12 个月，或 24、36 个月")
+	}
+	if p.InstanceCount < 0 || p.InstanceCount > 10 {
+		return fmt.Errorf("购买数量为 1 到 10")
+	}
+	charset := strings.TrimSpace(p.Charset)
+	if charset != "UTF8" && charset != "LATIN1" {
+		return fmt.Errorf("字符集只支持 UTF8 或 LATIN1")
+	}
+	syncMode := strings.TrimSpace(p.SyncMode)
+	if syncMode != "Async" && syncMode != "Semi-sync" {
+		return fmt.Errorf("请选择数据复制方式")
+	}
+	if name := strings.TrimSpace(p.Name); len([]rune(name)) >= 60 {
+		return fmt.Errorf("实例名长度要小于 60")
+	}
+	if err := validAdminName(p.AdminUser); err != nil {
+		return err
+	}
+	if secret.IsEncrypted(p.PasswordEnc) {
+		return nil
+	}
+	if err := validAdminPassword(p.PasswordEnc); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validAdminName(name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" || len(name) > 16 || !regexp.MustCompile(`^[A-Za-z0-9_]+$`).MatchString(name) {
+		return fmt.Errorf("管理员账号需要 1-16 位字母、数字或下划线")
+	}
+	if name[0] >= '0' && name[0] <= '9' {
+		return fmt.Errorf("管理员账号不能以数字开头")
+	}
+	lower := strings.ToLower(name)
+	if lower == "postgres" || strings.HasPrefix(lower, "pg_") {
+		return fmt.Errorf("管理员账号不能是 postgres，也不能以 pg_ 开头")
+	}
+	return nil
+}
+
+func validAdminPassword(password string) error {
+	if len(password) < 8 || len(password) > 32 || strings.HasPrefix(password, "/") {
+		return fmt.Errorf("管理员密码需要 8-32 位，且不能以 / 开头")
+	}
+	if !regexp.MustCompile(`[a-z]`).MatchString(password) ||
+		!regexp.MustCompile(`[A-Z]`).MatchString(password) ||
+		!regexp.MustCompile(`[0-9]`).MatchString(password) ||
+		!regexp.MustCompile("[`()~!@#$%^&*\\-+=_|{}\\[\\]:;'<>,.?/]").MatchString(password) {
+		return fmt.Errorf("管理员密码需要同时包含大写字母、小写字母、数字和特殊字符")
+	}
+	return nil
+}
+
+// CheckTargetSpec 变配、扩盘的目标不能为 0，也不能小于当前规格。
+func CheckTargetSpec(action string, beforeCPU, beforeMem, beforeDisk, cpu, mem, disk int, allowDiskShrink bool) error {
+	_, _, err := ScaleDelta("", action, beforeCPU, beforeMem, beforeDisk, cpu, mem, disk, allowDiskShrink)
+	return err
+}
+
+// flexibleScale 是 PostgreSQL、MySQL。目标规格可以不填，只把变化的项交给云接口。
+func flexibleScale(engine string) bool {
+	return engine == EnginePostgres || engine == EngineMySQL
+}
+
+// ScaleDelta 比较变更前后。specChanged、diskChanged 表示要传给云接口的项。
+func ScaleDelta(engine, action string, beforeCPU, beforeMem, beforeDisk, cpu, mem, disk int, allowDiskShrink bool) (specChanged, diskChanged bool, err error) {
+	switch action {
+	case ActionScaleDisk:
+		if disk <= 0 {
+			return false, false, fmt.Errorf("目标磁盘不能为 0")
+		}
+		if err := CheckDisk(action, beforeDisk, disk, allowDiskShrink); err != nil {
+			return false, false, err
+		}
+		return false, true, nil
+	case ActionScaleSpec:
+		if !flexibleScale(engine) {
+			if cpu <= 0 || mem <= 0 {
+				return false, false, fmt.Errorf("请填写目标规格")
+			}
+			if (beforeCPU > 0 && cpu < beforeCPU) || (beforeMem > 0 && mem < beforeMem) {
+				return false, false, fmt.Errorf("目标规格不能小于当前规格")
+			}
+			if beforeDisk > 0 && disk <= 0 {
+				return false, false, fmt.Errorf("目标磁盘不能为 0")
+			}
+			if err := CheckDisk(action, beforeDisk, disk, allowDiskShrink); err != nil {
+				return false, false, err
+			}
+			return true, disk > 0 && beforeDisk > 0 && disk != beforeDisk, nil
+		}
+		if (cpu > 0) != (mem > 0) {
+			return false, false, fmt.Errorf("请同时填写核数和内存")
+		}
+		specChanged = cpu > 0 && (cpu != beforeCPU || mem != beforeMem)
+		if specChanged && ((beforeCPU > 0 && cpu < beforeCPU) || (beforeMem > 0 && mem < beforeMem)) {
+			return false, false, fmt.Errorf("目标规格不能小于当前规格")
+		}
+		if disk > 0 && beforeDisk > 0 && disk != beforeDisk {
+			if err := CheckDisk(action, beforeDisk, disk, allowDiskShrink); err != nil {
+				return false, false, err
+			}
+			diskChanged = true
+		} else if beforeDisk == 0 && disk > 0 {
+			diskChanged = true
+		}
+		if !specChanged && !diskChanged {
+			return false, false, fmt.Errorf("没有需要执行的变更")
+		}
+		return specChanged, diskChanged, nil
+	default:
+		return false, false, nil
+	}
+}
+
+// SpecForAPI 只保留这次要执行的 CPU、内存或磁盘。未变化的项为 0，云请求会省略。
+func SpecForAPI(p Payload, specChanged, diskChanged bool) SpecInput {
+	in := SpecInput{
+		CloudID: p.CloudID, InstanceType: p.InstanceType,
+		SwitchTag: p.SwitchTag, SwitchStart: strings.TrimSpace(p.SwitchStart), SwitchEnd: strings.TrimSpace(p.SwitchEnd),
+	}
+	if p.Action == ActionScaleDisk {
+		in.DiskGB = p.DiskGB
+		return in
+	}
+	if p.Action == ActionScaleSpec && flexibleScale(p.Engine) {
+		if specChanged {
+			in.CPU = p.CPU
+			in.MemoryMB = p.MemoryMB
+		}
+		if diskChanged {
+			in.DiskGB = p.DiskGB
+		}
+		return in
+	}
+	in.CPU = p.CPU
+	in.MemoryMB = p.MemoryMB
+	in.DiskGB = p.DiskGB
+	return in
+}
+
+// ImpactFor 只扩盘时说明不调整规格。
+func ImpactFor(p Payload, allowDiskShrink bool) (bool, string) {
+	specChanged, diskChanged, err := ScaleDelta(p.Engine, p.Action, p.BeforeCPU, p.BeforeMem, p.BeforeDisk, p.CPU, p.MemoryMB, p.DiskGB, allowDiskShrink)
+	if err != nil {
+		return ImpactOf(p.Action, p.BeforeCPU, p.BeforeMem, p.CPU, p.MemoryMB)
+	}
+	if p.Action == ActionScaleDisk || (p.Action == ActionScaleSpec && diskChanged && !specChanged) {
+		return false, "只扩容磁盘"
+	}
+	blip, text := ImpactOf(p.Action, p.BeforeCPU, p.BeforeMem, p.CPU, p.MemoryMB)
+	if p.Action == ActionScaleSpec && specChanged && diskChanged {
+		text += "，并扩容磁盘"
+	}
+	return blip, text
+}
+
+// MaxStorageGB 按 CPU 和内存找到规格的最大存储。没有这档规格或云上没给上限时返回 0。
+func MaxStorageGB(specs []Spec, cpu, memoryMB int) int {
+	for _, s := range specs {
+		if s.CPU == cpu && s.MemoryMB == memoryMB {
+			return s.MaxStorageGB
+		}
+	}
+	return 0
+}
+
+// DiskForStorageCheck 变配没另填磁盘时用当前磁盘。
+func DiskForStorageCheck(action string, diskGB, beforeDisk int) int {
+	if action == ActionScaleSpec && diskGB <= 0 {
+		return beforeDisk
+	}
+	return diskGB
+}
+
+// CheckSpecStorage 磁盘超过规格最大存储时拒绝。上限为 0 表示云上没返回，不拦截。
+func CheckSpecStorage(diskGB, maxStorageGB int) error {
+	if diskGB <= 0 || maxStorageGB <= 0 || diskGB <= maxStorageGB {
+		return nil
+	}
+	return fmt.Errorf("当前磁盘 %dGB，该规格最大支持 %dGB", diskGB, maxStorageGB)
+}
+
+var switchClock = regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d:[0-5]\d$`)
+
+// CheckSwitch PostgreSQL 变配、扩盘的切换时间。0 升级完成时，1 指定时间，2 维护时间内。缺省按 0。
+func CheckSwitch(engine, action string, tag int, start, end string) error {
+	if engine != "" && engine != EnginePostgres {
+		return nil
+	}
+	if action != ActionScaleSpec && action != ActionScaleDisk {
+		return nil
+	}
+	start = strings.TrimSpace(start)
+	end = strings.TrimSpace(end)
+	switch tag {
+	case 0, 2:
+		return nil
+	case 1:
+		if !switchClock.MatchString(start) || !switchClock.MatchString(end) || start >= end {
+			return fmt.Errorf("指定切换时间需要开始早于结束，格式为 HH:mm:ss")
+		}
+		return nil
+	default:
+		return fmt.Errorf("切换时间无效")
+	}
+}
+
+// SwitchText 审批页用的切换时间说明。
+func SwitchText(tag int, start, end string) string {
+	switch tag {
+	case 1:
+		return fmt.Sprintf("指定时间 %s–%s", strings.TrimSpace(start), strings.TrimSpace(end))
+	case 2:
+		return "维护时间内"
+	default:
+		return "升级完成时"
+	}
+}
+
+// CopyCurrentSpec 不改规格的动作沿用当前规格，避免把变更后写成 0。
+func CopyCurrentSpec(p *Payload) {
+	if p == nil {
+		return
+	}
+	switch p.Action {
+	case ActionScaleSpec, ActionScaleDisk, ActionCreate:
+		return
+	}
+	if p.CPU == 0 {
+		p.CPU = p.BeforeCPU
+	}
+	if p.MemoryMB == 0 {
+		p.MemoryMB = p.BeforeMem
+	}
+	if p.DiskGB == 0 {
+		p.DiskGB = p.BeforeDisk
+	}
 }
 
 // CheckDisk 腾讯云磁盘只能变大。其他云由 Caps.ScaleDiskDown 决定。

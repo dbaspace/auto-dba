@@ -74,6 +74,50 @@ func TestEnsureQueryLimit(t *testing.T) {
 	}
 }
 
+func TestEnsureQueryLimitOffsetAndComma(t *testing.T) {
+	got := EnsureQueryLimit("SELECT * FROM t LIMIT 10 OFFSET 0", 1000, 10000)
+	if got.AppliedLimit != 10 || got.SQL != "SELECT * FROM t limit 10 offset 0" {
+		t.Fatalf("offset keep: %+v", got)
+	}
+	if strings.Count(strings.ToLower(got.SQL), "limit") != 1 {
+		t.Fatalf("offset duplicated: %q", got.SQL)
+	}
+
+	got = EnsureQueryLimit("SELECT * FROM t LIMIT 5000 OFFSET 0", 1000, 1000)
+	if got.AppliedLimit != 1000 || got.SQL != "SELECT * FROM t limit 1000 offset 0" {
+		t.Fatalf("offset clamp: %+v", got)
+	}
+	if strings.Count(strings.ToLower(got.SQL), "limit") != 1 {
+		t.Fatalf("offset clamp duplicated: %q", got.SQL)
+	}
+
+	got = EnsureQueryLimit("SELECT * FROM t LIMIT 0, 10", 1000, 10000)
+	if got.AppliedLimit != 10 || got.SQL != "SELECT * FROM t limit 0, 10" {
+		t.Fatalf("comma keep: %+v", got)
+	}
+	if strings.Count(strings.ToLower(got.SQL), "limit") != 1 {
+		t.Fatalf("comma duplicated: %q", got.SQL)
+	}
+
+	got = EnsureQueryLimit("SELECT * FROM t LIMIT 0, 5000", 1000, 1000)
+	if got.AppliedLimit != 1000 || got.SQL != "SELECT * FROM t limit 0, 1000" {
+		t.Fatalf("comma clamp: %+v", got)
+	}
+
+	n, ok := ParseSQLTailLimit("select * from t LIMIT 10 OFFSET 0")
+	if !ok || n != 10 {
+		t.Fatalf("parse offset n=%d ok=%v", n, ok)
+	}
+	n, err := RequireExportSQLLimit("select * from t LIMIT 10 OFFSET 0")
+	if err != nil || n != 10 {
+		t.Fatalf("export offset n=%d err=%v", n, err)
+	}
+	n, ok = ParseSQLTailLimit("select * from t LIMIT 20, 5")
+	if !ok || n != 5 {
+		t.Fatalf("parse comma n=%d ok=%v", n, ok)
+	}
+}
+
 func TestMissingPATSelectLimit(t *testing.T) {
 	if _, missing := MissingPATSelectLimit([]string{"SELECT * FROM t"}); !missing {
 		t.Fatal("expected missing LIMIT")

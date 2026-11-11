@@ -126,6 +126,61 @@ func TestProcStartTimeIdx(t *testing.T) {
 	}
 }
 
+func TestFELiveQueryHostsSkipsStopped(t *testing.T) {
+	cl := &store.SrCluster{FeHost: "172.24.16.4"}
+	nodes := []store.SrNode{
+		{Component: "fe", Host: "172.24.16.4", Status: store.SrNodeStopped},
+		{Component: "fe", Host: "172.24.16.25", Status: store.SrNodeReady},
+		{Component: "fe", Host: "172.24.16.7", Status: store.SrNodeReady},
+		{Component: "be", Host: "172.24.16.16", Status: store.SrNodeReady},
+	}
+	got := feLiveQueryHosts(cl, nodes)
+	if len(got) != 2 || got[0] != "172.24.16.25" || got[1] != "172.24.16.7" {
+		t.Fatalf("应跳过已停止的 fe_host: %v", got)
+	}
+	nodes[0].Status = store.SrNodeReady
+	got = feLiveQueryHosts(cl, nodes)
+	if len(got) != 3 || got[0] != "172.24.16.4" {
+		t.Fatalf("fe_host 存活时应排在最前: %v", got)
+	}
+}
+
+func TestSystemdReportsActive(t *testing.T) {
+	if !systemdReportsActive("Active: active (running)\n") {
+		t.Fatal("active 应判为运行")
+	}
+	if systemdReportsActive("Active: inactive (dead)") || systemdReportsActive("Active: activating") {
+		t.Fatal("inactive / activating 不应判为运行")
+	}
+}
+
+func TestPrimaryLeaderID(t *testing.T) {
+	nodes := []store.SrNode{
+		{ID: "a", Component: "fe", Host: "172.24.16.4", IsPrimaryFE: true},
+		{ID: "b", Component: "fe", Host: "172.24.16.7"},
+		{ID: "be", Component: "be", Host: "172.24.16.16"},
+	}
+	live := map[string]NodeLive{
+		"a": {Role: "FOLLOWER"},
+		"b": {Role: "LEADER"},
+	}
+	ready := &store.SrCluster{Status: store.SrClusterReady}
+	id, ok := primaryLeaderID(ready, nodes, live)
+	if !ok || id != "b" {
+		t.Fatalf("应跟到当前 Leader: %q %v", id, ok)
+	}
+	if _, ok := primaryLeaderID(&store.SrCluster{Status: store.SrClusterIniting}, nodes, live); ok {
+		t.Fatal("未就绪集群不应改首 FE")
+	}
+	live["a"] = NodeLive{Role: "LEADER"}
+	if _, ok := primaryLeaderID(ready, nodes, live); ok {
+		t.Fatal("两个 Leader 时不改首 FE")
+	}
+	if _, ok := primaryLeaderID(ready, nodes, nil); ok {
+		t.Fatal("没有实时角色时不改首 FE")
+	}
+}
+
 func TestReleaseIDForVersion(t *testing.T) {
 	rels := []store.SrRelease{{ID: "r1", Version: "3.2.1"}, {ID: "r2", Version: "3.2.10"}, {ID: "r3", Version: "3.3.22"}}
 	if got := releaseIDForVersion(rels, "3.2.10-f61f51a"); got != "r2" {

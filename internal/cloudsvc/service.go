@@ -8,12 +8,14 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"auto-dba/internal/alert"
 	"auto-dba/internal/cloud"
 	"auto-dba/internal/flashback"
 	"auto-dba/internal/secret"
+	"auto-dba/internal/slowbus"
 	"auto-dba/internal/store"
 
 	_ "auto-dba/internal/cloud/tencentcvm"
@@ -27,6 +29,18 @@ type Service struct {
 	Secret string
 	mu     sync.Mutex
 	busy   map[string]bool
+
+	slowMu     sync.Mutex
+	stopping   bool
+	pulling    int
+	pullCancel context.CancelFunc
+	busOpen    sync.Mutex
+	bus        *slowbus.Bus
+	busKey     string
+	kafkaDown  time.Time
+	drainSince time.Time
+	lastPurge  time.Time
+	rateHits   atomic.Int64
 }
 
 func New(db *store.DB, secretKey string) *Service {
@@ -606,160 +620,6 @@ func (s *Service) noteSync(account *store.CloudAccount, engine, dataType, cloudI
 		})
 	}
 	_ = s.DB.SaveCloudCursor(cur)
-}
-
-func (s *Service) SlowlogAll(ctx context.Context, onlyCloudID string) error {
-	accounts, err := s.DB.ListCloudAccounts("", true)
-	if err != nil {
-		return err
-	}
-	var first error
-	for i := range accounts {
-		if !cloud.Supported(accounts[i].Vendor, cloud.EnginePostgres) {
-			continue
-		}
-		if !s.tryAccount(accounts[i].ID + ":slow") {
-			if first == nil {
-				first = fmt.Errorf("排队中")
-			}
-			continue
-		}
-		err := s.slowAccount(ctx, &accounts[i], onlyCloudID)
-		s.doneAccount(accounts[i].ID + ":slow")
-		if err != nil && !errors.Is(err, cloud.ErrNoKey) && first == nil {
-			first = err
-		}
-	}
-	s.purgeSlow()
-	return first
-}
-
-func (s *Service) slowAccount(ctx context.Context, account *store.CloudAccount, only string) error {
-	reader, err := cloud.GetReader(account.Vendor, cloud.EnginePostgres)
-	if err != nil {
-		return err
-	}
-	cred, err := s.Cred(account, cloud.RoleReadonly, "")
-	if err != nil {
-		return err
-	}
-	list, err := s.DB.ListCloudResources(account.TenantID, cloud.EnginePostgres, "")
-	if err != nil {
-		return err
-	}
-	now := time.Now()
-	for _, inst := range list {
-		if inst.AccountID != account.ID {
-			continue
-		}
-		if only != "" && inst.CloudID != only && inst.InstanceID != only {
-			continue
-		}
-		if strings.TrimSpace(inst.InstanceID) != "" {
-			pi, _ := s.DB.GetInstance(inst.InstanceID)
-			if pi != nil && strings.TrimSpace(pi.CloudAccountID) == "" {
-				continue
-			}
-		}
-		if inst.Region != "" {
-			cred.Region = inst.Region
-		}
-		if err := s.slowOne(ctx, reader, cred, account, inst, now); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *Service) slowOne(ctx context.Context, reader cloud.Reader, cred cloud.Cred, account *store.CloudAccount, inst store.CloudInstance, now time.Time) error {
-	cur, err := s.DB.GetCloudCursor(account.Vendor, "postgres", account.ID, inst.CloudID, "slow_log")
-	if err != nil {
-		return err
-	}
-	var last time.Time
-	if cur != nil && cur.CursorAt != "" {
-		last, _ = time.Parse(time.RFC3339, cur.CursorAt)
-	}
-	win := cloud.NextWindow(last, now, 5*time.Minute, time.Minute)
-	parts := cloud.SplitWindow(win, 24*time.Hour)
-	cursor := last
-	total := 0
-	for _, seg := range parts {
-		n, err := s.pullSlow(ctx, reader, cred, account, inst, seg)
-		row := &store.CloudCursor{
-			TenantID: account.TenantID, Vendor: account.Vendor, Engine: "postgres", AccountID: account.ID,
-			CloudID: inst.CloudID, DataType: "slow_log", LastCount: n,
-		}
-		if err != nil {
-			row.CursorAt = cursor.UTC().Format(time.RFC3339)
-			if cursor.IsZero() {
-				row.CursorAt = ""
-			}
-			row.Status = "error"
-			row.Error = err.Error()
-			if cur != nil {
-				row.FailCount = cur.FailCount + 1
-			}
-			_ = s.DB.SaveCloudCursor(row)
-			return err
-		}
-		total += n
-		cursor = cloud.AdvanceCursor(cursor, seg, true)
-		row.CursorAt = cursor.UTC().Format(time.RFC3339)
-		row.Status = "ok"
-		row.LastCount = total
-		if err := s.DB.SaveCloudCursor(row); err != nil {
-			return err
-		}
-		cur = row
-	}
-	return nil
-}
-
-func (s *Service) pullSlow(ctx context.Context, reader cloud.Reader, cred cloud.Cred, account *store.CloudAccount, inst store.CloudInstance, seg cloud.Window) (int, error) {
-	offset := 0
-	n := 0
-	for {
-		var page []cloud.SlowLog
-		var total int
-		err := cloud.RetryRead(ctx, nil, func() error {
-			var e error
-			page, total, e = reader.ListSlowLogs(ctx, cred, inst.CloudID, seg.From, seg.To, offset, 100)
-			return e
-		})
-		if err != nil {
-			return n, err
-		}
-		for _, row := range page {
-			if row.Time.Before(seg.From) || row.Time.After(seg.To) {
-				continue
-			}
-			fp := cloud.Fingerprint(row.SQL)
-			if err := s.DB.InsertCloudSlowLog(&store.CloudSlowLog{
-				TenantID: account.TenantID, Vendor: account.Vendor, Engine: "postgres", AccountID: account.ID,
-				CloudID: inst.CloudID, LogTime: row.Time.UTC().Format(time.RFC3339Nano), DBName: row.DBName,
-				DBUser: row.User, Client: row.Client, Duration: row.DurationMS, SQL: row.SQL, Fingerprint: fp,
-			}); err != nil {
-				return n, err
-			}
-			n++
-		}
-		offset += len(page)
-		if len(page) == 0 || offset >= total {
-			break
-		}
-	}
-	return n, nil
-}
-
-func (s *Service) purgeSlow() {
-	raw, _ := s.DB.GetGlobalArg(store.ArgCloudSlowlogRetention)
-	days := atoi(raw)
-	if days <= 0 {
-		days = 15
-	}
-	before := time.Now().AddDate(0, 0, -days).UTC().Format(time.RFC3339)
-	_ = s.DB.PurgeCloudSlowLogs(before)
 }
 
 func (s *Service) QueueSlow(cloudID string) error {

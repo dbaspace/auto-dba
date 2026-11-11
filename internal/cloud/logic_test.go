@@ -21,6 +21,37 @@ func TestNextWindowFirstAndOverlap(t *testing.T) {
 	}
 }
 
+func TestSlowSyncCooling(t *testing.T) {
+	now := time.Date(2026, 11, 10, 11, 30, 0, 0, time.UTC)
+	if !SlowSyncCooling(now.Add(-4*time.Minute).Format(time.RFC3339), now) {
+		t.Fatal("4 minutes should still be cooling")
+	}
+	if SlowSyncCooling(now.Add(-5*time.Minute).Format(time.RFC3339), now) {
+		t.Fatal("5 minutes should allow another sync")
+	}
+	if SlowSyncCooling("", now) {
+		t.Fatal("missing cursor should allow the first sync")
+	}
+}
+
+func TestClampSlowWindowKeepsAPIStartInsideRetention(t *testing.T) {
+	now := time.Date(2026, 11, 10, 11, 16, 3, 0, time.UTC)
+	wide := NextWindow(time.Time{}, now, 15*24*time.Hour, time.Minute)
+	got := ClampSlowWindow(wide, now)
+	floor := now.Add(-SlowLogAPILookback)
+	if got.From.Before(floor) || !got.To.Equal(now) {
+		t.Fatalf("clamped window %+v floor %s", got, floor)
+	}
+	if !got.From.Equal(floor) {
+		t.Fatalf("15 day start was not pulled forward: %s", got.From)
+	}
+	last := now.Add(-time.Hour)
+	inc := ClampSlowWindow(NextWindow(last, now, 15*24*time.Hour, time.Minute), now)
+	if !inc.From.Equal(last.Add(-time.Minute)) {
+		t.Fatalf("incremental start changed: %s", inc.From)
+	}
+}
+
 func TestSplitAndCursor(t *testing.T) {
 	start := time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC)
 	w := Window{From: start, To: start.Add(50 * time.Hour)}
@@ -191,6 +222,103 @@ func TestDecideBind(t *testing.T) {
 	}
 }
 
+func TestCheckTargetSpec(t *testing.T) {
+	if err := CheckTargetSpec(ActionScaleSpec, 8, 16384, 100, 0, 0, 100, false); err == nil {
+		t.Fatal("zero target spec should fail")
+	}
+	if err := CheckTargetSpec(ActionScaleSpec, 8, 16384, 100, 4, 8192, 100, false); err == nil {
+		t.Fatal("smaller spec should fail")
+	}
+	if err := CheckTargetSpec(ActionScaleSpec, 8, 16384, 100, 16, 32768, 100, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckTargetSpec(ActionScaleDisk, 8, 16384, 3980, 0, 0, 0, false); err == nil {
+		t.Fatal("zero disk should fail")
+	}
+	if err := CheckSwitch(EnginePostgres, ActionScaleSpec, 1, "", ""); err == nil {
+		t.Fatal("specified switch needs a window")
+	}
+	if err := CheckSwitch(EnginePostgres, ActionScaleSpec, 1, "06:00:00", "02:00:00"); err == nil {
+		t.Fatal("switch start must be earlier")
+	}
+	if err := CheckSwitch(EnginePostgres, ActionScaleDisk, 1, "02:00:00", "06:00:00"); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckSwitch(EnginePostgres, ActionScaleSpec, 0, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckSwitch(EnginePostgres, ActionScaleSpec, 2, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if SwitchText(0, "", "") != "升级完成时" || SwitchText(2, "", "") != "维护时间内" || SwitchText(1, "02:00:00", "06:00:00") != "指定时间 02:00:00–06:00:00" {
+		t.Fatal("switch text")
+	}
+	rebind := Payload{Action: ActionRebind, BeforeCPU: 8, BeforeMem: 16, BeforeDisk: 3980}
+	CopyCurrentSpec(&rebind)
+	if rebind.CPU != 8 || rebind.MemoryMB != 16 || rebind.DiskGB != 3980 {
+		t.Fatalf("rebind should keep current spec: %+v", rebind)
+	}
+}
+
+func TestCheckSpecStorage(t *testing.T) {
+	specs := []Spec{
+		{CPU: 4, MemoryMB: 8192, MaxStorageGB: 3000},
+		{CPU: 4, MemoryMB: 16384, MaxStorageGB: 6000},
+	}
+	if MaxStorageGB(specs, 4, 8192) != 3000 || MaxStorageGB(specs, 8, 16384) != 0 {
+		t.Fatal("max storage lookup")
+	}
+	disk := DiskForStorageCheck(ActionScaleSpec, 0, 3500)
+	if err := CheckSpecStorage(disk, MaxStorageGB(specs, 4, 8192)); err == nil || err.Error() != "当前磁盘 3500GB，该规格最大支持 3000GB" {
+		t.Fatal(err)
+	}
+	if err := CheckSpecStorage(920, 3000); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckSpecStorage(3500, 0); err != nil {
+		t.Fatal(err)
+	}
+	if DiskForStorageCheck(ActionScaleDisk, 4000, 920) != 4000 {
+		t.Fatal("disk expansion should use the target size")
+	}
+}
+
+func TestScaleDeltaOnlyChangedFields(t *testing.T) {
+	spec, disk, err := ScaleDelta(EnginePostgres, ActionScaleSpec, 1, 2048, 500, 0, 0, 800, false)
+	if err != nil || spec || !disk {
+		t.Fatalf("disk only: spec=%v disk=%v err=%v", spec, disk, err)
+	}
+	in := SpecForAPI(Payload{Engine: EnginePostgres, Action: ActionScaleSpec, CloudID: "pg-1", DiskGB: 800, SwitchTag: 2}, spec, disk)
+	if in.CPU != 0 || in.MemoryMB != 0 || in.DiskGB != 800 || in.SwitchTag != 2 {
+		t.Fatalf("%+v", in)
+	}
+	spec, disk, err = ScaleDelta(EnginePostgres, ActionScaleSpec, 1, 2048, 500, 2, 4096, 500, false)
+	if err != nil || !spec || disk {
+		t.Fatalf("spec only: spec=%v disk=%v err=%v", spec, disk, err)
+	}
+	in = SpecForAPI(Payload{Engine: EnginePostgres, Action: ActionScaleSpec, CPU: 2, MemoryMB: 4096, DiskGB: 500}, spec, disk)
+	if in.CPU != 2 || in.MemoryMB != 4096 || in.DiskGB != 0 {
+		t.Fatalf("%+v", in)
+	}
+	spec, disk, err = ScaleDelta(EnginePostgres, ActionScaleSpec, 1, 2048, 500, 2, 4096, 800, false)
+	if err != nil || !spec || !disk {
+		t.Fatalf("both: spec=%v disk=%v err=%v", spec, disk, err)
+	}
+	if _, _, err = ScaleDelta(EnginePostgres, ActionScaleSpec, 4, 8192, 500, 4, 8192, 500, false); err == nil || err.Error() != "没有需要执行的变更" {
+		t.Fatal(err)
+	}
+	if _, _, err = ScaleDelta(EnginePostgres, ActionScaleSpec, 4, 8192, 500, 4, 0, 800, false); err == nil || err.Error() != "请同时填写核数和内存" {
+		t.Fatal(err)
+	}
+	if _, _, err = ScaleDelta(EngineMySQL, ActionScaleSpec, 4, 8192, 500, 2, 4096, 500, false); err == nil || err.Error() != "目标规格不能小于当前规格" {
+		t.Fatal(err)
+	}
+	blip, text := ImpactFor(Payload{Engine: EnginePostgres, Action: ActionScaleSpec, BeforeCPU: 1, BeforeMem: 2048, BeforeDisk: 500, DiskGB: 800}, false)
+	if blip || text != "只扩容磁盘" {
+		t.Fatalf("blip=%v text=%s", blip, text)
+	}
+}
+
 func TestDiskAndApproval(t *testing.T) {
 	if err := CheckDisk(ActionScaleDisk, 100, 80, false); err == nil {
 		t.Fatal("shrink should fail")
@@ -280,5 +408,41 @@ func TestLimiterSerialPerAccount(t *testing.T) {
 	}
 	if slept != 0 {
 		t.Fatalf("other account should not wait, slept %s", slept)
+	}
+}
+
+func TestValidateCreatePostgres(t *testing.T) {
+	ok := Payload{
+		Action: ActionCreate, Engine: EnginePostgres, Region: "ap-beijing",
+		Zone: "ap-beijing-6", StandbyZone: "ap-beijing-7",
+		VpcID: "vpc-1", SubnetID: "subnet-1", DBMajorVersion: "14",
+		SpecCode: "pg.2c4g", CPU: 2, MemoryMB: 4096, DiskGB: 100,
+		ChargeType: "PREPAID", Period: 5, Charset: "UTF8", SyncMode: "Semi-sync",
+		AdminUser: "dbadmin", PasswordEnc: "Abcdef1!",
+	}
+	if err := ValidateCreate(ok); err != nil {
+		t.Fatal(err)
+	}
+	mysql := ok
+	mysql.Engine = EngineMySQL
+	mysql.VpcID = ""
+	if err := ValidateCreate(mysql); err != nil {
+		t.Fatal(err)
+	}
+	missing := ok
+	missing.SubnetID = ""
+	if err := ValidateCreate(missing); err == nil {
+		t.Fatal("subnet is required")
+	}
+	disk := ok
+	disk.DiskGB = 15
+	if err := ValidateCreate(disk); err == nil {
+		t.Fatal("disk step")
+	}
+	postpaid := ok
+	postpaid.ChargeType = "POSTPAID_BY_HOUR"
+	postpaid.Period = 0
+	if err := ValidateCreate(postpaid); err != nil {
+		t.Fatal(err)
 	}
 }

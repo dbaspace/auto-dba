@@ -110,6 +110,10 @@ func (d *DB) ensureCloudSchema() error {
 			updated_at TEXT NOT NULL
 		)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uq_cloud_cursor ON tbl_cloud_sync_cursors(vendor, engine, account_id, cloud_instance_id, data_type)`,
+		`ALTER TABLE tbl_cloud_sync_cursors ADD COLUMN IF NOT EXISTS gap_from TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE tbl_cloud_sync_cursors ADD COLUMN IF NOT EXISTS gap_to TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE tbl_cloud_sync_cursors ADD COLUMN IF NOT EXISTS produced_at TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE tbl_cloud_sync_cursors ADD COLUMN IF NOT EXISTS ingested_at TEXT NOT NULL DEFAULT ''`,
 		`CREATE TABLE IF NOT EXISTS tbl_cloud_slow_logs (
 			id TEXT PRIMARY KEY,
 			tenant_id TEXT NOT NULL DEFAULT '',
@@ -127,7 +131,9 @@ func (d *DB) ensureCloudSchema() error {
 			raw_json TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL
 		)`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS uq_cloud_slow ON tbl_cloud_slow_logs(vendor, engine, cloud_instance_id, log_time, fingerprint)`,
+		`ALTER TABLE tbl_cloud_slow_logs ADD COLUMN IF NOT EXISTS dedupe_key TEXT NOT NULL DEFAULT ''`,
+		`DROP INDEX IF EXISTS uq_cloud_slow`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uq_cloud_slow_dedupe ON tbl_cloud_slow_logs(vendor, engine, cloud_instance_id, dedupe_key) WHERE dedupe_key <> ''`,
 		`CREATE INDEX IF NOT EXISTS idx_cloud_slow_time ON tbl_cloud_slow_logs(cloud_instance_id, log_time)`,
 		`CREATE TABLE IF NOT EXISTS tbl_cloud_events (
 			id TEXT PRIMARY KEY,
@@ -1024,27 +1030,31 @@ func (d *DB) ListEnabledCloudPolicies() ([]CloudPolicy, error) {
 }
 
 type CloudCursor struct {
-	ID        string `json:"id"`
-	TenantID  string `json:"tenant_id"`
-	Vendor    string `json:"vendor"`
-	Engine    string `json:"engine"`
-	AccountID string `json:"account_id"`
-	CloudID   string `json:"cloud_instance_id"`
-	DataType  string `json:"data_type"`
-	CursorAt  string `json:"cursor_at"`
-	Status    string `json:"status"`
-	Error     string `json:"error"`
-	LastCount int    `json:"last_count"`
-	FailCount int    `json:"fail_count"`
-	UpdatedAt string `json:"updated_at"`
+	ID         string `json:"id"`
+	TenantID   string `json:"tenant_id"`
+	Vendor     string `json:"vendor"`
+	Engine     string `json:"engine"`
+	AccountID  string `json:"account_id"`
+	CloudID    string `json:"cloud_instance_id"`
+	DataType   string `json:"data_type"`
+	CursorAt   string `json:"cursor_at"`
+	Status     string `json:"status"`
+	Error      string `json:"error"`
+	LastCount  int    `json:"last_count"`
+	FailCount  int    `json:"fail_count"`
+	UpdatedAt  string `json:"updated_at"`
+	GapFrom    string `json:"gap_from,omitempty"`
+	GapTo      string `json:"gap_to,omitempty"`
+	ProducedAt string `json:"produced_at,omitempty"`
+	IngestedAt string `json:"ingested_at,omitempty"`
 }
 
 func (d *DB) GetCloudCursor(vendor, engine, accountID, cloudID, dataType string) (*CloudCursor, error) {
-	row := d.QueryRow(`SELECT id, tenant_id, vendor, engine, account_id, cloud_instance_id, data_type, cursor_at, status, error, last_count, fail_count, updated_at
+	row := d.QueryRow(`SELECT id, tenant_id, vendor, engine, account_id, cloud_instance_id, data_type, cursor_at, status, error, last_count, fail_count, updated_at, gap_from, gap_to, produced_at, ingested_at
 		FROM tbl_cloud_sync_cursors WHERE vendor=? AND engine=? AND account_id=? AND cloud_instance_id=? AND data_type=?`,
 		vendor, engine, accountID, cloudID, dataType)
 	var c CloudCursor
-	err := row.Scan(&c.ID, &c.TenantID, &c.Vendor, &c.Engine, &c.AccountID, &c.CloudID, &c.DataType, &c.CursorAt, &c.Status, &c.Error, &c.LastCount, &c.FailCount, &c.UpdatedAt)
+	err := row.Scan(&c.ID, &c.TenantID, &c.Vendor, &c.Engine, &c.AccountID, &c.CloudID, &c.DataType, &c.CursorAt, &c.Status, &c.Error, &c.LastCount, &c.FailCount, &c.UpdatedAt, &c.GapFrom, &c.GapTo, &c.ProducedAt, &c.IngestedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -1062,14 +1072,26 @@ func (d *DB) SaveCloudCursor(c *CloudCursor) error {
 	}
 	if exist == nil {
 		c.ID = uuid.NewString()
-		_, err = d.Exec(`INSERT INTO tbl_cloud_sync_cursors(id, tenant_id, vendor, engine, account_id, cloud_instance_id, data_type, cursor_at, status, error, last_count, fail_count, updated_at)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			c.ID, c.TenantID, c.Vendor, c.Engine, c.AccountID, c.CloudID, c.DataType, c.CursorAt, c.Status, c.Error, c.LastCount, c.FailCount, now)
+		_, err = d.Exec(`INSERT INTO tbl_cloud_sync_cursors(id, tenant_id, vendor, engine, account_id, cloud_instance_id, data_type, cursor_at, status, error, last_count, fail_count, updated_at, gap_from, gap_to, produced_at, ingested_at)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			c.ID, c.TenantID, c.Vendor, c.Engine, c.AccountID, c.CloudID, c.DataType, c.CursorAt, c.Status, c.Error, c.LastCount, c.FailCount, now, c.GapFrom, c.GapTo, c.ProducedAt, c.IngestedAt)
 		return err
 	}
 	c.ID = exist.ID
-	_, err = d.Exec(`UPDATE tbl_cloud_sync_cursors SET cursor_at=?, status=?, error=?, last_count=?, fail_count=?, updated_at=? WHERE id=?`,
-		c.CursorAt, c.Status, c.Error, c.LastCount, c.FailCount, now, exist.ID)
+	_, err = d.Exec(`UPDATE tbl_cloud_sync_cursors SET cursor_at=?, status=?, error=?, last_count=?, fail_count=?, updated_at=?,
+		gap_from=CASE WHEN ? <> '' THEN ? ELSE gap_from END,
+		gap_to=CASE WHEN ? <> '' THEN ? ELSE gap_to END,
+		produced_at=CASE WHEN ? <> '' THEN ? ELSE produced_at END,
+		ingested_at=CASE WHEN ? <> '' THEN ? ELSE ingested_at END
+		WHERE id=?`,
+		c.CursorAt, c.Status, c.Error, c.LastCount, c.FailCount, now,
+		c.GapFrom, c.GapFrom, c.GapTo, c.GapTo, c.ProducedAt, c.ProducedAt, c.IngestedAt, c.IngestedAt, exist.ID)
+	return err
+}
+
+func (d *DB) TouchSlowIngested(vendor, engine, accountID, cloudID, at string) error {
+	_, err := d.Exec(`UPDATE tbl_cloud_sync_cursors SET ingested_at=? WHERE vendor=? AND engine=? AND account_id=? AND cloud_instance_id=? AND data_type='slow_log'`,
+		at, vendor, engine, accountID, cloudID)
 	return err
 }
 
@@ -1093,6 +1115,68 @@ type CloudSlowLog struct {
 	Duration    int    `json:"duration_ms"`
 	SQL         string `json:"sql_text"`
 	Fingerprint string `json:"fingerprint"`
+	Raw         string `json:"-"`
+	Dedupe      string `json:"-"`
+}
+
+type CloudSlowStat struct {
+	Fingerprint string `json:"fingerprint"`
+	SQL         string `json:"sql_text"`
+	LastTime    string `json:"last_time"`
+	Calls       int    `json:"calls"`
+	TotalMS     int    `json:"total_ms"`
+	AvgMS       int    `json:"avg_ms"`
+	DBName      string `json:"db_name"`
+	DBUser      string `json:"db_user"`
+	Client      string `json:"client"`
+}
+
+type CloudSlowPoint struct {
+	Bucket string `json:"bucket"`
+	Count  int    `json:"count"`
+}
+
+type CloudSlowSpread struct {
+	Label string `json:"label"`
+	Count int    `json:"count"`
+}
+
+func (d *DB) InsertCloudSlowLogs(rows []CloudSlowLog) error {
+	const chunk = 100
+	for i := 0; i < len(rows); i += chunk {
+		end := i + chunk
+		if end > len(rows) {
+			end = len(rows)
+		}
+		if err := d.insertCloudSlowChunk(rows[i:end]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (d *DB) insertCloudSlowChunk(rows []CloudSlowLog) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	var b strings.Builder
+	b.WriteString(`INSERT INTO tbl_cloud_slow_logs(id, tenant_id, vendor, engine, account_id, cloud_instance_id, log_time, db_name, db_user, client, duration_ms, sql_text, fingerprint, raw_json, dedupe_key, created_at) VALUES `)
+	args := make([]any, 0, len(rows)*16)
+	now := time.Now().UTC().Format(time.RFC3339)
+	for i, row := range rows {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString("(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+		id := row.ID
+		if id == "" {
+			id = uuid.NewString()
+		}
+		args = append(args, id, row.TenantID, row.Vendor, row.Engine, row.AccountID, row.CloudID, row.LogTime, row.DBName, row.DBUser, row.Client, row.Duration, row.SQL, row.Fingerprint, row.Raw, row.Dedupe, now)
+	}
+	b.WriteString(` ON CONFLICT (vendor, engine, cloud_instance_id, dedupe_key) WHERE dedupe_key <> '' DO NOTHING`)
+	_, err := d.Exec(b.String(), args...)
+	return err
 }
 
 func (d *DB) InsertCloudSlowLog(row *CloudSlowLog) error {
@@ -1100,9 +1184,9 @@ func (d *DB) InsertCloudSlowLog(row *CloudSlowLog) error {
 		row.ID = uuid.NewString()
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := d.Exec(`INSERT INTO tbl_cloud_slow_logs(id, tenant_id, vendor, engine, account_id, cloud_instance_id, log_time, db_name, db_user, client, duration_ms, sql_text, fingerprint, raw_json, created_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`,
-		row.ID, row.TenantID, row.Vendor, row.Engine, row.AccountID, row.CloudID, row.LogTime, row.DBName, row.DBUser, row.Client, row.Duration, row.SQL, row.Fingerprint, "", now)
+	_, err := d.Exec(`INSERT INTO tbl_cloud_slow_logs(id, tenant_id, vendor, engine, account_id, cloud_instance_id, log_time, db_name, db_user, client, duration_ms, sql_text, fingerprint, raw_json, dedupe_key, created_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`,
+		row.ID, row.TenantID, row.Vendor, row.Engine, row.AccountID, row.CloudID, row.LogTime, row.DBName, row.DBUser, row.Client, row.Duration, row.SQL, row.Fingerprint, row.Raw, row.Dedupe, now)
 	return err
 }
 
@@ -1113,14 +1197,7 @@ func (d *DB) ListCloudSlowLogs(cloudID, from, to, dbName, keyword string, minMS,
 	q := `SELECT id, tenant_id, vendor, engine, account_id, cloud_instance_id, log_time, db_name, db_user, client, duration_ms, sql_text, fingerprint
 		FROM tbl_cloud_slow_logs WHERE cloud_instance_id=?`
 	args := []any{cloudID}
-	if from != "" {
-		q += ` AND log_time>=?`
-		args = append(args, from)
-	}
-	if to != "" {
-		q += ` AND log_time<=?`
-		args = append(args, to)
-	}
+	q, args = appendSlowRange(q, args, from, to)
 	if dbName != "" {
 		q += ` AND db_name=?`
 		args = append(args, dbName)
@@ -1151,9 +1228,114 @@ func (d *DB) ListCloudSlowLogs(cloudID, from, to, dbName, keyword string, minMS,
 	return out, rows.Err()
 }
 
+func appendSlowRange(q string, args []any, from, to string) (string, []any) {
+	if strings.TrimSpace(from) != "" {
+		q += ` AND log_time::timestamptz >= ?::timestamptz`
+		args = append(args, strings.TrimSpace(from))
+	}
+	if strings.TrimSpace(to) != "" {
+		q += ` AND log_time::timestamptz <= ?::timestamptz`
+		args = append(args, strings.TrimSpace(to))
+	}
+	return q, args
+}
+
+func (d *DB) CountCloudSlowLogsSince(cloudID string, since time.Time) (int, error) {
+	var n int
+	err := d.QueryRow(`SELECT COUNT(*) FROM tbl_cloud_slow_logs WHERE cloud_instance_id=? AND log_time::timestamptz >= ?::timestamptz`, cloudID, since.UTC().Format(time.RFC3339)).Scan(&n)
+	return n, err
+}
+
+func (d *DB) CloudSlowTrend(cloudID, from, to, unit string) ([]CloudSlowPoint, error) {
+	trunc := "minute"
+	if unit == "hour" {
+		trunc = "hour"
+	}
+	q := fmt.Sprintf(`SELECT to_char(date_trunc('%s', log_time::timestamptz AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI'), COUNT(*)
+		FROM tbl_cloud_slow_logs WHERE cloud_instance_id=?`, trunc)
+	args := []any{cloudID}
+	q, args = appendSlowRange(q, args, from, to)
+	q += ` GROUP BY 1 ORDER BY 1`
+	rows, err := d.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []CloudSlowPoint{}
+	for rows.Next() {
+		var p CloudSlowPoint
+		if err := rows.Scan(&p.Bucket, &p.Count); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+func (d *DB) CloudSlowSpread(cloudID, from, to string) ([]CloudSlowSpread, error) {
+	q := `SELECT
+		COUNT(*) FILTER (WHERE duration_ms >= 1000 AND duration_ms < 2000),
+		COUNT(*) FILTER (WHERE duration_ms >= 2000 AND duration_ms < 3000),
+		COUNT(*) FILTER (WHERE duration_ms >= 3000 AND duration_ms < 4000),
+		COUNT(*) FILTER (WHERE duration_ms >= 4000 AND duration_ms < 5000),
+		COUNT(*) FILTER (WHERE duration_ms >= 5000 AND duration_ms < 10000),
+		COUNT(*) FILTER (WHERE duration_ms >= 10000)
+		FROM tbl_cloud_slow_logs WHERE cloud_instance_id=?`
+	args := []any{cloudID}
+	q, args = appendSlowRange(q, args, from, to)
+	var a, b, c, e, f, g int
+	if err := d.QueryRow(q, args...).Scan(&a, &b, &c, &e, &f, &g); err != nil {
+		return nil, err
+	}
+	return []CloudSlowSpread{
+		{Label: "1–2 秒", Count: a},
+		{Label: "2–3 秒", Count: b},
+		{Label: "3–4 秒", Count: c},
+		{Label: "4–5 秒", Count: e},
+		{Label: "5–10 秒", Count: f},
+		{Label: "10 秒以上", Count: g},
+	}, nil
+}
+
+func (d *DB) CloudSlowStats(cloudID, from, to string) ([]CloudSlowStat, error) {
+	q := `SELECT fingerprint, MAX(sql_text), MAX(log_time), COUNT(*), COALESCE(SUM(duration_ms),0), COALESCE(AVG(duration_ms),0)::int,
+		MAX(db_name), MAX(db_user), MAX(client)
+		FROM tbl_cloud_slow_logs WHERE cloud_instance_id=?`
+	args := []any{cloudID}
+	q, args = appendSlowRange(q, args, from, to)
+	q += ` GROUP BY fingerprint ORDER BY SUM(duration_ms) DESC LIMIT 100`
+	rows, err := d.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []CloudSlowStat{}
+	for rows.Next() {
+		var s CloudSlowStat
+		if err := rows.Scan(&s.Fingerprint, &s.SQL, &s.LastTime, &s.Calls, &s.TotalMS, &s.AvgMS, &s.DBName, &s.DBUser, &s.Client); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
 func (d *DB) PurgeCloudSlowLogs(before string) error {
 	_, err := d.Exec(`DELETE FROM tbl_cloud_slow_logs WHERE log_time<>'' AND log_time<?`, before)
 	return err
+}
+
+func (d *DB) PurgeCloudSlowLogsBatch(before string, limit int) (int, error) {
+	if limit <= 0 {
+		limit = 5000
+	}
+	res, err := d.Exec(`DELETE FROM tbl_cloud_slow_logs WHERE id IN (
+		SELECT id FROM tbl_cloud_slow_logs WHERE log_time <> '' AND log_time < ? ORDER BY log_time LIMIT ?)`, before, limit)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
 }
 
 func (d *DB) AddCloudEvent(tenantID, vendor, accountID, cloudID, eventType, message, at string) error {

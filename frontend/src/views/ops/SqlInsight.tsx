@@ -23,9 +23,29 @@ function defaultRange(): [Dayjs, Dayjs] {
   return [end.subtract(1, 'hour'), end]
 }
 
+function tagValue(tags: unknown, key: string) {
+  const list = Array.isArray(tags) ? tags : []
+  const prefix = `${key}=`
+  for (const raw of list) {
+    const text = String(raw || '').trim()
+    if (text.toLowerCase().startsWith(prefix)) return text.slice(prefix.length).trim()
+  }
+  return ''
+}
+
+function instDomain(i: any) {
+  const fromTag = tagValue(i?.tags, 'domain')
+  if (fromTag) return fromTag
+  if (i?.domain_name) return String(i.domain_name)
+  const domains = Array.isArray(i?.domains) ? i.domains.filter(Boolean) : []
+  return domains[0] ? String(domains[0]) : ''
+}
+
 function instLabel(i: any) {
-  const host = i.host || i.domain_name || '-'
-  return `${i.name || host} (${host}:${i.port})`
+  const name = i?.name || '未命名实例'
+  const domain = instDomain(i)
+  if (!domain) return name
+  return `${name} (${domain}${i?.port ? `:${i.port}` : ''})`
 }
 
 function isPG(i: any) {
@@ -236,7 +256,7 @@ export default function SqlInsight() {
           {
             key: 'cloud',
             label: '云慢日志',
-            children: <CloudSlowLogTab filter={filter} active={tab === 'cloud'} />,
+            children: <CloudSlowLogTab filter={buildFilter(draftInstance, draftRange, instances)} active={tab === 'cloud'} />,
           },
         ]}
       />

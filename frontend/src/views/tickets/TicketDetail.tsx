@@ -34,6 +34,22 @@ function cdcTicketReason(description: any): string {
   return raw.slice(0, i).trim()
 }
 
+function cloudExecResult(it: any): string {
+  const status = String(it?.status || '')
+  const exec = it?.exec || {}
+  const msg = String(exec.message || exec.summary || '').trim()
+  if (status === 'executed') return msg || '执行完成'
+  if (status === 'failed' || status === 'stopped') {
+    if (!msg) return status === 'stopped' ? '已终止' : '执行失败'
+    if (/UnauthorizedOperation|AuthFailure|无权限|没有权限|权限不足/i.test(msg)) {
+      return msg.startsWith('密钥没有该操作权限') ? msg : `密钥没有该操作权限。${msg}`
+    }
+    return msg
+  }
+  if (status === 'running') return msg || '执行中'
+  return '尚未执行'
+}
+
 function fmtTime(v: any): string {
   if (!v) return '-'
   const d = new Date(v)
@@ -349,11 +365,31 @@ export default function TicketDetail() {
       let p: any = {}
       try { p = JSON.parse(it.sql_content || '{}') } catch { p = {} }
       fields.push({ key: 'action', label: '动作', value: p.action || '-' })
-      fields.push({ key: 'before', label: '变更前', value: `${p.before_cpu || 0}核 / ${p.before_memory_mb || 0}MB / ${p.before_disk_gb || 0}GB` })
-      fields.push({ key: 'after', label: '变更后', value: `${p.cpu || 0}核 / ${p.memory_mb || 0}MB / ${p.disk_gb || 0}GB` })
+      if (p.action === 'scale_spec' || p.action === 'scale_disk' || p.action === 'create') {
+        const mem = (mb: number) => {
+          const n = Number(mb || 0)
+          return n >= 1024 && n % 1024 === 0 ? `${n / 1024}GB` : `${n}MB`
+        }
+        fields.push({ key: 'before', label: '变更前', value: `${p.before_cpu || 0}核 / ${mem(p.before_memory_mb)} / ${p.before_disk_gb || 0}GB` })
+        const specChanged = Number(p.cpu) > 0 && (Number(p.cpu) !== Number(p.before_cpu || 0) || Number(p.memory_mb) !== Number(p.before_memory_mb || 0))
+        const diskChanged = Number(p.disk_gb) > 0 && Number(p.disk_gb) !== Number(p.before_disk_gb || 0)
+        const afterSpec = specChanged ? `${p.cpu}核 / ${mem(p.memory_mb)}` : '规格不变'
+        const afterDisk = diskChanged ? `${p.disk_gb}GB` : '磁盘不变'
+        fields.push({ key: 'after', label: '变更后', value: p.action === 'create' ? `${p.cpu || 0}核 / ${mem(p.memory_mb)} / ${p.disk_gb || 0}GB` : `${afterSpec} / ${afterDisk}` })
+        if (p.action === 'scale_spec' || p.action === 'scale_disk') {
+          const plan = p.action === 'scale_disk' || (!specChanged && diskChanged) ? '仅扩容磁盘' : specChanged && diskChanged ? '调整规格并扩容磁盘' : specChanged ? '仅调整规格' : '—'
+          fields.push({ key: 'plan', label: '将执行', value: plan })
+        }
+      }
+      if (it.issue_type === 'cloud_pg' && (p.action === 'scale_spec' || p.action === 'scale_disk')) {
+        const tag = Number(p.switch_tag || 0)
+        const when = tag === 1 ? `指定时间 ${p.switch_start || ''}–${p.switch_end || ''}` : tag === 2 ? '维护时间内' : '升级完成时'
+        fields.push({ key: 'switch', label: '切换时间', value: when })
+      }
       fields.push({ key: 'impact', label: '影响', value: `${p.impact || '-'}；${p.blip ? '会造成闪断' : '默认不闪断'}` })
       fields.push({ key: 'quote', label: '询价差额', value: p.quote?.amount ?? '-' })
       fields.push({ key: 'task', label: '云上任务', value: p.task_id || '尚未提交' })
+      fields.push({ key: 'exec', label: '执行结果', kind: 'pre', value: cloudExecResult(it) })
       return fields
     }
     if (!isResourceApply) {

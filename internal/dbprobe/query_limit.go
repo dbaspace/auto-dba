@@ -15,8 +15,8 @@ const (
 
 var (
 	reTailLimitNum    = regexp.MustCompile(`(?i)\s+LIMIT\s+(\d+)\s*;?\s*$`)
-	reTailLimitOffset = regexp.MustCompile(`(?i)\s+LIMIT\s+(\d+)\s+OFFSET\s+\d+\s*;?\s*$`)
-	reTailLimitComma  = regexp.MustCompile(`(?i)\s+LIMIT\s+\d+\s*,\s*(\d+)\s*;?\s*$`)
+	reTailLimitOffset = regexp.MustCompile(`(?i)\s+LIMIT\s+(\d+)\s+OFFSET\s+(\d+)\s*;?\s*$`)
+	reTailLimitComma  = regexp.MustCompile(`(?i)\s+LIMIT\s+(\d+)\s*,\s*(\d+)\s*;?\s*$`)
 )
 
 const patSelectLimitHint = "PAT 查询的 SELECT 必须在语句末尾写 LIMIT，例如 LIMIT 100"
@@ -54,22 +54,14 @@ func EnsureExportLimit(raw string, defaultN, maxN int) EnsureQueryLimitResult {
 	return ensureSelectLimit(raw, defaultN, maxN, exportLimitSanityMax)
 }
 
-// ParseSQLTailLimit 解析语句尾部 LIMIT n（LIMIT a,b 取 b）；无则 ok=false。
+// ParseSQLTailLimit 解析语句尾部行数上限。LIMIT n OFFSET m 取 n，LIMIT offset, count 取 count；无则 ok=false。
 func ParseSQLTailLimit(raw string) (n int, ok bool) {
 	s := strings.TrimSpace(raw)
 	if s == "" {
 		return 0, false
 	}
 	body := strings.TrimSpace(strings.TrimSuffix(s, ";"))
-	m := reTailLimitNum.FindStringSubmatch(body)
-	if m == nil {
-		return 0, false
-	}
-	n, err := strconv.Atoi(m[1])
-	if err != nil || n <= 0 {
-		return 0, false
-	}
-	return n, true
+	return parsePositiveTailLimit(body)
 }
 
 // MissingPATSelectLimit 返回第一条缺少语句末尾 LIMIT 的 SELECT/WITH 下标。SHOW/EXPLAIN/DESC 不要求。
@@ -104,7 +96,7 @@ func parsePositiveTailLimit(body string) (n int, ok bool) {
 		return n, n > 0
 	}
 	if m := reTailLimitComma.FindStringSubmatch(body); m != nil {
-		n, _ = strconv.Atoi(m[1])
+		n, _ = strconv.Atoi(m[2])
 		return n, n > 0
 	}
 	if m := reTailLimitNum.FindStringSubmatch(body); m != nil {
@@ -112,6 +104,16 @@ func parsePositiveTailLimit(body string) (n int, ok bool) {
 		return n, n > 0
 	}
 	return 0, false
+}
+
+func clampTailLimit(n, defaultN, maxN int) int {
+	if n <= 0 {
+		n = defaultN
+	}
+	if n > maxN {
+		n = maxN
+	}
+	return n
 }
 
 // RequireExportSQLLimit 导出 SQL 必须自带 LIMIT；返回钳制后的扫描上限（代码硬顶 100 万）。
@@ -152,14 +154,23 @@ func ensureSelectLimit(raw string, defaultN, maxN, sanityMax int) EnsureQueryLim
 		out.AppliedLimit = maxN
 		return out
 	}
-	if m := reTailLimitNum.FindStringSubmatch(body); m != nil {
+	if m := reTailLimitOffset.FindStringSubmatch(body); m != nil {
 		n, _ := strconv.Atoi(m[1])
-		if n <= 0 {
-			n = defaultN
-		}
-		if n > maxN {
-			n = maxN
-		}
+		off, _ := strconv.Atoi(m[2])
+		n = clampTailLimit(n, defaultN, maxN)
+		body = strings.TrimSpace(reTailLimitOffset.ReplaceAllString(body, ""))
+		body = fmt.Sprintf("%s limit %d offset %d", body, n, off)
+		out.AppliedLimit = n
+	} else if m := reTailLimitComma.FindStringSubmatch(body); m != nil {
+		off, _ := strconv.Atoi(m[1])
+		n, _ := strconv.Atoi(m[2])
+		n = clampTailLimit(n, defaultN, maxN)
+		body = strings.TrimSpace(reTailLimitComma.ReplaceAllString(body, ""))
+		body = fmt.Sprintf("%s limit %d, %d", body, off, n)
+		out.AppliedLimit = n
+	} else if m := reTailLimitNum.FindStringSubmatch(body); m != nil {
+		n, _ := strconv.Atoi(m[1])
+		n = clampTailLimit(n, defaultN, maxN)
 		body = strings.TrimSpace(reTailLimitNum.ReplaceAllString(body, ""))
 		body = fmt.Sprintf("%s limit %d", body, n)
 		out.AppliedLimit = n

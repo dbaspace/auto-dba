@@ -2,6 +2,7 @@ package cloudsvc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -40,7 +41,18 @@ func (s *Service) Submit(ctx context.Context, p cloud.Payload, submitter, tenant
 	if err != nil {
 		return nil, err
 	}
-	if err := cloud.CheckDisk(p.Action, p.BeforeDisk, p.DiskGB, reader.Caps().ScaleDiskDown); err != nil {
+	cloud.CopyCurrentSpec(&p)
+	if err := cloud.ValidateCreate(p); err != nil {
+		return nil, err
+	}
+	specChanged, _, err := cloud.ScaleDelta(p.Engine, p.Action, p.BeforeCPU, p.BeforeMem, p.BeforeDisk, p.CPU, p.MemoryMB, p.DiskGB, reader.Caps().ScaleDiskDown)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.rejectOversizedDisk(ctx, p, reader, specChanged); err != nil {
+		return nil, err
+	}
+	if err := cloud.CheckSwitch(p.Engine, p.Action, p.SwitchTag, p.SwitchStart, p.SwitchEnd); err != nil {
 		return nil, err
 	}
 	if p.Action == cloud.ActionCreate || p.Action == cloud.ActionScaleSpec || p.Action == cloud.ActionScaleDisk {
@@ -67,7 +79,7 @@ func (s *Service) Submit(ctx context.Context, p cloud.Payload, submitter, tenant
 	if p.CloudID != "" && n > 0 {
 		return nil, fmt.Errorf("该云实例已有未完成变更")
 	}
-	p.Blip, p.Impact = cloud.ImpactOf(p.Action, p.BeforeCPU, p.BeforeMem, p.CPU, p.MemoryMB)
+	p.Blip, p.Impact = cloud.ImpactFor(p, reader.Caps().ScaleDiskDown)
 	if p.PasswordEnc != "" && !secret.IsEncrypted(p.PasswordEnc) {
 		enc, err := secret.Encrypt(s.Secret, p.PasswordEnc)
 		if err != nil {
@@ -111,6 +123,7 @@ func (s *Service) Quote(ctx context.Context, p cloud.Payload) (cloud.Quote, erro
 	eng := p.Engine
 	if eng == "" {
 		eng = cloud.EnginePostgres
+		p.Engine = eng
 	}
 	reader, err := cloud.GetReader(acc.Vendor, eng)
 	if err != nil {
@@ -120,17 +133,82 @@ func (s *Service) Quote(ctx context.Context, p cloud.Payload) (cloud.Quote, erro
 	if err != nil {
 		return cloud.Quote{}, err
 	}
+	var upgrade cloud.SpecInput
+	if p.Action != cloud.ActionCreate {
+		upgrade, err = s.modifyInput(p, reader.Caps().ScaleDiskDown)
+		if err != nil {
+			return cloud.Quote{}, err
+		}
+	}
 	var q cloud.Quote
+	var create cloud.CreateInput
+	if p.Action == cloud.ActionCreate {
+		if err := cloud.ValidateCreate(p); err != nil {
+			return cloud.Quote{}, err
+		}
+		pass := p.PasswordEnc
+		if secret.IsEncrypted(pass) {
+			pass, _ = secret.Decrypt(s.Secret, pass)
+		}
+		create = p.ToCreateInput(pass)
+	}
 	err = cloud.RetryRead(ctx, nil, func() error {
 		var e error
 		if p.Action == cloud.ActionCreate {
-			q, e = reader.QuoteCreate(ctx, cred, cloud.CreateInput{Region: p.Region, Zone: p.Zone, CPU: p.CPU, MemoryMB: p.MemoryMB, DiskGB: p.DiskGB, Name: p.Name})
+			q, e = reader.QuoteCreate(ctx, cred, create)
 		} else {
-			q, e = reader.QuoteUpgrade(ctx, cred, cloud.SpecInput{CloudID: p.CloudID, CPU: p.CPU, MemoryMB: p.MemoryMB, DiskGB: p.DiskGB, InstanceType: p.InstanceType})
+			q, e = reader.QuoteUpgrade(ctx, cred, upgrade)
 		}
 		return e
 	})
 	return q, err
+}
+
+func (s *Service) modifyInput(p cloud.Payload, allowShrink bool) (cloud.SpecInput, error) {
+	specChanged, diskChanged, err := cloud.ScaleDelta(p.Engine, p.Action, p.BeforeCPU, p.BeforeMem, p.BeforeDisk, p.CPU, p.MemoryMB, p.DiskGB, allowShrink)
+	if err != nil {
+		return cloud.SpecInput{}, err
+	}
+	return cloud.SpecForAPI(p, specChanged, diskChanged), nil
+}
+
+// rejectOversizedDisk 用云上规格的最大存储核对磁盘。变配看目标规格，扩盘看当前规格。
+func (s *Service) rejectOversizedDisk(ctx context.Context, p cloud.Payload, reader cloud.Reader, specChanged bool) error {
+	if p.Engine != "" && p.Engine != cloud.EnginePostgres {
+		return nil
+	}
+	if p.Action != cloud.ActionScaleSpec && p.Action != cloud.ActionScaleDisk && p.Action != cloud.ActionCreate {
+		return nil
+	}
+	acc, err := s.DB.GetCloudAccount(p.AccountID)
+	if err != nil || acc == nil {
+		return cloud.ErrNoAccount
+	}
+	cred, err := s.Cred(acc, cloud.RoleReadonly, p.Region)
+	if err != nil {
+		return err
+	}
+	var specs []cloud.Spec
+	err = cloud.RetryRead(ctx, nil, func() error {
+		var e error
+		specs, e = reader.ListSpecs(ctx, cred, p.Zone)
+		return e
+	})
+	if err != nil {
+		return err
+	}
+	cpu, mem := p.CPU, p.MemoryMB
+	if p.Action != cloud.ActionCreate {
+		cpu, mem = p.BeforeCPU, p.BeforeMem
+		if specChanged {
+			cpu, mem = p.CPU, p.MemoryMB
+		}
+	}
+	disk := p.DiskGB
+	if p.Action != cloud.ActionCreate && disk <= 0 {
+		disk = p.BeforeDisk
+	}
+	return cloud.CheckSpecStorage(disk, cloud.MaxStorageGB(specs, cpu, mem))
 }
 
 // Execute 只在已通过且审核记录完整时调用变更密钥。已有任务 ID 时只查询进度。
@@ -159,6 +237,18 @@ func (s *Service) Execute(ctx context.Context, it *store.Issue) error {
 		return s.fail(it, err)
 	}
 	if p.TaskID == "" {
+		specChanged, _, err := cloud.ScaleDelta(p.Engine, p.Action, p.BeforeCPU, p.BeforeMem, p.BeforeDisk, p.CPU, p.MemoryMB, p.DiskGB, reader.Caps().ScaleDiskDown)
+		if err != nil {
+			return s.fail(it, err)
+		}
+		if err := s.rejectOversizedDisk(ctx, p, reader, specChanged); err != nil {
+			return s.fail(it, err)
+		}
+	}
+	if err := cloud.CheckSwitch(p.Engine, p.Action, p.SwitchTag, p.SwitchStart, p.SwitchEnd); err != nil {
+		return s.fail(it, err)
+	}
+	if p.TaskID == "" {
 		n, err := s.DB.CountOpenCloudChanges(p.CloudID, it.ID)
 		if err != nil {
 			return err
@@ -184,7 +274,7 @@ func (s *Service) Execute(ctx context.Context, it *store.Issue) error {
 	if err != nil {
 		return s.fail(it, err)
 	}
-	op, err := s.Cred(acc, cloud.RoleOperate, p.Region)
+	op, err := s.operateCred(acc, p.Region)
 	if err != nil {
 		return s.fail(it, err)
 	}
@@ -210,9 +300,13 @@ func (s *Service) submit(ctx context.Context, w cloud.Writer, cred cloud.Cred, p
 	switch p.Action {
 	case cloud.ActionCreate:
 		pass, _ := secret.Decrypt(s.Secret, p.PasswordEnc)
-		return w.Create(ctx, cred, cloud.CreateInput{Region: p.Region, Zone: p.Zone, CPU: p.CPU, MemoryMB: p.MemoryMB, DiskGB: p.DiskGB, Name: p.Name, Admin: p.AdminUser, Password: pass})
+		return w.Create(ctx, cred, p.ToCreateInput(pass))
 	case cloud.ActionScaleSpec, cloud.ActionScaleDisk:
-		return w.ModifySpec(ctx, cred, cloud.SpecInput{CloudID: p.CloudID, CPU: p.CPU, MemoryMB: p.MemoryMB, DiskGB: p.DiskGB, InstanceType: p.InstanceType})
+		in, err := s.modifyInput(p, w.Caps().ScaleDiskDown)
+		if err != nil {
+			return cloud.Task{}, err
+		}
+		return w.ModifySpec(ctx, cred, in)
 	case cloud.ActionRestart:
 		return w.Restart(ctx, cred, p.CloudID)
 	case cloud.ActionSwitch:
@@ -373,6 +467,17 @@ func netFromExtras(row *store.CloudInstance) (string, int) {
 		fmt.Sscan(n, &port)
 	}
 	return strings.TrimSpace(host), port
+}
+
+func (s *Service) operateCred(acc *store.CloudAccount, region string) (cloud.Cred, error) {
+	cred, err := s.Cred(acc, cloud.RoleOperate, region)
+	if err == nil {
+		return cred, nil
+	}
+	if !errors.Is(err, cloud.ErrNoKey) {
+		return cloud.Cred{}, err
+	}
+	return s.Cred(acc, cloud.RoleReadonly, region)
 }
 
 func (s *Service) fail(it *store.Issue, err error) error {

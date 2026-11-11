@@ -82,9 +82,24 @@ func CheckTicketWithRules(sqlContent, issueType, dbType string, rules []Rule) Re
 		dbType = "starrocks"
 	}
 	var extras []StatementRow
+	inTxn := false
+	pendingSetLocal := ""
 	for _, stmt := range stmts {
 		row := StatementRow{Stage: "static", ErrorLevel: "INFO", Message: "通过", SQL: stmt}
-		hits := checkStatement(stmt, issueType, dbType, byName)
+		hits := checkStatement(stmt, issueType, dbType, byName, inTxn)
+		if strings.EqualFold(issueType, "ddl") && dbType == "postgres" {
+			switch pgDDLTxnKind(stmt) {
+			case "begin":
+				inTxn = true
+			case "commit", "rollback":
+				inTxn = false
+				pendingSetLocal = ""
+			case "set_local":
+				if inTxn && pendingSetLocal == "" {
+					pendingSetLocal = stmt
+				}
+			}
+		}
 		for i, hit := range hits {
 			if hit == nil {
 				continue
@@ -97,6 +112,11 @@ func CheckTicketWithRules(sqlContent, issueType, dbType string, rules []Rule) Re
 			appendHit(&res, stmt, hit)
 		}
 		res.Statements = append(res.Statements, row)
+	}
+	if pendingSetLocal != "" {
+		hit := errID("TicketType", "SET LOCAL 之后缺少 COMMIT")
+		appendHit(&res, pendingSetLocal, hit)
+		extras = append(extras, StatementRow{Stage: "static", ErrorLevel: hit.Level, Message: hit.Message, SQL: pendingSetLocal, RuleID: hit.RuleID})
 	}
 	if strings.EqualFold(issueType, "ddl") {
 		applyTicketCommentRules(stmts, dbType, byName, &res)
@@ -156,7 +176,35 @@ func ruleOf(byName map[string]Rule, names ...string) (Rule, bool) {
 	return Rule{}, false
 }
 
-func checkStatement(stmt, issueType, dbType string, byName map[string]Rule) []*ruleHit {
+var rePGTimeoutSet = regexp.MustCompile(`(?i)^SET\s+(LOCAL\s+)?(lock_timeout|statement_timeout)\s*(?:=|TO)\s+\S+`)
+
+// pgDDLTxnKind 识别 PostgreSQL DDL 脚本里允许的事务和超时设置。
+func pgDDLTxnKind(stmt string) string {
+	s := strings.TrimSpace(stripSQLComments(stmt))
+	s = strings.TrimRight(s, "; \t\r\n")
+	if s == "" {
+		return ""
+	}
+	fields := strings.Fields(s)
+	u := strings.ToUpper(strings.Join(fields, " "))
+	switch u {
+	case "BEGIN", "BEGIN TRANSACTION", "BEGIN WORK", "START TRANSACTION":
+		return "begin"
+	case "COMMIT", "COMMIT TRANSACTION", "COMMIT WORK":
+		return "commit"
+	case "ROLLBACK", "ROLLBACK TRANSACTION", "ROLLBACK WORK", "ABORT":
+		return "rollback"
+	}
+	if !rePGTimeoutSet.MatchString(s) {
+		return ""
+	}
+	if len(fields) >= 2 && strings.EqualFold(fields[1], "LOCAL") {
+		return "set_local"
+	}
+	return "set"
+}
+
+func checkStatement(stmt, issueType, dbType string, byName map[string]Rule, inTxn bool) []*ruleHit {
 	kw := firstKeyword(stmt)
 	if strings.EqualFold(issueType, "dml") {
 		if mk := mainKeyword(stmt); mk != "" {
@@ -166,6 +214,17 @@ func checkStatement(stmt, issueType, dbType string, byName map[string]Rule) []*r
 	upper := strings.ToUpper(stmt)
 	switch issueType {
 	case "ddl":
+		if dbType == "postgres" {
+			switch pgDDLTxnKind(stmt) {
+			case "begin", "commit", "rollback", "set":
+				return nil
+			case "set_local":
+				if !inTxn {
+					return []*ruleHit{errID("TicketType", "SET LOCAL 必须写在 BEGIN 和 COMMIT 之间")}
+				}
+				return nil
+			}
+		}
 		if !isDDL(kw) && kw != "GRANT" && kw != "REVOKE" && kw != "LOCK" && kw != "VACUUM" && kw != "CLUSTER" && kw != "COMMENT" && kw != "REINDEX" && kw != "REFRESH" {
 			return []*ruleHit{errID("TicketType", "语句必须是 DDL（CREATE/ALTER/DROP/TRUNCATE/RENAME/COMMENT）")}
 		}

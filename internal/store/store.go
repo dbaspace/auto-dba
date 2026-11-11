@@ -40,14 +40,14 @@ const (
 type PoolSettings struct {
 	MaxOpenConns    int
 	MaxIdleConns    int
-	ConnMaxLifetime  time.Duration
+	ConnMaxLifetime time.Duration
 	ConnMaxIdleTime time.Duration
 }
 
 const (
 	defaultMaxOpenConns    = 50
 	defaultMaxIdleConns    = 10
-	defaultConnMaxLifetime  = 30 * time.Minute
+	defaultConnMaxLifetime = 30 * time.Minute
 	defaultConnMaxIdleTime = 5 * time.Minute
 	defaultPingTimeout     = 10 * time.Second
 )
@@ -56,7 +56,7 @@ func DefaultPoolSettings() PoolSettings {
 	return PoolSettings{
 		MaxOpenConns:    defaultMaxOpenConns,
 		MaxIdleConns:    defaultMaxIdleConns,
-		ConnMaxLifetime:  defaultConnMaxLifetime,
+		ConnMaxLifetime: defaultConnMaxLifetime,
 		ConnMaxIdleTime: defaultConnMaxIdleTime,
 	}
 }
@@ -250,6 +250,56 @@ func (d *DB) Query(query string, args ...any) (*sql.Rows, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	return d.db.Query(d.rewrite(query), args...)
+}
+
+// WithConn 借出一条连接，用完关闭。advisory lock 必须跟会话走，不能还回连接池。
+func (d *DB) WithConn(ctx context.Context, fn func(context.Context, *sql.Conn) error) error {
+	if d == nil {
+		return fmt.Errorf("db not open")
+	}
+	d.mu.RLock()
+	db := d.db
+	d.mu.RUnlock()
+	if db == nil {
+		return fmt.Errorf("db not open")
+	}
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	return fn(ctx, conn)
+}
+
+// TryAdvisoryLock 拿到会话级锁才返回 release。没拿到时 ok 为 false。
+func (d *DB) TryAdvisoryLock(ctx context.Context, key string) (func(), bool, error) {
+	if d == nil {
+		return nil, false, fmt.Errorf("db not open")
+	}
+	d.mu.RLock()
+	db := d.db
+	d.mu.RUnlock()
+	if db == nil {
+		return nil, false, fmt.Errorf("db not open")
+	}
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	var ok bool
+	if err := conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock(hashtext($1)::bigint)`, key).Scan(&ok); err != nil {
+		conn.Close()
+		return nil, false, err
+	}
+	if !ok {
+		conn.Close()
+		return nil, false, nil
+	}
+	release := func() {
+		_, _ = conn.ExecContext(context.Background(), `SELECT pg_advisory_unlock(hashtext($1)::bigint)`, key)
+		conn.Close()
+	}
+	return release, true, nil
 }
 
 func (d *DB) QueryRow(query string, args ...any) *sql.Row {

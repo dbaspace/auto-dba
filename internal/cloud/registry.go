@@ -12,6 +12,15 @@ const (
 var readers = map[string]Reader{}
 var writers = map[string]Writer{}
 
+// NormalizePGMemoryMB 把仍按 GB 存下来的 PostgreSQL 内存换成 MB。
+// 规格接口和重新同步后的值已经是 MB，不小于 1024 的不再乘。
+func NormalizePGMemoryMB(memoryMB int) int {
+	if memoryMB <= 0 || memoryMB >= 1024 {
+		return memoryMB
+	}
+	return memoryMB * 1024
+}
+
 func regKey(vendor, engine string) string {
 	return vendor + "/" + engine
 }

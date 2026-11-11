@@ -137,6 +137,7 @@ export default function SlotList() {
   const [taskQ, setTaskQ] = useState('')
   const [applied, setApplied] = useState({ status: '', lag: null as number | null, host: '', task: '' })
   const [job, setJob] = useState<CollectJob | null>(null)
+  const [collectKnown, setCollectKnown] = useState(false)
   const [restartJob, setRestartJob] = useState<RestartJob | null>(null)
   const [logOpen, setLogOpen] = useState(false)
   const [opLogs, setOpLogs] = useState<OpLogRow[]>([])
@@ -165,9 +166,13 @@ export default function SlotList() {
 
   /** 只拉采集进度，running 期间不打全量 /sync-slots */
   const pollCollect = useCallback(async () => {
-    const { data } = await api.get('/sync-slots/collect')
-    setJob(data)
-    return data?.status === 'running'
+    try {
+      const { data } = await api.get('/sync-slots/collect')
+      setJob(data)
+      return data?.status === 'running'
+    } finally {
+      setCollectKnown(true)
+    }
   }, [])
 
   const pollRestart = useCallback(async () => {
@@ -228,8 +233,8 @@ export default function SlotList() {
   }
 
   function confirmRestart(ids: string[]) {
-    if (job?.status === 'running') {
-      message.warning('采集进行中，请等待完成后再重启')
+    if (!collectKnown || job?.status === 'running') {
+      message.warning(job?.message || '采集进行中，请等待完成后再重启')
       return
     }
     const records = rows.filter((r) => ids.includes(r.id))
@@ -270,7 +275,7 @@ export default function SlotList() {
       database: r.database,
     }))
     try {
-      const { data } = await api.post('/sync-slots/restart', { items })
+      const { data } = await api.post('/sync-slots/restart', { items }, { silent: true })
       setRestartJob(data)
       if (data?.started && data?.status === 'running') {
         message.info(data.message || '已开始批量重启')
@@ -284,7 +289,12 @@ export default function SlotList() {
         message.info(data.message)
       }
     } catch (e: unknown) {
-      const msg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message
+      const res = (e as { response?: { status?: number; data?: { message?: string } } })?.response
+      const msg = res?.data?.message
+      if (res?.status === 409) {
+        message.warning(msg || '采集进行中，请等待完成后再重启')
+        return
+      }
       message.error(msg || '启动重启失败')
     }
   }
@@ -379,6 +389,7 @@ export default function SlotList() {
   }, [rows, applied])
 
   const collectRunning = job?.status === 'running'
+  const restartLocked = !collectKnown || collectRunning
   const openCell = useCallback((title: string, text: string) => setCellView({ title, text }), [])
   const restartRunning = restartJob?.status === 'running'
   // line 已含「HH:MM:SS [采集|重启] …」，勿再叠 kind 前缀
@@ -456,12 +467,17 @@ export default function SlotList() {
               手动采集
             </Button>
             <Button
-              disabled={!selected.length || restartRunning || collectRunning}
+              disabled={!selected.length || restartRunning || restartLocked}
               loading={restartRunning}
               onClick={() => confirmRestart(selected)}
             >
               批量重启
             </Button>
+            {collectRunning ? (
+              <span className="hint">{job?.message || '采集进行中，请等待完成后再重启'}</span>
+            ) : !collectKnown ? (
+              <span className="hint">正在确认采集进度</span>
+            ) : null}
             <Button
               onClick={() => {
                 setLogOpen(true)

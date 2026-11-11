@@ -14,24 +14,25 @@ import (
 )
 
 type Config struct {
-	Nacos     NacosConfig        `yaml:"nacos"`
-	App       AppConfig          `yaml:"app"`
-	HTTP      HTTPConfig         `yaml:"http"`
-	Frontend  FrontendConfig     `yaml:"frontend"` // 开发态 Vite；可放 Nacos，与后端端口一并管理
-	Log       LogConfig          `yaml:"log"`
-	DB        DBConfig           `yaml:"db"`
-	Redis     RedisConfig        `yaml:"redis"` // 平台登录会话；生产放 Nacos，默认关闭不影响现网
-	CDC       CDCConfig          `yaml:"cdc"`
-	Migration MigrationConfig    `yaml:"migration"`
-	Flashback FlashbackConfig    `yaml:"flashback"`
-	Backup    BackupConfig       `yaml:"backup"`
-	External  ExternalConfig     `yaml:"external"`
-	Terminal  TerminalConfig     `yaml:"terminal"`
-	Services  ServicesConfig     `yaml:"services"`
-	Copilot   CopilotConfig      `yaml:"copilot"` // DBA Copilot；密钥放 Nacos，不读库表全局参数
-	Notify    NotifyModuleConfig `yaml:"notify"`  // 通知渠道能力（飞书/企微/短信/电话/机器人）；密钥放 Nacos；不含邮件
-	DNS       DNSConfig          `yaml:"dns"`     // 独立解析库；节点账号写入 Corefile
-	Ticket    TicketConfig       `yaml:"ticket"`  // 工单申请页环境分组；不改实例登记的环境编码
+	Nacos      NacosConfig        `yaml:"nacos"`
+	App        AppConfig          `yaml:"app"`
+	HTTP       HTTPConfig         `yaml:"http"`
+	Frontend   FrontendConfig     `yaml:"frontend"` // 开发态 Vite；可放 Nacos，与后端端口一并管理
+	Log        LogConfig          `yaml:"log"`
+	DB         DBConfig           `yaml:"db"`
+	Redis      RedisConfig        `yaml:"redis"` // 平台登录会话；生产放 Nacos，默认关闭不影响现网
+	CDC        CDCConfig          `yaml:"cdc"`
+	SlowlogBus SlowlogBusConfig   `yaml:"slowlog_bus"` // 平台慢日志总线，与 cdc.kafka_brokers 分开
+	Migration  MigrationConfig    `yaml:"migration"`
+	Flashback  FlashbackConfig    `yaml:"flashback"`
+	Backup     BackupConfig       `yaml:"backup"`
+	External   ExternalConfig     `yaml:"external"`
+	Terminal   TerminalConfig     `yaml:"terminal"`
+	Services   ServicesConfig     `yaml:"services"`
+	Copilot    CopilotConfig      `yaml:"copilot"` // DBA Copilot；密钥放 Nacos，不读库表全局参数
+	Notify     NotifyModuleConfig `yaml:"notify"`  // 通知渠道能力（飞书/企微/短信/电话/机器人）；密钥放 Nacos；不含邮件
+	DNS        DNSConfig          `yaml:"dns"`     // 独立解析库；节点账号写入 Corefile
+	Ticket     TicketConfig       `yaml:"ticket"`  // 工单申请页环境分组；不改实例登记的环境编码
 }
 
 // TicketEnvGroup 申请页「生产 / 测试」与环境编码的对应关系。
@@ -165,6 +166,45 @@ type CDCConfig struct {
 	Enabled      bool   `yaml:"enabled"`
 	DebeziumURL  string `yaml:"debezium_url"`
 	KafkaBrokers string `yaml:"kafka_brokers"`
+}
+
+// SlowlogBusConfig 平台慢日志 Kafka。只配地址和可选的 SASL/TLS；主题名在代码里。
+// 密码留在 Nacos，不进入日志。instances 为空表示地址配上后全部实例走 Kafka，用来灰度时填云实例 ID。
+type SlowlogBusConfig struct {
+	Brokers       string `yaml:"brokers"`
+	SASLMechanism string `yaml:"sasl_mechanism"`
+	Username      string `yaml:"username"`
+	Password      string `yaml:"password"`
+	TLS           bool   `yaml:"tls"`
+	Instances     string `yaml:"instances"`
+}
+
+// Allows 表示这个云实例是否走 Kafka。地址为空则一律直接写库。
+func (c SlowlogBusConfig) Allows(cloudID string) bool {
+	if strings.TrimSpace(c.Brokers) == "" {
+		return false
+	}
+	list := strings.TrimSpace(c.Instances)
+	if list == "" {
+		return true
+	}
+	for _, id := range strings.Split(list, ",") {
+		if strings.TrimSpace(id) == strings.TrimSpace(cloudID) {
+			return true
+		}
+	}
+	return false
+}
+
+// LogLine 给启动日志用，不含密码。
+func (c SlowlogBusConfig) LogLine() string {
+	return fmt.Sprintf("brokers=%s sasl=%s tls=%t user_set=%t instances=%t",
+		strings.TrimSpace(c.Brokers), strings.ToUpper(strings.TrimSpace(c.SASLMechanism)), c.TLS, strings.TrimSpace(c.Username) != "", strings.TrimSpace(c.Instances) != "")
+}
+
+// Key 用于判断连接参数是否变化。含密码，只留在内存里比较，不能打印。
+func (c SlowlogBusConfig) Key() string {
+	return strings.Join([]string{c.Brokers, c.SASLMechanism, c.Username, c.Password, fmt.Sprint(c.TLS)}, "\x00")
 }
 
 type MigrationConfig struct {
