@@ -33,11 +33,22 @@ type Sample struct {
 	LagSecKnown bool    `json:"lag_sec_known,omitempty"`
 	HitRate     float64 `json:"hit_rate,omitempty"`
 	HitKnown    bool    `json:"hit_known,omitempty"`
-	// DataBytes 是当前账号可见的非模板库文件合计，不含 WAL。
+	// DataBytes 是当前账号可见的非模板库文件合计，不含 WAL。StarRocks 时为各 BE DataUsedCapacity 之和。
 	DataBytes        int64   `json:"data_bytes,omitempty"`
 	DataKnown        bool    `json:"data_known,omitempty"`
 	StorageRate      float64 `json:"storage_rate,omitempty"`
 	StorageRateKnown bool    `json:"storage_rate_known,omitempty"`
+	// StarRocks：数据盘总大小为各 BE TotalCapacity 之和；使用率是单节点最高 UsedPct。
+	DiskBytes         int64  `json:"disk_bytes,omitempty"`
+	DiskKnown         bool   `json:"disk_known,omitempty"`
+	TabletCount       int64  `json:"tablet_count,omitempty"`
+	TabletKnown       bool   `json:"tablet_known,omitempty"`
+	FEAlive           int    `json:"fe_alive,omitempty"`
+	FETotal           int    `json:"fe_total,omitempty"`
+	BEAlive           int    `json:"be_alive,omitempty"`
+	BETotal           int    `json:"be_total,omitempty"`
+	BEDecommissioning bool   `json:"be_decommissioning,omitempty"`
+	StorageHotHost    string `json:"storage_hot_host,omitempty"`
 	// CpuRate / CpuSeries：Redis CPU（Prometheus 近 5 分钟）；Rate 为序列末点百分比。
 	CpuRate     float64    `json:"cpu_rate,omitempty"`
 	CpuKnown    bool       `json:"cpu_known,omitempty"`
@@ -86,6 +97,10 @@ func Probe(ctx context.Context, inst *store.Instance, secretKey string) Sample {
 		return s
 	case "redis":
 		s := probeRedis(ctx, inst, pass)
+		s.CollectedAt = now
+		return s
+	case "starrocks":
+		s := probeStarRocks(ctx, inst, pass)
 		s.CollectedAt = now
 		return s
 	default:
@@ -231,7 +246,7 @@ func atoi64(s string) int64 {
 
 func Unsupported(dbType string) bool {
 	switch store.NormalizeDBType(dbType) {
-	case "postgres", "redis":
+	case "postgres", "redis", "starrocks":
 		return false
 	default:
 		return true

@@ -5,6 +5,62 @@ import (
 	"testing"
 )
 
+func TestSplitSQL_InsertSelectStaysOneStatement(t *testing.T) {
+	sql := `INSERT INTO public.tbl_order_discount_48 (id, parent, order_id)
+SELECT p.id, p.parent, d.order_id
+FROM (VALUES (1, 2, 3), (4, 5, 6)) AS p(id, parent, order_id);`
+	st := SplitSQL(sql)
+	if len(st) != 1 {
+		t.Fatalf("want 1 statement, got %d: %#v", len(st), st)
+	}
+	if !strings.Contains(strings.ToUpper(st[0]), "SELECT") {
+		t.Fatalf("SELECT 应留在 INSERT 里: %s", st[0])
+	}
+	dml := CheckTicket(sql, "dml", false, false)
+	for _, row := range dml.Statements {
+		if row.ErrorLevel == "ERROR" && strings.Contains(row.Message, "必须是 DML") {
+			t.Fatalf("INSERT SELECT 不应判成非 DML: %+v", row)
+		}
+	}
+}
+
+func TestSplitSQL_InsertValuesThenSelectStillSplits(t *testing.T) {
+	sql := `INSERT INTO t (a) VALUES (1)
+SELECT 1;`
+	st := SplitSQL(sql)
+	if len(st) != 2 {
+		t.Fatalf("want 2 statements, got %d: %#v", len(st), st)
+	}
+}
+
+func TestSplitSQL_InsertSelectThenAnotherSelectSplits(t *testing.T) {
+	sql := `INSERT INTO t
+SELECT 1
+SELECT 2;`
+	st := SplitSQL(sql)
+	if len(st) != 2 {
+		t.Fatalf("want 2 statements, got %d: %#v", len(st), st)
+	}
+	if !strings.HasPrefix(strings.ToUpper(strings.TrimSpace(st[0])), "INSERT") || !strings.Contains(strings.ToUpper(st[0]), "SELECT") {
+		t.Fatalf("第一条应是 INSERT SELECT: %s", st[0])
+	}
+	if !strings.HasPrefix(strings.ToUpper(strings.TrimSpace(st[1])), "SELECT") {
+		t.Fatalf("第二条应是 SELECT: %s", st[1])
+	}
+}
+
+func TestCountInsertRowsIgnoresQueryValues(t *testing.T) {
+	stmt := `INSERT INTO t (id)
+SELECT p.id
+FROM (VALUES (1), (2), (3)) AS p(id)`
+	if n := countInsertRows(stmt); n != 0 {
+		t.Fatalf("INSERT SELECT 行数应为 0，got %d", n)
+	}
+	if n := countInsertRows(`INSERT INTO t (id) VALUES (1),(2),(3)`); n != 3 {
+		t.Fatalf("VALUES 行数应为 3，got %d", n)
+	}
+}
+
 func TestSplitSQL_CreateViewUnionAll(t *testing.T) {
 	sql := `CREATE OR REPLACE VIEW db_ods.v AS
 SELECT a FROM t1

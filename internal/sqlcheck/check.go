@@ -573,6 +573,44 @@ func alterTableAlterIsClause(sqlContent string, i int) bool {
 	return wordAfterKeywordAt(sqlContent, i) == "COLUMN"
 }
 
+// bufferIsInsertAwaitingQuery 是还没写查询体的 INSERT/REPLACE：顶层既没有 SELECT 也没有 VALUES。
+// 列清单括号里的内容不算顶层，所以 INSERT INTO t (列)\nSELECT 仍是同一条语句。
+func bufferIsInsertAwaitingQuery(buf string) bool {
+	s := strings.TrimSpace(stripSQLComments(buf))
+	if s == "" {
+		return false
+	}
+	switch mainKeyword(s) {
+	case "INSERT", "REPLACE":
+	default:
+		return false
+	}
+	return !topLevelHasWord(s, "SELECT") && !topLevelHasWord(s, "VALUES")
+}
+
+func topLevelHasWord(s, word string) bool {
+	found := false
+	scanTopLevel(s, func(i int) bool {
+		if _, ok := matchWordAt(s, i, word); ok {
+			found = true
+			return true
+		}
+		return false
+	})
+	return found
+}
+
+func lastTopLevelWord(s, word string) int {
+	idx := -1
+	scanTopLevel(s, func(i int) bool {
+		if _, ok := matchWordAt(s, i, word); ok {
+			idx = skipSpaceSQL(s, i)
+		}
+		return false
+	})
+	return idx
+}
+
 // shouldSuppressMissingSemicolonSplit 在 DDL 多行语句内部子句处不强制分段。
 func shouldSuppressMissingSemicolonSplit(buf string, keyword string, sqlContent string, i int) bool {
 	switch keyword {
@@ -601,6 +639,9 @@ func shouldSuppressMissingSemicolonSplit(buf string, keyword string, sqlContent 
 		}
 	}
 	if keyword == "SELECT" || keyword == "WITH" {
+		if bufferIsInsertAwaitingQuery(buf) {
+			return true
+		}
 		return bufferEndsWithPendingQueryAS(buf) || bufferEndsWithClosedCTE(buf) || bufferEndsWithSetOp(buf)
 	}
 	if keyword == "REFRESH" {

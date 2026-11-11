@@ -735,12 +735,12 @@ func countCreateTableColumns(stmt string) int {
 }
 
 func countInsertRows(stmt string) int {
-	up := strings.ToUpper(stmt)
-	i := strings.LastIndex(up, "VALUES")
+	s := stripSQLComments(stmt)
+	i := lastTopLevelWord(s, "VALUES")
 	if i < 0 {
 		return 0
 	}
-	return strings.Count(stmt[i:], "),(") + 1
+	return strings.Count(s[i:], "),(") + 1
 }
 
 func isMultiTableDML(kw, upper, stmt string) bool {

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Button, Input, Progress, Select, Space, Table, Tag, message } from 'antd'
+import { Button, Input, Progress, Select, Space, Table, Tag, Tooltip, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import type { EChartsCoreOption } from 'echarts'
 import { useNavigate } from 'react-router-dom'
@@ -32,6 +32,16 @@ type Sample = {
   data_known?: boolean
   storage_rate?: number
   storage_rate_known?: boolean
+  disk_bytes?: number
+  disk_known?: boolean
+  tablet_count?: number
+  tablet_known?: boolean
+  fe_alive?: number
+  fe_total?: number
+  be_alive?: number
+  be_total?: number
+  be_decommissioning?: boolean
+  storage_hot_host?: string
   cpu_rate?: number
   cpu_known?: boolean
   cpu_series?: CpuPoint[]
@@ -215,6 +225,11 @@ function anomalyTags(row: Row) {
   if (s.conn_max && s.conn_used != null && s.conn_used / s.conn_max >= 0.8) tags.push('连接偏高')
   if (s.mem_max && s.mem_used != null && s.mem_used / s.mem_max >= 0.8) tags.push('内存偏高')
   if (s.storage_rate_known && (s.storage_rate || 0) >= 80) tags.push('存储偏高')
+  if (normEngine(row.db_type) === 'starrocks' && s.reachable) {
+    if ((s.fe_total || 0) > 0 && (s.fe_alive || 0) < (s.fe_total || 0)) tags.push('FE失联')
+    if ((s.be_total || 0) > 0 && (s.be_alive || 0) < (s.be_total || 0)) tags.push('BE失联')
+    if (s.be_decommissioning) tags.push('下线中')
+  }
   if (s.cpu_known && (s.cpu_rate || 0) >= 80) tags.push('CPU偏高')
   if ((s.lag_known && (s.lag_bytes || 0) >= LAG_BYTES) || (s.lag_sec_known && (s.lag_seconds || 0) >= 10)) {
     tags.push('复制延迟')
@@ -333,6 +348,8 @@ export default function InstanceOverview() {
     let ok = 0
     let primary = 0
     let replica = 0
+    let feBad = 0
+    let beBad = 0
     const versions = new Set<string>()
     for (const row of rows) {
       const s = row.sample
@@ -342,12 +359,17 @@ export default function InstanceOverview() {
       if (s?.role === 'primary') primary++
       if (s?.role === 'replica') replica++
       if (s?.version) versions.add(s.version)
+      if (normEngine(row.db_type) === 'starrocks' && s && s.error_kind !== 'skip') {
+        if (!s.reachable || ((s.fe_total || 0) > 0 && (s.fe_alive || 0) < (s.fe_total || 0))) feBad++
+        if (s.reachable && (((s.be_total || 0) > 0 && (s.be_alive || 0) < (s.be_total || 0)) || s.be_decommissioning)) beBad++
+      }
     }
-    return { total: rows.length, alert, ok, primary, replica, versions: versions.size }
+    return { total: rows.length, alert, ok, primary, replica, feBad, beBad, versions: versions.size }
   }, [rows])
 
   const engine = normEngine(dbType)
   const showRedis = engine === 'redis'
+  const showStarRocks = engine === 'starrocks'
   const showRuntime = engine === 'postgres' || engine === 'redis'
   const typeGroups = useMemo(
     () =>
@@ -374,8 +396,13 @@ export default function InstanceOverview() {
     },
     {
       title: '角色',
-      width: 88,
+      width: showStarRocks ? 168 : 88,
       render: (_, row) => {
+        if (showStarRocks) {
+          const s = row.sample
+          if (!s?.reachable) return '—'
+          return `FE ${s.fe_alive ?? 0}/${s.fe_total ?? 0} · BE ${s.be_alive ?? 0}/${s.be_total ?? 0}`
+        }
         const role = row.sample?.role
         if (role === 'primary') return <Tag className="ov-role ov-role-primary">主库</Tag>
         if (role === 'replica') return <Tag className="ov-role ov-role-replica">从库</Tag>
@@ -466,6 +493,34 @@ export default function InstanceOverview() {
   if (showRuntime) {
     columns.push({ title: '从库延迟', width: 140, render: (_, row) => lagText(row.sample) })
   }
+  if (showStarRocks) {
+    columns.push(
+      {
+        title: '数据盘总大小',
+        width: 120,
+        render: (_, row) => (row.sample?.disk_known ? bytesText(row.sample.disk_bytes || 0) : '—'),
+      },
+      { title: '数据存储', width: 110, render: (_, row) => usedStorage(row.sample) },
+      {
+        title: '数据使用率',
+        width: 170,
+        onCell: (row) => {
+          const pct = row.sample?.storage_rate_known ? row.sample.storage_rate ?? 0 : null
+          return { className: pct == null ? '' : `ov-cell ov-cell-${rateLevel(pct)}` }
+        },
+        render: (_, row) => {
+          const cell = <RateCell pct={row.sample?.storage_rate_known ? row.sample.storage_rate ?? 0 : null} />
+          const hot = row.sample?.storage_hot_host
+          return hot ? <Tooltip title={`最高 ${hot}`}>{cell}</Tooltip> : cell
+        },
+      },
+      {
+        title: 'Tablet 数',
+        width: 100,
+        render: (_, row) => (row.sample?.tablet_known ? String(row.sample.tablet_count ?? 0) : '—'),
+      },
+    )
+  }
   columns.push(
     {
       title: '操作',
@@ -508,6 +563,9 @@ export default function InstanceOverview() {
       'CPU',
       '从库延迟',
     ]
+    if (showStarRocks) {
+      header.push('数据盘总大小', '数据存储', '数据使用率', 'Tablet 数', 'FE 存活', 'BE 存活')
+    }
     const lines = [header.join(',')]
     for (const row of sorted) {
       const tags = anomalyTags(row)
@@ -518,7 +576,9 @@ export default function InstanceOverview() {
           row.env_name,
           row.db_type,
           row.sample?.version || '',
-          roleText(row.sample?.role),
+          showStarRocks && row.sample?.reachable
+            ? `FE ${row.sample.fe_alive ?? 0}/${row.sample.fe_total ?? 0} · BE ${row.sample.be_alive ?? 0}/${row.sample.be_total ?? 0}`
+            : roleText(row.sample?.role),
           tags.join(' ') || (row.sample ? '正常' : '未采集'),
           row.sample ? ratio(row.sample.conn_used, row.sample.conn_max) : '',
           usedStorage(row.sample),
@@ -531,6 +591,16 @@ export default function InstanceOverview() {
           })(),
           row.sample?.cpu_known && row.sample.cpu_rate != null ? `${Math.round(row.sample.cpu_rate)}%` : '',
           lagText(row.sample),
+          ...(showStarRocks
+            ? [
+                row.sample?.disk_known ? bytesText(row.sample.disk_bytes || 0) : '',
+                usedStorage(row.sample),
+                storageRateText(row.sample),
+                row.sample?.tablet_known ? String(row.sample.tablet_count ?? 0) : '',
+                row.sample?.reachable ? `${row.sample.fe_alive ?? 0}/${row.sample.fe_total ?? 0}` : '',
+                row.sample?.reachable ? `${row.sample.be_alive ?? 0}/${row.sample.be_total ?? 0}` : '',
+              ]
+            : []),
         ]
           .map((v) => csvCell(String(v)))
           .join(','),
@@ -618,14 +688,29 @@ export default function InstanceOverview() {
           <div className="label">告警中</div>
           <div className="value">{summary.alert}</div>
         </div>
-        <div className="ov-card">
-          <div className="label">主库</div>
-          <div className="value">{summary.primary}</div>
-        </div>
-        <div className="ov-card">
-          <div className="label">从库</div>
-          <div className="value">{summary.replica}</div>
-        </div>
+        {showStarRocks ? (
+          <>
+            <div className="ov-card">
+              <div className="label">FE 异常</div>
+              <div className="value">{summary.feBad}</div>
+            </div>
+            <div className="ov-card">
+              <div className="label">BE 异常</div>
+              <div className="value">{summary.beBad}</div>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="ov-card">
+              <div className="label">主库</div>
+              <div className="value">{summary.primary}</div>
+            </div>
+            <div className="ov-card">
+              <div className="label">从库</div>
+              <div className="value">{summary.replica}</div>
+            </div>
+          </>
+        )}
         <div className="ov-card">
           <div className="label">版本种类</div>
           <div className="value">{summary.versions}<span className="unit">种</span></div>
@@ -639,7 +724,9 @@ export default function InstanceOverview() {
                 ? ' 已用存储是各库文件合计。使用率是云监控最近值。大约总量 = 已用存储 / 使用率。'
                 : engine === 'redis'
                   ? ' Redis CPU 为近 5 分钟 Prometheus 曲线（redis_exporter），旁注为末点占用。'
-                  : ''
+                  : engine === 'starrocks'
+                    ? ' 数据盘总大小、数据存储是各 BE 之和。数据使用率是单节点最高值，悬停可见该 BE。'
+                    : ''
             }`}
       </div>
       <div className="instance-overview-table">
@@ -649,7 +736,7 @@ export default function InstanceOverview() {
           loading={loading && !running}
           dataSource={sorted}
           columns={columns}
-          scroll={{ x: 1560 }}
+          scroll={{ x: showStarRocks ? 1960 : 1560 }}
           pagination={{ defaultPageSize: 20, showSizeChanger: true, pageSizeOptions: ['20', '50', '100'], showTotal: (n) => `共 ${n} 条` }}
           rowClassName={(row) => (stale(row.sample) ? 'instance-overview-stale' : '')}
         />
