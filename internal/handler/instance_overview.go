@@ -38,15 +38,16 @@ type overviewJob struct {
 }
 
 type overviewRow struct {
-	ID          string               `json:"id"`
-	Name        string               `json:"name"`
-	DBType      string               `json:"db_type"`
-	Host        string               `json:"host"`
-	Port        int                  `json:"port"`
-	EnvID       string               `json:"env_id"`
-	EnvName     string               `json:"env_name"`
-	Collectable bool                 `json:"collectable"`
-	Sample      *instoverview.Sample `json:"sample,omitempty"`
+	ID              string               `json:"id"`
+	Name            string               `json:"name"`
+	DBType          string               `json:"db_type"`
+	Host            string               `json:"host"`
+	Port            int                  `json:"port"`
+	EnvID           string               `json:"env_id"`
+	EnvName         string               `json:"env_name"`
+	Collectable     bool                 `json:"collectable"`
+	CloudInstanceID string               `json:"-"`
+	Sample          *instoverview.Sample `json:"sample,omitempty"`
 }
 
 func (h *OverviewHandler) List(c *gin.Context) {
@@ -214,6 +215,7 @@ func (h *OverviewHandler) rows(tid, userID, dbType, env, q string) ([]overviewRo
 		row := overviewRow{
 			ID: inst.ID, Name: name, DBType: norm, Host: host, Port: inst.Port,
 			EnvID: envID, Collectable: !instoverview.Unsupported(norm),
+			CloudInstanceID: strings.TrimSpace(inst.CloudInstanceID),
 		}
 		if envID == "" {
 			row.EnvName = "未设置环境"
@@ -228,38 +230,40 @@ func (h *OverviewHandler) rows(tid, userID, dbType, env, q string) ([]overviewRo
 		}
 		out = append(out, row)
 	}
-	h.attachPostgresCloudDisk(tid, out)
+	h.attachPostgresCloudDisk(out)
 	return out, nil
 }
 
-// attachPostgresCloudDisk 把已关联云资产的购买磁盘写到返回副本。不改采集缓存。
-func (h *OverviewHandler) attachPostgresCloudDisk(tid string, rows []overviewRow) {
+// attachPostgresCloudDisk 按云实例 ID 或平台实例 ID 取购买磁盘，不看云清单租户。只改返回副本。
+func (h *OverviewHandler) attachPostgresCloudDisk(rows []overviewRow) {
 	if h == nil || h.Store == nil || len(rows) == 0 {
 		return
 	}
-	need := false
+	var keys []platformDiskKey
+	var instIDs, cloudIDs []string
 	for _, row := range rows {
-		if row.DBType == "postgres" {
-			need = true
-			break
+		if row.DBType != "postgres" {
+			continue
+		}
+		keys = append(keys, platformDiskKey{ID: row.ID, CloudID: row.CloudInstanceID})
+		instIDs = append(instIDs, row.ID)
+		if row.CloudInstanceID != "" {
+			cloudIDs = append(cloudIDs, row.CloudInstanceID)
 		}
 	}
-	if !need {
+	if len(keys) == 0 {
 		return
 	}
-	list, err := h.Store.ListCloudResources(tid, "postgres", "")
+	list, err := h.Store.ListPostgresCloudDisks(instIDs, cloudIDs)
 	if err != nil {
 		log.Printf("instance overview cloud disk: %v", err)
 		return
 	}
-	disks := latestCloudDiskBytes(list)
+	disks := assignCloudDisk(keys, list)
 	if len(disks) == 0 {
 		return
 	}
 	for i := range rows {
-		if rows[i].DBType != "postgres" {
-			continue
-		}
 		b, ok := disks[rows[i].ID]
 		if !ok || b <= 0 {
 			continue
@@ -267,35 +271,66 @@ func (h *OverviewHandler) attachPostgresCloudDisk(tid string, rows []overviewRow
 		if rows[i].Sample == nil {
 			rows[i].Sample = &instoverview.Sample{}
 		}
-		rows[i].Sample.DiskBytes = b
-		rows[i].Sample.DiskKnown = true
+		applyCloudCapacity(rows[i].Sample, b)
 	}
 }
 
-// latestCloudDiskBytes 同一平台实例多条云记录时取同步时间最新且 disk_gb > 0 的容量。
-func latestCloudDiskBytes(rows []store.CloudInstance) map[string]int64 {
+type platformDiskKey struct {
+	ID      string
+	CloudID string
+}
+
+// assignCloudDisk 优先用平台实例上的云实例 ID，否则用云行指向的平台实例 ID。同一键取同步时间最新的容量。
+func assignCloudDisk(keys []platformDiskKey, rows []store.CloudInstance) map[string]int64 {
 	type pick struct {
 		sync  string
 		bytes int64
 	}
-	best := map[string]pick{}
+	byInst := map[string]pick{}
+	byCloud := map[string]pick{}
 	for _, it := range rows {
-		id := strings.TrimSpace(it.InstanceID)
-		if id == "" || it.DiskGB <= 0 {
+		if it.DiskGB <= 0 {
 			continue
 		}
 		b := int64(it.DiskGB) * 1024 * 1024 * 1024
-		cur, ok := best[id]
-		if ok && it.SyncedAt <= cur.sync {
-			continue
+		if id := strings.TrimSpace(it.InstanceID); id != "" {
+			cur, ok := byInst[id]
+			if !ok || it.SyncedAt > cur.sync {
+				byInst[id] = pick{sync: it.SyncedAt, bytes: b}
+			}
 		}
-		best[id] = pick{sync: it.SyncedAt, bytes: b}
+		if cid := strings.ToLower(strings.TrimSpace(it.CloudID)); cid != "" {
+			cur, ok := byCloud[cid]
+			if !ok || it.SyncedAt > cur.sync {
+				byCloud[cid] = pick{sync: it.SyncedAt, bytes: b}
+			}
+		}
 	}
-	out := make(map[string]int64, len(best))
-	for id, p := range best {
-		out[id] = p.bytes
+	out := map[string]int64{}
+	for _, k := range keys {
+		if cid := strings.ToLower(strings.TrimSpace(k.CloudID)); cid != "" {
+			if p, ok := byCloud[cid]; ok {
+				out[k.ID] = p.bytes
+				continue
+			}
+		}
+		if p, ok := byInst[k.ID]; ok {
+			out[k.ID] = p.bytes
+		}
 	}
 	return out
+}
+
+func applyCloudCapacity(s *instoverview.Sample, bytes int64) {
+	if s == nil || bytes <= 0 {
+		return
+	}
+	s.DiskBytes = bytes
+	s.DiskKnown = true
+	if s.DataKnown {
+		s.StorageRate = float64(s.DataBytes) / float64(bytes) * 100
+		s.StorageRateKnown = true
+	}
 }
 
 func (h *OverviewHandler) attachStorageRates(tid string, targets []overviewRow) {

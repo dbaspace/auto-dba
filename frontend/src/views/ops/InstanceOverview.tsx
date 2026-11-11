@@ -119,8 +119,7 @@ function storageRateText(s?: Sample) {
 
 function approxTotal(s?: Sample) {
   if (s?.disk_known && (s.disk_bytes || 0) > 0) return bytesText(s.disk_bytes)
-  if (!s?.data_known || !s.storage_rate_known || !s.storage_rate) return '—'
-  return bytesText((s.data_bytes || 0) / (s.storage_rate / 100))
+  return '—'
 }
 
 function usagePct(used?: number, max?: number) {
@@ -738,7 +737,7 @@ export default function InstanceOverview() {
           ? '正在采样，汇总和表格会随结果更新，完成后才是本轮最终数字'
           : `数字是当前一次采样，不是监控图里的区间平均。超过约 5 分钟会变淡。低于 60% 为绿色，60% 起为黄色，80% 起为红色。${
               engine === 'postgres'
-                ? ' 已用存储是各库文件合计。使用率是云监控最近值。大约总量优先用已关联云资产的磁盘容量；没有关联时才用已用存储除以使用率。'
+                ? ' 已用存储是各库文件合计。大约总量是已关联云资产的磁盘容量。使用率是已用存储除以这块容量；没有云磁盘时才用云监控最近值。'
                 : engine === 'redis'
                   ? ' Redis CPU 为近 5 分钟 Prometheus 曲线（redis_exporter），旁注为末点占用。'
                   : engine === 'starrocks'

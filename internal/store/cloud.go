@@ -869,6 +869,58 @@ func (d *DB) GetCloudPostgresByCloudID(vendor, cloudID string) (*CloudInstance, 
 	return d.GetCloudResourceByCloudID(vendor, "postgres", cloudID)
 }
 
+// ListPostgresCloudDisks 按平台实例 ID 或云实例 ID 取 PostgreSQL 购买磁盘，不按租户过滤。
+func (d *DB) ListPostgresCloudDisks(instanceIDs, cloudIDs []string) ([]CloudInstance, error) {
+	instanceIDs = compactStrings(instanceIDs)
+	cloudIDs = compactStrings(cloudIDs)
+	if len(instanceIDs) == 0 && len(cloudIDs) == 0 {
+		return nil, nil
+	}
+	var args []any
+	var conds []string
+	if len(instanceIDs) > 0 {
+		conds = append(conds, `instance_id IN (?`+strings.Repeat(",?", len(instanceIDs)-1)+`)`)
+		for _, id := range instanceIDs {
+			args = append(args, id)
+		}
+	}
+	if len(cloudIDs) > 0 {
+		conds = append(conds, `LOWER(cloud_instance_id) IN (?`+strings.Repeat(",?", len(cloudIDs)-1)+`)`)
+		for _, id := range cloudIDs {
+			args = append(args, strings.ToLower(id))
+		}
+	}
+	q := `SELECT instance_id, cloud_instance_id, disk_gb, synced_at FROM tbl_cloud_instances WHERE COALESCE(engine,'postgres')='postgres' AND disk_gb>0 AND (` + strings.Join(conds, " OR ") + `)`
+	rows, err := d.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []CloudInstance
+	for rows.Next() {
+		var it CloudInstance
+		if err := rows.Scan(&it.InstanceID, &it.CloudID, &it.DiskGB, &it.SyncedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, it)
+	}
+	return out, rows.Err()
+}
+
+func compactStrings(in []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, s := range in {
+		s = strings.TrimSpace(s)
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	return out
+}
+
 func (d *DB) GetCloudResourceByCloudID(vendor, engine, cloudID string) (*CloudInstance, error) {
 	if engine == "" {
 		engine = "postgres"
