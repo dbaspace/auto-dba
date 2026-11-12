@@ -51,6 +51,7 @@ type overviewRow struct {
 	EnvName         string                 `json:"env_name"`
 	Collectable     bool                   `json:"collectable"`
 	Domain          string                 `json:"domain,omitempty"`
+	App             string                 `json:"app,omitempty"`
 	CloudInstanceID string                 `json:"-"`
 	Sample          *instoverview.Sample   `json:"sample,omitempty"`
 	HostInfo        *instoverview.HostInfo `json:"host_info,omitempty"`
@@ -235,16 +236,17 @@ func (h *OverviewHandler) listRows(tid, userID, dbType, env, q string) ([]overvi
 		}
 		name := strings.TrimSpace(inst.Name)
 		host := strings.TrimSpace(inst.Host)
-		domain := ""
+		domain, app := "", ""
 		if store.IsHostInstanceType(norm) {
 			domain = instoverview.HostDisplayDomain(inst.Tags, inst.Domains, inst.DomainName)
+			app = instoverview.HostAppName(inst.Tags)
 		}
-		if needle != "" && !strings.Contains(strings.ToLower(name+" "+host+" "+domain), needle) {
+		if needle != "" && !strings.Contains(strings.ToLower(name+" "+host+" "+domain+" "+app), needle) {
 			continue
 		}
 		row := overviewRow{
 			ID: inst.ID, Name: name, DBType: norm, Host: host, Port: inst.Port,
-			EnvID: envID, Collectable: !instoverview.Unsupported(norm), Domain: domain,
+			EnvID: envID, Collectable: !instoverview.Unsupported(norm), Domain: domain, App: app,
 			CloudInstanceID: strings.TrimSpace(inst.CloudInstanceID),
 		}
 		if envID == "" {

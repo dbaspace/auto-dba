@@ -60,6 +60,7 @@ type Row = {
   env_name: string
   collectable: boolean
   domain?: string
+  app?: string
   sample?: Sample
   host_info?: HostInfo
 }
@@ -343,6 +344,10 @@ export default function InstanceOverview() {
   const [dbType, setDbType] = useState('postgres')
   const [env, setEnv] = useState<string | undefined>()
   const [q, setQ] = useState('')
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(10)
+  const tableWrapRef = useRef<HTMLDivElement>(null)
+  const [tableScrollY, setTableScrollY] = useState(320)
   const [typeOptions, setTypeOptions] = useState<InstanceTypeOption[]>(FALLBACK_TYPES)
   const [envs, setEnvs] = useState<EnvOpt[]>([])
   const [rows, setRows] = useState<Row[]>([])
@@ -467,6 +472,31 @@ export default function InstanceOverview() {
   const showStarRocks = engine === 'starrocks'
   const showRuntime = engine === 'postgres' || engine === 'redis'
   const showHost = isHostEngine(engine)
+
+  useEffect(() => {
+    setPage(1)
+  }, [q, env, dbType])
+
+  useEffect(() => {
+    setPage(1)
+    setPageSize(showHost ? 10 : 20)
+  }, [showHost])
+
+  useEffect(() => {
+    const el = tableWrapRef.current
+    if (!el) return
+    const measure = () => {
+      const header = el.querySelector('.ant-table-header')?.getBoundingClientRect().height || 39
+      const pager = el.querySelector('.ant-pagination')?.getBoundingClientRect().height || 32
+      const next = Math.max(160, Math.floor(el.clientHeight - header - pager - 24))
+      setTableScrollY((prev) => (prev === next ? prev : next))
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [showHost])
+
   const typeGroups = useMemo(
     () =>
       groupInstanceTypes(typeOptions).map((g) => ({
@@ -478,6 +508,7 @@ export default function InstanceOverview() {
 
   const hostColumns: ColumnsType<Row> = [
     { title: '实例名', dataIndex: 'name', width: 160, ellipsis: true },
+    { title: '应用', dataIndex: 'app', width: 140, ellipsis: true, render: (v: string) => v || '—' },
     {
       title: '域名',
       dataIndex: 'domain',
@@ -726,7 +757,7 @@ export default function InstanceOverview() {
   }
 
   const exportHostCsv = () => {
-    const header = ['实例名', '域名', '地址', '环境', '状态', 'CPU核', '内存GB', '系统盘GB', '数据盘总大小', '数据盘使用率']
+    const header = ['实例名', '应用', '域名', '地址', '环境', '状态', 'CPU核', '内存GB', '系统盘GB', '数据盘总大小', '数据盘使用率']
     const lines = [header.join(',')]
     let latest = ''
     for (const row of sorted) {
@@ -739,6 +770,7 @@ export default function InstanceOverview() {
       lines.push(
         [
           row.name,
+          row.app || '',
           row.domain || '',
           `${row.host}:${row.port}`,
           row.env_name,
@@ -951,7 +983,7 @@ export default function InstanceOverview() {
                     : ''
             }`}
       </div>
-      <div className="instance-overview-table">
+      <div className="instance-overview-table" ref={tableWrapRef}>
         <Table
           key={showHost ? 'host' : 'db'}
           rowKey="id"
@@ -959,12 +991,18 @@ export default function InstanceOverview() {
           loading={loading && !running}
           dataSource={sorted}
           columns={columns}
-          scroll={{ x: showStarRocks ? 1960 : showHost ? 1640 : 1560 }}
+          scroll={{ x: showStarRocks ? 1960 : showHost ? 1780 : 1560, y: tableScrollY }}
           pagination={{
-            defaultPageSize: showHost ? 10 : 20,
-            showSizeChanger: true,
+            current: page,
+            pageSize,
+            hideOnSinglePage: false,
+            showSizeChanger: { getPopupContainer: () => document.body },
             pageSizeOptions: showHost ? ['10', '20', '30', '50', '100'] : ['20', '50', '100'],
             showTotal: (n) => `共 ${n} 条`,
+            onChange: (next, size) => {
+              setPage(next)
+              setPageSize(size)
+            },
           }}
           rowClassName={(row) => (stale(row.sample) ? 'instance-overview-stale' : '')}
         />

@@ -65,6 +65,17 @@ func HostDisplayDomain(tags, domains []string, domainName string) string {
 	return strings.TrimSpace(domainName)
 }
 
+// HostAppName 取标签里第一条非空 app=，键不区分大小写。没有时为空。
+func HostAppName(tags []string) string {
+	for _, raw := range tags {
+		k, v, ok := splitTag(raw)
+		if ok && strings.EqualFold(k, "app") && v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 func splitTag(raw string) (key, value string, ok bool) {
 	raw = strings.TrimSpace(raw)
 	i := strings.Index(raw, "=")

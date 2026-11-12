@@ -38,6 +38,15 @@ func TestHostDisplayDomain(t *testing.T) {
 	}
 }
 
+func TestHostAppName(t *testing.T) {
+	if got := HostAppName([]string{"idc=beijing", "App= fe-StarRocks ", "app=be-StarRocks"}); got != "fe-StarRocks" {
+		t.Fatalf("app = %q", got)
+	}
+	if got := HostAppName([]string{"app=", "domain=x"}); got != "" {
+		t.Fatalf("empty app = %q", got)
+	}
+}
+
 func TestMatchCloudHosts(t *testing.T) {
 	rows := []store.CloudInstance{
 		{CloudID: "ins-a", SyncedAt: "1", Extras: map[string]any{"PrivateIpAddresses": []any{"10.0.0.1"}}},

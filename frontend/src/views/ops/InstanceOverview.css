@@ -1,6 +1,13 @@
+.app-tab-panel:has(.instance-overview) {
+  overflow: hidden;
+}
+
 .app-tab-panel > .instance-overview.ops-page {
   background: #f4f6fb;
   padding: 4px 2px 8px;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 
 html[data-color-mode='dark'] .app-tab-panel > .instance-overview.ops-page {
@@ -26,6 +33,7 @@ html[data-color-mode='dark'] .app-tab-panel > .instance-overview.ops-page {
   grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 12px;
   margin: 12px 0 10px;
+  flex-shrink: 0;
 }
 
 .ov-card {
@@ -71,6 +79,7 @@ html[data-color-mode='dark'] .app-tab-panel > .instance-overview.ops-page {
   color: rgba(0, 0, 0, 0.45);
   font-size: 12px;
   line-height: 1.6;
+  flex-shrink: 0;
 }
 
 .ov-collect,
@@ -228,10 +237,28 @@ html[data-color-mode='dark'] .instance-overview .ant-table-tbody > tr > td.ov-ce
 }
 
 .instance-overview-table {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   background: var(--app-content-bg, #fff);
   border: 1px solid #eef1f6;
   border-radius: 12px;
   overflow: hidden;
+}
+
+.instance-overview-table .ant-table-wrapper,
+.instance-overview-table .ant-spin-nested-loading,
+.instance-overview-table .ant-spin-container {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.instance-overview-table .ant-pagination {
+  flex-shrink: 0;
+  margin: 8px 12px;
 }
 
 .ov-role {
