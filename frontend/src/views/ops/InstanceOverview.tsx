@@ -5,6 +5,7 @@ import type { EChartsCoreOption } from 'echarts'
 import { useNavigate } from 'react-router-dom'
 import api from '../../api/request'
 import ChartBox from '../dashboard/ChartBox'
+import HostDiskAnalysis from './HostDiskAnalysis'
 import { groupInstanceTypes, parseInstanceTypes, type InstanceTypeOption } from '../../utils/instanceTypes'
 import './InstanceOverview.css'
 
@@ -77,6 +78,10 @@ type HostInfo = {
   data_used_known?: boolean
   data_used_bytes?: number
   data_size_bytes?: number
+  sys_used_rate?: number
+  sys_used_known?: boolean
+  sys_used_bytes?: number
+  sys_size_bytes?: number
   collected_at?: string
 }
 
@@ -130,6 +135,12 @@ function hostDiskPct(h?: HostInfo) {
   return h?.data_used_known ? h.data_used_rate ?? 0 : null
 }
 
+function hostSysPct(h?: HostInfo) {
+  return h?.sys_used_known ? h.sys_used_rate ?? 0 : null
+}
+
+const HOST_DISK_TAGS = ['数据盘偏高', '系统盘偏高']
+
 function hostTags(row: Row) {
   const h = row.host_info
   const tags: string[] = []
@@ -137,6 +148,8 @@ function hostTags(row: Row) {
   if (st === 'stopped' || st === 'offline') tags.push(HOST_STATUS[st].text)
   const pct = hostDiskPct(h)
   if (pct != null && pct >= 80) tags.push('数据盘偏高')
+  const sys = hostSysPct(h)
+  if (sys != null && sys >= 80) tags.push('系统盘偏高')
   return tags
 }
 
@@ -348,6 +361,7 @@ export default function InstanceOverview() {
   const [pageSize, setPageSize] = useState(10)
   const tableWrapRef = useRef<HTMLDivElement>(null)
   const [tableScrollY, setTableScrollY] = useState(320)
+  const [analysisOpen, setAnalysisOpen] = useState(false)
   const [typeOptions, setTypeOptions] = useState<InstanceTypeOption[]>(FALLBACK_TYPES)
   const [envs, setEnvs] = useState<EnvOpt[]>([])
   const [rows, setRows] = useState<Row[]>([])
@@ -523,7 +537,7 @@ export default function InstanceOverview() {
       width: 170,
       render: (_, row) => {
         const st = hostStatus(row.host_info)
-        const extra = hostTags(row).filter((t) => t === '数据盘偏高')
+        const extra = hostTags(row).filter((t) => HOST_DISK_TAGS.includes(t))
         if (!row.host_info?.cloud_matched) return <span className="ov-status muted">未关联云主机</span>
         if (!st && !extra.length) return <span className="ov-muted">—</span>
         return (
@@ -563,6 +577,25 @@ export default function InstanceOverview() {
         if (pct == null || !h) return cell
         return (
           <Tooltip title={`已用 ${bytesText(h.data_used_bytes || 0)} / 挂载合计 ${bytesText(h.data_size_bytes || 0)}`}>
+            {cell}
+          </Tooltip>
+        )
+      },
+    },
+    {
+      title: '系统盘使用率',
+      width: 190,
+      onCell: (row) => {
+        const pct = hostSysPct(row.host_info)
+        return { className: pct == null ? '' : `ov-cell ov-cell-${rateLevel(pct)}` }
+      },
+      render: (_, row) => {
+        const h = row.host_info
+        const pct = hostSysPct(h)
+        const cell = <RateCell pct={pct} />
+        if (pct == null || !h) return cell
+        return (
+          <Tooltip title={`根分区 / 已用 ${bytesText(h.sys_used_bytes || 0)} / ${bytesText(h.sys_size_bytes || 0)}`}>
             {cell}
           </Tooltip>
         )
@@ -720,8 +753,8 @@ export default function InstanceOverview() {
       },
     )
   }
-  columns.push(
-    {
+  if (!showHost) {
+    columns.push({
       title: '操作',
       width: 150,
       fixed: 'right',
@@ -741,8 +774,8 @@ export default function InstanceOverview() {
           </Button>
         </Space>
       ),
-    },
-  )
+    })
+  }
 
   const downloadCsv = (lines: string[], latest: string) => {
     const stamp = latest ? latest.replace('T', ' ').slice(0, 19) : '未采集'
@@ -757,14 +790,15 @@ export default function InstanceOverview() {
   }
 
   const exportHostCsv = () => {
-    const header = ['实例名', '应用', '域名', '地址', '环境', '状态', 'CPU核', '内存GB', '系统盘GB', '数据盘总大小', '数据盘使用率']
+    const header = ['实例名', '应用', '域名', '地址', '环境', '状态', 'CPU核', '内存GB', '系统盘GB', '数据盘总大小', '数据盘使用率', '系统盘使用率']
     const lines = [header.join(',')]
     let latest = ''
     for (const row of sorted) {
       const h = row.host_info
       const st = hostStatus(h)
       const pct = hostDiskPct(h)
-      const tags = hostTags(row).filter((t) => t === '数据盘偏高')
+      const sys = hostSysPct(h)
+      const tags = hostTags(row).filter((t) => HOST_DISK_TAGS.includes(t))
       const status = !h?.cloud_matched ? '未关联云主机' : [st?.text || '', ...tags].filter(Boolean).join(' ')
       if ((h?.collected_at || '') > latest) latest = h?.collected_at || ''
       lines.push(
@@ -780,6 +814,7 @@ export default function InstanceOverview() {
           h?.system_disk_gb ? String(h.system_disk_gb) : '',
           dataDiskText(h) === '—' ? '' : dataDiskText(h),
           pct == null ? '' : `${Math.round(pct)}%`,
+          sys == null ? '' : `${Math.round(sys)}%`,
         ]
           .map((v) => csvCell(String(v)))
           .join(','),
@@ -937,6 +972,10 @@ export default function InstanceOverview() {
               <div className="label">未关联云主机</div>
               <div className="value">{summary.unmatched}<span className="unit">台</span></div>
             </div>
+            <button type="button" className="ov-card ov-card-action" onClick={() => setAnalysisOpen(true)}>
+              <span className="ov-card-action-title">智能分析</span>
+              <span className="label">近 7 天数据盘与系统盘增长</span>
+            </button>
           </>
         ) : showStarRocks ? (
           <>
@@ -968,11 +1007,10 @@ export default function InstanceOverview() {
           </div>
         )}
       </div>
-      <div className="instance-overview-note">
-        {running
-          ? '正在采样，汇总和表格会随结果更新，完成后才是本轮最终数字'
-          : showHost
-            ? '状态、CPU、内存、系统盘和数据盘总大小来自云资源下的主机清单，按云主机 ID 或内网 IP 关联；同步云资源后刷新可更新。数据盘使用率来自 Prometheus 的 node_exporter，排除 /、/boot 等系统挂载点，按设备去重后合计，点刷新时采集。低于 60% 为绿色，60% 起为黄色，80% 起为红色。'
+      {showHost ? null : (
+        <div className="instance-overview-note">
+          {running
+            ? '正在采样，汇总和表格会随结果更新，完成后才是本轮最终数字'
             : `数字是当前一次采样，不是监控图里的区间平均。超过约 5 分钟会变淡。低于 60% 为绿色，60% 起为黄色，80% 起为红色。${
               engine === 'postgres'
                 ? ' 已用存储是各库文件合计。大约总量是已关联云资产的磁盘容量。使用率是已用存储除以这块容量；没有云磁盘时才用云监控最近值。'
@@ -982,7 +1020,8 @@ export default function InstanceOverview() {
                     ? ' 数据盘、数据存储与 Grafana 的 Total / Used Capacity 相同，是各存储路径之和。idc 与主机按标签管理中的候选值对齐。没有监控指标时才用 SHOW BACKENDS。数据使用率是数据存储除以数据盘总大小，悬停可见整盘最高使用率。'
                     : ''
             }`}
-      </div>
+        </div>
+      )}
       <div className="instance-overview-table" ref={tableWrapRef}>
         <Table
           key={showHost ? 'host' : 'db'}
@@ -991,7 +1030,7 @@ export default function InstanceOverview() {
           loading={loading && !running}
           dataSource={sorted}
           columns={columns}
-          scroll={{ x: showStarRocks ? 1960 : showHost ? 1780 : 1560, y: tableScrollY }}
+          scroll={{ x: showStarRocks ? 1960 : showHost ? 1820 : 1560, y: tableScrollY }}
           pagination={{
             current: page,
             pageSize,
@@ -1007,6 +1046,14 @@ export default function InstanceOverview() {
           rowClassName={(row) => (stale(row.sample) ? 'instance-overview-stale' : '')}
         />
       </div>
+      {showHost ? (
+        <HostDiskAnalysis
+          open={analysisOpen}
+          onClose={() => setAnalysisOpen(false)}
+          hosts={rows.map((r) => ({ host: r.host, domain: r.domain }))}
+          envs={envs}
+        />
+      ) : null}
     </div>
   )
 }

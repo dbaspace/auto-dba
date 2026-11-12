@@ -263,3 +263,12 @@ func TestReadLatestNacosDiskCache(t *testing.T) {
 		t.Fatalf("got=%q path=%q err=%v", got, path, err)
 	}
 }
+
+func TestApplyHTTPPortEnvOverridesConfiguredPort(t *testing.T) {
+	t.Setenv("AUTO_DBA_HTTP_PORT", "18800")
+	cfg := &Config{HTTP: HTTPConfig{Port: 8800}}
+	applyDefaults(cfg, t.TempDir())
+	if cfg.HTTP.Port != 18800 {
+		t.Fatalf("port=%d want 18800", cfg.HTTP.Port)
+	}
+}

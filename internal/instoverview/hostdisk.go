@@ -22,6 +22,10 @@ type HostInfo struct {
 	DataUsedKnown bool                 `json:"data_used_known,omitempty"`
 	DataUsedBytes float64              `json:"data_used_bytes,omitempty"`
 	DataSizeBytes float64              `json:"data_size_bytes,omitempty"`
+	SysUsedRate   float64              `json:"sys_used_rate,omitempty"`
+	SysUsedKnown  bool                 `json:"sys_used_known,omitempty"`
+	SysUsedBytes  float64              `json:"sys_used_bytes,omitempty"`
+	SysSizeBytes  float64              `json:"sys_size_bytes,omitempty"`
 	CollectedAt   string               `json:"collected_at,omitempty"`
 }
 
@@ -187,6 +191,51 @@ func systemMount(mp string) bool {
 		return true
 	}
 	return false
+}
+
+// HostDisk 是一台主机的数据盘和系统盘（根分区）用量。
+type HostDisk struct {
+	Data   DiskUsage
+	System DiskUsage
+}
+
+// HostDiskUsage 把同一批样本拆成数据盘和根分区两份，按主机 IP 归并。
+func HostDiskUsage(samples []FSSample) map[string]HostDisk {
+	out := map[string]HostDisk{}
+	for ip, u := range HostDataUsage(samples) {
+		d := out[ip]
+		d.Data = u
+		out[ip] = d
+	}
+	for ip, u := range HostSystemUsage(samples) {
+		d := out[ip]
+		d.System = u
+		out[ip] = d
+	}
+	return out
+}
+
+// HostSystemUsage 只取挂载点 /，与主机监控和告警里的根分区一致。/boot 不计入。
+func HostSystemUsage(samples []FSSample) map[string]DiskUsage {
+	out := map[string]DiskUsage{}
+	for _, s := range samples {
+		if strings.TrimSpace(s.Mountpoint) != "/" || s.Size <= 0 {
+			continue
+		}
+		ip := store.HostAddrKey(s.Instance)
+		if ip == "" {
+			continue
+		}
+		if _, ok := out[ip]; ok {
+			continue
+		}
+		used := s.Size - s.Avail
+		if used < 0 {
+			used = 0
+		}
+		out[ip] = DiskUsage{Size: s.Size, Used: used}
+	}
+	return out
 }
 
 // HostDataUsage 把 node_filesystem 样本按主机 IP 归并成数据盘用量。同一设备只算一次，避免 bind mount 重复。

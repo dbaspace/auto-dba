@@ -677,6 +677,10 @@ func Init(e *gin.Engine, d Deps) {
 	if d.InstanceOverview != nil {
 		secured.GET("/instance-overview", d.InstanceOverview.List)
 		secured.POST("/instance-overview/collect", d.InstanceOverview.Collect)
+		secured.POST("/instance-overview/host-disk-trend", d.InstanceOverview.HostDiskTrend)
+		secured.GET("/instance-overview/host-disk-trend/jobs/:id", d.InstanceOverview.HostDiskTrendJob)
+		secured.GET("/analysis-reports", d.InstanceOverview.ListAnalysisReports)
+		secured.GET("/analysis-reports/:id", d.InstanceOverview.GetAnalysisReport)
 	}
 
 	mig := secured.Group("/migration")

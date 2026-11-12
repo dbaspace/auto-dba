@@ -628,6 +628,9 @@ func (d *DB) ensureLoginLogsTable() error {
 	if err := d.ensureQueryFavoritesTable(); err != nil {
 		return err
 	}
+	if err := d.ensureAnalysisReportsTable(); err != nil {
+		return err
+	}
 	if err := d.ensureRolesUpdatedAt(); err != nil {
 		return err
 	}

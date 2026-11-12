@@ -216,6 +216,7 @@ const router = createHashRouter([
       { path: 'ops/cloud/accounts', element: <Navigate to="/config/cloud-accounts" replace /> },
       { path: 'config/cloud-accounts', element: <CloudAccounts /> },
       { path: 'ops/instance-overview', element: <InstanceOverview /> },
+      { path: 'ops/instance-overview/reports/:id', element: null },
       { path: 'ops/redis-rdb', element: <RedisRdb /> },
       { path: 'ops/db-monitor', element: <Navigate to="/ops/db-monitor/postgres" replace /> },
       { path: 'ops/db-monitor/postgres', element: <DbMonitor engine="postgres" /> },

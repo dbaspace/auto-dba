@@ -112,6 +112,9 @@ func (d *DB) migrateFast() error {
 			if err := d.ensureQueryFavoritesTable(); err != nil {
 				return err
 			}
+			if err := d.ensureAnalysisReportsTable(); err != nil {
+				return err
+			}
 			if err := d.backfillQueryFavoriteScope(); err != nil {
 				return err
 			}

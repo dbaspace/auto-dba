@@ -38,6 +38,10 @@ function pageRouteTitle(path: string): string {
   return PAGE_ROUTES.find((r) => r.path === p)?.title || ''
 }
 
+function diskReportTitle(path: string): string {
+  return /^\/ops\/instance-overview\/reports\/[^/]+$/.test(normPath(path)) ? '磁盘分析报告' : ''
+}
+
 /** /ops/tickets/:id → 工单详情（勿沿用「工单列表」） */
 function ticketDetailTitle(path: string): string {
   return /^\/ops\/tickets\/[^/]+$/.test(normPath(path)) ? '工单详情' : ''
@@ -98,6 +102,8 @@ function normalizeCachedTabTitle(path: string, title: string, menus?: MenuNode[]
   if (cdcTitle) return cdcTitle
   const migTitle = migrationDetailTitle(p)
   if (migTitle) return migTitle
+  const reportTitle = diskReportTitle(p)
+  if (reportTitle) return reportTitle
   const cloudTitle = cloudRouteTitle(p)
   if (cloudTitle) return cloudTitle
   const routeTitle = pageRouteTitle(p)
@@ -115,6 +121,8 @@ export function titleForPath(path: string, menus?: MenuNode[]): string {
   if (cdcTitle) return cdcTitle
   const migTitle = migrationDetailTitle(p)
   if (migTitle) return migTitle
+  const reportTitle = diskReportTitle(p)
+  if (reportTitle) return reportTitle
   const engineTitle = clusterDeployEngineTitle(p)
   if (engineTitle) return engineTitle
   const exactRoute = PAGE_ROUTES.find((r) => r.path === p)

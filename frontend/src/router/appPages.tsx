@@ -28,6 +28,7 @@ import CloudPostgres from '../views/ops/cloud/CloudPostgres'
 import CloudPolicies from '../views/ops/cloud/CloudPolicies'
 import CloudAccounts from '../views/ops/cloud/CloudAccounts'
 import InstanceOverview from '../views/ops/InstanceOverview'
+import HostDiskReportPage from '../views/ops/HostDiskReportPage'
 import DbMonitor from '../views/ops/DbMonitor'
 import RedisRdb from '../views/ops/redis-rdb/RedisRdb'
 import Migration from '../views/ops/Migration'
@@ -244,6 +245,7 @@ export function TabPagePanel({ pathname, search }: { pathname: string; search?: 
       <Route path="/ops/cloud/accounts" element={<Navigate to="/config/cloud-accounts" replace />} />
       <Route path="/config/cloud-accounts" element={<CloudAccounts />} />
       <Route path="/ops/instance-overview" element={<InstanceOverview />} />
+      <Route path="/ops/instance-overview/reports/:id" element={<HostDiskReportPage />} />
       <Route path="/ops/redis-rdb" element={<RedisRdb />} />
       <Route path="/ops/db-monitor" element={<Navigate to="/ops/db-monitor/postgres" replace />} />
       <Route path="/ops/db-monitor/postgres" element={<DbMonitor engine="postgres" />} />

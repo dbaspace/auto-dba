@@ -469,6 +469,25 @@ func applyDefaults(cfg *Config, path string) {
 	}
 	applyDbMonitorServiceDefaults(cfg)
 	applyTerminalDefaults(cfg, path)
+	applyHTTPPortEnv(cfg)
+}
+
+// applyHTTPPortEnv 让本机自测用 AUTO_DBA_HTTP_PORT 覆盖配置和 Nacos 里的 http.port。
+// 8800 留给日常开发进程，自测不要占用。
+func applyHTTPPortEnv(cfg *Config) {
+	if cfg == nil {
+		return
+	}
+	v := strings.TrimSpace(os.Getenv("AUTO_DBA_HTTP_PORT"))
+	if v == "" {
+		return
+	}
+	p, err := strconv.Atoi(v)
+	if err != nil || p <= 0 || p > 65535 {
+		log.Printf("config: 忽略无效的 AUTO_DBA_HTTP_PORT=%q", v)
+		return
+	}
+	cfg.HTTP.Port = p
 }
 
 func applyDbMonitorServiceDefaults(cfg *Config) {

@@ -66,6 +66,81 @@ html[data-color-mode='dark'] .app-tab-panel > .instance-overview.ops-page {
   font-weight: 500;
 }
 
+.ov-card-action {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font: inherit;
+  text-align: center;
+  cursor: pointer;
+  border-color: #d3adf7;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.ov-card-action:hover {
+  border-color: #722ed1;
+  box-shadow: 0 2px 8px rgba(114, 46, 209, 0.15);
+}
+
+.ov-card-action-title {
+  color: #722ed1;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.ov-trend-note {
+  margin-bottom: 12px;
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.ov-trend-conclusions {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.ov-trend-advice {
+  white-space: normal;
+  line-height: 1.6;
+}
+
+.ov-trend-ok {
+  color: #389e0d;
+}
+
+.ov-trend-warn {
+  color: #d48806;
+}
+
+.ov-trend-danger {
+  color: #cf1322;
+  font-weight: 600;
+}
+
+.ov-trend-muted {
+  color: rgba(0, 0, 0, 0.45);
+}
+
+.host-disk-report {
+  overflow: auto;
+  padding: 8px 12px 16px;
+}
+
+.host-disk-report-meta {
+  margin: 0 0 8px;
+  color: rgba(0, 0, 0, 0.65);
+  font-size: 13px;
+}
+
+.host-disk-report-range {
+  margin: 0 0 12px;
+  color: var(--app-text, #1f1f1f);
+  font-size: 13px;
+}
+
 .ov-card.ok .value {
   color: #389e0d;
 }

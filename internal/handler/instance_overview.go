@@ -29,9 +29,11 @@ type OverviewHandler struct {
 	mu    sync.Mutex
 	jobs  map[string]*overviewJob
 	cache map[string]map[string]instoverview.Sample
-	// hostDisk 按租户缓存 node_exporter 数据盘用量，键是主机 IP。
-	hostDisk   map[string]map[string]instoverview.DiskUsage
+	// hostDisk 按租户缓存 node_exporter 数据盘和根分区用量，键是主机 IP。
+	hostDisk   map[string]map[string]instoverview.HostDisk
 	hostDiskAt map[string]map[string]string
+	// trendJobs 是后台磁盘分析，同一租户同时只保留一条。
+	trendJobs map[string]*trendJob
 }
 
 type overviewJob struct {
@@ -298,18 +300,26 @@ func (h *OverviewHandler) attachHostInfo(tid string, rows []overviewRow) {
 			info = instoverview.CloudHostInfo(it)
 		}
 		ip := store.HostAddrKey(rows[i].Host)
-		if u, ok := usage[ip]; ok && u.Size > 0 {
-			info.DataUsedKnown = true
-			info.DataUsedRate = u.Rate()
-			info.DataUsedBytes = u.Used
-			info.DataSizeBytes = u.Size
+		if d, ok := usage[ip]; ok {
+			if u := d.Data; u.Size > 0 {
+				info.DataUsedKnown = true
+				info.DataUsedRate = u.Rate()
+				info.DataUsedBytes = u.Used
+				info.DataSizeBytes = u.Size
+			}
+			if u := d.System; u.Size > 0 {
+				info.SysUsedKnown = true
+				info.SysUsedRate = u.Rate()
+				info.SysUsedBytes = u.Used
+				info.SysSizeBytes = u.Size
+			}
 			info.CollectedAt = at[ip]
 		}
 		rows[i].HostInfo = &info
 	}
 }
 
-// collectHostDisk 只查这些主机的文件系统，按 IP 归并成数据盘用量，覆盖这些 IP 的缓存。
+// collectHostDisk 只查这些主机的文件系统，按 IP 归并成数据盘和根分区用量，覆盖这些 IP 的缓存。
 func (h *OverviewHandler) collectHostDisk(tid string, hosts []overviewRow) {
 	if h.Store == nil {
 		return
@@ -319,8 +329,7 @@ func (h *OverviewHandler) collectHostDisk(tid string, hosts []overviewRow) {
 		raw = append(raw, row.Host)
 	}
 	addrs := instoverview.HostAddrs(raw)
-	sizeExpr, availExpr := instoverview.HostFSExprs(addrs)
-	if sizeExpr == "" {
+	if len(addrs) == 0 {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -330,26 +339,58 @@ func (h *OverviewHandler) collectHostDisk(tid string, hosts []overviewRow) {
 		return
 	}
 	now := time.Now()
+	fs, err := queryHostFS(ctx, cli, addrs, now)
+	if err != nil {
+		log.Printf("instance overview host fs: %v", err)
+		return
+	}
+	usage := instoverview.HostDiskUsage(fs)
+	at := now.Format(time.RFC3339)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.hostDisk == nil {
+		h.hostDisk = map[string]map[string]instoverview.HostDisk{}
+		h.hostDiskAt = map[string]map[string]string{}
+	}
+	if h.hostDisk[tid] == nil {
+		h.hostDisk[tid] = map[string]instoverview.HostDisk{}
+		h.hostDiskAt[tid] = map[string]string{}
+	}
+	for _, ip := range addrs {
+		if u, ok := usage[ip]; ok {
+			h.hostDisk[tid][ip] = u
+			h.hostDiskAt[tid][ip] = at
+		} else {
+			delete(h.hostDisk[tid], ip)
+			delete(h.hostDiskAt[tid], ip)
+		}
+	}
+}
+
+// queryHostFS 取这些主机在 ts 时刻的 node_filesystem 容量和可用，按 instance、挂载点、设备配对。
+func queryHostFS(ctx context.Context, cli *promclient.Client, addrs []string, ts time.Time) ([]instoverview.FSSample, error) {
+	sizeExpr, availExpr := instoverview.HostFSExprs(addrs)
+	if sizeExpr == "" {
+		return nil, nil
+	}
 	var sizes, avails []promclient.Sample
 	var sizeErr, availErr error
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		sizes, sizeErr = cli.Query(ctx, sizeExpr, now)
+		sizes, sizeErr = cli.Query(ctx, sizeExpr, ts)
 	}()
 	go func() {
 		defer wg.Done()
-		avails, availErr = cli.Query(ctx, availExpr, now)
+		avails, availErr = cli.Query(ctx, availExpr, ts)
 	}()
 	wg.Wait()
 	if sizeErr != nil {
-		log.Printf("instance overview host fs size: %v", sizeErr)
-		return
+		return nil, sizeErr
 	}
 	if availErr != nil {
-		log.Printf("instance overview host fs avail: %v", availErr)
-		return
+		return nil, availErr
 	}
 	key := func(m map[string]string) string {
 		return m["instance"] + "\n" + m["mountpoint"] + "\n" + m["device"]
@@ -375,27 +416,7 @@ func (h *OverviewHandler) collectHostDisk(tid string, hosts []overviewRow) {
 			Size: v, Avail: a,
 		})
 	}
-	usage := instoverview.HostDataUsage(fs)
-	at := now.Format(time.RFC3339)
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.hostDisk == nil {
-		h.hostDisk = map[string]map[string]instoverview.DiskUsage{}
-		h.hostDiskAt = map[string]map[string]string{}
-	}
-	if h.hostDisk[tid] == nil {
-		h.hostDisk[tid] = map[string]instoverview.DiskUsage{}
-		h.hostDiskAt[tid] = map[string]string{}
-	}
-	for _, ip := range addrs {
-		if u, ok := usage[ip]; ok {
-			h.hostDisk[tid][ip] = u
-			h.hostDiskAt[tid][ip] = at
-		} else {
-			delete(h.hostDisk[tid], ip)
-			delete(h.hostDiskAt[tid], ip)
-		}
-	}
+	return fs, nil
 }
 
 // attachPostgresCloudDisk 按云实例 ID 或平台实例 ID 取购买磁盘，不看云清单租户。只改返回副本。
