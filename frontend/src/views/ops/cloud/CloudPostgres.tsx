@@ -26,6 +26,29 @@ function specText(cpu?: number, memoryMB?: number) {
   return `${Number(cpu || 0)}核 / ${memoryText(memoryMB)}`
 }
 
+const diskTypeLabel: Record<string, string> = {
+  CLOUD_BASIC: '普通云硬盘',
+  CLOUD_PREMIUM: '高性能云硬盘',
+  CLOUD_SSD: 'SSD 云硬盘',
+  CLOUD_HSSD: '增强型 SSD',
+  CLOUD_BSSD: '通用型 SSD',
+  CLOUD_TSSD: '极速型 SSD',
+  LOCAL_BASIC: '本地盘',
+  LOCAL_SSD: '本地 SSD',
+  LOCAL_NVME: '本地 NVMe',
+}
+
+function diskLine(kind: string, gb?: number, type?: string) {
+  const size = Number(gb || 0)
+  if (size <= 0) return ''
+  const t = String(type || '').trim()
+  return `${kind} ${size}GB${t ? ` ${diskTypeLabel[t] || t}` : ''}`
+}
+
+function systemDiskText(gb?: number, type?: string) {
+  return diskLine('系统盘', gb, type)
+}
+
 const switchClock = /^([01]\d|2[0-3]):[0-5]\d:[0-5]\d$/
 
 function storageLimitMessage(disk: number, max: number) {
@@ -180,8 +203,10 @@ export default function CloudPostgres({ engine = 'postgres' }: { engine?: string
   }
 
   async function loadAccounts() {
-    const { data } = await api.get('/cloud/accounts', { params: { mine: 1, vendor: 'tencent' } })
-    setAccounts(data.data || [])
+    const { data } = await api.get('/cloud/accounts', { params: { vendor: 'tencent' } })
+    const list = data.data || []
+    setAccounts(list)
+    return list as any[]
   }
 
   useEffect(() => {
@@ -211,14 +236,24 @@ export default function CloudPostgres({ engine = 'postgres' }: { engine?: string
     }
   }
 
-  function clickSync() {
+  async function clickSync() {
     if (syncing) return
-    const ready = accounts.filter((a) => a.has_readonly)
+    let list = accounts
+    try {
+      list = await loadAccounts()
+    } catch {
+      /* 沿用已加载的账号 */
+    }
+    const ready = list.filter((a) => a.has_readonly)
     if (ready.length === 0) {
-      message.warning('没有已登记只读密钥的云账号，请到配置中心 · 云账号登记后再同步')
+      message.warning(
+        list.length
+          ? `云账号 ${list.map((a) => a.name).join('、')} 未登记只读密钥，请到配置中心 · 云账号登记后再同步`
+          : '没有可用的云账号，请到配置中心 · 云账号登记后再同步',
+      )
       return
     }
-    if (ready.length === 1) {
+    if (ready.length === 1 && list.length === 1) {
       void runSync([ready[0].id])
       return
     }
@@ -232,7 +267,7 @@ export default function CloudPostgres({ engine = 'postgres' }: { engine?: string
       setSyncOpen(false)
       return
     }
-    clickSync()
+    void clickSync()
   }
 
   function confirmSync() {
@@ -362,7 +397,7 @@ export default function CloudPostgres({ engine = 'postgres' }: { engine?: string
     })
     setOpen(true)
     if (next === 'create') {
-      api.get('/cloud/accounts', { params: { mine: 1, vendor: 'tencent' } })
+      api.get('/cloud/accounts', { params: { vendor: 'tencent' } })
         .then(({ data }) => setAccounts(data.data || []))
         .catch(() => setAccounts([]))
     }
@@ -415,7 +450,11 @@ export default function CloudPostgres({ engine = 'postgres' }: { engine?: string
                 value={syncIds}
                 onChange={setSyncIds}
                 getPopupContainer={(node) => node.parentElement || document.body}
-                options={accounts.filter((a) => a.has_readonly).map((a) => ({ value: a.id, label: a.name }))}
+                options={accounts.map((a) => ({
+                  value: a.id,
+                  label: a.has_readonly ? a.name : `${a.name}（未登记只读密钥）`,
+                  disabled: !a.has_readonly,
+                }))}
               />
               <div style={{ marginTop: 12, textAlign: 'right' }}>
                 <Space>
@@ -490,7 +529,25 @@ export default function CloudPostgres({ engine = 'postgres' }: { engine?: string
           },
           { title: '状态', dataIndex: 'status' },
           { title: '规格', render: (_, r) => specText(r.cpu, r.memory_mb) },
-          { title: '磁盘 GB', dataIndex: 'disk_gb' },
+          {
+            title: '磁盘 GB',
+            dataIndex: 'disk_gb',
+            render: (v, r) => {
+              if (engine !== 'host') return v
+              const lines = [
+                systemDiskText(r.system_disk_gb, r.system_disk_type),
+                ...(Array.isArray(r.data_disks) ? r.data_disks.map((d: { gb?: number; type?: string }) => diskLine('数据盘', d.gb, d.type)) : []),
+              ].filter(Boolean)
+              if (!lines.length) return v || '—'
+              return (
+                <div>
+                  {lines.map((line, i) => (
+                    <div key={i} style={{ whiteSpace: 'nowrap' }}>{line}</div>
+                  ))}
+                </div>
+              )
+            },
+          },
           {
             title: '平台实例',
             dataIndex: 'instance_name',

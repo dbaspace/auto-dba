@@ -59,7 +59,84 @@ type Row = {
   env_id: string
   env_name: string
   collectable: boolean
+  domain?: string
   sample?: Sample
+  host_info?: HostInfo
+}
+
+type HostInfo = {
+  cloud_matched?: boolean
+  cloud_status?: string
+  cpu?: number
+  memory_mb?: number
+  system_disk_gb?: number
+  data_disk_gb?: number
+  data_disks?: { gb?: number; type?: string }[]
+  data_used_rate?: number
+  data_used_known?: boolean
+  data_used_bytes?: number
+  data_size_bytes?: number
+  collected_at?: string
+}
+
+function isHostEngine(t: string) {
+  const n = t.trim().toLowerCase()
+  return n === 'host' || n === 'os' || n === '主机'
+}
+
+const HOST_STATUS: Record<string, { text: string; cls: string }> = {
+  running: { text: '运行中', cls: 'ok' },
+  stopped: { text: '已关机', cls: 'danger' },
+  offline: { text: '已下线', cls: 'danger' },
+  changing: { text: '变更中', cls: 'warn' },
+}
+
+function hostStatus(h?: HostInfo) {
+  const st = String(h?.cloud_status || '').toLowerCase()
+  if (!h?.cloud_matched || !st) return null
+  return HOST_STATUS[st] || { text: st, cls: 'muted' }
+}
+
+function gbText(gb?: number) {
+  return gb ? `${gb} GB` : '—'
+}
+
+function dataDisks(h?: HostInfo) {
+  return (h?.data_disks || []).filter((d) => (d.gb || 0) > 0)
+}
+
+function dataDiskText(h?: HostInfo) {
+  const disks = dataDisks(h)
+  if (disks.length) return disks.map((d) => `${d.gb} GB`).join('、')
+  return gbText(h?.data_disk_gb)
+}
+
+function dataDiskTip(h?: HostInfo) {
+  const disks = dataDisks(h)
+  if (disks.length < 2) return ''
+  const total = disks.reduce((n, d) => n + (d.gb || 0), 0)
+  const detail = disks.map((d) => (d.type ? `${d.gb} GB ${d.type}` : `${d.gb} GB`)).join('、')
+  return `合计 ${total} GB（${detail}）`
+}
+
+function memGbText(mb?: number) {
+  if (!mb) return '—'
+  const gb = Math.round((mb / 1024) * 10) / 10
+  return `${Number.isInteger(gb) ? gb : gb.toFixed(1)} GB`
+}
+
+function hostDiskPct(h?: HostInfo) {
+  return h?.data_used_known ? h.data_used_rate ?? 0 : null
+}
+
+function hostTags(row: Row) {
+  const h = row.host_info
+  const tags: string[] = []
+  const st = String(h?.cloud_status || '').toLowerCase()
+  if (st === 'stopped' || st === 'offline') tags.push(HOST_STATUS[st].text)
+  const pct = hostDiskPct(h)
+  if (pct != null && pct >= 80) tags.push('数据盘偏高')
+  return tags
 }
 
 type CollectState = { status?: string; done?: number; total?: number; message?: string }
@@ -223,6 +300,7 @@ function stale(s?: Sample) {
 }
 
 function anomalyTags(row: Row) {
+  if (isHostEngine(row.db_type)) return hostTags(row)
   const s = row.sample
   const tags: string[] = []
   if (!s) return tags
@@ -357,11 +435,21 @@ export default function InstanceOverview() {
     let replica = 0
     let feBad = 0
     let beBad = 0
+    let diskHigh = 0
+    let unmatched = 0
     const versions = new Set<string>()
     for (const row of rows) {
       const s = row.sample
       const tags = anomalyTags(row).filter((t) => t !== '暂不采集')
       if (tags.length) alert++
+      if (isHostEngine(row.db_type)) {
+        const h = row.host_info
+        if (String(h?.cloud_status || '').toLowerCase() === 'running') ok++
+        if (!h?.cloud_matched) unmatched++
+        const pct = hostDiskPct(h)
+        if (pct != null && pct >= 80) diskHigh++
+        continue
+      }
       if (s?.reachable) ok++
       if (s?.role === 'primary') primary++
       if (s?.role === 'replica') replica++
@@ -371,13 +459,14 @@ export default function InstanceOverview() {
         if (s.reachable && (((s.be_total || 0) > 0 && (s.be_alive || 0) < (s.be_total || 0)) || s.be_decommissioning)) beBad++
       }
     }
-    return { total: rows.length, alert, ok, primary, replica, feBad, beBad, versions: versions.size }
+    return { total: rows.length, alert, ok, primary, replica, feBad, beBad, diskHigh, unmatched, versions: versions.size }
   }, [rows])
 
   const engine = normEngine(dbType)
   const showRedis = engine === 'redis'
   const showStarRocks = engine === 'starrocks'
   const showRuntime = engine === 'postgres' || engine === 'redis'
+  const showHost = isHostEngine(engine)
   const typeGroups = useMemo(
     () =>
       groupInstanceTypes(typeOptions).map((g) => ({
@@ -387,7 +476,70 @@ export default function InstanceOverview() {
     [typeOptions],
   )
 
-  const columns: ColumnsType<Row> = [
+  const hostColumns: ColumnsType<Row> = [
+    { title: '实例名', dataIndex: 'name', width: 160, ellipsis: true },
+    {
+      title: '域名',
+      dataIndex: 'domain',
+      width: 220,
+      ellipsis: true,
+      render: (v: string) => v || '—',
+    },
+    { title: '地址', width: 170, ellipsis: true, render: (_, row) => `${row.host || '—'}:${row.port || ''}` },
+    { title: '环境', dataIndex: 'env_name', width: 120, ellipsis: true },
+    {
+      title: '状态',
+      width: 170,
+      render: (_, row) => {
+        const st = hostStatus(row.host_info)
+        const extra = hostTags(row).filter((t) => t === '数据盘偏高')
+        if (!row.host_info?.cloud_matched) return <span className="ov-status muted">未关联云主机</span>
+        if (!st && !extra.length) return <span className="ov-muted">—</span>
+        return (
+          <Space size={4} wrap>
+            {st ? <span className={`ov-status ${st.cls}`}>{st.text}</span> : null}
+            {extra.map((t) => (
+              <span key={t} className="ov-status warn">{t}</span>
+            ))}
+          </Space>
+        )
+      },
+    },
+    { title: 'CPU', width: 80, render: (_, row) => (row.host_info?.cpu ? `${row.host_info.cpu} 核` : '—') },
+    { title: '内存', width: 90, render: (_, row) => memGbText(row.host_info?.memory_mb) },
+    { title: '系统盘', width: 90, render: (_, row) => gbText(row.host_info?.system_disk_gb) },
+    {
+      title: '数据盘总大小',
+      width: 180,
+      ellipsis: true,
+      render: (_, row) => {
+        const text = dataDiskText(row.host_info)
+        const tip = dataDiskTip(row.host_info)
+        return tip ? <Tooltip title={tip}>{text}</Tooltip> : text
+      },
+    },
+    {
+      title: '数据盘使用率',
+      width: 190,
+      onCell: (row) => {
+        const pct = hostDiskPct(row.host_info)
+        return { className: pct == null ? '' : `ov-cell ov-cell-${rateLevel(pct)}` }
+      },
+      render: (_, row) => {
+        const h = row.host_info
+        const pct = hostDiskPct(h)
+        const cell = <RateCell pct={pct} />
+        if (pct == null || !h) return cell
+        return (
+          <Tooltip title={`已用 ${bytesText(h.data_used_bytes || 0)} / 挂载合计 ${bytesText(h.data_size_bytes || 0)}`}>
+            {cell}
+          </Tooltip>
+        )
+      },
+    },
+  ]
+
+  const columns: ColumnsType<Row> = showHost ? hostColumns : [
     { title: '实例名', dataIndex: 'name', width: 180, ellipsis: true },
     {
       title: '地址',
@@ -561,7 +713,54 @@ export default function InstanceOverview() {
     },
   )
 
+  const downloadCsv = (lines: string[], latest: string) => {
+    const stamp = latest ? latest.replace('T', ' ').slice(0, 19) : '未采集'
+    lines.push('')
+    lines.push(['采集时间', stamp].map((v) => csvCell(v)).join(','))
+    const blob = new Blob([`\uFEFF${lines.join('\n')}`], { type: 'text/csv;charset=utf-8' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = 'instance-overview.csv'
+    a.click()
+    URL.revokeObjectURL(a.href)
+  }
+
+  const exportHostCsv = () => {
+    const header = ['实例名', '域名', '地址', '环境', '状态', 'CPU核', '内存GB', '系统盘GB', '数据盘总大小', '数据盘使用率']
+    const lines = [header.join(',')]
+    let latest = ''
+    for (const row of sorted) {
+      const h = row.host_info
+      const st = hostStatus(h)
+      const pct = hostDiskPct(h)
+      const tags = hostTags(row).filter((t) => t === '数据盘偏高')
+      const status = !h?.cloud_matched ? '未关联云主机' : [st?.text || '', ...tags].filter(Boolean).join(' ')
+      if ((h?.collected_at || '') > latest) latest = h?.collected_at || ''
+      lines.push(
+        [
+          row.name,
+          row.domain || '',
+          `${row.host}:${row.port}`,
+          row.env_name,
+          status,
+          h?.cpu ? String(h.cpu) : '',
+          h?.memory_mb ? String(Math.round((h.memory_mb / 1024) * 10) / 10) : '',
+          h?.system_disk_gb ? String(h.system_disk_gb) : '',
+          dataDiskText(h) === '—' ? '' : dataDiskText(h),
+          pct == null ? '' : `${Math.round(pct)}%`,
+        ]
+          .map((v) => csvCell(String(v)))
+          .join(','),
+      )
+    }
+    downloadCsv(lines, latest)
+  }
+
   const exportCsv = () => {
+    if (showHost) {
+      exportHostCsv()
+      return
+    }
     const header = [
       '实例名',
       '地址',
@@ -627,15 +826,7 @@ export default function InstanceOverview() {
       const t = row.sample?.collected_at || ''
       if (t > latest) latest = t
     }
-    const stamp = latest ? latest.replace('T', ' ').slice(0, 19) : '未采集'
-    lines.push('')
-    lines.push(['采集时间', stamp].map((v) => csvCell(v)).join(','))
-    const blob = new Blob([`\uFEFF${lines.join('\n')}`], { type: 'text/csv;charset=utf-8' })
-    const a = document.createElement('a')
-    a.href = URL.createObjectURL(blob)
-    a.download = 'instance-overview.csv'
-    a.click()
-    URL.revokeObjectURL(a.href)
+    downloadCsv(lines, latest)
   }
 
   const running = collect.status === 'running'
@@ -697,14 +888,25 @@ export default function InstanceOverview() {
           <div className="value">{summary.total}<span className="unit">个</span></div>
         </div>
         <div className="ov-card ok">
-          <div className="label">运行正常</div>
+          <div className="label">{showHost ? '运行中' : '运行正常'}</div>
           <div className="value">{summary.ok}</div>
         </div>
         <div className="ov-card warn">
           <div className="label">告警中</div>
           <div className="value">{summary.alert}</div>
         </div>
-        {showStarRocks ? (
+        {showHost ? (
+          <>
+            <div className="ov-card">
+              <div className="label">数据盘使用率 ≥80%</div>
+              <div className="value">{summary.diskHigh}<span className="unit">台</span></div>
+            </div>
+            <div className="ov-card">
+              <div className="label">未关联云主机</div>
+              <div className="value">{summary.unmatched}<span className="unit">台</span></div>
+            </div>
+          </>
+        ) : showStarRocks ? (
           <>
             <div className="ov-card">
               <div className="label">FE 异常</div>
@@ -727,15 +929,19 @@ export default function InstanceOverview() {
             </div>
           </>
         )}
-        <div className="ov-card">
-          <div className="label">版本种类</div>
-          <div className="value">{summary.versions}<span className="unit">种</span></div>
-        </div>
+        {showHost ? null : (
+          <div className="ov-card">
+            <div className="label">版本种类</div>
+            <div className="value">{summary.versions}<span className="unit">种</span></div>
+          </div>
+        )}
       </div>
       <div className="instance-overview-note">
         {running
           ? '正在采样，汇总和表格会随结果更新，完成后才是本轮最终数字'
-          : `数字是当前一次采样，不是监控图里的区间平均。超过约 5 分钟会变淡。低于 60% 为绿色，60% 起为黄色，80% 起为红色。${
+          : showHost
+            ? '状态、CPU、内存、系统盘和数据盘总大小来自云资源下的主机清单，按云主机 ID 或内网 IP 关联；同步云资源后刷新可更新。数据盘使用率来自 Prometheus 的 node_exporter，排除 /、/boot 等系统挂载点，按设备去重后合计，点刷新时采集。低于 60% 为绿色，60% 起为黄色，80% 起为红色。'
+            : `数字是当前一次采样，不是监控图里的区间平均。超过约 5 分钟会变淡。低于 60% 为绿色，60% 起为黄色，80% 起为红色。${
               engine === 'postgres'
                 ? ' 已用存储是各库文件合计。大约总量是已关联云资产的磁盘容量。使用率是已用存储除以这块容量；没有云磁盘时才用云监控最近值。'
                 : engine === 'redis'
@@ -752,7 +958,7 @@ export default function InstanceOverview() {
           loading={loading && !running}
           dataSource={sorted}
           columns={columns}
-          scroll={{ x: showStarRocks ? 1960 : 1560 }}
+          scroll={{ x: showStarRocks ? 1960 : showHost ? 1640 : 1560 }}
           pagination={{ defaultPageSize: 20, showSizeChanger: true, pageSizeOptions: ['20', '50', '100'], showTotal: (n) => `共 ${n} 条` }}
           rowClassName={(row) => (stale(row.sample) ? 'instance-overview-stale' : '')}
         />

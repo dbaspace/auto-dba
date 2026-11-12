@@ -16,6 +16,9 @@ const (
 	apiHost    = "cvm.tencentcloudapi.com"
 	apiVersion = "2017-03-12"
 	apiService = "cvm"
+
+	cbsHost    = "cbs.tencentcloudapi.com"
+	cbsVersion = "2017-03-12"
 )
 
 type Client struct {
@@ -57,8 +60,149 @@ func init() {
 	cloud.Register(cloud.EngineHost, Reader{c}, Writer{c})
 }
 
+func (c *Client) cbs() *tencentapi.Client {
+	var do func(*http.Request) (*http.Response, error)
+	if c != nil {
+		do = c.Do
+	}
+	return &tencentapi.Client{Host: cbsHost, Service: "cbs", Version: cbsVersion, Do: do}
+}
+
+// sysDisk 是云硬盘接口里一块系统盘的规格。
+type sysDisk struct {
+	Size int
+	Type string
+}
+
+// dataDisk 是云硬盘接口里一块数据盘。
+type dataDisk struct {
+	ID   string
+	Size int
+	Type string
+}
+
+// cbsDisks 是一台实例在云硬盘接口里的系统盘和数据盘。
+type cbsDisks struct {
+	System sysDisk
+	Data   []dataDisk
+}
+
+// regionDisks 分页取出本地域全部云硬盘，按实例分成系统盘和数据盘。未挂到实例的盘不收。
+func (r Reader) regionDisks(ctx context.Context, cred cloud.Cred) (map[string]cbsDisks, error) {
+	out := map[string]cbsDisks{}
+	offset := 0
+	for {
+		raw, err := r.cbs().Call(ctx, cred, "DescribeDisks", map[string]any{"Limit": 100, "Offset": offset})
+		if err != nil {
+			return out, err
+		}
+		var resp struct {
+			Response struct {
+				TotalCount int              `json:"TotalCount"`
+				DiskSet    []map[string]any `json:"DiskSet"`
+			} `json:"Response"`
+		}
+		if err := json.Unmarshal(raw, &resp); err != nil {
+			return out, err
+		}
+		for _, d := range resp.Response.DiskSet {
+			id := tencentapi.Str(d["InstanceId"])
+			if id == "" {
+				continue
+			}
+			got := out[id]
+			switch strings.ToUpper(tencentapi.Str(d["DiskUsage"])) {
+			case "SYSTEM_DISK":
+				got.System = sysDisk{Size: tencentapi.Num(d["DiskSize"]), Type: tencentapi.Str(d["DiskType"])}
+			case "DATA_DISK":
+				got.Data = append(got.Data, dataDisk{
+					ID:   tencentapi.Str(d["DiskId"]),
+					Size: tencentapi.Num(d["DiskSize"]),
+					Type: tencentapi.Str(d["DiskType"]),
+				})
+			}
+			out[id] = got
+		}
+		offset += len(resp.Response.DiskSet)
+		if len(resp.Response.DiskSet) == 0 || offset >= resp.Response.TotalCount {
+			break
+		}
+	}
+	return out, nil
+}
+
+// fillSystemDisk 系统盘大小为空时用云硬盘接口的值补上，已有值不改。
+func fillSystemDisk(row map[string]any, d sysDisk) {
+	if d.Size <= 0 {
+		return
+	}
+	sys, _ := row["SystemDisk"].(map[string]any)
+	if sys == nil {
+		sys = map[string]any{}
+		row["SystemDisk"] = sys
+	}
+	if tencentapi.Num(sys["DiskSize"]) > 0 {
+		return
+	}
+	sys["DiskSize"] = float64(d.Size)
+	if tencentapi.Str(sys["DiskType"]) == "" && d.Type != "" {
+		sys["DiskType"] = d.Type
+	}
+}
+
+// mergeDataDisks 用云硬盘数据盘替换同 DiskId 的记录，并保留主机接口里对不上的本地盘。没有云数据盘时不改原列表。
+func mergeDataDisks(row map[string]any, disks []dataDisk) {
+	if len(disks) == 0 {
+		return
+	}
+	seen := map[string]bool{}
+	merged := make([]any, 0, len(disks))
+	for _, d := range disks {
+		if d.Size <= 0 {
+			continue
+		}
+		if d.ID != "" {
+			seen[d.ID] = true
+		}
+		item := map[string]any{"DiskSize": float64(d.Size)}
+		if d.ID != "" {
+			item["DiskId"] = d.ID
+		}
+		if d.Type != "" {
+			item["DiskType"] = d.Type
+		}
+		merged = append(merged, item)
+	}
+	if have, ok := row["DataDisks"].([]any); ok {
+		for _, raw := range have {
+			m, ok := raw.(map[string]any)
+			if !ok || tencentapi.Num(m["DiskSize"]) <= 0 {
+				continue
+			}
+			if id := tencentapi.Str(m["DiskId"]); id != "" && seen[id] {
+				continue
+			}
+			merged = append(merged, m)
+		}
+	}
+	row["DataDisks"] = merged
+}
+
+// applyCBSDisks 把云硬盘接口的系统盘和数据盘写回主机原始返回。
+func applyCBSDisks(row map[string]any, all map[string]cbsDisks) {
+	if len(all) == 0 {
+		return
+	}
+	got, ok := all[tencentapi.Str(row["InstanceId"])]
+	if !ok {
+		return
+	}
+	fillSystemDisk(row, got.System)
+	mergeDataDisks(row, got.Data)
+}
+
 func (r Reader) ListInstances(ctx context.Context, cred cloud.Cred) ([]cloud.Instance, error) {
-	var out []cloud.Instance
+	var rows []map[string]any
 	offset := 0
 	for {
 		raw, err := r.call(ctx, cred, "DescribeInstances", map[string]any{"Limit": 100, "Offset": offset})
@@ -74,13 +218,21 @@ func (r Reader) ListInstances(ctx context.Context, cred cloud.Cred) ([]cloud.Ins
 		if err := json.Unmarshal(raw, &resp); err != nil {
 			return nil, err
 		}
-		for _, row := range resp.Response.InstanceSet {
-			out = append(out, mapInstance(row, cred.Region))
-		}
+		rows = append(rows, resp.Response.InstanceSet...)
 		offset += len(resp.Response.InstanceSet)
 		if len(resp.Response.InstanceSet) == 0 || offset >= resp.Response.TotalCount {
 			break
 		}
+	}
+	var disks map[string]cbsDisks
+	if len(rows) > 0 {
+		// 云硬盘查询失败时仍返回实例，磁盘只计 DescribeInstances 里已有的大小。
+		disks, _ = r.regionDisks(ctx, cred)
+	}
+	out := make([]cloud.Instance, 0, len(rows))
+	for _, row := range rows {
+		applyCBSDisks(row, disks)
+		out = append(out, mapInstance(row, cred.Region))
 	}
 	return out, nil
 }

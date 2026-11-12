@@ -2,6 +2,7 @@ package handler
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -117,6 +118,11 @@ func (h *CloudHandler) CreateAccount(c *gin.Context) {
 	if err := h.Store.CreateCloudAccount(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
+	}
+	if user, _ := h.Store.GetUserByUsername(middleware.Username(c)); user != nil {
+		if err := h.Store.SetCloudAccountUsers(req.ID, []string{user.ID}); err != nil {
+			log.Printf("cloud account %s bind creator: %v", req.ID, err)
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{"data": req})
 }
@@ -241,6 +247,12 @@ func (h *CloudHandler) ListPostgres(c *gin.Context) {
 			list[i].MemoryMB = cloud.NormalizePGMemoryMB(list[i].MemoryMB)
 		}
 		list[i].Intranet, list[i].Port = cloud.NetFromExtras(list[i].Engine, list[i].Extras)
+		if list[i].Engine == cloud.EngineHost {
+			list[i].SystemDiskGB, list[i].SystemDiskType = cloud.SystemDiskFromExtras(list[i].Extras)
+			for _, d := range cloud.DataDisksFromExtras(list[i].Extras) {
+				list[i].DataDisks = append(list[i].DataDisks, store.CloudDataDisk{GB: d.GB, Type: d.Type})
+			}
+		}
 		list[i].Extras = nil
 		if acc, _ := h.Store.GetCloudAccount(list[i].AccountID); acc != nil {
 			list[i].AccountName = acc.Name

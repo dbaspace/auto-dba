@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"auto-dba/internal/cloud"
 	"auto-dba/internal/instoverview"
 	"auto-dba/internal/middleware"
 	"auto-dba/internal/promclient"
@@ -28,6 +29,9 @@ type OverviewHandler struct {
 	mu    sync.Mutex
 	jobs  map[string]*overviewJob
 	cache map[string]map[string]instoverview.Sample
+	// hostDisk 按租户缓存 node_exporter 数据盘用量，键是主机 IP。
+	hostDisk   map[string]map[string]instoverview.DiskUsage
+	hostDiskAt map[string]map[string]string
 }
 
 type overviewJob struct {
@@ -38,16 +42,18 @@ type overviewJob struct {
 }
 
 type overviewRow struct {
-	ID              string               `json:"id"`
-	Name            string               `json:"name"`
-	DBType          string               `json:"db_type"`
-	Host            string               `json:"host"`
-	Port            int                  `json:"port"`
-	EnvID           string               `json:"env_id"`
-	EnvName         string               `json:"env_name"`
-	Collectable     bool                 `json:"collectable"`
-	CloudInstanceID string               `json:"-"`
-	Sample          *instoverview.Sample `json:"sample,omitempty"`
+	ID              string                 `json:"id"`
+	Name            string                 `json:"name"`
+	DBType          string                 `json:"db_type"`
+	Host            string                 `json:"host"`
+	Port            int                    `json:"port"`
+	EnvID           string                 `json:"env_id"`
+	EnvName         string                 `json:"env_name"`
+	Collectable     bool                   `json:"collectable"`
+	Domain          string                 `json:"domain,omitempty"`
+	CloudInstanceID string                 `json:"-"`
+	Sample          *instoverview.Sample   `json:"sample,omitempty"`
+	HostInfo        *instoverview.HostInfo `json:"host_info,omitempty"`
 }
 
 func (h *OverviewHandler) List(c *gin.Context) {
@@ -68,15 +74,17 @@ func (h *OverviewHandler) Collect(c *gin.Context) {
 	}
 	_ = c.ShouldBindJSON(&req)
 	tid := effectiveListTenantID(h.Store, c)
-	rows, err := h.rows(tid, middleware.UserID(c), req.DBType, req.Env, req.Q)
+	rows, err := h.listRows(tid, middleware.UserID(c), req.DBType, req.Env, req.Q)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
-	var targets []overviewRow
+	var targets, hosts []overviewRow
 	for _, row := range rows {
 		if row.Collectable {
 			targets = append(targets, row)
+		} else if store.IsHostInstanceType(row.DBType) {
+			hosts = append(hosts, row)
 		}
 	}
 	h.mu.Lock()
@@ -90,19 +98,22 @@ func (h *OverviewHandler) Collect(c *gin.Context) {
 		return
 	}
 	job := &overviewJob{Status: "running", Total: len(targets)}
-	if len(targets) == 0 {
+	if len(hosts) > 0 {
+		job.Total++
+	}
+	if job.Total == 0 {
 		job.Status = "done"
 		job.Message = "当前筛选没有可采集的实例"
 	}
 	h.jobs[tid] = job
 	h.mu.Unlock()
-	if len(targets) > 0 {
-		go h.runCollect(tid, targets)
+	if job.Total > 0 {
+		go h.runCollect(tid, targets, hosts)
 	}
 	c.JSON(http.StatusOK, gin.H{"collect": h.jobView(tid)})
 }
 
-func (h *OverviewHandler) runCollect(tid string, targets []overviewRow) {
+func (h *OverviewHandler) runCollect(tid string, targets, hosts []overviewRow) {
 	sem := make(chan struct{}, overviewWorkers)
 	var wg sync.WaitGroup
 	for _, row := range targets {
@@ -130,6 +141,9 @@ func (h *OverviewHandler) runCollect(tid string, targets []overviewRow) {
 	h.attachStorageRates(tid, targets)
 	h.attachStarRocksCapacity(tid, targets)
 	h.attachRedisCPU(tid, targets)
+	if len(hosts) > 0 {
+		h.collectHostDisk(tid, hosts)
+	}
 	h.mu.Lock()
 	if job := h.jobs[tid]; job != nil {
 		job.Status = "done"
@@ -161,6 +175,17 @@ func (h *OverviewHandler) jobView(tid string) overviewJob {
 }
 
 func (h *OverviewHandler) rows(tid, userID, dbType, env, q string) ([]overviewRow, error) {
+	out, err := h.listRows(tid, userID, dbType, env, q)
+	if err != nil {
+		return nil, err
+	}
+	h.attachPostgresCloudDisk(out)
+	h.attachHostInfo(tid, out)
+	return out, nil
+}
+
+// listRows 只列筛选后的实例和缓存样本，不读云清单。
+func (h *OverviewHandler) listRows(tid, userID, dbType, env, q string) ([]overviewRow, error) {
 	list, err := h.Store.ListInstancesInTenant(tid, "", "")
 	if err != nil {
 		return nil, err
@@ -210,12 +235,16 @@ func (h *OverviewHandler) rows(tid, userID, dbType, env, q string) ([]overviewRo
 		}
 		name := strings.TrimSpace(inst.Name)
 		host := strings.TrimSpace(inst.Host)
-		if needle != "" && !strings.Contains(strings.ToLower(name+" "+host), needle) {
+		domain := ""
+		if store.IsHostInstanceType(norm) {
+			domain = instoverview.HostDisplayDomain(inst.Tags, inst.Domains, inst.DomainName)
+		}
+		if needle != "" && !strings.Contains(strings.ToLower(name+" "+host+" "+domain), needle) {
 			continue
 		}
 		row := overviewRow{
 			ID: inst.ID, Name: name, DBType: norm, Host: host, Port: inst.Port,
-			EnvID: envID, Collectable: !instoverview.Unsupported(norm),
+			EnvID: envID, Collectable: !instoverview.Unsupported(norm), Domain: domain,
 			CloudInstanceID: strings.TrimSpace(inst.CloudInstanceID),
 		}
 		if envID == "" {
@@ -231,8 +260,140 @@ func (h *OverviewHandler) rows(tid, userID, dbType, env, q string) ([]overviewRo
 		}
 		out = append(out, row)
 	}
-	h.attachPostgresCloudDisk(out)
 	return out, nil
+}
+
+// attachHostInfo 给主机行附上云清单规格和缓存的数据盘用量。云清单不看租户，和 PG 云盘一致。
+func (h *OverviewHandler) attachHostInfo(tid string, rows []overviewRow) {
+	if h == nil || h.Store == nil {
+		return
+	}
+	var keys []instoverview.HostCloudKey
+	for _, row := range rows {
+		if store.IsHostInstanceType(row.DBType) {
+			keys = append(keys, instoverview.HostCloudKey{ID: row.ID, CloudID: row.CloudInstanceID, Host: row.Host})
+		}
+	}
+	if len(keys) == 0 {
+		return
+	}
+	var matched map[string]store.CloudInstance
+	if list, err := h.Store.ListCloudResourcesForPage("", cloud.EngineHost, ""); err != nil {
+		log.Printf("instance overview cloud hosts: %v", err)
+	} else {
+		matched = instoverview.MatchCloudHosts(keys, list)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	usage := h.hostDisk[tid]
+	at := h.hostDiskAt[tid]
+	for i := range rows {
+		if !store.IsHostInstanceType(rows[i].DBType) {
+			continue
+		}
+		info := instoverview.HostInfo{}
+		if it, ok := matched[rows[i].ID]; ok {
+			info = instoverview.CloudHostInfo(it)
+		}
+		ip := store.HostAddrKey(rows[i].Host)
+		if u, ok := usage[ip]; ok && u.Size > 0 {
+			info.DataUsedKnown = true
+			info.DataUsedRate = u.Rate()
+			info.DataUsedBytes = u.Used
+			info.DataSizeBytes = u.Size
+			info.CollectedAt = at[ip]
+		}
+		rows[i].HostInfo = &info
+	}
+}
+
+// collectHostDisk 只查这些主机的文件系统，按 IP 归并成数据盘用量，覆盖这些 IP 的缓存。
+func (h *OverviewHandler) collectHostDisk(tid string, hosts []overviewRow) {
+	if h.Store == nil {
+		return
+	}
+	raw := make([]string, 0, len(hosts))
+	for _, row := range hosts {
+		raw = append(raw, row.Host)
+	}
+	addrs := instoverview.HostAddrs(raw)
+	sizeExpr, availExpr := instoverview.HostFSExprs(addrs)
+	if sizeExpr == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cli, err := h.promClient()
+	if err != nil || cli == nil {
+		return
+	}
+	now := time.Now()
+	var sizes, avails []promclient.Sample
+	var sizeErr, availErr error
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		sizes, sizeErr = cli.Query(ctx, sizeExpr, now)
+	}()
+	go func() {
+		defer wg.Done()
+		avails, availErr = cli.Query(ctx, availExpr, now)
+	}()
+	wg.Wait()
+	if sizeErr != nil {
+		log.Printf("instance overview host fs size: %v", sizeErr)
+		return
+	}
+	if availErr != nil {
+		log.Printf("instance overview host fs avail: %v", availErr)
+		return
+	}
+	key := func(m map[string]string) string {
+		return m["instance"] + "\n" + m["mountpoint"] + "\n" + m["device"]
+	}
+	avail := make(map[string]float64, len(avails))
+	for _, sm := range avails {
+		if v, ok := promclient.InstantValue(sm); ok {
+			avail[key(sm.Metric)] = v
+		}
+	}
+	fs := make([]instoverview.FSSample, 0, len(sizes))
+	for _, sm := range sizes {
+		v, ok := promclient.InstantValue(sm)
+		if !ok {
+			continue
+		}
+		a, ok := avail[key(sm.Metric)]
+		if !ok {
+			continue
+		}
+		fs = append(fs, instoverview.FSSample{
+			Instance: sm.Metric["instance"], Mountpoint: sm.Metric["mountpoint"], Device: sm.Metric["device"],
+			Size: v, Avail: a,
+		})
+	}
+	usage := instoverview.HostDataUsage(fs)
+	at := now.Format(time.RFC3339)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.hostDisk == nil {
+		h.hostDisk = map[string]map[string]instoverview.DiskUsage{}
+		h.hostDiskAt = map[string]map[string]string{}
+	}
+	if h.hostDisk[tid] == nil {
+		h.hostDisk[tid] = map[string]instoverview.DiskUsage{}
+		h.hostDiskAt[tid] = map[string]string{}
+	}
+	for _, ip := range addrs {
+		if u, ok := usage[ip]; ok {
+			h.hostDisk[tid][ip] = u
+			h.hostDiskAt[tid][ip] = at
+		} else {
+			delete(h.hostDisk[tid], ip)
+			delete(h.hostDiskAt[tid], ip)
+		}
+	}
 }
 
 // attachPostgresCloudDisk 按云实例 ID 或平台实例 ID 取购买磁盘，不看云清单租户。只改返回副本。

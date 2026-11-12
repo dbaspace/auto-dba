@@ -189,6 +189,42 @@ func NetFromExtras(engine string, extras map[string]any) (host string, port int)
 	return "", 0
 }
 
+// SystemDiskFromExtras 从云主机原始返回取系统盘大小（GB）和类型。
+func SystemDiskFromExtras(extras map[string]any) (gb int, diskType string) {
+	sys, ok := extras["SystemDisk"].(map[string]any)
+	if !ok {
+		return 0, ""
+	}
+	return anyInt(sys["DiskSize"]), anyStr(sys["DiskType"])
+}
+
+// DataDiskSpec 是云主机一块数据盘的大小和类型，只用于列表展示。
+type DataDiskSpec struct {
+	GB   int    `json:"gb"`
+	Type string `json:"type,omitempty"`
+}
+
+// DataDisksFromExtras 从云主机原始返回逐块取出数据盘，不含系统盘，大小为空的跳过。
+func DataDisksFromExtras(extras map[string]any) []DataDiskSpec {
+	raw, ok := extras["DataDisks"].([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]DataDiskSpec, 0, len(raw))
+	for _, item := range raw {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		gb := anyInt(m["DiskSize"])
+		if gb <= 0 {
+			continue
+		}
+		out = append(out, DataDiskSpec{GB: gb, Type: anyStr(m["DiskType"])})
+	}
+	return out
+}
+
 // EngineOfDBType 把平台实例类型收成云引擎名。
 func EngineOfDBType(dbType string) string {
 	switch strings.ToLower(strings.TrimSpace(dbType)) {
