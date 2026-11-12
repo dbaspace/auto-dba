@@ -8,6 +8,33 @@ import (
 	"auto-dba/internal/store"
 )
 
+func TestAttachSlotCDCShowsTaskSourceEndpoint(t *testing.T) {
+	inst := store.Instance{ID: "ai-sea-pg", Host: "172.23.32.67", Port: 5432, Tags: []string{"domain=pg.sea.restosuite.ai"}}
+	tasks := []store.CDCTask{{
+		ID: "t1", Name: "rt_ai_sea_db_apaas", TaskType: "init", SourceID: inst.ID, SourceDB: "db_apaas",
+		Description: `-- auto-dba-cdc:{"source_host":"pg.apaas.sea.restosuite.shop","source_port":"5432","slot_name":"slot_ai_sea_db_apaas_9e0e72","publication_name":"rt_ai_sea_db_apaas_monitor","connector_name":"rt_ai_sea_db_apaas_monitor","connect_base_url":"http://172.23.128.116:8083"}`,
+	}, {
+		ID: "t2", Name: "dbz_only", TaskType: "init", SourceID: inst.ID, SourceDB: "db_bill",
+		Description: `-- auto-dba-cdc:{"slot_name":"slot_bill","connector_name":"conn_bill","debezium_config":{"database.hostname":"pg.bill.sea.restosuite.shop","database.port":"5433"}}`,
+	}}
+	rows := AttachSlotCDC([]store.SyncSlot{
+		{Host: inst.Host, Port: 5432, SlotName: "slot_ai_sea_db_apaas_9e0e72", Database: "db_apaas"},
+		{Host: inst.Host, Port: 5432, SlotName: "slot_bill", Database: "db_bill"},
+		{Host: inst.Host, Port: 5432, SlotName: "slot_orphan", Database: "db_x"},
+	}, tasks, []store.Instance{inst})
+	r := rows[0]
+	if r.SourceHost != "pg.apaas.sea.restosuite.shop" || r.SourcePort != 5432 || r.Database != "db_apaas" ||
+		r.TaskName != "rt_ai_sea_db_apaas_monitor" || r.SlotName != "slot_ai_sea_db_apaas_9e0e72" || r.Host != inst.Host {
+		t.Fatalf("task row = %+v", r)
+	}
+	if rows[1].SourceHost != "pg.bill.sea.restosuite.shop" || rows[1].SourcePort != 5433 {
+		t.Fatalf("debezium host row = %+v", rows[1])
+	}
+	if rows[2].TaskName != "" || rows[2].SourceHost != inst.Host || rows[2].SourcePort != 5432 {
+		t.Fatalf("orphan row = %+v", rows[2])
+	}
+}
+
 func TestAttachSlotCDC(t *testing.T) {
 	inst := store.Instance{ID: "i1", Host: "10.0.0.8", DomainName: "pg.example", Port: 5432}
 	tasks := []store.CDCTask{{

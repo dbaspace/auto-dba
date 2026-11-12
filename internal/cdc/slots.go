@@ -52,8 +52,10 @@ type SlotRow struct {
 	TaskID        string `json:"task_id,omitempty"`
 	Topic         string `json:"topic,omitempty"`
 	Heartbeat     string `json:"heartbeat,omitempty"`
-	// BoundHost 只给列表展示该库已登记的绑定域名。槽的 Host 仍是连接主机，重启查找不使用本字段。
-	BoundHost string `json:"bound_host,omitempty"`
+	// SourceHost/SourcePort 只给列表展示：命中 CDC 任务时是任务源端地址，否则是槽自身采集地址。
+	// 槽的 Host/Port 不变，采集、重启和删除仍按它们查找。
+	SourceHost string `json:"source_host,omitempty"`
+	SourcePort int    `json:"source_port,omitempty"`
 }
 
 // SlotTagDomain 采集拨号地址只取实例标签 domain=。有多条时用第一条非空值。没有则失败，不读连接主机。
@@ -360,7 +362,7 @@ func AttachSlotCDC(slots []store.SyncSlot, tasks []store.CDCTask, insts []store.
 	}
 	out := make([]SlotRow, 0, len(slots))
 	for _, slot := range slots {
-		row := SlotRow{SyncSlot: slot}
+		row := SlotRow{SyncSlot: slot, SourceHost: strings.TrimSpace(slot.Host), SourcePort: slot.Port}
 		best := 0
 		cands := bySlot[strings.ToLower(strings.TrimSpace(slot.SlotName))]
 		for _, c := range cands {
@@ -379,10 +381,29 @@ func AttachSlotCDC(slots []store.SyncSlot, tasks []store.CDCTask, insts []store.
 			row.ConnectBase = base
 			row.Connector = connectorLabel(base)
 			row.Topic = topic
+			if host, port := EffectiveSourceEndpoint(c.extra, c.inst); host != "" {
+				row.SourceHost, row.SourcePort = host, port
+			}
+			if strings.TrimSpace(slot.Database) == "" {
+				row.Database = taskSlotDB(slot, c.task, c.extra)
+			}
 		}
 		out = append(out, row)
 	}
 	return out
+}
+
+// taskSlotDB 是任务里该槽对应的库：分库 binding 的 db_name 优先，否则任务源库。
+func taskSlotDB(slot store.SyncSlot, task *store.CDCTask, extra map[string]string) string {
+	for _, b := range ParseShardBindings(extra) {
+		if strings.EqualFold(strings.TrimSpace(b.SlotName), strings.TrimSpace(slot.SlotName)) && strings.TrimSpace(b.DbName) != "" {
+			return strings.TrimSpace(b.DbName)
+		}
+	}
+	if task == nil {
+		return ""
+	}
+	return strings.TrimSpace(task.SourceDB)
 }
 
 // ResolveSlotConnector 先按本地 CDC 任务配对，对不上再用采集记下的连接器。

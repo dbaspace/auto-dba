@@ -105,6 +105,10 @@ interface TabItem {
   result: QueryResult | null
   results?: QueryResult[]
   resultIdx?: number
+  /** 结果区搜索词，跟页签走，切窗口不丢 */
+  resultKeyword?: string
+  /** 结果区当前页，跟页签走 */
+  resultPage?: number
   error: string
 }
 
@@ -534,8 +538,6 @@ export default function CommonQuery() {
     const n = Number(localStorage.getItem(PAGE_SIZE_KEY) || 20)
     return [10, 20, 50, 100].includes(n) ? n : 20
   })
-  const [resultPage, setResultPage] = useState(1)
-  const [resultKeyword, setResultKeyword] = useState('')
   const [colWidths, setColWidths] = useState<number[]>([])
   const colDragRef = useRef(false)
   const [cellDetail, setCellDetail] = useState<{ row: number; col: number } | null>(null)
@@ -586,6 +588,8 @@ export default function CommonQuery() {
   }, [location.state])
 
   const current = useMemo(() => tabs.find((t) => t.key === activeKey) || null, [tabs, activeKey])
+  const resultKeyword = current?.resultKeyword || ''
+  const resultPage = Math.max(current?.resultPage || 1, 1)
 
   useLayoutEffect(() => {
     const el = sqlBoxRef.current
@@ -1083,19 +1087,6 @@ export default function CommonQuery() {
     }
   }, [!!activeResult, editorHeight, leftCollapsed, resultPageSize, activeResult?.columns?.length])
 
-  useEffect(() => {
-    setResultPage(1)
-    setResultKeyword('')
-  }, [activeResult, current?.resultIdx])
-
-  useEffect(() => {
-    setResultPage(1)
-  }, [resultKeyword])
-
-  useEffect(() => {
-    setResultPage(1)
-  }, [resultKeyword])
-
   const mergeRemoteHistory = useCallback(async () => {
     try {
       const { data: histRes } = await api.get('/query/history').catch(() => ({ data: { data: [] } }))
@@ -1551,7 +1542,7 @@ export default function CommonQuery() {
         ? data.results
         : [result]
       setTabs((list) => list.map((t) => (
-        t.key === tab.key ? { ...t, result: results[0], results, resultIdx: 0, error: '', executedSql: sql } : t
+        t.key === tab.key ? { ...t, result: results[0], results, resultIdx: 0, error: '', executedSql: sql, resultKeyword: '', resultPage: 1 } : t
       )))
       pushHistory({ ...tab, sql })
       void mergeRemoteHistory()
@@ -1568,7 +1559,7 @@ export default function CommonQuery() {
         ).catch(() => { /* 补记失败不影响页面 */ })
       }
       const errMsg = err.response?.data?.message || err.message || '查询失败'
-      setTabs((list) => list.map((t) => (t.key === tab.key ? { ...t, result: null, results: undefined, error: errMsg } : t)))
+      setTabs((list) => list.map((t) => (t.key === tab.key ? { ...t, result: null, results: undefined, error: errMsg, resultKeyword: '', resultPage: 1 } : t)))
     } finally {
       if (queryAbortRef.current === ac) queryAbortRef.current = null
       setRunning(false)
@@ -2472,7 +2463,7 @@ export default function CommonQuery() {
                       <Tabs
                         size="small"
                         activeKey={String(current?.resultIdx || 0)}
-                        onChange={(k) => updateCurrent({ resultIdx: Number(k) || 0 })}
+                        onChange={(k) => updateCurrent({ resultIdx: Number(k) || 0, resultKeyword: '', resultPage: 1 })}
                         items={(current?.results || []).map((_, i) => ({
                           key: String(i),
                           label: `查询 #${i + 1}`,
@@ -2509,7 +2500,7 @@ export default function CommonQuery() {
                         placeholder="搜索"
                         prefix={<SearchOutlined />}
                         value={resultKeyword}
-                        onChange={(e) => setResultKeyword(e.target.value)}
+                        onChange={(e) => updateCurrent({ resultKeyword: e.target.value, resultPage: 1 })}
                       />
                       <div className="result-pagination">
                         <span className="result-count">
@@ -2521,11 +2512,11 @@ export default function CommonQuery() {
                           current={resultPage}
                           pageSize={resultPageSize}
                           total={resultRowsFiltered.length}
-                          showSizeChanger
+                          showSizeChanger={{ getPopupContainer: () => document.body }}
                           showQuickJumper={false}
                           pageSizeOptions={['10', '20', '50', '100']}
                           onChange={(page, size) => {
-                            setResultPage(page)
+                            updateCurrent({ resultPage: page })
                             if (size && size !== resultPageSize) {
                               setResultPageSize(size)
                               localStorage.setItem(PAGE_SIZE_KEY, String(size))

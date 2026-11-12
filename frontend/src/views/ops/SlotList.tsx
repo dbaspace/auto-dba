@@ -7,10 +7,10 @@ import { Perm, usePermission } from '../../hooks/usePermission'
 import './SlotList.css'
 
 function slotInstanceLabel(row: SlotRow) {
-  const names = String(row.bound_host || '').split(',').map((s) => s.trim()).filter(Boolean)
-  if (!names.length) return ''
-  if (!row.port) return names.join(', ')
-  return names.map((host) => (host.includes(':') ? host : `${host}:${row.port}`)).join(', ')
+  const host = String(row.source_host || '').trim()
+  if (!host) return ''
+  const port = row.source_port || row.port
+  return port && !host.includes(':') ? `${host}:${port}` : host
 }
 
 type SlotRow = {
@@ -29,7 +29,8 @@ type SlotRow = {
   connect_base?: string
   task_name?: string
   topic?: string
-  bound_host?: string
+  source_host?: string
+  source_port?: number
 }
 
 type CollectJob = {
@@ -397,7 +398,7 @@ export default function SlotList() {
         const mb = Number(row.lag_bytes || 0) / 1024 / 1024
         if (mb < applied.lag) return false
       }
-      if (host && !`${row.bound_host || ''}`.toLowerCase().includes(host)) return false
+      if (host && !slotInstanceLabel(row).toLowerCase().includes(host)) return false
       if (task && !slotSyncName(row).toLowerCase().includes(task)) return false
       return true
     })

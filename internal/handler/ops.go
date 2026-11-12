@@ -1000,12 +1000,6 @@ func (h *SlotHandler) List(c *gin.Context) {
 	}
 	rows := cdc.AttachSlotCDC(list, tasks, insts)
 	rows = cdc.FillSlotConnectFallback(rows)
-	dbs, err := h.Store.ListDatabasesInTenant(tid, "", "")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
-		return
-	}
-	rows = cdc.FillSlotBoundHosts(rows, insts, dbs)
 	if rows == nil {
 		rows = []cdc.SlotRow{}
 	}
