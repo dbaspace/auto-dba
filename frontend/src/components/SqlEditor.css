@@ -73,7 +73,7 @@
 .sql-hl-input::selection {
   background: rgba(22, 119, 255, 0.28);
   color: var(--app-text, #1f2937);
-  -webkit-text-fill-color: transparent;
+  -webkit-text-fill-color: var(--app-text, #1f2937);
 }
 
 .sql-kw {

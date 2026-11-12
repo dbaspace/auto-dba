@@ -198,7 +198,7 @@ func EngineOfDBType(dbType string) string {
 		return EngineMySQL
 	case "redis":
 		return EngineRedis
-	case "host", "cvm":
+	case "host", "cvm", "os", "主机":
 		return EngineHost
 	default:
 		return strings.ToLower(strings.TrimSpace(dbType))

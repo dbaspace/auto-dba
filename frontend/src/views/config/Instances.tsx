@@ -221,7 +221,7 @@ export default function Instances() {
   const passwordRequired = !hostType && REQUIRED_PASSWORD_TYPES.has(String(form.db_type || '').toLowerCase())
   const showPassword = !hostType && (passwordRequired || OPTIONAL_PASSWORD_TYPES.has(String(form.db_type || '').toLowerCase()))
   const showCloud = (() => {
-    if (hostType) return false
+    if (hostType) return true
     const t = String(form.db_type || '').toLowerCase()
     return t === 'mysql' || t === 'postgres' || t === 'postgresql'
   })()
@@ -229,6 +229,7 @@ export default function Instances() {
 
   const cloudIdPlaceholder = (() => {
     const v = String(form.cloud_vendor || '')
+    if (hostType) return v === 'tencent' ? '如 ins-xxxx' : '云主机实例 ID'
     if (v === 'tencent') return '如 postgres-xxxx'
     if (v === 'aliyun') return '如 pgm-xxxx / rr-xxxx'
     if (v === 'huawei') return '云数据库实例 ID'
@@ -453,8 +454,12 @@ export default function Instances() {
       const d = data?.data || {}
       message.success(
         `已从监控同步主机：新建 ${d.created || 0}，补齐 ${d.updated || 0}，跳过 ${d.skipped || 0}，未能匹配环境 ${d.unbound || 0}` +
+          (d.merged ? `，合并重复主机 ${d.merged}` : '') +
           (d.hosts != null ? `（监控去重后 ${d.hosts} 台）` : ''),
       )
+      if (Array.isArray(d.kept) && d.kept.length > 0) {
+        message.warning(`以下重复主机未删除：${d.kept.join('；')}`, 8)
+      }
       await load()
     } catch (e: any) {
       message.error(e?.response?.data?.message || e.message || '同步失败')
@@ -571,9 +576,13 @@ export default function Instances() {
       }
     }
     if (!String(payload.password || '').trim()) delete payload.password
-    if (payload.id) await api.put('/instances/' + payload.id, payload)
-    else await api.post('/instances', payload)
-    message.success('已保存')
+    if (payload.id) {
+      await api.put('/instances/' + payload.id, payload)
+      message.success('已保存')
+    } else {
+      const { data } = await api.post('/instances', payload)
+      message.success(data?.message || '已保存')
+    }
     setVisible(false)
     if (payload.db_type) setActiveType(payload.db_type)
     await load()
@@ -1299,7 +1308,9 @@ export default function Instances() {
                   onChange={(v) => setForm((f) => ({ ...f, cloud_vendor: v ?? '' }))}
                 />
                 <div className="type-hint">
-                  闪回和云同步使用实例绑定的云账号只读密钥。连库仍用上方主机/账密。
+                  {hostType
+                    ? '按连接主机对照云主机内网地址关联云资源。'
+                    : '闪回和云同步使用实例绑定的云账号只读密钥。连库仍用上方主机/账密。'}
                 </div>
               </div>
             </div>

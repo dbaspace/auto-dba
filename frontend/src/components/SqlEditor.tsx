@@ -50,6 +50,46 @@ const SqlEditor = forwardRef<HTMLTextAreaElement, SqlEditorProps>(function SqlEd
   const html = useMemo(() => highlightSql(value || ''), [value])
   const fill = Boolean(className?.includes('sql-box-hl'))
 
+  const placeCursor = (pos: number) => {
+    window.setTimeout(() => {
+      const ta = localRef.current
+      if (!ta) return
+      const n = Math.max(0, Math.min(pos, ta.value.length))
+      ta.setSelectionRange(n, n)
+    }, 0)
+  }
+
+  const onCopy = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const ta = e.currentTarget
+    const { selectionStart: s, selectionEnd: t } = ta
+    if (t <= s) return
+    e.preventDefault()
+    e.clipboardData.setData('text/plain', ta.value.slice(s, t))
+  }
+
+  const onCut = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const ta = e.currentTarget
+    const { selectionStart: s, selectionEnd: t } = ta
+    if (t <= s || disabled) return
+    e.preventDefault()
+    e.clipboardData.setData('text/plain', ta.value.slice(s, t))
+    onBeforeInput?.(e as unknown as React.FormEvent<HTMLTextAreaElement>)
+    onChange(ta.value.slice(0, s) + ta.value.slice(t))
+    placeCursor(s)
+  }
+
+  const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    if (disabled) return
+    const text = e.clipboardData.getData('text/plain')
+    if (!text) return
+    const ta = e.currentTarget
+    const { selectionStart: s, selectionEnd: t } = ta
+    e.preventDefault()
+    onBeforeInput?.(e as unknown as React.FormEvent<HTMLTextAreaElement>)
+    onChange(ta.value.slice(0, s) + text + ta.value.slice(t))
+    placeCursor(s + text.length)
+  }
+
   const syncScroll = () => {
     const ta = localRef.current
     const pre = preRef.current
@@ -83,6 +123,9 @@ const SqlEditor = forwardRef<HTMLTextAreaElement, SqlEditorProps>(function SqlEd
         }}
         onKeyDown={onKeyDown}
         onBeforeInput={onBeforeInput}
+        onCopy={onCopy}
+        onCut={onCut}
+        onPaste={onPaste}
         onKeyUp={onKeyUp}
         onClick={onClick}
       />

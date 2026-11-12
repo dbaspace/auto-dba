@@ -503,6 +503,30 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
+	if store.IsHostInstanceType(it.DBType) {
+		cur, err := h.Store.FindHostByAddr(it.Host, "")
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+			return
+		}
+		if cur != nil {
+			if strings.TrimSpace(cur.TenantID) != strings.TrimSpace(it.TenantID) {
+				c.JSON(http.StatusConflict, gin.H{"message": "连接主机 " + it.Host + " 已在其它租户登记为主机「" + cur.Name + "」"})
+				return
+			}
+			before := *cur
+			if fillHostBlanks(cur, &it) {
+				if err := h.Store.UpdateInstance(cur); err != nil {
+					c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+					return
+				}
+				_ = h.Store.AppendCmdbAudit(c.GetString(middleware.CtxUsername), "update", "instance", cur.ID, "api", redactInstanceCopy(before), redactInstanceCopy(*cur))
+			}
+			redactInstance(cur)
+			c.JSON(http.StatusOK, gin.H{"data": cur, "message": "连接主机已登记为主机「" + cur.Name + "」，已补齐空项，未新建"})
+			return
+		}
+	}
 	if err := h.Store.CreateInstance(&it); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "创建失败（可能是 host+port 已存在）: " + err.Error()})
 		return
@@ -538,29 +562,37 @@ func (h *InstanceHandler) SyncHostsFromMonitor(c *gin.Context) {
 		return
 	}
 	tid := middleware.TenantID(c)
-	exist, err := h.Store.ListInstancesInTenant(tid, "", "")
+	who := actorName(c)
+	if who == "" {
+		who = "admin"
+	}
+	dedupe, err := mergeDuplicateHosts(h.Store, who)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	exist, err := h.Store.ListHostInstances()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
 	known := map[string]*store.Instance{}
 	for i := range exist {
-		if !store.IsHostInstanceType(exist[i].DBType) {
-			continue
+		if k := store.HostAddrKey(exist[i].Host); k != "" {
+			known[k] = &exist[i]
 		}
+	}
+	for i := range exist {
 		for _, a := range nodecheck.HostAddrs(&exist[i]) {
-			if _, ok := known[a]; !ok {
-				known[a] = &exist[i]
+			k := store.HostAddrKey(a)
+			if _, ok := known[k]; !ok && k != "" {
+				known[k] = &exist[i]
 			}
 		}
 	}
 	envByID := map[string]store.Environment{}
 	for _, e := range envs {
 		envByID[e.ID] = e
-	}
-	who := actorName(c)
-	if who == "" {
-		who = "admin"
 	}
 	enc, err := secret.Encrypt(h.Secret, "")
 	if err != nil {
@@ -574,7 +606,11 @@ func (h *InstanceHandler) SyncHostsFromMonitor(c *gin.Context) {
 		if envOK {
 			envCode = strings.TrimSpace(envByID[envID].Code)
 		}
-		if cur := known[mh.Host]; cur != nil {
+		if cur := known[store.HostAddrKey(mh.Host)]; cur != nil {
+			if tid != "" && strings.TrimSpace(cur.TenantID) != tid {
+				skipped++
+				continue
+			}
 			fillRegion, fillEnv, fillCode := regionID, envID, envCode
 			if id := strings.TrimSpace(cur.EnvID); id != "" {
 				fillEnv = ""
@@ -642,7 +678,7 @@ func (h *InstanceHandler) SyncHostsFromMonitor(c *gin.Context) {
 		_, _ = h.Store.SyncAccessDomainsFromInstance(&it)
 		_ = h.Store.AppendCmdbAudit(who, "create", "instance", it.ID, "sync-hosts-from-monitor", nil, redactInstanceCopy(it))
 		saved := it
-		known[mh.Host] = &saved
+		known[store.HostAddrKey(mh.Host)] = &saved
 		created++
 		if strings.TrimSpace(it.EnvID) == "" {
 			unbound++
@@ -654,6 +690,8 @@ func (h *InstanceHandler) SyncHostsFromMonitor(c *gin.Context) {
 		"skipped": skipped,
 		"unbound": unbound,
 		"hosts":   len(hosts),
+		"merged":  dedupe.Merged,
+		"kept":    dedupe.Kept,
 	}})
 }
 
@@ -955,6 +993,17 @@ func (h *InstanceHandler) Update(c *gin.Context) {
 	if msg := validateHostACL(&it); msg != "" {
 		c.JSON(http.StatusBadRequest, gin.H{"message": msg})
 		return
+	}
+	if store.IsHostInstanceType(it.DBType) && store.HostAddrKey(it.Host) != store.HostAddrKey(exist.Host) {
+		other, err := h.Store.FindHostByAddr(it.Host, exist.ID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+			return
+		}
+		if other != nil {
+			c.JSON(http.StatusConflict, gin.H{"message": "连接主机 " + it.Host + " 已登记为主机「" + other.Name + "」，不能改成同一地址"})
+			return
+		}
 	}
 	if err := validateResourceACL(h.Store, it.TenantID, it.Visibility, it.AccessUsers, it.RoleIDs, it.Approvers); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})

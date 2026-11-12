@@ -41,6 +41,9 @@ type Service struct {
 	drainSince time.Time
 	lastPurge  time.Time
 	rateHits   atomic.Int64
+
+	// MergeDuplicateHosts 在云主机同步前合并连接地址相同的主机，由 server 注入。
+	MergeDuplicateHosts func()
 }
 
 func New(db *store.DB, secretKey string) *Service {
@@ -320,9 +323,21 @@ func (s *Service) SyncAccountEngine(ctx context.Context, account *store.CloudAcc
 		s.noteSync(account, engine, "inventory", "", err)
 		return regionErrs, err
 	}
+	onlyHosts := engine == cloud.EngineHost
+	if onlyHosts && s.MergeDuplicateHosts != nil {
+		s.MergeDuplicateHosts()
+	}
 	plats, _ := s.instancesForInventoryMatch(account.TenantID)
+	hostKeys := registeredHostKeys(plats)
 	seen := make([]string, 0, len(all))
 	for _, inst := range all {
+		if onlyHosts {
+			ip := matchRegisteredHostIP(inst, hostKeys)
+			if ip == "" {
+				continue
+			}
+			inst.Host = ip
+		}
 		seen = append(seen, inst.CloudID)
 		prev, _ := s.DB.GetCloudResourceByCloudID(account.Vendor, engine, inst.CloudID)
 		row := &store.CloudInstance{
@@ -350,6 +365,11 @@ func (s *Service) SyncAccountEngine(ctx context.Context, account *store.CloudAcc
 		evCred := base
 		evCred.Region = inst.Region
 		s.pullEvents(ctx, reader, evCred, account, inst.CloudID)
+	}
+	if onlyHosts {
+		if _, err := s.DB.DeleteCloudResourcesNotIn(account.ID, engine, okRegions, seen); err != nil {
+			return regionErrs, err
+		}
 	}
 	if err := s.DB.MarkMissingCloudResourcesInRegions(account.ID, engine, okRegions, seen); err != nil {
 		return regionErrs, err
@@ -531,6 +551,38 @@ func (s *Service) bindByIntranet(row *store.CloudInstance, intranet string, plat
 	}
 	row.InstanceID = hit.ID
 	row.Reconcile = cloud.ReconcileLinked
+}
+
+// registeredHostKeys 是已登记主机的连接地址集合。
+func registeredHostKeys(plats []store.Instance) map[string]bool {
+	keys := map[string]bool{}
+	for _, it := range plats {
+		if !store.IsHostInstanceType(it.DBType) {
+			continue
+		}
+		if k := store.HostAddrKey(it.Host); k != "" {
+			keys[k] = true
+		}
+	}
+	return keys
+}
+
+// matchRegisteredHostIP 返回云主机内网地址里第一个已登记为主机的地址，没有时为空。
+func matchRegisteredHostIP(inst cloud.Instance, keys map[string]bool) string {
+	cands := []string{inst.Host}
+	if ips, ok := inst.Extras["PrivateIpAddresses"].([]any); ok {
+		for _, ip := range ips {
+			if s, ok := ip.(string); ok {
+				cands = append(cands, s)
+			}
+		}
+	}
+	for _, c := range cands {
+		if k := store.HostAddrKey(c); k != "" && keys[k] {
+			return k
+		}
+	}
+	return ""
 }
 
 func (s *Service) fillInstanceCloudBlanks(id, vendor, cloudID, region string) {

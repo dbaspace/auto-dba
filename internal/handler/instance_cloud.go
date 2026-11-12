@@ -35,13 +35,16 @@ func (h *InstanceHandler) SyncCloud(c *gin.Context) {
 		dbType = exist.DBType
 	}
 	engine := cloud.EngineOfDBType(dbType)
-	if engine != cloud.EnginePostgres && engine != cloud.EngineMySQL {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "仅 PostgreSQL 和 MySQL 实例可同步云资源信息"})
+	if engine != cloud.EnginePostgres && engine != cloud.EngineMySQL && engine != cloud.EngineHost {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "仅 PostgreSQL、MySQL 实例和主机可同步云资源信息"})
 		return
 	}
 	host := strings.TrimSpace(req.Host)
 	if host == "" {
 		host = exist.Host
+	}
+	if engine == cloud.EngineHost {
+		host = store.HostAddrKey(host)
 	}
 	cloudIDIn := strings.TrimSpace(req.CloudInstanceID)
 	refs, err := h.cloudFillRefs(exist.TenantID, engine, cloudIDIn)

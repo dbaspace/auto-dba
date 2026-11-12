@@ -124,6 +124,7 @@ func Run(cfg *config.Config, configPath string) {
 	ticketH.ReapDQLExportFiles()
 	cloudSvc := cloudsvc.New(db, fieldCrypto)
 	cloudSvc.Install()
+	cloudSvc.MergeDuplicateHosts = func() { handler.MergeDuplicateHosts(db, "cloud-sync") }
 	ticketH.Cloud = cloudSvc
 	pgSpaceSvc := pgspace.New(db, fieldCrypto)
 	redisRDBSvc := redisrdb.New(db, fieldCrypto, filepath.Join(os.TempDir(), "auto-dba-redis-rdb"))
