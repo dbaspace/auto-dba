@@ -539,7 +539,8 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 
 // SyncHostsFromMonitor POST /instances/sync-hosts-from-monitor —
 // 从「监控目标注册」全部 endpoints 提取主机，并按标签匹配区域、环境、标签。
-// 已存在的主机只补这三项里的空字段。SSH 默认 sysadmin:22、私有可见（当前用户）。
+// 已存在的主机：区域和环境只补空的；标签按键合并，缺的补上，监控里变了的更新，主机独有的保留。
+// SSH 默认 sysadmin:22、私有可见（当前用户）。
 func (h *InstanceHandler) SyncHostsFromMonitor(c *gin.Context) {
 	hosts, err := collectMonitorHosts(h.Store)
 	if err != nil {
@@ -634,8 +635,8 @@ func (h *InstanceHandler) SyncHostsFromMonitor(c *gin.Context) {
 				cur.IDC = fillCode
 				changed = true
 			}
-			if len(cur.Tags) == 0 && len(fillTags) > 0 {
-				cur.Tags = fillTags
+			if next, tagChanged := mergeHostTagsFromMonitor(cur.Tags, fillTags, fillCode); tagChanged {
+				cur.Tags = next
 				changed = true
 			}
 			if !changed {
@@ -875,6 +876,93 @@ func pickRegionForEnv(env store.Environment, regions []store.Region, binds []sto
 		return hit[0]
 	}
 	return ""
+}
+
+// mergeHostTagsFromMonitor 按键把监控标签并进主机标签。
+// 主机没有的键补上，两边都有且值不同时用监控的值，只在主机上的键保留。
+// envCode 非空时 idc= 固定为该环境编码，不跟监控里的 idc 走。
+func mergeHostTagsFromMonitor(existing, fromMonitor []string, envCode string) (next []string, changed bool) {
+	type monTag struct{ key, val string }
+	mon := map[string]monTag{}
+	var monKeys []string
+	for _, raw := range fromMonitor {
+		k, v, ok := splitInstanceTagKV(raw)
+		if !ok {
+			continue
+		}
+		lk := strings.ToLower(k)
+		if _, seen := mon[lk]; seen {
+			continue
+		}
+		mon[lk] = monTag{key: k, val: v}
+		monKeys = append(monKeys, lk)
+	}
+	seen := map[string]bool{}
+	for _, raw := range existing {
+		raw = strings.TrimSpace(raw)
+		k, v, ok := splitInstanceTagKV(raw)
+		if !ok {
+			if raw != "" {
+				next = append(next, raw)
+			}
+			continue
+		}
+		lk := strings.ToLower(k)
+		if seen[lk] {
+			changed = true
+			continue
+		}
+		seen[lk] = true
+		if mv, ok := mon[lk]; ok && mv.val != v {
+			next = append(next, k+"="+mv.val)
+			changed = true
+			continue
+		}
+		next = append(next, raw)
+	}
+	for _, lk := range monKeys {
+		if seen[lk] {
+			continue
+		}
+		seen[lk] = true
+		mv := mon[lk]
+		next = append(next, mv.key+"="+mv.val)
+		changed = true
+	}
+	if strings.TrimSpace(envCode) == "" {
+		return next, changed
+	}
+	it := store.Instance{DBType: "host", Tags: next}
+	syncInstanceMonitorTags(&it, envCode)
+	if !hostTagsEqual(next, it.Tags) {
+		changed = true
+	}
+	return it.Tags, changed
+}
+
+func hostTagsEqual(a, b []string) bool {
+	ma, mb := hostTagMap(a), hostTagMap(b)
+	if len(ma) != len(mb) {
+		return false
+	}
+	for k, v := range ma {
+		if mb[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
+func hostTagMap(tags []string) map[string]string {
+	out := map[string]string{}
+	for _, raw := range tags {
+		k, v, ok := splitInstanceTagKV(raw)
+		if !ok {
+			continue
+		}
+		out[strings.ToLower(k)] = v
+	}
+	return out
 }
 
 func monitorLabelsToTags(labels map[string]string, envCode string) []string {

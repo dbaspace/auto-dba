@@ -953,13 +953,19 @@ export default function InstanceOverview() {
       </div>
       <div className="instance-overview-table">
         <Table
+          key={showHost ? 'host' : 'db'}
           rowKey="id"
           size="small"
           loading={loading && !running}
           dataSource={sorted}
           columns={columns}
           scroll={{ x: showStarRocks ? 1960 : showHost ? 1640 : 1560 }}
-          pagination={{ defaultPageSize: 20, showSizeChanger: true, pageSizeOptions: ['20', '50', '100'], showTotal: (n) => `共 ${n} 条` }}
+          pagination={{
+            defaultPageSize: showHost ? 10 : 20,
+            showSizeChanger: true,
+            pageSizeOptions: showHost ? ['10', '20', '30', '50', '100'] : ['20', '50', '100'],
+            showTotal: (n) => `共 ${n} 条`,
+          }}
           rowClassName={(row) => (stale(row.sample) ? 'instance-overview-stale' : '')}
         />
       </div>

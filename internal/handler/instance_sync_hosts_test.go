@@ -49,6 +49,35 @@ func TestAbsorbMonitorLabelsKeepsFirstValue(t *testing.T) {
 	}
 }
 
+func TestMergeHostTagsFromMonitor(t *testing.T) {
+	next, changed := mergeHostTagsFromMonitor(
+		[]string{"idc=beijing"},
+		[]string{"app=fe-StarRocks", "domain=dorisdb.etl.bj.restosuite.cn", "idc=beijing"},
+		"beijing",
+	)
+	if !changed || !hostTagsEqual(next, []string{"idc=beijing", "app=fe-StarRocks", "domain=dorisdb.etl.bj.restosuite.cn"}) {
+		t.Fatalf("fill missing domain: changed=%v tags=%v", changed, next)
+	}
+
+	next, changed = mergeHostTagsFromMonitor(
+		[]string{"idc=beijing", "domain=old.example.cn", "team=dba"},
+		[]string{"domain=new.example.cn", "idc=test"},
+		"beijing",
+	)
+	if !changed || !hostTagsEqual(next, []string{"idc=beijing", "domain=new.example.cn", "team=dba"}) {
+		t.Fatalf("update domain keep host-only, idc stays env: changed=%v tags=%v", changed, next)
+	}
+
+	next, changed = mergeHostTagsFromMonitor(
+		[]string{"domain=dorisdb.etl.bj.restosuite.cn", "idc=beijing"},
+		[]string{"domain=dorisdb.etl.bj.restosuite.cn", "idc=beijing"},
+		"beijing",
+	)
+	if changed {
+		t.Fatalf("same tags must not write: %v", next)
+	}
+}
+
 func TestMatchMonitorHostLocation(t *testing.T) {
 	envs := []store.Environment{
 		{ID: "e-bj", Code: "beijing", Name: "北京"},
