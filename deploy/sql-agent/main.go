@@ -34,7 +34,7 @@ func main() {
 	exports := sqlexec.NewExportRunner(*dataDir)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", withAuth(func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "proto": sqlexec.Proto})
 	}))
 	mux.HandleFunc("/v1/sql/jobs", withAuth(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {

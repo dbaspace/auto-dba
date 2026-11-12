@@ -297,6 +297,59 @@ UPDATE t SET a=1 WHERE id=1;`
 	}
 }
 
+func TestSplitSQL_OrderDiscountInsertSelectStaysWithUpdates(t *testing.T) {
+	sql := `UPDATE public.tbl_order_master_33 m
+SET total_payment_discount_amount=1307, update_time=CURRENT_TIMESTAMP
+WHERE m.corporation_id=302 AND m.shop_id=77165409
+  AND m.order_id=2118876210776351329 AND m.local_order_id='2026110710387714565210004'
+  AND m.origin_business_date=DATE '2026-11-07' AND m.is_deleted=false
+  AND m.total_payment_discount_amount=0 AND m.net_amount=4423
+  AND m.total_item_amount=6310 AND m.total_discount_amount=880
+  AND m.status=20 AND m.close_status=1 AND m.version=1;
+
+-- 2. 四菜支付分摊，预期 UPDATE 4。
+UPDATE public.tbl_order_item_master_33 i
+SET total_share_discount_amount=v.share, actual_amount=v.new_actual,
+    update_time=CURRENT_TIMESTAMP
+FROM (VALUES
+    (2118876210776350727,4690,655,4035,972,3063),
+    (2118876210776350728,300,43,257,62,195)
+) v(item_id,old_gross,old_discount,old_actual,share,new_actual)
+WHERE i.corporation_id=302 AND i.shop_id=77165409
+  AND i.order_id=2118876210776351329 AND i.item_id=v.item_id;
+
+-- 3. 补佣金优惠明细，列清单换行后接 SELECT。
+INSERT INTO public.tbl_order_discount_33 (
+  discount_item_id,parent_discount_item_id,order_id,local_order_id,corporation_id,shop_id,
+  scope,scope_id,discount_id,discount_code,discount_name,discount_type,
+  applied_type,applied_id,processing_state,processing_scope,source_type,
+  discount_amount,actual_discount_amount,share_revenue_amount,discount_revenue_amount,
+  applied_server_id,applied_server_name,approver_server_id,approver_server_name,
+  created_by,modified_by,triggers_json,metadata,business_date,origin_business_date
+)
+SELECT v.discount_item_id,1794477412268,2118876210776351329,'2026110710387714565210004',302,77165409,
+  v.scope,v.scope_id,'51012','','美团外卖佣金/服务费',22,
+  3,'2118876210809905161',2,0,'5101',
+  0,v.actual_discount,0,0,
+  0,'',0,'','oncall-repair','oncall-repair','{}'::json,
+  '{"properties":{},"discountNameTranslate":{"domain":"BOH_METADATA","resource":"discountType","key":"51012"}}'::json,'2026-11-07',DATE '2026-11-07'
+FROM (VALUES
+    (1794477412268,0,0,1307),
+    (1794477412269,20,2118876210776350727,972)
+) v(discount_item_id,scope,scope_id,actual_discount);`
+	st := SplitSQL(sql)
+	if len(st) != 3 {
+		t.Fatalf("want 3 statements, got %d: %#v", len(st), st)
+	}
+	third := strings.ToUpper(st[2])
+	if !strings.Contains(third, "SELECT") || !strings.Contains(third, "VALUES") {
+		t.Fatalf("第 3 条应同时包含 SELECT 和 VALUES: %s", st[2])
+	}
+	if FirstIncompleteInsert(st) != 0 {
+		t.Fatalf("第 3 条不应被判成不完整 INSERT")
+	}
+}
+
 func TestSplitSQL_BlockCommentNotInStatement(t *testing.T) {
 	sql := `/* note */ CREATE TABLE tbl_t (id int);`
 	st := SplitSQL(sql)

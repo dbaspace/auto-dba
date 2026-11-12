@@ -16,6 +16,13 @@ import (
 // ErrJobNotFound 表示执行器进程里没有这个任务（重启、过期或任务号不对）。
 var ErrJobNotFound = errors.New("执行器上没有这个任务")
 
+// Proto 是 sql-agent 与平台约定的协议号。
+// SplitSQL 的分段行为变更时加一，旧执行器会在 Probe 被拦住。
+const Proto = 1
+
+// ErrProtoTooOld 表示执行器没有协议号，或协议号低于平台要求。
+var ErrProtoTooOld = errors.New("执行器版本过旧，请在 SQL 执行器页重新下发后重试")
+
 // Probe 访问执行器健康检查，并把失败原因写成页面能直接展示的话。
 func Probe(ctx context.Context, baseURL, user, pass string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/healthz", nil)
@@ -36,6 +43,16 @@ func Probe(ctx context.Context, baseURL, user, pass string) error {
 	}
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("地址不通: HTTP %d", resp.StatusCode)
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if err != nil {
+		return ErrProtoTooOld
+	}
+	var body struct {
+		Proto int `json:"proto"`
+	}
+	if json.Unmarshal(raw, &body) != nil || body.Proto < Proto {
+		return ErrProtoTooOld
 	}
 	return nil
 }
