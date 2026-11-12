@@ -118,26 +118,42 @@ func (s *Service) SetTags(ciType, ciID string, pairs map[string]string, actor st
 	return nil
 }
 
-// SyncMonitorTagsIntoCmdb 将监控标签字典同步为 CMDB 标签定义（scope=monitor）。
-func (s *Service) SyncMonitorTagsIntoCmdb() error {
+// SyncMonitorTagsIntoCmdb 将监控标签字典同步为当前租户的 CMDB 标签定义（scope=monitor）。
+// 只按本租户的 key 更新或插入，不改其它租户的同名行。
+func (s *Service) SyncMonitorTagsIntoCmdb(tenantID string) error {
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		return fmt.Errorf("请先选择租户")
+	}
 	mons, err := s.Store.ListMonitorLabelTags()
 	if err != nil {
 		return err
 	}
+	codes, err := s.Store.EnvironmentCodes()
+	if err != nil {
+		return err
+	}
+	exist, err := s.Store.ListCmdbTagDefsInTenant(tenantID, "")
+	if err != nil {
+		return err
+	}
+	byKey := make(map[string]store.CmdbTagDef, len(exist))
+	for _, e := range exist {
+		if _, ok := byKey[e.Key]; !ok {
+			byKey[e.Key] = e
+		}
+	}
 	for _, m := range mons {
 		def := &store.CmdbTagDef{
-			Key: m.Key, Name: m.Name, Values: m.Values, Description: m.Description,
-			Scope: "monitor", SortOrder: m.SortOrder,
+			TenantID: tenantID,
+			Key:      m.Key, Name: m.Name, Values: store.MergeEnvTagValues(m.Key, m.Values, codes),
+			Description: m.Description,
+			Scope:       "monitor", SortOrder: m.SortOrder,
 			CITypes: []string{TypeMonitorJob, TypeMonitorGroup, TypeInstance},
 		}
-		// 查是否已有同 key
-		exist, _ := s.Store.ListCmdbTagDefs("")
-		for _, e := range exist {
-			if e.Key == m.Key {
-				def.ID = e.ID
-				def.CreatedAt = e.CreatedAt
-				break
-			}
+		if e, ok := byKey[m.Key]; ok {
+			def.ID = e.ID
+			def.CreatedAt = e.CreatedAt
 		}
 		if err := s.Store.UpsertCmdbTagDef(def); err != nil {
 			return err

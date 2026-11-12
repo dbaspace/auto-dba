@@ -33,12 +33,13 @@ type Sample struct {
 	LagSecKnown bool    `json:"lag_sec_known,omitempty"`
 	HitRate     float64 `json:"hit_rate,omitempty"`
 	HitKnown    bool    `json:"hit_known,omitempty"`
-	// DataBytes 是当前账号可见的非模板库文件合计，不含 WAL。StarRocks 时为各 BE DataUsedCapacity 之和。
+	// DataBytes 是当前账号可见的非模板库文件合计，不含 WAL。
+	// StarRocks 优先为 Grafana data_used_capacity 之和，没有指标时为各 BE DataUsedCapacity 之和。
 	DataBytes        int64   `json:"data_bytes,omitempty"`
 	DataKnown        bool    `json:"data_known,omitempty"`
 	StorageRate      float64 `json:"storage_rate,omitempty"`
 	StorageRateKnown bool    `json:"storage_rate_known,omitempty"`
-	// StarRocks：数据盘总大小为各 BE TotalCapacity 之和。使用率是数据存储 / 数据盘总大小。
+	// StarRocks：数据盘优先为 Grafana total_capacity 之和，没有指标时为各 BE TotalCapacity 之和。使用率是数据存储 / 数据盘总大小。
 	// 整盘最高 UsedPct 单独放在 DiskUsedRate，悬停用。
 	DiskBytes         int64   `json:"disk_bytes,omitempty"`
 	DiskKnown         bool    `json:"disk_known,omitempty"`

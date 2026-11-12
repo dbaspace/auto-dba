@@ -21,6 +21,14 @@ func (h *MonitorLabelTagHandler) List(c *gin.Context) {
 	if list == nil {
 		list = []store.MonitorLabelTag{}
 	}
+	codes, err := h.Store.EnvironmentCodes()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	for i := range list {
+		list[i].Values = store.MergeEnvTagValues(list[i].Key, list[i].Values, codes)
+	}
 	c.JSON(http.StatusOK, gin.H{"data": list})
 }
 

@@ -128,6 +128,7 @@ func (h *OverviewHandler) runCollect(tid string, targets []overviewRow) {
 	}
 	wg.Wait()
 	h.attachStorageRates(tid, targets)
+	h.attachStarRocksCapacity(tid, targets)
 	h.attachRedisCPU(tid, targets)
 	h.mu.Lock()
 	if job := h.jobs[tid]; job != nil {
@@ -503,6 +504,124 @@ func (h *OverviewHandler) attachRedisCPU(tid string, targets []overviewRow) {
 		}
 		h.cache[tid][m.id] = s
 	}
+}
+
+const (
+	srDataUsedExpr  = `sum by (idc, domain, cname) (starrocks_be_disks_data_used_capacity)`
+	srDiskTotalExpr = `sum by (idc, domain, cname) (starrocks_be_disks_total_capacity)`
+)
+
+// attachStarRocksCapacity 用与 Grafana Used/Total Capacity 相同的指标覆盖返回缓存。匹配不到时保留 SHOW BACKENDS。
+func (h *OverviewHandler) attachStarRocksCapacity(tid string, targets []overviewRow) {
+	var ids []string
+	for _, row := range targets {
+		if store.NormalizeDBType(row.DBType) == "starrocks" {
+			ids = append(ids, row.ID)
+		}
+	}
+	if len(ids) == 0 || h.Store == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	cli, err := h.promClient()
+	if err != nil || cli == nil {
+		return
+	}
+	now := time.Now()
+	dataSamples, err := cli.Query(ctx, srDataUsedExpr, now)
+	if err != nil {
+		log.Printf("instance overview starrocks data capacity: %v", err)
+		return
+	}
+	diskSamples, err := cli.Query(ctx, srDiskTotalExpr, now)
+	if err != nil {
+		log.Printf("instance overview starrocks disk capacity: %v", err)
+		return
+	}
+	dataHits := capacityHits(dataSamples)
+	diskHits := capacityHits(diskSamples)
+	definedIDC, allowCName := starRocksLabelAliases(h.Store)
+	envByID := map[string]store.Environment{}
+	if list, err := h.Store.ListEnvironments(); err == nil {
+		for _, e := range list {
+			envByID[e.ID] = e
+		}
+	}
+	type matched struct {
+		id   string
+		data float64
+		disk float64
+	}
+	var found []matched
+	for _, id := range ids {
+		inst, err := h.Store.GetInstance(id)
+		if err != nil || inst == nil {
+			continue
+		}
+		env := envByID[strings.TrimSpace(inst.EnvID)]
+		idcs := instoverview.StarRocksIDCAliases(env.Code, inst.IDC, inst.Tags, definedIDC)
+		hosts := instoverview.StarRocksHostCandidates(inst)
+		data, okData := instoverview.SumCapacity(idcs, hosts, allowCName, dataHits)
+		disk, okDisk := instoverview.SumCapacity(idcs, hosts, allowCName, diskHits)
+		if !okData || !okDisk {
+			continue
+		}
+		found = append(found, matched{id: id, data: data, disk: disk})
+	}
+	if len(found) == 0 {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.cache == nil || h.cache[tid] == nil {
+		return
+	}
+	for _, m := range found {
+		s, ok := h.cache[tid][m.id]
+		if !ok {
+			continue
+		}
+		instoverview.ApplyPromCapacity(&s, m.data, m.disk)
+		h.cache[tid][m.id] = s
+	}
+}
+
+func starRocksLabelAliases(db *store.DB) (idcValues []string, allowCName bool) {
+	if db == nil {
+		return nil, false
+	}
+	tags, err := db.ListMonitorLabelTags()
+	if err != nil {
+		log.Printf("instance overview label tags: %v", err)
+		return nil, false
+	}
+	for _, t := range tags {
+		switch strings.ToLower(strings.TrimSpace(t.Key)) {
+		case "idc":
+			idcValues = append(idcValues, t.Values...)
+		case "cname":
+			allowCName = true
+		}
+	}
+	return idcValues, allowCName
+}
+
+func capacityHits(samples []promclient.Sample) []instoverview.CapacityHit {
+	out := make([]instoverview.CapacityHit, 0, len(samples))
+	for _, sm := range samples {
+		v, ok := promclient.InstantValue(sm)
+		if !ok {
+			continue
+		}
+		out = append(out, instoverview.CapacityHit{
+			IDC:    sm.Metric["idc"],
+			Domain: sm.Metric["domain"],
+			CName:  sm.Metric["cname"],
+			Bytes:  v,
+		})
+	}
+	return out
 }
 
 func (h *OverviewHandler) promClient() (*promclient.Client, error) {

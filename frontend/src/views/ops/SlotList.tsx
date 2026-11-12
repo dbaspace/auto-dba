@@ -71,7 +71,7 @@ function slotSyncName(row: SlotRow) {
   return String(row.task_name || row.connector_name || '').trim()
 }
 
-function canRestart(row: SlotRow) {
+function slotRestartable(row: SlotRow) {
   return !!(row.connect_base || row.connector) && !!slotSyncName(row)
 }
 
@@ -252,7 +252,7 @@ export default function SlotList() {
       message.warning('请先勾选要重启的数据')
       return
     }
-    const invalid = records.filter((r) => !canRestart(r))
+    const invalid = records.filter((r) => !slotRestartable(r))
     if (invalid.length) {
       message.warning(`有 ${invalid.length} 条缺少 Kafka 连接器或任务名，无法重启，请调整勾选`)
       return

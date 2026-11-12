@@ -129,16 +129,25 @@ func (h *CmdbHandler) DeleteRelation(c *gin.Context) {
 }
 
 func (h *CmdbHandler) ListTagDefs(c *gin.Context) {
-	// 种子写当前审计租户；列表在审计会话下看全平台。
-	if seedTID := middleware.TenantID(c); seedTID != "" {
-		if err := h.Store.EnsureDefaultCmdbTagDefsForTenant(seedTID); err != nil {
-			log.Printf("cmdb: seed tag defs tenant=%s: %v", seedTID, err)
+	// 标签定义按当前租户看。审计会话不再把各租户叠在同一页。
+	tid := middleware.TenantID(c)
+	if tid != "" {
+		if err := h.Store.EnsureDefaultCmdbTagDefsForTenant(tid); err != nil {
+			log.Printf("cmdb: seed tag defs tenant=%s: %v", tid, err)
 		}
 	}
-	list, err := h.Store.ListCmdbTagDefsInTenant(effectiveListTenantID(h.Store, c), c.Query("scope"))
+	list, err := h.Store.ListCmdbTagDefsInTenant(tid, c.Query("scope"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
+	}
+	codes, err := h.Store.EnvironmentCodes()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	for i := range list {
+		list[i].Values = store.MergeEnvTagValues(list[i].Key, list[i].Values, codes)
 	}
 	c.JSON(http.StatusOK, gin.H{"data": list})
 }
@@ -179,7 +188,11 @@ func (h *CmdbHandler) DeleteTagDef(c *gin.Context) {
 }
 
 func (h *CmdbHandler) SyncMonitorTags(c *gin.Context) {
-	if err := h.svc().SyncMonitorTagsIntoCmdb(); err != nil {
+	tid, ok := requireTenantID(c)
+	if !ok {
+		return
+	}
+	if err := h.svc().SyncMonitorTagsIntoCmdb(tid); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}

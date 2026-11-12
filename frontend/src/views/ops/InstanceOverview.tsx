@@ -741,7 +741,7 @@ export default function InstanceOverview() {
                 : engine === 'redis'
                   ? ' Redis CPU 为近 5 分钟 Prometheus 曲线（redis_exporter），旁注为末点占用。'
                   : engine === 'starrocks'
-                    ? ' 数据盘总大小、数据存储是各 BE 之和。数据使用率是数据存储除以数据盘总大小，悬停可见整盘最高使用率。'
+                    ? ' 数据盘、数据存储与 Grafana 的 Total / Used Capacity 相同，是各存储路径之和。idc 与主机按标签管理中的候选值对齐。没有监控指标时才用 SHOW BACKENDS。数据使用率是数据存储除以数据盘总大小，悬停可见整盘最高使用率。'
                     : ''
             }`}
       </div>

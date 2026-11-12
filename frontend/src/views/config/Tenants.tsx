@@ -102,6 +102,8 @@ export default function Tenants() {
   const [grantLabelMap, setGrantLabelMap] = useState<Record<string, string>>({})
   const [grantResLoading, setGrantResLoading] = useState(false)
   const [grantResSearch, setGrantResSearch] = useState('')
+  const [grantListQ, setGrantListQ] = useState('')
+  const [grantPage, setGrantPage] = useState(1)
   const grantFilterInputRef = useRef<InputRef>(null)
   const [editForm] = Form.useForm()
   const [grantForm] = Form.useForm()
@@ -158,6 +160,23 @@ export default function Tenants() {
     }
     return m
   }, [users])
+
+  const filteredGrants = useMemo(() => {
+    const kw = grantListQ.trim().toLowerCase()
+    if (!kw) return grants
+    return grants.filter((row) => {
+      const typeLabel = (GRANT_TYPES.find((t) => t.value === row.resource_type)?.label || row.resource_type || '').toLowerCase()
+      const resource = (grantLabelMap[row.resource_id] || row.resource_id || '').toLowerCase()
+      let target = ''
+      if (row.to_user_id) {
+        target = userLabelById[row.to_user_id] || row.to_user_id
+      } else if (row.to_tenant_id) {
+        const t = list.find((x) => x.id === row.to_tenant_id)
+        target = t ? t.name || t.code : row.to_tenant_id
+      }
+      return typeLabel.includes(kw) || resource.includes(kw) || String(target || '').toLowerCase().includes(kw)
+    })
+  }, [grants, grantListQ, grantLabelMap, userLabelById, list])
 
   const filteredList = useMemo(() => {
     const kw = listQ.trim().toLowerCase()
@@ -297,6 +316,8 @@ export default function Tenants() {
     setGrantOpen(true)
     setGrantLabelMap({})
     setGrantSelectedKeys([])
+    setGrantListQ('')
+    setGrantPage(1)
     grantForm.setFieldsValue({
       grant_target_mode: 'tenant',
       resource_type: 'instance',
@@ -772,9 +793,11 @@ export default function Tenants() {
           setGrantLabelMap({})
           setGrantSelectedKeys([])
           setGrantResSearch('')
+          setGrantListQ('')
+          setGrantPage(1)
         }}
         footer={null}
-        width={1000}
+        width={1120}
         destroyOnClose
       >
         <p style={{ marginBottom: 12, color: '#6b7280', fontSize: 13 }}>
@@ -927,21 +950,39 @@ export default function Tenants() {
           <Button type="primary" htmlType="submit">
             授权
           </Button>
-        </Form>
-        <div style={{ marginBottom: 8 }}>
-          <Button danger disabled={!grantSelectedKeys.length} onClick={() => void revokeSelectedGrants()}>
+          <Button type="button" danger disabled={!grantSelectedKeys.length} onClick={() => void revokeSelectedGrants()}>
             {grantSelectedKeys.length ? `撤销（${grantSelectedKeys.length}）` : '撤销'}
           </Button>
+        </Form>
+        <div style={{ marginBottom: 8 }}>
+          <Input
+            allowClear
+            value={grantListQ}
+            placeholder="搜索类型、资源或授权对象"
+            onChange={(e) => {
+              setGrantListQ(e.target.value)
+              setGrantPage(1)
+            }}
+          />
         </div>
         <Table
           rowKey="id"
           size="small"
-          dataSource={grants}
+          dataSource={filteredGrants}
+          pagination={{
+            current: grantPage,
+            onChange: (page) => setGrantPage(page),
+            showTotal: (n) => `共 ${n} 条`,
+          }}
+          locale={{
+            emptyText: grantListQ.trim()
+              ? '没有匹配的授权记录'
+              : '暂无授权记录，请选择资源与目标后点击授权',
+          }}
           rowSelection={{
             selectedRowKeys: grantSelectedKeys,
             onChange: (keys) => setGrantSelectedKeys(keys),
           }}
-          locale={{ emptyText: '暂无授权记录，请选择资源与目标后点击授权' }}
           columns={[
             {
               title: '类型',

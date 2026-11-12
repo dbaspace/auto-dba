@@ -40,6 +40,57 @@ func encodeTagValues(vals []string) string {
 	return string(b)
 }
 
+// MergeEnvTagValues 给 idc、env 补上环境管理编码。已有候选值保持原顺序，缺的编码追加在后面。
+func MergeEnvTagValues(key string, values, envCodes []string) []string {
+	switch strings.TrimSpace(key) {
+	case "idc", "env":
+	default:
+		return values
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values)+len(envCodes))
+	for _, v := range values {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			continue
+		}
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	for _, code := range envCodes {
+		code = strings.TrimSpace(code)
+		if code == "" {
+			continue
+		}
+		if _, ok := seen[code]; ok {
+			continue
+		}
+		seen[code] = struct{}{}
+		out = append(out, code)
+	}
+	return out
+}
+
+func (d *DB) EnvironmentCodes() ([]string, error) {
+	if d == nil {
+		return nil, nil
+	}
+	envs, err := d.ListEnvironments()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(envs))
+	for _, e := range envs {
+		if code := strings.TrimSpace(e.Code); code != "" {
+			out = append(out, code)
+		}
+	}
+	return out, nil
+}
+
 func decodeTagValues(s string) []string {
 	s = strings.TrimSpace(s)
 	if s == "" {
