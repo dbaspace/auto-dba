@@ -242,6 +242,13 @@ func (d *DB) UpdateIssueStatus(id, status, reason string) error {
 	return err
 }
 
+// SetIssueStatus 只改状态，保留驳回原因和执行结果。
+func (d *DB) SetIssueStatus(id, status string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := d.Exec(`UPDATE tbl_issues SET status=?, updated_at=? WHERE id=?`, status, now, id)
+	return err
+}
+
 // ListRunningAutoExecIssueIDs 返回仍在后台执行的 DDL/DML/建库工单。
 func (d *DB) ListRunningAutoExecIssueIDs() ([]string, error) {
 	rows, err := d.Query(

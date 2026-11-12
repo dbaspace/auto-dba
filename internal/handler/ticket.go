@@ -1362,6 +1362,41 @@ func (h *TicketHandler) cancelIssue(ctx context.Context, it *store.Issue, reason
 	return nil
 }
 
+// Reopen 把执行失败或已终止的工单退回待审批，不再次执行 SQL。
+func (h *TicketHandler) Reopen(c *gin.Context) {
+	it, err := h.Store.GetIssueInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
+	if err != nil || it == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "工单不存在"})
+		return
+	}
+	if h.Store != nil && h.Store.HardenTicketExecute() && !h.actorCanExecuteIssue(c, it) {
+		c.JSON(http.StatusForbidden, gin.H{
+			"message":      "无权执行该工单（须为提交人、审批人或持有执行权限）",
+			"code":         "ticket_execute_forbidden",
+			"required_urn": store.URNTicketsExecute,
+		})
+		return
+	}
+	if it.Status != store.StatusFailed && it.Status != store.StatusStopped {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "仅执行失败或已终止的工单可退回待审批"})
+		return
+	}
+	prevExec := it.ExecuteResult
+	if err := h.Store.SetIssueStatus(it.ID, store.StatusPending); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	if latest, err := h.Store.GetIssue(it.ID); err == nil && latest != nil {
+		it = latest
+	}
+	it.Status = store.StatusPending
+	if strings.TrimSpace(it.ExecuteResult) == "" {
+		it.ExecuteResult = prevExec
+	}
+	NotifyIssueCreatedAsync(h.Store, h.Secret, it)
+	c.JSON(http.StatusOK, gin.H{"ok": true, "data": it, "message": "已退回待审批"})
+}
+
 func (h *TicketHandler) Execute(c *gin.Context) {
 	it, err := h.Store.GetIssueInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
 	if err != nil || it == nil {

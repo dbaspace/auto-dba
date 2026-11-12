@@ -1117,6 +1117,19 @@ export default function TicketDetail() {
         await api.put(`/tickets/${it.id}/cancel`)
       } else if (kind === 'execute') {
         await api.post(`/tickets/${it.id}/execute`)
+      } else if (kind === 'reopen') {
+        okMsg = '已退回待审批'
+        await new Promise<void>((resolve, reject) => {
+          Modal.confirm({
+            title: '重新审批',
+            content: '将退回待审批，不会再次执行',
+            okText: '重新审批',
+            cancelText: '取消',
+            onOk: () => resolve(),
+            onCancel: () => reject('cancel'),
+          })
+        })
+        await api.put(`/tickets/${it.id}/reopen`)
       } else if (kind === 'stop') {
         okMsg = '已终止执行'
         await new Promise<void>((resolve, reject) => {
@@ -1397,6 +1410,9 @@ export default function TicketDetail() {
                           )}
                         </div>
                         <div className="timeout-hint">提交后超过 8 小时未审核完成，系统将自动取消</div>
+                        {execErrorText ? (
+                          <div className="user-sub exec-fail-msg" title={execErrorText}>上次执行失败：{execErrorText}</div>
+                        ) : null}
                         <div className="remark-box">
                           <div className="remark-label">附言：</div>
                           <Input.TextArea
@@ -1647,8 +1663,8 @@ export default function TicketDetail() {
                       <>
                         <div className="status-text danger">已终止</div>
                         <div className="user-sub">{execSummary || fmtTime(item.updated_at)}</div>
-                        <Button type="primary" size="small" loading={acting} onClick={() => act('execute')}>
-                          重试执行
+                        <Button type="primary" size="small" loading={acting} onClick={() => act('reopen')}>
+                          重新审批
                         </Button>
                       </>
                     ) : item.status === 'approved' ? (
@@ -1676,9 +1692,9 @@ export default function TicketDetail() {
                           type="primary"
                           size="small"
                           loading={acting}
-                          onClick={() => act('execute')}
+                          onClick={() => act('reopen')}
                         >
-                          重试执行
+                          重新审批
                         </Button>
                       </>
                     ) : item.status === 'executed' ? (

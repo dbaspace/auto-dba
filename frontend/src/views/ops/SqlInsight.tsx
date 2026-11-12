@@ -155,7 +155,7 @@ export default function SqlInsight() {
     const all: { key: InsightTabKey; label: string; children: React.ReactNode }[] = [
       {
         key: 'sql',
-        label: 'SQL洞察',
+        label: '快照查询',
         children: (
           <SqlInsightTab
             filter={filter}
