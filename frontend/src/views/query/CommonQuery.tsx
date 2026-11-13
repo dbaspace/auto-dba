@@ -52,7 +52,9 @@ import { queryFavoriteKey, queryHistoryKey, queryWorkspaceKey } from './querySes
 import DbTypeIcon from '../../components/DbTypeIcon'
 import SqlEditor from '../../components/SqlEditor'
 import { useQuerySuggest, type SuggestEnv } from './useQuerySuggest'
+import { newClientRequestID } from '../../utils/clientRequestId'
 import { formatSqlContent } from '../../utils/formatSql'
+import { applySqlLineComment, type SqlCommentMode } from '../../utils/sqlComment'
 import {
   buildExportContent,
   downloadPasswordZip,
@@ -1370,12 +1372,17 @@ export default function CommonQuery() {
   }
 
   function placeSqlCursor(cursor: number, sql: string) {
+    placeSqlRange(cursor, cursor, sql)
+  }
+
+  function placeSqlRange(start: number, end: number, sql: string) {
     setTimeout(() => {
       const el = sqlBoxRef.current
       if (!el) return
-      const n = Math.max(0, Math.min(cursor, sql.length))
+      const a = Math.max(0, Math.min(start, sql.length))
+      const b = Math.max(0, Math.min(end, sql.length))
       el.focus()
-      el.setSelectionRange(n, n)
+      el.setSelectionRange(a, b)
     }, 0)
   }
 
@@ -1447,11 +1454,33 @@ export default function CommonQuery() {
       el.setSelectionRange(end, end)
       return
     }
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.nativeEvent.isComposing && (e.key === '/' || e.key === '?')) {
+      e.preventDefault()
+      applyLineComment(e.shiftKey || e.key === '?' ? 'uncomment' : 'comment')
+      return
+    }
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       suggest.close()
       runSQL()
     }
+  }
+
+  function applyLineComment(mode: SqlCommentMode) {
+    if (!current) return
+    const el = sqlBoxRef.current
+    const sql = el?.value ?? current.sql ?? ''
+    const start = el?.selectionStart ?? sql.length
+    const end = el?.selectionEnd ?? start
+    const next = applySqlLineComment(sql, start, end, mode)
+    if (next.text === sql) {
+      placeSqlRange(next.start, next.end, sql)
+      return
+    }
+    noteSqlEdit(current.key, { sql, cursor: start })
+    suggest.close()
+    updateCurrent({ sql: next.text })
+    placeSqlRange(next.start, next.end, next.text)
   }
 
   function pushHistory(tab: TabItem) {
@@ -1522,7 +1551,7 @@ export default function CommonQuery() {
     queryAbortRef.current?.abort()
     const ac = new AbortController()
     queryAbortRef.current = ac
-    const clientRequestID = crypto.randomUUID()
+    const clientRequestID = newClientRequestID()
     const started = Date.now()
     setRunning(true)
     if (picked) setSelectionEpoch((n) => n + 1)
@@ -2353,7 +2382,7 @@ export default function CommonQuery() {
                     className="sql-box-hl"
                     spellCheck={false}
                     minRows={8}
-                    placeholder="输入 SQL，Ctrl / ⌘ + Enter 运行；有多条且选中一段时只执行选中。Ctrl+A 全选，Esc 取消选中"
+                    placeholder="输入 SQL，Ctrl / ⌘ + Enter 运行；有多条且选中一段时只执行选中。Ctrl+A 全选，Esc 取消选中。Ctrl / ⌘ + / 注释，Ctrl / ⌘ + Shift + / 取消注释"
                     onChange={(v) => {
                       suggestEnv.current.sql = v
                       updateCurrent({ sql: v })
