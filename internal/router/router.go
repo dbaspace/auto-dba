@@ -105,6 +105,7 @@ func Init(e *gin.Engine, d Deps) {
 	api.GET("/info", d.Auth.Info)
 	api.POST("/auth/login", d.Auth.Login)
 	api.GET("/auth/captcha", d.Auth.Captcha)
+	api.POST("/auth/register", d.Auth.Register)
 	api.POST("/auth/password/forgot", d.Auth.ForgotPassword)
 	api.POST("/auth/password/reset", d.Auth.ResetPassword)
 	api.GET("/auth/sso/login", d.Auth.SSOStart)
@@ -120,6 +121,7 @@ func Init(e *gin.Engine, d Deps) {
 		"/healthz", "/readyz",
 		"/api/v1/auth/login", "/api/v1/auth/captcha", "/api/v1/info",
 		"/api/v1/auth/sso/",
+		"/api/v1/auth/register",
 		"/api/v1/auth/password/forgot", "/api/v1/auth/password/reset",
 		"/api/v1/k8s/agents/",
 	)
@@ -252,6 +254,10 @@ func Init(e *gin.Engine, d Deps) {
 	secured.GET("/roles/:id/users", d.RBAC.ListRoleUsers)
 	secured.GET("/roles/:id/menus", d.RBAC.GetRoleMenus)
 	secured.PUT("/roles/:id/menus", requireURN(store.URNRolesEdit), d.RBAC.PutRoleMenus)
+
+	secured.GET("/user-registrations", d.Auth.ListUserRegistrations)
+	secured.POST("/user-registrations/:id/approve", d.Auth.ApproveUserRegistration)
+	secured.POST("/user-registrations/:id/reject", d.Auth.RejectUserRegistration)
 
 	secured.GET("/users", d.RBAC.ListUsers)
 	secured.POST("/users", requireURN(store.URNUsersCreate), d.RBAC.CreateUser)

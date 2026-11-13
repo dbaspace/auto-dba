@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Button, Form, Input, Modal, Pagination, Popconfirm, Select, Space, Tag, Tooltip, message } from 'antd'
+import { Button, Form, Input, Modal, Pagination, Popconfirm, Select, Space, Table, Tag, Tooltip, message } from 'antd'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import api, { beginLogout } from '../../api/request'
 import Auth from '../../components/Auth'
-import { Perm } from '../../hooks/usePermission'
+import { Perm, usePermission } from '../../hooks/usePermission'
 import { useAppDispatch, useAppSelector } from '../../store'
 import { clearAuth } from '../../store/authSlice'
 import { resetTabs } from '../../store/tabsSlice'
@@ -110,6 +110,9 @@ export default function Users() {
   const [usernameQuery, setUsernameQuery] = useState('')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
+  const { isAdmin } = usePermission()
+  const [pending, setPending] = useState<any[]>([])
+  const [reviewingId, setReviewingId] = useState('')
   const me = currentUserId()
   const [form, setForm] = useState({
     id: '',
@@ -157,6 +160,29 @@ export default function Users() {
       }
     } else {
       setTenantRoleMap({})
+    }
+    if (isAdmin) {
+      try {
+        const { data } = await api.get('/user-registrations', { silent: true })
+        setPending(data?.data || [])
+      } catch {
+        setPending([])
+      }
+    } else {
+      setPending([])
+    }
+  }
+
+  async function reviewRegistration(id: string, action: 'approve' | 'reject') {
+    setReviewingId(id)
+    try {
+      await api.post(`/user-registrations/${id}/${action}`, {}, { silent: true })
+      message.success(action === 'approve' ? '已通过，用户已创建' : '已驳回')
+      await load()
+    } catch (e: any) {
+      message.error(e?.response?.data?.message || e?.message || '操作失败')
+    } finally {
+      setReviewingId('')
     }
   }
 
@@ -329,6 +355,48 @@ export default function Users() {
           </Auth>
         </Space>
       </div>
+      {isAdmin ? (
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontWeight: 600, marginBottom: 8 }}>待审批注册</div>
+          <Table
+            size="small"
+            rowKey="id"
+            pagination={false}
+            dataSource={pending}
+            locale={{ emptyText: '暂无待审批注册' }}
+            columns={[
+              { title: '用户名', dataIndex: 'username' },
+              { title: '显示名', dataIndex: 'display_name' },
+              {
+                title: '申请时间',
+                dataIndex: 'created_at',
+                render: (v: string) => (v ? new Date(v).toLocaleString() : '-'),
+              },
+              {
+                title: '操作',
+                width: 160,
+                render: (_, row) => (
+                  <Space>
+                    <Button
+                      type="link"
+                      size="small"
+                      loading={reviewingId === row.id}
+                      onClick={() => reviewRegistration(row.id, 'approve')}
+                    >
+                      通过
+                    </Button>
+                    <Popconfirm title="驳回该注册申请？" onConfirm={() => reviewRegistration(row.id, 'reject')}>
+                      <Button type="link" size="small" danger loading={reviewingId === row.id}>
+                        驳回
+                      </Button>
+                    </Popconfirm>
+                  </Space>
+                ),
+              },
+            ]}
+          />
+        </div>
+      ) : null}
       <div className="ops-table">
         <ResponsiveTable
           rowKey={(r) => r.id || r.username}

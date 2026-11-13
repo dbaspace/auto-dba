@@ -153,6 +153,35 @@ export function dbBoundDomains(db: any): string[] {
 }
 
 /**
+ * 已登记库用于导出数据源的域名。
+ * 先 domains，再标签 domain=；库本身没绑定时才用实例主域名 domain_name。
+ */
+export function registeredDbDomains(db: any, inst?: { domain_name?: string } | null): string[] {
+  const bound = dbBoundDomains(db)
+  if (bound.length) return bound
+  const primary = String(inst?.domain_name || '').trim()
+  return primary ? [primary] : []
+}
+
+/**
+ * 从查询进入导出时补选数据源。已有选中值则保持。
+ * 一条域名直接选中；多条时优先和当前环境下拉选项重合的，否则第一条。没有绑定域名则不选。
+ */
+export function pickRegisteredExportDomain(
+  domains: string[],
+  optionDomains: string[] = [],
+  current = '',
+): string {
+  const cur = String(current || '').trim()
+  if (cur) return cur
+  const list = (domains || []).map((d) => String(d || '').trim()).filter(Boolean)
+  if (!list.length) return ''
+  if (list.length === 1) return list[0]
+  const opts = new Set((optionDomains || []).map((d) => domainKey(d)).filter(Boolean))
+  return list.find((d) => opts.has(domainKey(d))) || list[0]
+}
+
+/**
  * 库记录是否匹配指定域名（大小写不敏感）。
  * 未绑定任何域名时视为匹配（与后端提交校验：空 domains 放行一致）。
  */

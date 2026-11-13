@@ -40,6 +40,7 @@ export default function SystemNotice() {
         bump_version: false,
         ticket_submit_freeze: !!row.ticket_submit_freeze,
         ticket_submit_freeze_message: row.ticket_submit_freeze_message || '',
+        user_register_enabled: !!row.user_register_enabled,
       })
     } finally {
       setLoading(false)
@@ -73,6 +74,7 @@ export default function SystemNotice() {
         bump_version: !!values.bump_version,
         ticket_submit_freeze: !!values.ticket_submit_freeze,
         ticket_submit_freeze_message: String(values.ticket_submit_freeze_message || '').trim(),
+        user_register_enabled: !!values.user_register_enabled,
       })
       const row = data.data || {}
       setNoticeId(String(row.id || noticeId))
@@ -147,6 +149,17 @@ export default function SystemNotice() {
               extra={`可空，空则使用默认：${DEFAULT_FREEZE_MSG}`}
             >
               <Input.TextArea rows={3} maxLength={500} placeholder={DEFAULT_FREEZE_MSG} />
+            </Form.Item>
+            <h3 style={{ marginTop: 28 }}>用户注册</h3>
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 16 }}
+              message="允许用户自己注册"
+              description="开启后，登录页出现注册入口。注册用户加入默认租户，角色为只读，不能自行选择租户或角色。"
+            />
+            <Form.Item name="user_register_enabled" label="允许用户注册" valuePropName="checked">
+              <Switch checkedChildren="开" unCheckedChildren="关" />
             </Form.Item>
           </div>
         </div>

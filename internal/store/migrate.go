@@ -1680,7 +1680,22 @@ func (d *DB) ensureFlashbackSchema() error {
 	if err := d.ensureSystemNoticeTables(); err != nil {
 		return err
 	}
+	if err := d.ensureUserRegistrationTable(); err != nil {
+		return err
+	}
 	return nil
+}
+
+func (d *DB) ensureUserRegistrationTable() error {
+	_, err := d.db.Exec(`CREATE TABLE IF NOT EXISTS tbl_user_registrations (
+		id TEXT PRIMARY KEY,
+		username TEXT NOT NULL,
+		display_name TEXT NOT NULL DEFAULT '',
+		password_hash TEXT NOT NULL,
+		status TEXT NOT NULL DEFAULT 'pending',
+		created_at TEXT NOT NULL
+	)`)
+	return err
 }
 
 func (d *DB) ensureSystemNoticeTables() error {
@@ -1695,7 +1710,8 @@ func (d *DB) ensureSystemNoticeTables() error {
 		updated_at TEXT NOT NULL,
 		created_at TEXT NOT NULL,
 		ticket_submit_freeze INTEGER NOT NULL DEFAULT 0,
-		ticket_submit_freeze_message TEXT NOT NULL DEFAULT ''
+		ticket_submit_freeze_message TEXT NOT NULL DEFAULT '',
+		user_register_enabled INTEGER NOT NULL DEFAULT 0
 	)`); err != nil {
 		return err
 	}
@@ -1703,6 +1719,9 @@ func (d *DB) ensureSystemNoticeTables() error {
 		return err
 	}
 	if _, err := d.db.Exec(`ALTER TABLE tbl_system_notices ADD COLUMN IF NOT EXISTS ticket_submit_freeze_message TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	if _, err := d.db.Exec(`ALTER TABLE tbl_system_notices ADD COLUMN IF NOT EXISTS user_register_enabled INTEGER NOT NULL DEFAULT 0`); err != nil {
 		return err
 	}
 	if _, err := d.db.Exec(`CREATE TABLE IF NOT EXISTS tbl_system_notice_acks (

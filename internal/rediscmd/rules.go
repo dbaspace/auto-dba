@@ -190,6 +190,9 @@ func ValidateCommandWith(saved *RulesConfig, line string) error {
 	if !ok || !meta.Enabled {
 		return fmt.Errorf("命令不在允许的 CRUD 白名单内: %s", cmd)
 	}
+	if err := CheckReadSubcommand(cmd, parts[1:]); err != nil {
+		return err
+	}
 	argc := len(parts) - 1
 	if argc < meta.MinArgs {
 		return fmt.Errorf("%s 至少需要 %d 个参数（当前 %d）", meta.Name, meta.MinArgs, argc)

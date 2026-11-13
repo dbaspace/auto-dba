@@ -534,7 +534,7 @@ export default function RedisQuery() {
               <Input.TextArea
                 value={current.command}
                 rows={4}
-                placeholder={'只读命令，例如：GET mykey\nSCAN 0 MATCH * COUNT 100\nINFO server'}
+                placeholder={'只读命令，例如：GET mykey\nLLEN mylist\nSCAN 0 MATCH * COUNT 100\nINFO server'}
                 onChange={(e) => patchTab(current.key, { command: e.target.value })}
                 onKeyDown={onCmdKey}
               />
@@ -551,8 +551,11 @@ export default function RedisQuery() {
                 <Button onClick={() => patchTab(current.key, { command: 'INFO server' })} disabled={current.running}>
                   INFO 示例
                 </Button>
+                <Button onClick={() => patchTab(current.key, { command: 'LLEN key' })} disabled={current.running}>
+                  LLEN 示例
+                </Button>
                 <span className="muted">
-                  仅允许 GET / INFO / SCAN · Ctrl/⌘ + Enter 运行 · 当前 {current.dbName || '未选库'}
+                  仅允许只读命令，不支持写入和 KEYS 等危险命令 · Ctrl/⌘ + Enter 运行 · 当前 {current.dbName || '未选库'}
                 </span>
               </div>
               {current.result ? (

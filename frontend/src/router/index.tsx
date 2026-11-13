@@ -4,6 +4,7 @@ import AppLayout from '../layout/AppLayout'
 import Login from '../views/Login'
 import SelectTenant from '../views/SelectTenant'
 import ForgotPassword from '../views/ForgotPassword'
+import Register from '../views/Register'
 import ResetPassword from '../views/ResetPassword'
 import Forbidden from '../views/Forbidden'
 import RequireAuth from './RequireAuth'
@@ -111,6 +112,7 @@ const router = createHashRouter([
   { path: '/login', element: <Login /> },
   { path: '/select-tenant', element: <SelectTenant /> },
   { path: '/forgot-password', element: <ForgotPassword /> },
+  { path: '/register', element: <Register /> },
   { path: '/reset-password', element: <ResetPassword /> },
   { path: '/403', element: <Forbidden /> },
   {

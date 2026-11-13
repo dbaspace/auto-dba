@@ -26,9 +26,12 @@ func Execute(ctx context.Context, inst *store.Instance, opt Options, dbName, com
 	if err != nil {
 		return nil, err
 	}
-	parts := strings.Fields(strings.TrimSpace(command))
-	if len(parts) == 0 {
-		return nil, fmt.Errorf("命令不能为空")
+	if err := CheckQueryCommand(command); err != nil {
+		return nil, err
+	}
+	parts, err := rediscmd.SplitArgs(command)
+	if err != nil {
+		return nil, fmt.Errorf("命令解析失败: %v", err)
 	}
 	cmd := strings.ToUpper(parts[0])
 	args := parts[1:]
@@ -49,7 +52,7 @@ func Execute(ctx context.Context, inst *store.Instance, opt Options, dbName, com
 	case "SCAN":
 		return execSCAN(ctx, client, args, start)
 	default:
-		return nil, fmt.Errorf("仅允许只读命令 GET / INFO / SCAN（收到 %s）", cmd)
+		return execRead(ctx, client, parts, start)
 	}
 }
 

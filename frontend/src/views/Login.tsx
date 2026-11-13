@@ -242,6 +242,7 @@ export default function Login() {
   const [ssoGrantMode, setSsoGrantMode] = useState('')
   const [ssoCallbackURL, setSsoCallbackURL] = useState('')
   const [publicIPEcho, setPublicIPEcho] = useState(DEFAULT_PUBLIC_IP_ECHO)
+  const [registerEnabled, setRegisterEnabled] = useState(false)
   const [authMode, setAuthMode] = useState('platform')
   const [error, setError] = useState('')
   const [username, setUsername] = useState('')
@@ -347,6 +348,7 @@ export default function Login() {
         setSsoCallbackURL(callbackURL)
         const echo = String(data.public_ip_echo || '').trim()
         if (echo) setPublicIPEcho(echo)
+        setRegisterEnabled(!!data.user_register_enabled)
         const priority = Array.isArray(data.auth_priority) ? data.auth_priority : []
         let lastMode = ''
         try {
@@ -642,7 +644,12 @@ export default function Login() {
           >
             {retryAfter > 0 ? `请稍候（${retryAfter}s）` : '登录'}
           </Button>
-          <div style={{ textAlign: 'right', marginTop: 8 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8 }}>
+            {registerEnabled ? (
+              <Link to="/register" style={{ fontSize: 13 }}>
+                注册账号
+              </Link>
+            ) : <span />}
             <Link to="/forgot-password" style={{ fontSize: 13 }}>
               忘记密码？
             </Link>

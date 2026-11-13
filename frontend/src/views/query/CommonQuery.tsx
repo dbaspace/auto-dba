@@ -53,6 +53,7 @@ import DbTypeIcon from '../../components/DbTypeIcon'
 import SqlEditor from '../../components/SqlEditor'
 import { useQuerySuggest, type SuggestEnv } from './useQuerySuggest'
 import { newClientRequestID } from '../../utils/clientRequestId'
+import { registeredDbDomains } from '../../utils/instanceSource'
 import { formatSqlContent } from '../../utils/formatSql'
 import { applySqlLineComment, type SqlCommentMode } from '../../utils/sqlComment'
 import {
@@ -1671,12 +1672,16 @@ export default function CommonQuery() {
         const sqlLimit = limMatch
           ? Number(limMatch[2] != null ? limMatch[2] : limMatch[1])
           : 0
+        const db = databases.find((d) => d.id === tab.dbId)
+        const bound = registeredDbDomains(db, instMap[tab.instanceId] || instMap[db?.instance_id])
         sessionStorage.setItem(DQL_DRAFT_KEY, JSON.stringify({
           database_id: tab.dbId,
           instance_id: tab.instanceId,
           db_name: tab.dbName,
           env: tab.env,
           db_type: tab.dbType,
+          // 多条域名留给导出页按当前环境的域名管理选项再选；没有绑定域名则留空
+          domain: bound.length === 1 ? bound[0] : '',
           sql: exportSql,
           row_count: Number.isFinite(sqlLimit) && sqlLimit > 0 ? sqlLimit : 0,
           columns: tab.result?.columns || [],

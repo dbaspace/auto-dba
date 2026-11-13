@@ -973,15 +973,24 @@ func (h *AuthHandler) Info(c *gin.Context) {
 	}
 	priority = append(priority, "platform")
 	c.JSON(http.StatusOK, gin.H{
-		"auth_modes":       modes,
-		"auth_priority":    priority,
-		"auth_auto":        true,
-		"sso_grant_mode":   ssoGrantMode,
-		"sso_authorize":    ssoAuthorize,
-		"sso_login_path":   "/api/v1/auth/sso/login",
-		"sso_callback_url": ssoCallbackURL,
-		"public_ip_echo":   h.publicIPEcho(),
+		"auth_modes":            modes,
+		"auth_priority":         priority,
+		"auth_auto":             true,
+		"sso_grant_mode":        ssoGrantMode,
+		"sso_authorize":         ssoAuthorize,
+		"sso_login_path":        "/api/v1/auth/sso/login",
+		"sso_callback_url":      ssoCallbackURL,
+		"public_ip_echo":        h.publicIPEcho(),
+		"user_register_enabled": h.userRegisterEnabled(),
 	})
+}
+
+func (h *AuthHandler) userRegisterEnabled() bool {
+	if h == nil || h.Store == nil {
+		return false
+	}
+	ok, err := h.Store.UserRegisterEnabled()
+	return err == nil && ok
 }
 
 func (h *AuthHandler) publicIPEcho() string {
@@ -1694,6 +1703,160 @@ func allowForgotByIP(ip string) bool {
 	}
 	forgotIP[ip] = append(kept, now)
 	return true
+}
+
+// Register 提交自助注册申请。开关关闭时拒绝。通过管理员审批后才创建用户。
+func (h *AuthHandler) Register(c *gin.Context) {
+	var req struct {
+		Username        string `json:"username"`
+		Password        string `json:"password"`
+		PasswordConfirm string `json:"password_confirm"`
+		DisplayName     string `json:"display_name"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "参数无效"})
+		return
+	}
+	enabled, err := h.Store.UserRegisterEnabled()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	if !enabled {
+		c.JSON(http.StatusForbidden, gin.H{"message": "当前未开放注册"})
+		return
+	}
+	username := strings.TrimSpace(req.Username)
+	password := req.Password
+	if username == "" || strings.ContainsAny(username, " \t\r\n") || len(username) > 64 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "请填写有效用户名"})
+		return
+	}
+	if len(password) < 6 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "密码至少 6 位"})
+		return
+	}
+	if password != req.PasswordConfirm {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "两次输入的密码不一致"})
+		return
+	}
+	exist, err := h.Store.GetUserByUsernameFold(username)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	if exist != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "用户名已存在"})
+		return
+	}
+	pending, err := h.Store.GetPendingUserRegistrationByUsername(username)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	if pending != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "该用户名已在审批中"})
+		return
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	display := strings.TrimSpace(req.DisplayName)
+	if _, err := h.Store.CreateUserRegistration(username, display, string(hash)); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "message": "注册已提交，请等待管理员审批"})
+}
+
+// ListUserRegistrations 待审批的自助注册。仅平台管理员。
+func (h *AuthHandler) ListUserRegistrations(c *gin.Context) {
+	if !requireAdminViewer(h.Store, c, "仅管理员可审批注册") {
+		return
+	}
+	list, err := h.Store.ListPendingUserRegistrations()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	if list == nil {
+		list = []store.UserRegistration{}
+	}
+	c.JSON(http.StatusOK, gin.H{"data": list})
+}
+
+// ApproveUserRegistration 通过后按开发者角色创建用户并加入默认租户。
+func (h *AuthHandler) ApproveUserRegistration(c *gin.Context) {
+	if !requireAdminViewer(h.Store, c, "仅管理员可审批注册") {
+		return
+	}
+	rec, err := h.Store.GetUserRegistration(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	if rec == nil || rec.Status != store.UserRegistrationPending {
+		c.JSON(http.StatusNotFound, gin.H{"message": "申请不存在或已处理"})
+		return
+	}
+	exist, err := h.Store.GetUserByUsernameFold(rec.Username)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	if exist != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "用户名已存在"})
+		return
+	}
+	role, err := h.Store.GetRoleByCode("developer")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	if role == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "开发者角色不存在"})
+		return
+	}
+	u := &store.User{
+		Username:    rec.Username,
+		DisplayName: rec.DisplayName,
+		Role:        role.Code,
+		RoleID:      role.ID,
+		RoleIDs:     []string{role.ID},
+		Source:      store.UserSourcePlatform,
+	}
+	if err := h.Store.CreateUser(u, rec.PasswordHash); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "创建用户失败（用户名可能已存在）"})
+		return
+	}
+	if err := h.Store.DeleteUserRegistration(rec.ID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "id": u.ID})
+}
+
+// RejectUserRegistration 驳回申请，不创建用户。
+func (h *AuthHandler) RejectUserRegistration(c *gin.Context) {
+	if !requireAdminViewer(h.Store, c, "仅管理员可审批注册") {
+		return
+	}
+	rec, err := h.Store.GetUserRegistration(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	if rec == nil || rec.Status != store.UserRegistrationPending {
+		c.JSON(http.StatusNotFound, gin.H{"message": "申请不存在或已处理"})
+		return
+	}
+	if err := h.Store.DeleteUserRegistration(rec.ID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
 // ForgotPassword 按用户名定位账号，向请求中填写的邮箱发送重置链接。

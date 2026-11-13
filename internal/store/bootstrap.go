@@ -109,6 +109,9 @@ func (d *DB) migrateFast() error {
 			if err := d.ensureSystemNoticeTables(); err != nil {
 				return err
 			}
+			if err := d.ensureUserRegistrationTable(); err != nil {
+				return err
+			}
 			if err := d.ensureQueryFavoritesTable(); err != nil {
 				return err
 			}

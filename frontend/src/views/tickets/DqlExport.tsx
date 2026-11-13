@@ -14,6 +14,8 @@ import {
 import {
   filterDbsByDomain,
   parseSourceKey,
+  pickRegisteredExportDomain,
+  registeredDbDomains,
   sourceKey,
   sourcePrimaryLabel,
   sourcesFromAccessDomains,
@@ -340,23 +342,31 @@ export default function DqlExport() {
     restoreDraft()
   }
 
-  async function loadMeta(): Promise<{ instances: any[]; databases: any[] }> {
+  async function loadMeta(): Promise<{ instances: any[]; databases: any[]; accessDomains: any[] }> {
+    const groupsPromise = loadTicketEnvGroups().then((groups) => {
+      envGroupsRef.current = groups
+      setEnvGroups(groups)
+      const mapped = resolveTicketEnvValue(formRef.current.env, groups)
+      if (mapped !== formRef.current.env) {
+        formRef.current = { ...formRef.current, env: mapped }
+        patchForm({ env: mapped })
+      }
+      setEnvCatalogReady(true)
+      return groups
+    })
     const [instRes, dbRes, domainRes, argRes, apprRes] = await Promise.all([
       api.get('/instances'),
       api.get('/databases'),
       api.get('/access-domains').catch(() => ({ data: { data: [] } })),
       api.get('/global-args').catch(() => ({ data: { data: [] } })),
       api.get('/create-db/approvers', { params: { scope: 'tenant' } }).catch(() => ({ data: { data: [] } })),
+      groupsPromise,
     ])
     const instList = instRes.data.data || []
     const dbList = dbRes.data.data || []
     setInstances(instList)
     setDatabases(dbList)
     setAccessDomains(domainRes.data.data || [])
-    const groups = await loadTicketEnvGroups()
-    envGroupsRef.current = groups
-    setEnvGroups(groups)
-    setEnvCatalogReady(true)
     const raw = (argRes.data.data || []).find((a: any) => a.key === 'ticket_instance_types')?.value || ''
     try {
       const parsed = JSON.parse(raw)
@@ -376,7 +386,7 @@ export default function DqlExport() {
     setExtraApprovers([
       ...new Set<string>((apprRes.data.data || []).map((a: any) => a.name || a).filter(Boolean)),
     ])
-    return { instances: instList, databases: dbList }
+    return { instances: instList, databases: dbList, accessDomains: domainRes.data.data || [] }
   }
 
   async function submit() {
@@ -461,6 +471,24 @@ export default function DqlExport() {
       ) {
         formRef.current = { ...formRef.current, database_id: '', instance_id: '', db_name: '' }
         patchForm({ database_id: '', instance_id: '', db_name: '' })
+      }
+      if (formRef.current.database_id && !String(formRef.current.domain || '').trim()) {
+        const db = (meta.databases || []).find((d: any) => d.id === formRef.current.database_id)
+        const inst = (meta.instances || []).find((i: any) => i.id === (db?.instance_id || formRef.current.instance_id))
+        const options = sourcesFromAccessDomains(filterAccessDomainsByGroup(meta.accessDomains || [], {
+          groupCode: formRef.current.env,
+          groups: envGroupsRef.current,
+          dbType: formRef.current.db_type,
+        }))
+        const domain = pickRegisteredExportDomain(
+          registeredDbDomains(db, inst),
+          options.map((s) => s.domain),
+        )
+        if (domain) {
+          const instanceId = String(db?.instance_id || formRef.current.instance_id || '')
+          formRef.current = { ...formRef.current, domain, instance_id: instanceId || formRef.current.instance_id }
+          patchForm({ domain, instance_id: formRef.current.instance_id })
+        }
       }
       // setForm 异步，草稿恢复后用 antdForm 同步取值，避免跳过审批人加载
       const af = antdForm.getFieldsValue(true) || {}
