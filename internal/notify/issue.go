@@ -28,9 +28,19 @@ func notifyApproverPending(db *store.DB, encKey string, issue *store.Issue, tran
 	if db == nil || issue == nil {
 		return
 	}
-	ncfg, err := db.GetNotifyConfig()
+	ncfg, parseFailed, err := db.LoadNotifyConfig()
 	if err != nil || ncfg == nil {
+		msg := "读取通知配置失败"
+		if err != nil {
+			msg = err.Error()
+		}
 		log.Printf("notify ticket pending: read config failed ticket=%s err=%v", issue.TicketNo, err)
+		recordNotifyAudit(db, issue, nil, "", "notify:", "", false, msg, 0)
+		return
+	}
+	if parseFailed {
+		log.Printf("notify ticket pending: config parse failed ticket=%s", issue.TicketNo)
+		recordNotifyAudit(db, issue, nil, "", "notify:", "", false, "通知配置解析失败，已按默认关闭", 0)
 		return
 	}
 	wantEmail := ncfg.EmailOnTicketCreate
@@ -38,21 +48,18 @@ func notifyApproverPending(db *store.DB, encKey string, issue *store.Issue, tran
 	wantWecom := ncfg.WecomOnTicketCreate
 	wantRobot := ncfg.RobotsOnTicketCreate
 	if !wantEmail && !wantLark && !wantWecom && !wantRobot {
+		recordNotifyAudit(db, issue, nil, "", "notify:", "", false, "工单创建通知开关均未开启", 0)
 		return
 	}
 	recipients := collectApproverUsernames(issue)
 	if len(recipients) == 0 && !wantRobot {
 		log.Printf("notify ticket pending: no approver usernames ticket=%s", issue.TicketNo)
-		if wantEmail || wantLark {
-			recordNotifyAudit(db, issue, nil, "", "notify:", "", false, "没有审批人", 0)
-		}
+		recordNotifyAudit(db, issue, nil, "", "notify:", "", false, "没有审批人", 0)
 		return
 	}
 	if len(recipients) == 0 {
 		log.Printf("notify ticket pending: no approver usernames, person channels skipped ticket=%s", issue.TicketNo)
-		if wantEmail || wantLark {
-			recordNotifyAudit(db, issue, nil, "", "notify:", "", false, "没有审批人", 0)
-		}
+		recordNotifyAudit(db, issue, nil, "", "notify:", "", false, "没有审批人", 0)
 	}
 	smtpCfg, _ := db.GetSMTPConfig(encKey)
 	link := ticketLink(smtpCfg, issue.ID)
@@ -611,7 +618,11 @@ func recordNotifyAudit(db *store.DB, issue *store.Issue, user *store.User, usern
 		row.DisplayName = user.DisplayName
 	}
 	if err := db.CreateQueryAudit(row); err != nil {
-		log.Printf("notify audit ticket=%s: %v", issue.TicketNo, err)
+		who := row.Username
+		if who == "" {
+			who = strings.TrimSpace(issue.AssignedTo)
+		}
+		log.Printf("notify audit ticket=%s approver=%s: %v", issue.TicketNo, who, err)
 	}
 }
 

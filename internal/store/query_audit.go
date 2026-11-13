@@ -119,6 +119,32 @@ type QueryAuditFilter struct {
 	PageSize   int
 }
 
+// stripWorkflowTicketPrefix 把页面工单名 DQL-Txxxx 还原成审计里的工单号。
+// 前缀必须是已知工单类型，其它关键字保持原样。
+func stripWorkflowTicketPrefix(q string) string {
+	q = strings.TrimSpace(q)
+	i := strings.Index(q, "-")
+	if i <= 0 || i >= len(q)-1 {
+		return ""
+	}
+	if !ValidIssueType(strings.ToLower(q[:i])) {
+		return ""
+	}
+	return strings.TrimSpace(q[i+1:])
+}
+
+func queryAuditKeywordLikes(q string) []string {
+	q = strings.TrimSpace(q)
+	if q == "" {
+		return nil
+	}
+	likes := []string{"%" + q + "%"}
+	if bare := stripWorkflowTicketPrefix(q); bare != "" && !strings.EqualFold(bare, q) {
+		likes = append(likes, "%"+bare+"%")
+	}
+	return likes
+}
+
 func buildQueryAuditWhere(f QueryAuditFilter) (string, []any) {
 	where := `WHERE 1=1`
 	args := []any{}
@@ -142,10 +168,13 @@ func buildQueryAuditWhere(f QueryAuditFilter) (string, []any) {
 		where += ` AND client_type=?`
 		args = append(args, s)
 	}
-	if s := strings.TrimSpace(f.Q); s != "" {
-		where += ` AND (statement LIKE ? OR target LIKE ? OR instance_name LIKE ?)`
-		like := "%" + s + "%"
-		args = append(args, like, like, like)
+	if likes := queryAuditKeywordLikes(f.Q); len(likes) > 0 {
+		var parts []string
+		for _, like := range likes {
+			parts = append(parts, `(statement LIKE ? OR target LIKE ? OR instance_name LIKE ?)`)
+			args = append(args, like, like, like)
+		}
+		where += ` AND (` + strings.Join(parts, ` OR `) + `)`
 	}
 	if s := strings.TrimSpace(f.DateFrom); s != "" {
 		where += ` AND created_at>=?`
@@ -196,4 +225,44 @@ func (d *DB) ListQueryAudits(f QueryAuditFilter) ([]QueryAudit, int, error) {
 		out = append(out, it)
 	}
 	return out, total, rows.Err()
+}
+
+// ListNotifyAuditsByTicket 按真实工单号取待审批通知审计，不带页面上的类型前缀。
+func (d *DB) ListNotifyAuditsByTicket(ticketNo string, limit int) ([]QueryAudit, error) {
+	ticketNo = strings.TrimSpace(ticketNo)
+	if ticketNo == "" {
+		return nil, nil
+	}
+	if limit <= 0 || limit > 50 {
+		limit = 20
+	}
+	rows, err := d.Query(
+		`SELECT id, kind, user_id, username, display_name, ip, user_agent,
+			instance_id, instance_name, db_type, target, statement,
+			success, message, row_count, elapsed_ms,
+			COALESCE(client_type,''), COALESCE(token_id,''), created_at
+		 FROM tbl_query_audits
+		 WHERE kind='notify' AND instance_name=?
+		 ORDER BY created_at DESC LIMIT ?`,
+		ticketNo, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []QueryAudit{}
+	for rows.Next() {
+		var it QueryAudit
+		var success int
+		if err := rows.Scan(
+			&it.ID, &it.Kind, &it.UserID, &it.Username, &it.DisplayName, &it.IP, &it.UserAgent,
+			&it.InstanceID, &it.InstanceName, &it.DBType, &it.Target, &it.Statement,
+			&success, &it.Message, &it.RowCount, &it.ElapsedMS, &it.ClientType, &it.TokenID, &it.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		it.Success = success != 0
+		out = append(out, it)
+	}
+	return out, rows.Err()
 }

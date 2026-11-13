@@ -179,7 +179,7 @@ export default function QueryAudits() {
           loading={loading}
           bordered
           pagination={false}
-          scroll={{ y: '100%', x: 1420 }}
+          scroll={{ y: '100%', x: 1640 }}
           style={{ height: '100%' }}
           columns={[
             { title: '时间', dataIndex: 'created_at', width: 180, render: (v) => fmtTime(v) },
@@ -209,6 +209,13 @@ export default function QueryAudits() {
             },
             { title: '实例', dataIndex: 'instance_name', width: 140, ellipsis: true },
             { title: '目标', dataIndex: 'target', width: 140, ellipsis: true },
+            {
+              title: '说明',
+              dataIndex: 'message',
+              width: 220,
+              ellipsis: true,
+              render: (v: string) => v || '-',
+            },
             {
               title: '语句',
               dataIndex: 'statement',

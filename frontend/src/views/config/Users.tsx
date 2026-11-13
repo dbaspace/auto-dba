@@ -52,8 +52,7 @@ function isBuiltinAdmin(row: any): boolean {
   return String(row?.username || '').toLowerCase() === 'admin'
 }
 
-function larkMeta(row: any): { text: string; color: string } | null {
-  if (isBuiltinAdmin(row)) return null
+function larkMeta(row: any): { text: string; color: string } {
   if (row?.lark_open_id || row?.lark_id) return { text: '已同步', color: 'success' }
   if (row?.has_logged_in) return { text: '未同步', color: 'warning' }
   return { text: '未登录', color: 'default' }
@@ -425,7 +424,6 @@ export default function Users() {
               width: 90,
               render: (_, row) => {
                 const m = larkMeta(row)
-                if (!m) return '-'
                 const tag = <Tag color={m.color}>{m.text}</Tag>
                 return row.lark_sync_time ? (
                   <Tooltip title={`同步于 ${new Date(row.lark_sync_time).toLocaleString()}`}>{tag}</Tooltip>

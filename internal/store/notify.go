@@ -171,23 +171,39 @@ func (c *NotifyConfig) AwaitStuckHours() int {
 	return c.AwaitExecStuckHours
 }
 
+// decodeNotifyConfig 解析通知配置。空配置用默认值。JSON 损坏时也返回默认值，parseFailed 为 true。
+func decodeNotifyConfig(raw string) (c *NotifyConfig, parseFailed bool) {
+	if strings.TrimSpace(raw) == "" {
+		return DefaultNotifyConfig(), false
+	}
+	var cfg NotifyConfig
+	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+		return DefaultNotifyConfig(), true
+	}
+	if cfg.AwaitExecStuckHours <= 0 {
+		cfg.AwaitExecStuckHours = DefaultAwaitExecStuckHours
+	}
+	ApplyAlertNotifyDefaultsOnLoad(&cfg)
+	return &cfg, false
+}
+
 func (d *DB) GetNotifyConfig() (*NotifyConfig, error) {
 	v, err := d.GetGlobalArg(KeyNotifyConfig)
 	if err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(v) == "" {
-		return DefaultNotifyConfig(), nil
+	c, _ := decodeNotifyConfig(v)
+	return c, nil
+}
+
+// LoadNotifyConfig 与 GetNotifyConfig 相同，并标出配置 JSON 是否解析失败。
+func (d *DB) LoadNotifyConfig() (*NotifyConfig, bool, error) {
+	v, err := d.GetGlobalArg(KeyNotifyConfig)
+	if err != nil {
+		return nil, false, err
 	}
-	var c NotifyConfig
-	if err := json.Unmarshal([]byte(v), &c); err != nil {
-		return DefaultNotifyConfig(), nil
-	}
-	if c.AwaitExecStuckHours <= 0 {
-		c.AwaitExecStuckHours = DefaultAwaitExecStuckHours
-	}
-	ApplyAlertNotifyDefaultsOnLoad(&c)
-	return &c, nil
+	c, failed := decodeNotifyConfig(v)
+	return c, failed, nil
 }
 
 func (d *DB) SetNotifyConfig(c *NotifyConfig) error {

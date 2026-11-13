@@ -93,14 +93,14 @@ func TestLarkSyncBatchesAndRateLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Total != 30 || res.NotLoggedIn != 1 || strings.Join(res.NoKey, ",") != "nokey" {
+	if res.Total != 31 || res.NotLoggedIn != 1 || strings.Join(res.NoKey, ",") != "nokey" {
 		t.Fatalf("unexpected counts: %+v", res)
 	}
 	if calls != 5 || res.Requests != 7 || res.ScannedPages != 2 {
 		t.Fatalf("calls=%d requests=%d pages=%d want 5/7/2", calls, res.Requests, res.ScannedPages)
 	}
 	// 偶数 2..28 共 14 人 + u0（飞书邮箱）+ u1（手机号）
-	if res.Synced != 16 || len(res.Unmatched) != 14 {
+	if res.Synced != 16 || len(res.Unmatched) != 15 {
 		t.Fatalf("synced=%d unmatched=%d", res.Synced, len(res.Unmatched))
 	}
 	if got := saved["id0"]; got != [3]string{"user_id-x0@qq.com", "open_id-x0@qq.com", "x0@qq.com"} {
@@ -110,7 +110,16 @@ func TestLarkSyncBatchesAndRateLimit(t *testing.T) {
 		t.Fatalf("u1 saved %v", got)
 	}
 	if _, ok := saved["admin"]; ok {
-		t.Fatal("admin must be skipped")
+		t.Fatal("unmatched admin should not be saved")
+	}
+	sawAdmin := false
+	for _, name := range res.Unmatched {
+		if name == "admin" {
+			sawAdmin = true
+		}
+	}
+	if !sawAdmin {
+		t.Fatal("admin should be included in sync and left unmatched")
 	}
 }
 

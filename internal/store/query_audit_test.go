@@ -33,3 +33,21 @@ func TestBuildQueryAuditWhere(t *testing.T) {
 		t.Fatalf("args=%d %#v", len(args), args)
 	}
 }
+
+func TestBuildQueryAuditWhereWorkflowTicketName(t *testing.T) {
+	where, args := buildQueryAuditWhere(QueryAuditFilter{Q: "DQL-Tcb714eea3773"})
+	if strings.Count(where, "instance_name LIKE") != 2 {
+		t.Fatalf("where=%s", where)
+	}
+	if len(args) != 6 || args[0] != "%DQL-Tcb714eea3773%" || args[3] != "%Tcb714eea3773%" {
+		t.Fatalf("args=%#v", args)
+	}
+	_, plain := buildQueryAuditWhere(QueryAuditFilter{Q: "Tcb714eea3773"})
+	if len(plain) != 3 || plain[0] != "%Tcb714eea3773%" {
+		t.Fatalf("plain=%#v", plain)
+	}
+	_, other := buildQueryAuditWhere(QueryAuditFilter{Q: "SELECT-1"})
+	if len(other) != 3 {
+		t.Fatalf("other=%#v", other)
+	}
+}

@@ -1014,11 +1014,17 @@ func (h *TicketHandler) GetDetail(c *gin.Context) {
 	canApprove := it.Status == store.StatusPending && h.actorCanApproveIssue(c, it)
 	canTransfer := it.Status == store.StatusPending && strings.EqualFold(it.Submitter, middleware.Username(c))
 	canStop := it.Status == store.StatusRunning && h.actorCanStopIssue(c, it)
+	notifyAudits, aerr := h.Store.ListNotifyAuditsByTicket(it.TicketNo, 20)
+	if aerr != nil {
+		log.Printf("ticket notify audits ticket=%s: %v", it.TicketNo, aerr)
+		notifyAudits = nil
+	}
 	c.JSON(http.StatusOK, gin.H{
-		"data":         it,
-		"can_approve":  canApprove,
-		"can_transfer": canTransfer,
-		"can_stop":     canStop,
+		"data":          it,
+		"can_approve":   canApprove,
+		"can_transfer":  canTransfer,
+		"can_stop":      canStop,
+		"notify_audits": notifyAudits,
 	})
 }
 

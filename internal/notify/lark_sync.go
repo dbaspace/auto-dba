@@ -80,9 +80,6 @@ func (s *larkSender) syncUsers(save larkIdentitySaver, users []store.User) (*Lar
 	res := &LarkSyncResult{Unmatched: []string{}, NoKey: []string{}, Skipped: []string{}}
 	var todo []larkSyncUser
 	for _, u := range users {
-		if store.IsBuiltinAdminUser(&u) {
-			continue
-		}
 		if !u.HasLoggedIn {
 			res.NotLoggedIn++
 			continue

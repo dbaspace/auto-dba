@@ -34,6 +34,23 @@ function cdcTicketReason(description: any): string {
   return raw.slice(0, i).trim()
 }
 
+function notifyAuditSummary(rows: any[] | null | undefined): { type: 'success' | 'warning' | 'info'; text: string } {
+  const list = Array.isArray(rows) ? rows : []
+  if (!list.length) {
+    return { type: 'info', text: '没有待审批通知记录。可能是旧版本或审计写入失败，请查平台日志' }
+  }
+  const fails = list.filter((row) => !row?.success)
+  if (!fails.length) return { type: 'success', text: '待审批通知已发出' }
+  const text = fails
+    .map((row) => {
+      const who = String(row.display_name || row.username || '审批人')
+      const why = String(row.message || row.target || '失败')
+      return `${who}：${why}`
+    })
+    .join('；')
+  return { type: 'warning', text }
+}
+
 function cloudExecResult(it: any): string {
   const status = String(it?.status || '')
   const exec = it?.exec || {}
@@ -238,6 +255,7 @@ export default function TicketDetail() {
   }
 
   const [item, setItem] = useState<any>(null)
+  const [notifyAudits, setNotifyAudits] = useState<any[] | null>(null)
   const [canApproveFlag, setCanApproveFlag] = useState(false)
   const [canStop, setCanStop] = useState(false)
   const [canTransferFlag, setCanTransferFlag] = useState(false)
@@ -263,6 +281,8 @@ export default function TicketDetail() {
   // 使用 ref 存放最新 item，供导出等异步逻辑读取，避免闭包过期
   const itemRef = useRef<any>(null)
   itemRef.current = item
+
+  const notifySummary = useMemo(() => (notifyAudits ? notifyAuditSummary(notifyAudits) : null), [notifyAudits])
 
   const workflowName = useMemo(() => {
     const it = item
@@ -897,6 +917,7 @@ export default function TicketDetail() {
     try {
       const { data } = await api.get('/tickets/' + params.id, { silent: true })
       setItem(data.data)
+      setNotifyAudits(Array.isArray(data.notify_audits) ? data.notify_audits : [])
       setCanApproveFlag(Boolean(data.can_approve))
       setCanStop(Boolean(data.can_stop))
       setCanTransferFlag(Boolean(data.can_transfer))
@@ -913,6 +934,7 @@ export default function TicketDetail() {
       }
     } catch (err: any) {
       setItem(null)
+      setNotifyAudits(null)
       const status = err?.response?.status
       const msg = err?.response?.data?.message || err?.message || '加载失败'
       setLoadError(status === 404 ? '工单不存在或已删除' : msg)
@@ -1761,6 +1783,9 @@ export default function TicketDetail() {
           </aside>
 
           <section className="review-main">
+            {notifySummary ? (
+              <Alert type={notifySummary.type} showIcon style={{ marginBottom: 12 }} message={notifySummary.text} />
+            ) : null}
             <div className="sec-title">申请信息</div>
             <Descriptions column={1} bordered className="apply-desc">
               {applyFields.map((f) => (
