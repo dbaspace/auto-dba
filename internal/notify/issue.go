@@ -14,6 +14,36 @@ import (
 
 const ticketLinkLocalWarn = "工单链接仍是本机地址，请在邮件设置填写前端访问地址"
 
+// sendMail 工单邮件发送。测试可替换，生产走 mail.Send。
+var sendMail = mail.Send
+
+// loadTicketSMTP 读取工单邮件用的 SMTP。测试可替换。
+var loadTicketSMTP = loadSMTP
+
+// loadTicketNotify 读取工单通知开关。测试可替换。
+var loadTicketNotify = func(db *store.DB) (*store.NotifyConfig, bool, error) {
+	if db == nil {
+		return nil, false, fmt.Errorf("读取通知配置失败")
+	}
+	return db.LoadNotifyConfig()
+}
+
+// findNotifyUser 按用户名查收件人。测试可替换。
+var findNotifyUser = func(db *store.DB, username string) (*store.User, error) {
+	if db == nil {
+		return nil, nil
+	}
+	return db.GetUserByUsernameFold(username)
+}
+
+// saveNotifyAudit 写入通知审计。测试可替换。
+var saveNotifyAudit = func(db *store.DB, row *store.QueryAudit) error {
+	if db == nil || row == nil {
+		return nil
+	}
+	return db.CreateQueryAudit(row)
+}
+
 // IssueCreated 工单创建后通知审批人（邮件）。异步调用方应 go IssueCreated(...)。
 func IssueCreated(db *store.DB, encKey string, issue *store.Issue) {
 	notifyApproverPending(db, encKey, issue, false)
@@ -25,10 +55,10 @@ func IssueAssigneeChanged(db *store.DB, encKey string, issue *store.Issue) {
 }
 
 func notifyApproverPending(db *store.DB, encKey string, issue *store.Issue, transferred bool) {
-	if db == nil || issue == nil {
+	if issue == nil {
 		return
 	}
-	ncfg, parseFailed, err := db.LoadNotifyConfig()
+	ncfg, parseFailed, err := loadTicketNotify(db)
 	if err != nil || ncfg == nil {
 		msg := "读取通知配置失败"
 		if err != nil {
@@ -61,7 +91,10 @@ func notifyApproverPending(db *store.DB, encKey string, issue *store.Issue, tran
 		log.Printf("notify ticket pending: no approver usernames, person channels skipped ticket=%s", issue.TicketNo)
 		recordNotifyAudit(db, issue, nil, "", "notify:", "", false, "没有审批人", 0)
 	}
-	smtpCfg, _ := db.GetSMTPConfig(encKey)
+	var smtpCfg *store.SMTPConfig
+	if db != nil {
+		smtpCfg, _ = db.GetSMTPConfig(encKey)
+	}
 	link := ticketLink(smtpCfg, issue.ID)
 	linkWarn := ""
 	if ticketLinkIsLocal(link) {
@@ -89,18 +122,29 @@ func notifyApproverPending(db *store.DB, encKey string, issue *store.Issue, tran
 	statement := subject + "\n\n" + body
 	audit := &notifyAuditCtx{issue: issue, statement: statement, linkWarn: linkWarn}
 	if wantEmail && len(recipients) > 0 {
-		if _, mailCfg, ok := loadSMTP(db, encKey, issue.TicketNo, "issue assignee notify"); ok {
-			sendToUsernames(db, mailCfg, recipients, subject, body, issue.TicketNo, "issue assignee notify", audit)
-		} else {
-			for _, name := range recipients {
-				recordNotifyAudit(db, issue, nil, name, "email:", statement, false, joinAuditMessage("SMTP 未就绪", linkWarn), 0)
-			}
-		}
+		go deliverApproverEmail(db, encKey, issue, recipients, subject, body, statement, linkWarn, audit)
 	}
 	if wantLark && len(recipients) > 0 {
 		sendTicketLark(db, issue, recipients, subject, body, statement, linkWarn)
 	}
 	sendApproverChannels(db, ncfg, recipients, subject, body, link, issue.TicketNo)
+}
+
+// deliverApproverEmail 单独发送邮件。报错、卡住、未就绪或 panic 只记邮件审计，不阻塞其它渠道。
+func deliverApproverEmail(db *store.DB, encKey string, issue *store.Issue, recipients []string, subject, body, statement, linkWarn string, audit *notifyAuditCtx) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			log.Printf("notify email panic ticket=%s: %v", issue.TicketNo, rec)
+			recordNotifyAudit(db, issue, nil, "", "email:", statement, false, joinAuditMessage("邮件发送异常", linkWarn), 0)
+		}
+	}()
+	if _, mailCfg, ok := loadTicketSMTP(db, encKey, issue.TicketNo, "issue assignee notify"); ok {
+		sendToUsernames(db, mailCfg, recipients, subject, body, issue.TicketNo, "issue assignee notify", audit)
+		return
+	}
+	for _, name := range recipients {
+		recordNotifyAudit(db, issue, nil, name, "email:", statement, false, joinAuditMessage("SMTP 未就绪", linkWarn), 0)
+	}
 }
 
 func sendApproverChannels(db *store.DB, ncfg *store.NotifyConfig, usernames []string, subject, body, link, ticketNo string) {
@@ -114,7 +158,7 @@ func sendApproverChannels(db *store.DB, ncfg *store.NotifyConfig, usernames []st
 		toParts := make([]string, 0)
 		seen := map[string]bool{}
 		for _, uname := range usernames {
-			u, _ := db.GetUserByUsernameFold(strings.TrimSpace(uname))
+			u, _ := findNotifyUser(db, strings.TrimSpace(uname))
 			if u == nil {
 				continue
 			}
@@ -489,7 +533,7 @@ func sendToUsernames(db *store.DB, mailCfg mail.Config, usernames []string, subj
 			continue
 		}
 		start := time.Now()
-		u, err := db.GetUserByUsernameFold(uname)
+		u, err := findNotifyUser(db, uname)
 		if err != nil || u == nil {
 			log.Printf("notify %s: user %q not found ticket=%s", tag, uname, ticketNo)
 			if audit != nil {
@@ -514,7 +558,7 @@ func sendToUsernames(db *store.DB, mailCfg mail.Config, usernames []string, subj
 			continue
 		}
 		seen[key] = true
-		if err := mail.Send(mailCfg, email, subject, body, "text/plain; charset=UTF-8"); err != nil {
+		if err := sendMail(mailCfg, email, subject, body, "text/plain; charset=UTF-8"); err != nil {
 			log.Printf("notify %s mail to %s ticket=%s: %v", tag, email, ticketNo, err)
 			if audit != nil {
 				audit.write(db, u, u.Username, "email:"+email, false, err.Error(), time.Since(start))
@@ -594,7 +638,7 @@ func joinAuditMessage(base, extra string) string {
 }
 
 func recordNotifyAudit(db *store.DB, issue *store.Issue, user *store.User, username, target, statement string, ok bool, message string, elapsed time.Duration) {
-	if db == nil || issue == nil {
+	if issue == nil {
 		return
 	}
 	row := &store.QueryAudit{
@@ -617,7 +661,7 @@ func recordNotifyAudit(db *store.DB, issue *store.Issue, user *store.User, usern
 		}
 		row.DisplayName = user.DisplayName
 	}
-	if err := db.CreateQueryAudit(row); err != nil {
+	if err := saveNotifyAudit(db, row); err != nil {
 		who := row.Username
 		if who == "" {
 			who = strings.TrimSpace(issue.AssignedTo)
@@ -636,7 +680,7 @@ func sendTicketLark(db *store.DB, issue *store.Issue, usernames []string, subjec
 		}
 		seen[key] = true
 		start := time.Now()
-		u, err := db.GetUserByUsernameFold(uname)
+		u, err := findNotifyUser(db, uname)
 		if err != nil || u == nil {
 			msg := fmt.Sprintf("查不到用户 %s", uname)
 			if err != nil {

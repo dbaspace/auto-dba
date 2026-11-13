@@ -12,6 +12,17 @@ import (
 	"time"
 )
 
+const (
+	smtpDialTimeoutDefault = 10 * time.Second
+	smtpSendTimeoutDefault = 30 * time.Second
+)
+
+// 测试可缩短。生产使用默认值。
+var (
+	smtpDialTimeout = smtpDialTimeoutDefault
+	smtpSendTimeout = smtpSendTimeoutDefault
+)
+
 type Config struct {
 	Host     string
 	Port     int
@@ -72,26 +83,74 @@ func Send(cfg Config, to, subject, body, contentType string) error {
 	waitRate(cfg.Rate)
 	addr := cfg.addr()
 	auth := smtpAuth(cfg, host)
+	raw := []byte(msg.String())
 
+	var err error
 	if cfg.UseTLS && (cfg.Port == 465 || cfg.Port == 0) {
-		return sendSMTPS(addr, host, auth, from, []string{to}, []byte(msg.String()))
+		err = sendSMTPS(addr, host, auth, from, []string{to}, raw)
+	} else {
+		err = sendSMTP(addr, host, auth, from, []string{to}, raw)
 	}
-	return smtp.SendMail(addr, auth, from, []string{to}, []byte(msg.String()))
+	return wrapSMTPTimeout(err)
+}
+
+func wrapSMTPTimeout(err error) error {
+	if err == nil {
+		return nil
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return fmt.Errorf("SMTP 超时: %w", err)
+	}
+	return err
+}
+
+func sendSMTP(addr, host string, auth smtp.Auth, from string, to []string, msg []byte) error {
+	dialer := &net.Dialer{Timeout: smtpDialTimeout}
+	conn, err := dialer.Dial("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("连接 SMTP 失败: %w", err)
+	}
+	if err := conn.SetDeadline(time.Now().Add(smtpSendTimeout)); err != nil {
+		_ = conn.Close()
+		return err
+	}
+	client, err := smtp.NewClient(conn, host)
+	if err != nil {
+		_ = conn.Close()
+		return err
+	}
+	defer client.Close()
+	if ok, _ := client.Extension("STARTTLS"); ok {
+		tlsCfg := &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}
+		if err := client.StartTLS(tlsCfg); err != nil {
+			return fmt.Errorf("SMTP STARTTLS 失败: %w", err)
+		}
+	}
+	return deliverSMTP(client, auth, from, to, msg)
 }
 
 func sendSMTPS(addr, host string, auth smtp.Auth, from string, to []string, msg []byte) error {
 	tlsCfg := &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}
-	dialer := &net.Dialer{Timeout: 20 * time.Second}
+	dialer := &net.Dialer{Timeout: smtpDialTimeout}
 	conn, err := tls.DialWithDialer(dialer, "tcp", addr, tlsCfg)
 	if err != nil {
 		return fmt.Errorf("连接 SMTP(TLS) 失败: %w", err)
 	}
-	defer conn.Close()
+	if err := conn.SetDeadline(time.Now().Add(smtpSendTimeout)); err != nil {
+		_ = conn.Close()
+		return err
+	}
 	client, err := smtp.NewClient(conn, host)
 	if err != nil {
+		_ = conn.Close()
 		return err
 	}
 	defer client.Close()
+	return deliverSMTP(client, auth, from, to, msg)
+}
+
+func deliverSMTP(client *smtp.Client, auth smtp.Auth, from string, to []string, msg []byte) error {
 	if auth != nil {
 		if err := client.Auth(auth); err != nil {
 			return fmt.Errorf("SMTP 认证失败: %w", err)
