@@ -408,7 +408,7 @@ func postAlertEmail(db *store.DB, encKey string, ncfg *store.NotifyConfig, p Ale
 	link := fmt.Sprintf("%s/#/ops/alerts", base)
 	subject := fmt.Sprintf("[auto-dba][%s] %s %s", p.Severity, p.Event, p.Title)
 	body := fmt.Sprintf("%s\n\n打开：%s\n", FormatAlertText(p), link)
-	sendToUsernames(db, mailCfg, users, subject, body, p.AlertID, "alert")
+	sendToUsernames(db, mailCfg, users, subject, body, p.AlertID, "alert", nil)
 }
 
 func collectAlertRecipients(db *store.DB, p AlertPayload, opts *AlertDispatchOpts) []string {

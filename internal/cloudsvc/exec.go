@@ -416,6 +416,8 @@ func (s *Service) applyPlatformBind(p cloud.Payload, acc *store.CloudAccount) er
 			port = 3306
 		case cloud.EngineRedis:
 			port = 6379
+		case cloud.EngineKafka:
+			port = 9092
 		case cloud.EngineHost:
 			port = 22
 		default:
@@ -446,6 +448,9 @@ func (s *Service) applyPlatformBind(p cloud.Payload, acc *store.CloudAccount) er
 func netFromExtras(row *store.CloudInstance) (string, int) {
 	if row == nil || row.Extras == nil {
 		return "", 0
+	}
+	if host, port := cloud.NetFromExtras(row.Engine, row.Extras); strings.TrimSpace(host) != "" {
+		return host, port
 	}
 	nets, _ := row.Extras["DBInstanceNetInfo"].([]any)
 	if len(nets) == 0 {

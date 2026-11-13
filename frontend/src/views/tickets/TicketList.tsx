@@ -58,6 +58,7 @@ function typeText(t: string) {
       cloud_pg: '云 PostgreSQL 变更',
       cloud_mysql: '云 MySQL 变更',
       cloud_redis: '云 Redis 变更',
+      cloud_kafka: '云 Kafka 变更',
       cloud_host: '云主机变更',
     }[t] ||
     t ||

@@ -28,5 +28,5 @@ func ClientAccessSecurityNotice(db *store.DB, encKey, username, clientType, path
 		return
 	}
 	_ = smtpCfg
-	sendToUsernames(db, mailCfg, admins, title, text+"\n", "client-access", "security")
+	sendToUsernames(db, mailCfg, admins, title, text+"\n", "client-access", "security", nil)
 }

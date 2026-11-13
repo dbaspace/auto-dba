@@ -10,7 +10,8 @@ func NotifyIssueCreatedAsync(db *store.DB, encKey string, issue *store.Issue) {
 	if db == nil || issue == nil {
 		return
 	}
-	go notify.IssueCreated(db, encKey, issue)
+	cp := *issue
+	go notify.IssueCreated(db, encKey, &cp)
 }
 
 // NotifyIssueAssigneeChangedAsync 审核人转移后异步通知新人。

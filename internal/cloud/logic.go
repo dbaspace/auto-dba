@@ -181,6 +181,8 @@ func NetFromExtras(engine string, extras map[string]any) (host string, port int)
 		return anyStr(extras["Vip"]), anyInt(extras["Vport"])
 	case EngineRedis:
 		return anyStr(extras["WanIp"]), anyInt(extras["Port"])
+	case EngineKafka:
+		return anyStr(extras["Vip"]), anyInt(extras["Vport"])
 	case EngineHost:
 		if ips, ok := extras["PrivateIpAddresses"].([]any); ok && len(ips) > 0 {
 			return anyStr(ips[0]), 0
@@ -555,9 +557,27 @@ func prepaidPeriodOK(n int) bool {
 	return (n >= 1 && n <= 12) || n == 24 || n == 36
 }
 
-// ValidateCreate 只检查 PostgreSQL 资源申请。其他引擎仍用原来的短表单。
+// ValidateCreate 检查 PostgreSQL 和 Kafka 的资源申请。其他引擎仍用原来的短表单。
 func ValidateCreate(p Payload) error {
-	if p.Action != ActionCreate || (p.Engine != "" && p.Engine != EnginePostgres) {
+	if p.Action != ActionCreate {
+		return nil
+	}
+	if p.Engine == EngineKafka {
+		if strings.TrimSpace(p.Name) == "" {
+			return fmt.Errorf("请填写实例名")
+		}
+		if _, err := strconv.Atoi(strings.TrimSpace(p.Zone)); err != nil {
+			return fmt.Errorf("请填写可用区 ID")
+		}
+		if p.DiskGB <= 0 {
+			return fmt.Errorf("请填写磁盘")
+		}
+		if strings.TrimSpace(p.VpcID) == "" || strings.TrimSpace(p.SubnetID) == "" {
+			return fmt.Errorf("请填写 VPC 和子网")
+		}
+		return nil
+	}
+	if p.Engine != "" && p.Engine != EnginePostgres {
 		return nil
 	}
 	if strings.TrimSpace(p.Region) == "" {

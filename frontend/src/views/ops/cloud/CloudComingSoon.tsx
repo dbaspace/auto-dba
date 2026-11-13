@@ -5,6 +5,7 @@ import { Button, Result } from 'antd'
 const titles: Record<string, string> = {
   mysql: '云 MySQL',
   redis: '云 Redis',
+  kafka: '云 Kafka',
   hosts: '云主机',
 }
 

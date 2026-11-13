@@ -48,7 +48,7 @@ func JobFailed(db *store.DB, encKey, jobKey, jobName, runID, errMsg string) {
 		log.Printf("notify job failed: no admin recipient job=%s", jobKey)
 		return
 	}
-	sendToUsernames(db, mailCfg, admins, title, body, runID, "job failed")
+	sendToUsernames(db, mailCfg, admins, title, body, runID, "job failed", nil)
 }
 
 func adminUsernames(db *store.DB) []string {

@@ -100,7 +100,7 @@ func ShouldAutoRun(issueType string) bool {
 	case store.IssueTypeDDL, store.IssueTypeDML, store.IssueTypeDCL, store.IssueTypeCreateDB, store.IssueTypeHA,
 		store.IssueTypeSrCluster, store.IssueTypeDbDeploy, store.IssueTypeResourceApply, store.IssueTypeRedis,
 		store.IssueTypeK8sChange, store.IssueTypeBackupRestore, store.IssueTypeDnsChange,
-		store.IssueTypeCloudPg, store.IssueTypeCloudMysql, store.IssueTypeCloudRedis, store.IssueTypeCloudHost:
+		store.IssueTypeCloudPg, store.IssueTypeCloudMysql, store.IssueTypeCloudRedis, store.IssueTypeCloudKafka, store.IssueTypeCloudHost:
 		return true
 	default:
 		return false

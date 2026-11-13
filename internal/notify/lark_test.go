@@ -108,3 +108,90 @@ func TestLarkSendFallbackAndContinue(t *testing.T) {
 		t.Fatalf("sent=%v want %s", sent, want)
 	}
 }
+
+func TestLarkSendScopeErrorTriesAllCandidates(t *testing.T) {
+	var posts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/open-apis/auth/v3/tenant_access_token/internal":
+			_, _ = w.Write([]byte(`{"code":0,"tenant_access_token":"t","expire":7200}`))
+		case "/open-apis/im/v1/messages":
+			posts++
+			_, _ = w.Write([]byte(`{"code":230013,"msg":"bot not in chat"}`))
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+
+	s := &larkSender{appID: "a", appSecret: "b", baseURL: srv.URL}
+	_, err := s.sendPerson("待审批", "正文", []string{"open_id:ou_a", "user_id:u_b", "email:a@qq.com"})
+	if err == nil || !strings.Contains(err.Error(), "230013") || !strings.Contains(err.Error(), "可用范围") {
+		t.Fatalf("err=%v", err)
+	}
+	if posts != 3 {
+		t.Fatalf("posts=%d want 3", posts)
+	}
+}
+
+func TestLarkSendRefreshesExpiredToken(t *testing.T) {
+	var tokens, posts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/open-apis/auth/v3/tenant_access_token/internal":
+			tokens++
+			_, _ = w.Write([]byte(`{"code":0,"tenant_access_token":"t","expire":7200}`))
+		case "/open-apis/im/v1/messages":
+			posts++
+			if posts == 1 {
+				_, _ = w.Write([]byte(`{"code":99991663,"msg":"token invalid"}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"code":0}`))
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+
+	s := &larkSender{appID: "a", appSecret: "b", baseURL: srv.URL}
+	used, err := s.sendPerson("待审批", "正文", []string{"open_id:ou_ok"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if used != "open_id:ou_ok" {
+		t.Fatalf("used=%q", used)
+	}
+	if tokens < 2 || posts != 2 {
+		t.Fatalf("tokens=%d posts=%d", tokens, posts)
+	}
+}
+
+func TestLarkSendRetriesHTTP5xx(t *testing.T) {
+	var posts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/open-apis/auth/v3/tenant_access_token/internal":
+			_, _ = w.Write([]byte(`{"code":0,"tenant_access_token":"t","expire":7200}`))
+		case "/open-apis/im/v1/messages":
+			posts++
+			if posts == 1 {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			_, _ = w.Write([]byte(`{"code":0}`))
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+
+	s := &larkSender{appID: "a", appSecret: "b", baseURL: srv.URL}
+	used, err := s.sendPerson("待审批", "正文", []string{"user_id:u_ok"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if used != "user_id:u_ok" || posts != 2 {
+		t.Fatalf("used=%q posts=%d", used, posts)
+	}
+}

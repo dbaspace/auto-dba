@@ -110,6 +110,7 @@ const titles: Record<string, string> = {
   postgres: '云 PostgreSQL',
   mysql: '云 MySQL',
   redis: '云 Redis',
+  kafka: '云 Kafka',
   host: '云主机',
 }
 
@@ -368,7 +369,7 @@ export default function CloudPostgres({ engine = 'postgres' }: { engine?: string
       cpu: undefined,
       memory_mb: undefined,
       spec_code: undefined,
-      disk_gb: next === 'scale_disk' ? undefined : (next === 'create' && engine === 'postgres' ? 100 : row?.disk_gb),
+      disk_gb: next === 'scale_disk' ? undefined : (next === 'create' && engine === 'postgres' ? 100 : next === 'create' && engine === 'kafka' ? 200 : row?.disk_gb),
       before_cpu: row?.cpu,
       before_memory_mb: row?.memory_mb,
       before_disk_gb: row?.disk_gb,
@@ -401,7 +402,7 @@ export default function CloudPostgres({ engine = 'postgres' }: { engine?: string
         .then(({ data }) => setAccounts(data.data || []))
         .catch(() => setAccounts([]))
     }
-    if (next === 'scale_spec' || next === 'create' || (engine === 'postgres' && next === 'scale_disk')) {
+    if (engine !== 'kafka' && (next === 'scale_spec' || next === 'create' || (engine === 'postgres' && next === 'scale_disk'))) {
       void loadSpecs(row?.account_id, row?.region, row?.zone)
     }
     if (next === 'modify_param') {
@@ -428,7 +429,7 @@ export default function CloudPostgres({ engine = 'postgres' }: { engine?: string
       .some((v) => String(v || '').toLowerCase().includes(q)))
   }, [rows, keyword])
 
-  const showSpec = action === 'create' || action === 'scale_spec'
+  const showSpec = (action === 'create' || action === 'scale_spec') && engine !== 'kafka'
   const showDisk = action === 'create' || action === 'scale_disk' || action === 'scale_spec'
 
   return (
@@ -476,7 +477,7 @@ export default function CloudPostgres({ engine = 'postgres' }: { engine?: string
         <span>同步健康</span>
         {health.map((h) => (
           <span key={h.account_id}>
-            {h.name}：{h.status === 'no_key' ? '缺只读密钥(跳过)' : (h.status || '未同步')} {h.status === 'no_key' ? '' : (h.error || '')} {h.cursor_at || ''}
+            {h.name}：{h.status === 'no_key' ? '缺只读密钥(跳过)' : ({ ok: '正常', error: '失败', skipped: '未勾选', running: '执行中' } as Record<string, string>)[h.status] || h.status || '未同步'} {h.status === 'no_key' ? '' : (h.error || '')} {h.cursor_at || ''}
             {h.cursor_at ? ` 落后 ${h.lag_sec ?? 0} 秒` : ''}
           </span>
         ))}
@@ -567,7 +568,7 @@ export default function CloudPostgres({ engine = 'postgres' }: { engine?: string
             render: (_, row) => (
               <Auth urn={Perm.cloud.submit}>
                 <Space>
-                  <Button size="small" disabled={row.reconcile === 'conflict'} onClick={() => openAction(row, 'scale_spec')}>变配</Button>
+                  {engine !== 'kafka' && <Button size="small" disabled={row.reconcile === 'conflict'} onClick={() => openAction(row, 'scale_spec')}>变配</Button>}
                   {allow(row, 'restart') && <Button size="small" disabled={row.reconcile === 'conflict'} onClick={() => openAction(row, 'restart')}>重启</Button>}
                   {allow(row, 'switchover') && <Button size="small" disabled={row.reconcile === 'conflict'} onClick={() => openAction(row, 'switchover')}>切换</Button>}
                   {allow(row, 'parameters') && <Button size="small" disabled={row.reconcile === 'conflict'} onClick={() => openAction(row, 'modify_param')}>参数</Button>}
@@ -584,6 +585,12 @@ export default function CloudPostgres({ engine = 'postgres' }: { engine?: string
             const reason = pgCreateError(v, specs)
             if (reason) {
               message.error(reason)
+              return
+            }
+          }
+          if (engine === 'kafka' && v.action === 'create') {
+            if (!String(v.name || '').trim() || !String(v.zone || '').trim() || !String(v.vpc_id || '').trim() || !String(v.subnet_id || '').trim() || Number(v.disk_gb || 0) <= 0) {
+              message.error('请填写名称、可用区 ID、磁盘、VPC 和子网')
               return
             }
           }
@@ -696,7 +703,7 @@ export default function CloudPostgres({ engine = 'postgres' }: { engine?: string
                   })
                   setSpecPick(undefined)
                   if (engine === 'postgres') void loadPurchase(id, region)
-                  void loadSpecs(id, region, '')
+                  if (engine !== 'kafka') void loadSpecs(id, region, '')
                 }}
               />
             </Form.Item>
@@ -846,10 +853,18 @@ export default function CloudPostgres({ engine = 'postgres' }: { engine?: string
           )}
           {!pgCreate && <Form.Item name="region" label="地域"><Input /></Form.Item>}
           {!pgCreate && (action === 'create' || action === 'scale_spec') && (
-            <Form.Item name="zone" label="可用区"><Input onBlur={() => void loadSpecs(form.getFieldValue('account_id'), form.getFieldValue('region'), form.getFieldValue('zone'))} /></Form.Item>
+            <Form.Item name="zone" label={engine === 'kafka' ? '可用区 ID' : '可用区'} extra={engine === 'kafka' ? '填写腾讯云可用区数字 ID，例如 100003' : undefined} rules={engine === 'kafka' && action === 'create' ? [{ required: true, message: '请填写可用区 ID' }] : undefined}>
+              <Input onBlur={() => { if (engine !== 'kafka') void loadSpecs(form.getFieldValue('account_id'), form.getFieldValue('region'), form.getFieldValue('zone')) }} />
+            </Form.Item>
           )}
           {!pgCreate && action !== 'create' && action !== 'scale_spec' && <Form.Item name="zone" hidden><Input /></Form.Item>}
-          {!pgCreate && action === 'create' && <Form.Item name="name" label="实例名"><Input /></Form.Item>}
+          {!pgCreate && action === 'create' && <Form.Item name="name" label="实例名" rules={engine === 'kafka' ? [{ required: true, message: '请填写实例名' }] : undefined}><Input /></Form.Item>}
+          {engine === 'kafka' && action === 'create' && (
+            <>
+              <Form.Item name="vpc_id" label="VPC" rules={[{ required: true, message: '请填写 VPC' }]}><Input placeholder="vpc-xxxxxxxx" /></Form.Item>
+              <Form.Item name="subnet_id" label="子网" rules={[{ required: true, message: '请填写子网' }]}><Input placeholder="subnet-xxxxxxxx" /></Form.Item>
+            </>
+          )}
           {action === 'scale_spec' && (
             <Form.Item label="原规格">
               <Input disabled value={beforeCPU || beforeMem ? specText(beforeCPU, beforeMem) : '—'} />
@@ -894,13 +909,13 @@ export default function CloudPostgres({ engine = 'postgres' }: { engine?: string
                       })()}`
                     : undefined
               }
-              rules={action === 'scale_disk' ? [{ required: true, message: '请填写目标磁盘' }] : undefined}
+              rules={action === 'scale_disk' || (engine === 'kafka' && action === 'create') ? [{ required: true, message: '请填写磁盘' }] : undefined}
             >
               <InputNumber min={action === 'scale_disk' ? (beforeDisk || 0) + 1 : (action === 'scale_spec' ? beforeDisk || 0 : 0)} />
             </Form.Item>
           )}
-          {!pgCreate && action === 'create' && <Form.Item name="admin_user" label="管理员账号"><Input /></Form.Item>}
-          {!pgCreate && action === 'create' && <Form.Item name="password_enc" label="管理员密码" extra="只在创建时填写，保存前会加密"><Input.Password /></Form.Item>}
+          {!pgCreate && engine !== 'kafka' && action === 'create' && <Form.Item name="admin_user" label="管理员账号"><Input /></Form.Item>}
+          {!pgCreate && engine !== 'kafka' && action === 'create' && <Form.Item name="password_enc" label="管理员密码" extra="只在创建时填写，保存前会加密"><Input.Password /></Form.Item>}
           {action === 'modify_param' && (
             <>
               <Table

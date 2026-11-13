@@ -6,6 +6,7 @@ describe('resolveOpenTabTitle', () => {
     expect(resolveOpenTabTitle('/ops/cloud/postgres', 'PostgreSQL')).toBe('云 PostgreSQL')
     expect(resolveOpenTabTitle('/ops/cloud/mysql', 'MySQL')).toBe('云 MySQL')
     expect(resolveOpenTabTitle('/ops/cloud/redis', 'Redis')).toBe('云 Redis')
+    expect(resolveOpenTabTitle('/ops/cloud/kafka', 'Kafka')).toBe('云 Kafka')
     expect(resolveOpenTabTitle('/ops/cloud/hosts', '主机')).toBe('云主机')
     expect(resolveOpenTabTitle('/ops/cloud/policies', '自愈策略')).toBe('云自愈策略')
   })

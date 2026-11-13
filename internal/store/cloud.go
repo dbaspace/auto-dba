@@ -403,7 +403,7 @@ func scanCloudAccount(sc interface{ Scan(...any) error }) (CloudAccount, error) 
 }
 
 func normalizeSyncEngines(in []string) []string {
-	allow := map[string]bool{"postgres": true, "mysql": true, "redis": true, "host": true}
+	allow := map[string]bool{"postgres": true, "mysql": true, "redis": true, "kafka": true, "host": true}
 	var out []string
 	seen := map[string]bool{}
 	for _, e := range in {
@@ -1477,8 +1477,8 @@ func (d *DB) UpdateIssueSQL(id, sql string) error {
 }
 
 func (d *DB) CountOpenCloudChanges(cloudID, exceptIssueID string) (int, error) {
-	rows, err := d.Query(`SELECT id, sql_content FROM tbl_issues WHERE issue_type IN (?,?,?,?) AND status IN ('pending','approved','running')`,
-		IssueTypeCloudPg, IssueTypeCloudMysql, IssueTypeCloudRedis, IssueTypeCloudHost)
+	rows, err := d.Query(`SELECT id, sql_content FROM tbl_issues WHERE issue_type IN (?,?,?,?,?) AND status IN ('pending','approved','running')`,
+		IssueTypeCloudPg, IssueTypeCloudMysql, IssueTypeCloudRedis, IssueTypeCloudKafka, IssueTypeCloudHost)
 	if err != nil {
 		return 0, err
 	}
@@ -1497,8 +1497,8 @@ func (d *DB) CountOpenCloudChanges(cloudID, exceptIssueID string) (int, error) {
 }
 
 func (d *DB) CountCloudActionsSince(cloudID, action, since string) (int, error) {
-	rows, err := d.Query(`SELECT sql_content, created_at FROM tbl_issues WHERE issue_type IN (?,?,?,?) AND created_at>=?`,
-		IssueTypeCloudPg, IssueTypeCloudMysql, IssueTypeCloudRedis, IssueTypeCloudHost, since)
+	rows, err := d.Query(`SELECT sql_content, created_at FROM tbl_issues WHERE issue_type IN (?,?,?,?,?) AND created_at>=?`,
+		IssueTypeCloudPg, IssueTypeCloudMysql, IssueTypeCloudRedis, IssueTypeCloudKafka, IssueTypeCloudHost, since)
 	if err != nil {
 		return 0, err
 	}
@@ -1517,8 +1517,8 @@ func (d *DB) CountCloudActionsSince(cloudID, action, since string) (int, error) 
 }
 
 func (d *DB) LastCloudActionAt(cloudID, action string) (string, error) {
-	rows, err := d.Query(`SELECT sql_content, created_at FROM tbl_issues WHERE issue_type IN (?,?,?,?) ORDER BY created_at DESC LIMIT 100`,
-		IssueTypeCloudPg, IssueTypeCloudMysql, IssueTypeCloudRedis, IssueTypeCloudHost)
+	rows, err := d.Query(`SELECT sql_content, created_at FROM tbl_issues WHERE issue_type IN (?,?,?,?,?) ORDER BY created_at DESC LIMIT 100`,
+		IssueTypeCloudPg, IssueTypeCloudMysql, IssueTypeCloudRedis, IssueTypeCloudKafka, IssueTypeCloudHost)
 	if err != nil {
 		return "", err
 	}
@@ -1536,8 +1536,8 @@ func (d *DB) LastCloudActionAt(cloudID, action string) (string, error) {
 }
 
 func (d *DB) ListRunningCloudIssues() ([]*Issue, error) {
-	rows, err := d.Query(`SELECT id FROM tbl_issues WHERE issue_type IN (?,?,?,?) AND status=?`,
-		IssueTypeCloudPg, IssueTypeCloudMysql, IssueTypeCloudRedis, IssueTypeCloudHost, StatusRunning)
+	rows, err := d.Query(`SELECT id FROM tbl_issues WHERE issue_type IN (?,?,?,?,?) AND status=?`,
+		IssueTypeCloudPg, IssueTypeCloudMysql, IssueTypeCloudRedis, IssueTypeCloudKafka, IssueTypeCloudHost, StatusRunning)
 	if err != nil {
 		return nil, err
 	}

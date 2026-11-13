@@ -501,6 +501,8 @@ func issueTypeLabel(t string) string {
 		return "云 MySQL 变更"
 	case IssueTypeCloudRedis:
 		return "云 Redis 变更"
+	case IssueTypeCloudKafka:
+		return "云 Kafka 变更"
 	case IssueTypeCloudHost:
 		return "云主机变更"
 	default:

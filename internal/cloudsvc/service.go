@@ -18,6 +18,7 @@ import (
 	"auto-dba/internal/slowbus"
 	"auto-dba/internal/store"
 
+	_ "auto-dba/internal/cloud/tencentckafka"
 	_ "auto-dba/internal/cloud/tencentcvm"
 	_ "auto-dba/internal/cloud/tencentmysql"
 	_ "auto-dba/internal/cloud/tencentpg"
@@ -161,18 +162,40 @@ func (s *Service) SyncAllEngines(ctx context.Context, onlyEngine string) (*SyncR
 		engines = []string{onlyEngine}
 	}
 	res := &SyncResult{}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
 	for i := range accounts {
-		acc := &accounts[i]
-		picked := enginesForAccount(acc, engines, true)
-		if len(picked) == 0 {
-			if len(acc.SyncEngines) == 0 {
-				res.Skipped = append(res.Skipped, acc.Name+" 未勾选定时同步资源")
-			}
-			continue
-		}
-		s.syncPicked(ctx, acc, picked, res)
+		acc := accounts[i]
+		wg.Add(1)
+		go func(acc store.CloudAccount) {
+			defer wg.Done()
+			local := &SyncResult{}
+			s.syncScheduled(ctx, &acc, engines, local)
+			mu.Lock()
+			res.Synced += local.Synced
+			res.Skipped = append(res.Skipped, local.Skipped...)
+			res.Errors = append(res.Errors, local.Errors...)
+			mu.Unlock()
+		}(acc)
 	}
+	wg.Wait()
 	return res, finalizeSyncResult(res)
+}
+
+// syncScheduled 按勾选的引擎同步一个账号。未勾选的引擎写入 skipped，避免健康状态停在上一次成功。
+func (s *Service) syncScheduled(ctx context.Context, acc *store.CloudAccount, want []string, res *SyncResult) {
+	missed := unscheduledEngines(acc, want)
+	for _, eng := range missed {
+		s.noteSync(acc, eng, "inventory", "", errNotScheduled)
+	}
+	picked := enginesForAccount(acc, want, true)
+	if len(picked) == 0 {
+		if len(acc.SyncEngines) == 0 {
+			res.Skipped = append(res.Skipped, acc.Name+" 未勾选定时同步资源")
+		}
+		return
+	}
+	s.syncPicked(ctx, acc, picked, res)
 }
 
 // SyncAccounts 手动同步指定账号。不受 sync_engines 限制，只跑传入的引擎。
@@ -231,6 +254,25 @@ func enginesForAccount(acc *store.CloudAccount, want []string, honorSchedule boo
 	return out
 }
 
+// unscheduledEngines 是厂商支持、但账号没有勾选定时同步的引擎。
+func unscheduledEngines(acc *store.CloudAccount, want []string) []string {
+	if acc == nil {
+		return nil
+	}
+	allow := map[string]bool{}
+	for _, e := range acc.SyncEngines {
+		allow[strings.TrimSpace(e)] = true
+	}
+	var out []string
+	for _, eng := range want {
+		if !cloud.Supported(acc.Vendor, eng) || allow[eng] {
+			continue
+		}
+		out = append(out, eng)
+	}
+	return out
+}
+
 func (s *Service) syncPicked(ctx context.Context, acc *store.CloudAccount, engines []string, res *SyncResult) {
 	if _, _, kerr := s.key(acc.ID, cloud.RoleReadonly); errors.Is(kerr, cloud.ErrNoKey) {
 		res.Skipped = append(res.Skipped, acc.Name+" 缺少只读密钥")
@@ -248,6 +290,10 @@ func (s *Service) syncPicked(ctx context.Context, acc *store.CloudAccount, engin
 		}
 		if errors.Is(err, cloud.ErrNoKey) {
 			res.Skipped = append(res.Skipped, acc.Name+" 缺少只读密钥")
+			continue
+		}
+		if errors.Is(err, errSyncBusy) {
+			res.Skipped = append(res.Skipped, acc.Name+"/"+eng+" 上一轮仍在执行")
 			continue
 		}
 		if len(partial) > 0 {
@@ -272,9 +318,12 @@ func (s *Service) SyncAccountEngine(ctx context.Context, account *store.CloudAcc
 	}
 	lockKey := account.ID + ":" + engine
 	if !s.tryAccount(lockKey) {
-		return nil, fmt.Errorf("排队中")
+		s.noteSync(account, engine, "inventory", "", errSyncBusy)
+		return nil, errSyncBusy
 	}
 	defer s.doneAccount(lockKey)
+	ctx, cancel := context.WithTimeout(ctx, engineSyncTimeout)
+	defer cancel()
 	reader, err := cloud.GetReader(account.Vendor, engine)
 	if err != nil {
 		return nil, err
@@ -624,6 +673,28 @@ func (s *Service) pullEvents(ctx context.Context, reader cloud.Reader, cred clou
 	}
 }
 
+const engineSyncTimeout = 4 * time.Minute
+
+var (
+	errNotScheduled = errors.New("未勾选定时同步")
+	errSyncBusy     = errors.New("上一轮仍在执行")
+)
+
+func classifySyncErr(err error) (status, message string, keepCursor, countFail bool) {
+	switch {
+	case err == nil:
+		return "ok", "", false, false
+	case errors.Is(err, errNotScheduled):
+		return "skipped", "未勾选定时同步", true, false
+	case errors.Is(err, errSyncBusy):
+		return "running", "上一轮仍在执行", true, false
+	case errors.Is(err, cloud.ErrNoKey):
+		return "no_key", "缺少只读密钥，已跳过", false, false
+	default:
+		return "error", err.Error(), true, true
+	}
+}
+
 func (s *Service) noteSync(account *store.CloudAccount, engine, dataType, cloudID string, err error) {
 	if engine == "" {
 		engine = cloud.EnginePostgres
@@ -631,35 +702,32 @@ func (s *Service) noteSync(account *store.CloudAccount, engine, dataType, cloudI
 	if dataType == "" {
 		dataType = "inventory"
 	}
+	status, message, keepCursor, countFail := classifySyncErr(err)
 	cur := &store.CloudCursor{
 		TenantID: account.TenantID, Vendor: account.Vendor, Engine: engine, AccountID: account.ID,
-		CloudID: cloudID, DataType: dataType, Status: "ok",
+		CloudID: cloudID, DataType: dataType, Status: status, Error: message,
 	}
 	if err != nil {
-		if errors.Is(err, cloud.ErrNoKey) {
-			cur.Status = "no_key"
-			cur.Error = "缺少只读密钥，已跳过"
-			cur.FailCount = 0
-		} else {
-			cur.Status = "error"
-			cur.Error = err.Error()
+		if keepCursor || countFail {
 			prev, _ := s.DB.GetCloudCursor(account.Vendor, engine, account.ID, cloudID, dataType)
 			if prev != nil {
-				cur.FailCount = prev.FailCount + 1
 				cur.CursorAt = prev.CursorAt
-			} else {
+				if countFail {
+					cur.FailCount = prev.FailCount + 1
+				}
+			} else if countFail {
 				cur.FailCount = 1
 			}
-			if cur.FailCount >= 3 {
-				_ = s.DB.UpsertAlert(&store.Alert{
-					ID: "cloud-sync-" + account.ID + "-" + engine, Fingerprint: "cloud-sync-" + account.ID + "-" + engine,
-					Severity: store.AlertSeverityP2, Title: "云资源同步连续失败", Service: "cloud",
-					Status: store.AlertStatusFiring, Handle: store.AlertHandleUnclaimed,
-					Labels:      map[string]string{"account_id": account.ID, "engine": engine},
-					Annotations: map[string]string{"error": err.Error()},
-					StartedAt:   time.Now().UTC().Format(time.RFC3339),
-				})
-			}
+		}
+		if countFail && cur.FailCount >= 3 {
+			_ = s.DB.UpsertAlert(&store.Alert{
+				ID: "cloud-sync-" + account.ID + "-" + engine, Fingerprint: "cloud-sync-" + account.ID + "-" + engine,
+				Severity: store.AlertSeverityP2, Title: "云资源同步连续失败", Service: "cloud",
+				Status: store.AlertStatusFiring, Handle: store.AlertHandleUnclaimed,
+				Labels:      map[string]string{"account_id": account.ID, "engine": engine},
+				Annotations: map[string]string{"error": message},
+				StartedAt:   time.Now().UTC().Format(time.RFC3339),
+			})
 		}
 	} else {
 		cur.CursorAt = time.Now().UTC().Format(time.RFC3339)

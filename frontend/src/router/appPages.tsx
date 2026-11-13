@@ -240,6 +240,7 @@ export function TabPagePanel({ pathname, search }: { pathname: string; search?: 
       <Route path="/ops/cloud/postgres" element={<CloudPostgres engine="postgres" />} />
       <Route path="/ops/cloud/mysql" element={<CloudPostgres engine="mysql" />} />
       <Route path="/ops/cloud/redis" element={<CloudPostgres engine="redis" />} />
+      <Route path="/ops/cloud/kafka" element={<CloudPostgres engine="kafka" />} />
       <Route path="/ops/cloud/hosts" element={<CloudPostgres engine="host" />} />
       <Route path="/ops/cloud/policies" element={<CloudPolicies />} />
       <Route path="/ops/cloud/accounts" element={<Navigate to="/config/cloud-accounts" replace />} />

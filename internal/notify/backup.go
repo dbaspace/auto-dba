@@ -52,5 +52,5 @@ func BackupFailed(db *store.DB, encKey string, policy *store.BackupPolicy, run *
 		msg,
 		link,
 	)
-	sendToUsernames(db, mailCfg, []string{who}, subject, body, run.ID, "backup failed")
+	sendToUsernames(db, mailCfg, []string{who}, subject, body, run.ID, "backup failed", nil)
 }

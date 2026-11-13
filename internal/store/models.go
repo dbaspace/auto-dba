@@ -793,6 +793,7 @@ const (
 	IssueTypeCloudPg       = "cloud_pg"       // 公有云 PostgreSQL 变更
 	IssueTypeCloudMysql    = "cloud_mysql"    // 公有云 MySQL 变更
 	IssueTypeCloudRedis    = "cloud_redis"    // 公有云 Redis 变更
+	IssueTypeCloudKafka    = "cloud_kafka"    // 公有云 Kafka 变更
 	IssueTypeCloudHost     = "cloud_host"     // 公有云主机变更
 
 	StatusPending        = "pending"
@@ -819,7 +820,7 @@ const (
 // IsCloudIssueType 公有云变更工单（PG/MySQL/Redis/主机）。
 func IsCloudIssueType(t string) bool {
 	switch t {
-	case IssueTypeCloudPg, IssueTypeCloudMysql, IssueTypeCloudRedis, IssueTypeCloudHost:
+	case IssueTypeCloudPg, IssueTypeCloudMysql, IssueTypeCloudRedis, IssueTypeCloudKafka, IssueTypeCloudHost:
 		return true
 	default:
 		return false
@@ -832,6 +833,8 @@ func CloudIssueTypeForEngine(engine string) string {
 		return IssueTypeCloudMysql
 	case "redis":
 		return IssueTypeCloudRedis
+	case "kafka":
+		return IssueTypeCloudKafka
 	case "host":
 		return IssueTypeCloudHost
 	default:
@@ -845,6 +848,8 @@ func EngineForCloudIssueType(t string) string {
 		return "mysql"
 	case IssueTypeCloudRedis:
 		return "redis"
+	case IssueTypeCloudKafka:
+		return "kafka"
 	case IssueTypeCloudHost:
 		return "host"
 	default:

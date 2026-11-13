@@ -106,6 +106,7 @@ const byKey: Record<string, React.ComponentType<{ style?: React.CSSProperties }>
   database: DatabaseOutlined,
   mysql: DatabaseOutlined,
   redis: DatabaseOutlined,
+  kafka: ClusterOutlined,
 }
 
 export type MenuIconTone = { color: string; background: string }

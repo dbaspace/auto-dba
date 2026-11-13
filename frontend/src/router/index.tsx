@@ -211,6 +211,7 @@ const router = createHashRouter([
       { path: 'ops/cloud/postgres', element: <CloudPostgres engine="postgres" /> },
       { path: 'ops/cloud/mysql', element: <CloudPostgres engine="mysql" /> },
       { path: 'ops/cloud/redis', element: <CloudPostgres engine="redis" /> },
+      { path: 'ops/cloud/kafka', element: <CloudPostgres engine="kafka" /> },
       { path: 'ops/cloud/hosts', element: <CloudPostgres engine="host" /> },
       { path: 'ops/cloud/policies', element: <CloudPolicies /> },
       { path: 'ops/cloud/accounts', element: <Navigate to="/config/cloud-accounts" replace /> },

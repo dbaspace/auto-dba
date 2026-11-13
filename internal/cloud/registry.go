@@ -6,6 +6,7 @@ const (
 	EnginePostgres = "postgres"
 	EngineMySQL    = "mysql"
 	EngineRedis    = "redis"
+	EngineKafka    = "kafka"
 	EngineHost     = "host"
 )
 
@@ -66,5 +67,5 @@ func Supported(vendor, engine string) bool {
 }
 
 func Engines() []string {
-	return []string{EnginePostgres, EngineMySQL, EngineRedis, EngineHost}
+	return []string{EnginePostgres, EngineMySQL, EngineRedis, EngineKafka, EngineHost}
 }

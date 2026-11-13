@@ -51,6 +51,7 @@ export const PAGE_ROUTES = [
   { path: '/ops/cloud/postgres', title: '云 PostgreSQL' },
   { path: '/ops/cloud/mysql', title: '云 MySQL' },
   { path: '/ops/cloud/redis', title: '云 Redis' },
+  { path: '/ops/cloud/kafka', title: '云 Kafka' },
   { path: '/ops/cloud/hosts', title: '云主机' },
   { path: '/ops/cloud/policies', title: '云自愈策略' },
   { path: '/config/cloud-accounts', title: '云账号' },

@@ -4,12 +4,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/url"
 	"strings"
 	"time"
 
 	"auto-dba/internal/mail"
 	"auto-dba/internal/store"
 )
+
+const ticketLinkLocalWarn = "工单链接仍是本机地址，请在邮件设置填写前端访问地址"
 
 // IssueCreated 工单创建后通知审批人（邮件）。异步调用方应 go IssueCreated(...)。
 func IssueCreated(db *store.DB, encKey string, issue *store.Issue) {
@@ -27,6 +30,7 @@ func notifyApproverPending(db *store.DB, encKey string, issue *store.Issue, tran
 	}
 	ncfg, err := db.GetNotifyConfig()
 	if err != nil || ncfg == nil {
+		log.Printf("notify ticket pending: read config failed ticket=%s err=%v", issue.TicketNo, err)
 		return
 	}
 	wantEmail := ncfg.EmailOnTicketCreate
@@ -39,13 +43,24 @@ func notifyApproverPending(db *store.DB, encKey string, issue *store.Issue, tran
 	recipients := collectApproverUsernames(issue)
 	if len(recipients) == 0 && !wantRobot {
 		log.Printf("notify ticket pending: no approver usernames ticket=%s", issue.TicketNo)
+		if wantEmail || wantLark {
+			recordNotifyAudit(db, issue, nil, "", "notify:", "", false, "没有审批人", 0)
+		}
 		return
 	}
 	if len(recipients) == 0 {
 		log.Printf("notify ticket pending: no approver usernames, person channels skipped ticket=%s", issue.TicketNo)
+		if wantEmail || wantLark {
+			recordNotifyAudit(db, issue, nil, "", "notify:", "", false, "没有审批人", 0)
+		}
 	}
 	smtpCfg, _ := db.GetSMTPConfig(encKey)
 	link := ticketLink(smtpCfg, issue.ID)
+	linkWarn := ""
+	if ticketLinkIsLocal(link) {
+		linkWarn = ticketLinkLocalWarn
+		log.Printf("notify ticket pending: %s ticket=%s link=%s", linkWarn, issue.TicketNo, link)
+	}
 	subject := fmt.Sprintf("[auto-dba] 待审批工单 %s", issue.TicketNo)
 	intro := "有新的工单待您审批"
 	if transferred {
@@ -64,10 +79,19 @@ func notifyApproverPending(db *store.DB, encKey string, issue *store.Issue, tran
 		strings.TrimSpace(issue.Description),
 		link,
 	)
+	statement := subject + "\n\n" + body
+	audit := &notifyAuditCtx{issue: issue, statement: statement, linkWarn: linkWarn}
 	if wantEmail && len(recipients) > 0 {
 		if _, mailCfg, ok := loadSMTP(db, encKey, issue.TicketNo, "issue assignee notify"); ok {
-			sendToUsernames(db, mailCfg, recipients, subject, body, issue.TicketNo, "issue assignee notify")
+			sendToUsernames(db, mailCfg, recipients, subject, body, issue.TicketNo, "issue assignee notify", audit)
+		} else {
+			for _, name := range recipients {
+				recordNotifyAudit(db, issue, nil, name, "email:", statement, false, joinAuditMessage("SMTP 未就绪", linkWarn), 0)
+			}
 		}
+	}
+	if wantLark && len(recipients) > 0 {
+		sendTicketLark(db, issue, recipients, subject, body, statement, linkWarn)
 	}
 	sendApproverChannels(db, ncfg, recipients, subject, body, link, issue.TicketNo)
 }
@@ -79,18 +103,11 @@ func sendApproverChannels(db *store.DB, ncfg *store.NotifyConfig, usernames []st
 	text := body
 	md := fmt.Sprintf("**%s**\n\n%s\n\n[打开工单](%s)", subject, body, link)
 
-	if ncfg.LarkOnTicketCreate {
-		recips := CollectLarkRecipients(db, usernames, "ticket="+ticketNo)
-		if len(recips) > 0 {
-			SendVia(ChannelLark, Message{Title: subject, Text: text, Markdown: md, LarkRecipients: recips})
-		}
-	}
-
 	if ncfg.WecomOnTicketCreate {
 		toParts := make([]string, 0)
 		seen := map[string]bool{}
 		for _, uname := range usernames {
-			u, _ := db.GetUserByUsername(strings.TrimSpace(uname))
+			u, _ := db.GetUserByUsernameFold(strings.TrimSpace(uname))
 			if u == nil {
 				continue
 			}
@@ -320,7 +337,7 @@ func IssueExecFailed(db *store.DB, encKey string, issue *store.Issue, errMsg str
 		msg,
 		link,
 	)
-	sendToUsernames(db, mailCfg, []string{issue.Submitter}, subject, body, issue.TicketNo, "issue exec failed")
+	sendToUsernames(db, mailCfg, []string{issue.Submitter}, subject, body, issue.TicketNo, "issue exec failed", nil)
 }
 
 // IssueAwaitExec 审批通过后仍待执行时通知提交人。
@@ -352,7 +369,7 @@ func IssueAwaitExec(db *store.DB, encKey string, issue *store.Issue, reason stri
 		why,
 		link,
 	)
-	sendToUsernames(db, mailCfg, []string{issue.Submitter}, subject, body, issue.TicketNo, "issue await exec")
+	sendToUsernames(db, mailCfg, []string{issue.Submitter}, subject, body, issue.TicketNo, "issue await exec", nil)
 }
 
 // IssueAwaitExecStuck 长时间停在待执行时告警提交人。
@@ -381,7 +398,7 @@ func IssueAwaitExecStuck(db *store.DB, encKey string, issue *store.Issue) {
 		issue.DBName,
 		link,
 	)
-	sendToUsernames(db, mailCfg, []string{issue.Submitter}, subject, body, issue.TicketNo, "issue await stuck")
+	sendToUsernames(db, mailCfg, []string{issue.Submitter}, subject, body, issue.TicketNo, "issue await stuck", nil)
 }
 
 // AwaitExecNotifyReason 审批后待执行邮件的说明文案。
@@ -448,21 +465,41 @@ func ticketLink(smtpCfg *store.SMTPConfig, issueID string) string {
 	return fmt.Sprintf("%s/#/ops/tickets/%s", base, issueID)
 }
 
-func sendToUsernames(db *store.DB, mailCfg mail.Config, usernames []string, subject, body, ticketNo, tag string) {
+func ticketLinkIsLocal(link string) bool {
+	u, err := url.Parse(strings.TrimSpace(link))
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	return host == "127.0.0.1" || host == "localhost"
+}
+
+func sendToUsernames(db *store.DB, mailCfg mail.Config, usernames []string, subject, body, ticketNo, tag string, audit *notifyAuditCtx) {
 	seen := map[string]bool{}
 	for _, uname := range usernames {
 		uname = strings.TrimSpace(uname)
 		if uname == "" {
 			continue
 		}
-		u, _ := db.GetUserByUsername(uname)
-		if u == nil {
+		start := time.Now()
+		u, err := db.GetUserByUsernameFold(uname)
+		if err != nil || u == nil {
 			log.Printf("notify %s: user %q not found ticket=%s", tag, uname, ticketNo)
+			if audit != nil {
+				msg := fmt.Sprintf("查不到用户 %s", uname)
+				if err != nil {
+					msg = err.Error()
+				}
+				audit.write(db, nil, uname, "email:", false, msg, time.Since(start))
+			}
 			continue
 		}
 		email := strings.TrimSpace(u.Email)
 		if email == "" || !strings.Contains(email, "@") {
 			log.Printf("notify %s: user %q has no email ticket=%s", tag, uname, ticketNo)
+			if audit != nil {
+				audit.write(db, u, u.Username, "email:", false, "没有邮箱", time.Since(start))
+			}
 			continue
 		}
 		key := strings.ToLower(email)
@@ -472,28 +509,39 @@ func sendToUsernames(db *store.DB, mailCfg mail.Config, usernames []string, subj
 		seen[key] = true
 		if err := mail.Send(mailCfg, email, subject, body, "text/plain; charset=UTF-8"); err != nil {
 			log.Printf("notify %s mail to %s ticket=%s: %v", tag, email, ticketNo, err)
+			if audit != nil {
+				audit.write(db, u, u.Username, "email:"+email, false, err.Error(), time.Since(start))
+			}
 			continue
 		}
 		log.Printf("notify %s mail sent to %s user=%s ticket=%s", tag, email, uname, ticketNo)
+		if audit != nil {
+			audit.write(db, u, u.Username, "email:"+email, true, "", time.Since(start))
+		}
 	}
 }
 
 func collectApproverUsernames(issue *store.Issue) []string {
+	if issue == nil {
+		return nil
+	}
 	var out []string
 	add := func(s string) {
-		s = strings.TrimSpace(s)
-		if s == "" {
-			return
-		}
-		for _, x := range out {
-			if strings.EqualFold(x, s) {
-				return
+		for _, name := range store.ExpandApproverNames([]string{s}) {
+			dup := false
+			for _, x := range out {
+				if strings.EqualFold(x, name) {
+					dup = true
+					break
+				}
+			}
+			if !dup {
+				out = append(out, name)
 			}
 		}
-		out = append(out, s)
 	}
 	// DQL 多级审批只通知当前关审批人（assigned_to）；推进后由 IssueAssigneeChanged 再通知下一关。
-	if issue != nil && issue.IssueType == store.IssueTypeDQL {
+	if issue.IssueType == store.IssueTypeDQL {
 		add(issue.AssignedTo)
 		return out
 	}
@@ -511,4 +559,98 @@ func collectApproverUsernames(issue *store.Issue) []string {
 		}
 	}
 	return out
+}
+
+type notifyAuditCtx struct {
+	issue     *store.Issue
+	statement string
+	linkWarn  string
+}
+
+func (a *notifyAuditCtx) write(db *store.DB, user *store.User, username, target string, ok bool, message string, elapsed time.Duration) {
+	if a == nil {
+		return
+	}
+	recordNotifyAudit(db, a.issue, user, username, target, a.statement, ok, joinAuditMessage(message, a.linkWarn), elapsed)
+}
+
+func joinAuditMessage(base, extra string) string {
+	base = strings.TrimSpace(base)
+	extra = strings.TrimSpace(extra)
+	if extra == "" {
+		return base
+	}
+	if base == "" {
+		return extra
+	}
+	return base + "；" + extra
+}
+
+func recordNotifyAudit(db *store.DB, issue *store.Issue, user *store.User, username, target, statement string, ok bool, message string, elapsed time.Duration) {
+	if db == nil || issue == nil {
+		return
+	}
+	row := &store.QueryAudit{
+		Kind:         "notify",
+		ClientType:   "notify",
+		Username:     strings.TrimSpace(username),
+		TenantID:     issue.TenantID,
+		InstanceName: issue.TicketNo,
+		DBType:       issue.IssueType,
+		Target:       target,
+		Statement:    statement,
+		Success:      ok,
+		Message:      message,
+		ElapsedMS:    elapsed.Milliseconds(),
+	}
+	if user != nil {
+		row.UserID = user.ID
+		if name := strings.TrimSpace(user.Username); name != "" {
+			row.Username = name
+		}
+		row.DisplayName = user.DisplayName
+	}
+	if err := db.CreateQueryAudit(row); err != nil {
+		log.Printf("notify audit ticket=%s: %v", issue.TicketNo, err)
+	}
+}
+
+func sendTicketLark(db *store.DB, issue *store.Issue, usernames []string, subject, text, statement, linkWarn string) {
+	seen := map[string]bool{}
+	for _, uname := range usernames {
+		uname = strings.TrimSpace(uname)
+		key := strings.ToLower(uname)
+		if uname == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		start := time.Now()
+		u, err := db.GetUserByUsernameFold(uname)
+		if err != nil || u == nil {
+			msg := fmt.Sprintf("查不到用户 %s", uname)
+			if err != nil {
+				msg = err.Error()
+			}
+			log.Printf("notify lark ticket=%s: %s", issue.TicketNo, msg)
+			recordNotifyAudit(db, issue, nil, uname, "lark:", statement, false, joinAuditMessage(msg, linkWarn), time.Since(start))
+			continue
+		}
+		cands := ResolveLarkRecipient(u)
+		if len(cands) == 0 {
+			log.Printf("notify lark ticket=%s: user %q has no im_account/email/phone", issue.TicketNo, u.Username)
+			recordNotifyAudit(db, issue, u, u.Username, "lark:", statement, false, joinAuditMessage("无飞书身份", linkWarn), time.Since(start))
+			continue
+		}
+		used, sendErr := SendLarkPerson(subject, text, cands)
+		target := "lark:" + used
+		if used == "" {
+			target = "lark:" + strings.Join(cands, "|")
+		}
+		if sendErr != nil {
+			log.Printf("notify lark ticket=%s user=%s: %v", issue.TicketNo, u.Username, sendErr)
+			recordNotifyAudit(db, issue, u, u.Username, target, statement, false, joinAuditMessage(sendErr.Error(), linkWarn), time.Since(start))
+			continue
+		}
+		recordNotifyAudit(db, issue, u, u.Username, target, statement, true, joinAuditMessage("", linkWarn), time.Since(start))
+	}
 }

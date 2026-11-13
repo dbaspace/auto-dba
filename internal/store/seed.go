@@ -1926,8 +1926,9 @@ func (d *DB) ensureCloudMenus(now string) error {
 		{"m-cloud-pg", "m-cloud", "PostgreSQL", "/ops/cloud/postgres", URNSidebarCloudPostgres, "查看云 PostgreSQL", "database", 1},
 		{"m-cloud-mysql", "m-cloud", "MySQL", "/ops/cloud/mysql", URNSidebarCloudMySQL, "查看云 MySQL", "mysql", 2},
 		{"m-cloud-redis", "m-cloud", "Redis", "/ops/cloud/redis", URNSidebarCloudRedis, "查看云 Redis", "redis", 3},
-		{"m-cloud-host", "m-cloud", "主机", "/ops/cloud/hosts", URNSidebarCloudHost, "查看云主机", "server", 4},
-		{"m-cloud-policies", "m-cloud", "自愈策略", "/ops/cloud/policies", URNSidebarCloudPolicies, "查看云自愈策略", "safety", 5},
+		{"m-cloud-kafka", "m-cloud", "Kafka", "/ops/cloud/kafka", URNSidebarCloudKafka, "查看云 Kafka", "kafka", 4},
+		{"m-cloud-host", "m-cloud", "主机", "/ops/cloud/hosts", URNSidebarCloudHost, "查看云主机", "server", 5},
+		{"m-cloud-policies", "m-cloud", "自愈策略", "/ops/cloud/policies", URNSidebarCloudPolicies, "查看云自愈策略", "safety", 6},
 		{"m-act-cloud-submit", "m-cloud-pg", "提交云变更", "", URNCloudSubmit, "提交云资源变更工单", "edit", 90},
 	}
 	for _, it := range items {
@@ -1943,7 +1944,7 @@ func (d *DB) ensureCloudMenus(now string) error {
 	if err := d.GrantMenuToAllRoles("m-cloud"); err != nil {
 		return err
 	}
-	for _, id := range []string{"m-cloud-pg", "m-cloud-mysql", "m-cloud-redis", "m-cloud-host", "m-cloud-policies"} {
+	for _, id := range []string{"m-cloud-pg", "m-cloud-mysql", "m-cloud-redis", "m-cloud-kafka", "m-cloud-host", "m-cloud-policies"} {
 		if err := d.GrantMenuFollowingParent(id, "m-cloud"); err != nil {
 			return err
 		}

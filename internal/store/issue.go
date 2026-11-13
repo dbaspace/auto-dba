@@ -17,7 +17,7 @@ func ValidIssueType(t string) bool {
 		IssueTypeCDC, IssueTypeArchive, IssueTypeFlashback, IssueTypeMigration, IssueTypeMullang, IssueTypeCreateDB,
 		IssueTypeHA, IssueTypeRedis, IssueTypeBackupRestore, IssueTypeSrCluster, IssueTypeDbDeploy,
 		IssueTypeResourceApply, IssueTypeK8sChange, IssueTypeDnsChange,
-		IssueTypeCloudPg, IssueTypeCloudMysql, IssueTypeCloudRedis, IssueTypeCloudHost:
+		IssueTypeCloudPg, IssueTypeCloudMysql, IssueTypeCloudRedis, IssueTypeCloudKafka, IssueTypeCloudHost:
 		return true
 	default:
 		return false

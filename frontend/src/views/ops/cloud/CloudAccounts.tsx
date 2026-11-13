@@ -247,6 +247,7 @@ export default function CloudAccounts() {
                 { value: 'postgres', label: 'PostgreSQL' },
                 { value: 'mysql', label: 'MySQL' },
                 { value: 'redis', label: 'Redis' },
+                { value: 'kafka', label: 'Kafka' },
                 { value: 'host', label: '主机' },
               ]}
             />

@@ -99,6 +99,40 @@ func (d *DB) GetUserByUsername(username string) (*User, error) {
 	return u, nil
 }
 
+// GetUserByUsernameFold 按用户名查找，不区分大小写。仅通知等审批人匹配使用，登录仍走精确匹配。
+func (d *DB) GetUserByUsernameFold(username string) (*User, error) {
+	username = strings.TrimSpace(username)
+	if username == "" {
+		return nil, nil
+	}
+	u := &User{}
+	var roleID sql.NullString
+	var source sql.NullString
+	var disabled, failed int
+	var lockedAt string
+	err := d.QueryRow(
+		`SELECT id, username, display_name, role, role_id, password_hash, source, created_at,
+			COALESCE(login_disabled,0), COALESCE(failed_login_count,0), COALESCE(locked_at,''),
+			COALESCE(password_changed_at,'')
+		 FROM tbl_users WHERE LOWER(username)=LOWER(?) ORDER BY username LIMIT 1`,
+		username,
+	).Scan(&u.ID, &u.Username, &u.DisplayName, &u.Role, &roleID, &u.PasswordHash, &source, &u.CreatedAt,
+		&disabled, &failed, &lockedAt, &u.PasswordChangedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	u.RoleID = roleID.String
+	u.Source = userSource(source.String)
+	scanUserLoginCols(disabled, failed, lockedAt, u)
+	d.attachUserProfile(u)
+	d.AttachUserRoleIDs(u)
+	d.attachExternalLoginAttempt(u)
+	return u, nil
+}
+
 func (d *DB) GetUserByID(id string) (*User, error) {
 	u := &User{}
 	var roleID sql.NullString

@@ -361,7 +361,7 @@ export default function TicketDetail() {
       })
       return fields
     }
-    if (it.issue_type === 'cloud_pg' || it.issue_type === 'cloud_mysql' || it.issue_type === 'cloud_redis' || it.issue_type === 'cloud_host') {
+    if (it.issue_type === 'cloud_pg' || it.issue_type === 'cloud_mysql' || it.issue_type === 'cloud_redis' || it.issue_type === 'cloud_kafka' || it.issue_type === 'cloud_host') {
       let p: any = {}
       try { p = JSON.parse(it.sql_content || '{}') } catch { p = {} }
       fields.push({ key: 'action', label: '动作', value: p.action || '-' })

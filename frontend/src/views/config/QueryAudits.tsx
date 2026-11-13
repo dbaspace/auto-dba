@@ -42,6 +42,7 @@ const KIND_LABEL: Record<string, string> = {
   db: '数据库',
   kafka: 'Kafka',
   redis: 'Redis',
+  notify: '通知',
 }
 
 function fmtTime(v?: string) {
@@ -98,7 +99,7 @@ export default function QueryAudits() {
 
   return (
     <div className="ops-page">
-      <p className="hint">记录数据库查询、Kafka 拉消息、Redis 命令的执行结果。仅管理员可查看。</p>
+      <p className="hint">记录数据库查询、Kafka 拉消息、Redis 命令，以及工单待审批通知的发送结果。仅管理员可查看。</p>
       <div className="toolbar">
         <Input
           allowClear
@@ -122,6 +123,7 @@ export default function QueryAudits() {
             { value: 'db', label: '数据库' },
             { value: 'kafka', label: 'Kafka' },
             { value: 'redis', label: 'Redis' },
+            { value: 'notify', label: '通知' },
           ]}
         />
         <Select
@@ -155,6 +157,7 @@ export default function QueryAudits() {
             { value: 'cli', label: 'cli' },
             { value: 'local_ai', label: 'local_ai' },
             { value: 'machine', label: 'machine' },
+            { value: 'notify', label: '通知' },
           ]}
         />
         <Input
@@ -195,7 +198,7 @@ export default function QueryAudits() {
               title: '客户端',
               dataIndex: 'client_type',
               width: 90,
-              render: (v: string) => v || 'browser',
+              render: (v: string) => (v === 'notify' ? '通知' : v || 'browser'),
             },
             {
               title: '令牌',

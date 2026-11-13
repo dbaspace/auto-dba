@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -88,6 +89,13 @@ func (s *larkSender) accessToken() (string, error) {
 	return s.token, nil
 }
 
+func (s *larkSender) invalidateToken() {
+	s.mu.Lock()
+	s.token = ""
+	s.expiresAt = time.Time{}
+	s.mu.Unlock()
+}
+
 // 飞书 receive_id_type 取值。
 const (
 	larkIDUserID  = "user_id"
@@ -140,6 +148,11 @@ var larkInvalidIDCodes = map[int]bool{
 	99992360: true, 99992361: true, 99992364: true, 230013: true, 230006: true,
 }
 
+// larkTokenInvalidCodes 访问令牌失效：清缓存后重新取一次再发。
+var larkTokenInvalidCodes = map[int]bool{
+	99991661: true, 99991663: true, 99991668: true,
+}
+
 type larkAPIError struct {
 	Code int
 	Msg  string
@@ -154,6 +167,31 @@ func larkRetryable(err error) bool {
 	}
 	var nf *larkNotFoundError
 	return errors.As(err, &nf)
+}
+
+func larkTokenInvalid(err error) bool {
+	var ae *larkAPIError
+	return errors.As(err, &ae) && larkTokenInvalidCodes[ae.Code]
+}
+
+type larkHTTPStatusError struct {
+	Status int
+}
+
+func (e *larkHTTPStatusError) Error() string {
+	if e == nil {
+		return "http error"
+	}
+	return fmt.Sprintf("http %d", e.Status)
+}
+
+func larkTransient(err error) bool {
+	var he *larkHTTPStatusError
+	if errors.As(err, &he) && he.Status >= 500 {
+		return true
+	}
+	var ne net.Error
+	return errors.As(err, &ne)
 }
 
 type larkNotFoundError struct{ what string }
@@ -190,7 +228,7 @@ func (s *larkSender) Send(msg Message) error {
 	text := fmt.Sprintf("【%s】\n%s", title, body)
 	var fails []string
 	for _, cands := range people {
-		if err := s.sendToCandidates(token, cands, text); err != nil {
+		if _, err := s.sendToCandidates(&token, cands, text); err != nil {
 			log.Printf("notify lark: %v", err)
 			fails = append(fails, err.Error())
 		}
@@ -201,8 +239,33 @@ func (s *larkSender) Send(msg Message) error {
 	return nil
 }
 
-// sendToCandidates 依次尝试同一人的候选身份，成功即停；仅「ID 无效」类错误才换下一个。
-func (s *larkSender) sendToCandidates(token string, cands []string, text string) error {
+// SendLarkPerson 向一名收件人的候选身份发送。成功时返回实际送达的身份，例如 open_id:ou_xxx。
+func SendLarkPerson(title, text string, cands []string) (string, error) {
+	globalReg.mu.RLock()
+	s, _ := globalReg.lark.(*larkSender)
+	globalReg.mu.RUnlock()
+	if s == nil {
+		return "", fmt.Errorf("飞书未配置")
+	}
+	return s.sendPerson(title, text, cands)
+}
+
+func (s *larkSender) sendPerson(title, text string, cands []string) (string, error) {
+	token, err := s.accessToken()
+	if err != nil {
+		return "", err
+	}
+	title = strings.TrimSpace(title)
+	if title == "" {
+		title = "KeePlus"
+	}
+	body := strings.TrimSpace(text)
+	formatted := fmt.Sprintf("【%s】\n%s", title, body)
+	return s.sendToCandidates(&token, cands, formatted)
+}
+
+// sendToCandidates 依次尝试同一人的候选身份，成功即停并返回命中的身份；仅「ID 无效」类错误才换下一个。
+func (s *larkSender) sendToCandidates(token *string, cands []string, text string) (string, error) {
 	var errs []string
 	for _, c := range cands {
 		c = strings.TrimSpace(c)
@@ -212,7 +275,7 @@ func (s *larkSender) sendToCandidates(token string, cands []string, text string)
 		typ, id := larkReceiveIDType(c)
 		err := s.sendOne(token, typ, id, text)
 		if err == nil {
-			return nil
+			return c, nil
 		}
 		errs = append(errs, larkSendErrText(c, typ, err))
 		if !larkRetryable(err) {
@@ -220,21 +283,54 @@ func (s *larkSender) sendToCandidates(token string, cands []string, text string)
 		}
 	}
 	if len(errs) == 0 {
-		return fmt.Errorf("lark send: empty recipient")
+		return "", fmt.Errorf("lark send: empty recipient")
 	}
-	return errors.New(strings.Join(errs, " | "))
+	return "", errors.New(strings.Join(errs, " | "))
 }
 
 func larkSendErrText(raw, typ string, err error) string {
 	msg := fmt.Sprintf("lark send to %s (%s): %v", raw, typ, err)
 	var ae *larkAPIError
-	if errors.As(err, &ae) && ae.Code == 99992360 {
+	if !errors.As(err, &ae) {
+		return msg
+	}
+	switch ae.Code {
+	case 99992360:
 		msg += "；提示：user_id 为飞书企业内用户 ID（非登录名），可改填飞书通讯录中的邮箱 / 手机号 / open_id"
+	case 230013:
+		msg += "；接收人不在飞书应用可用范围，请在开放平台调整可用范围"
 	}
 	return msg
 }
 
-func (s *larkSender) sendOne(token, typ, id, text string) error {
+func (s *larkSender) sendOne(token *string, typ, id, text string) error {
+	if token == nil {
+		return fmt.Errorf("lark send: empty token")
+	}
+	err := s.sendOneOnce(*token, typ, id, text)
+	if err == nil {
+		return nil
+	}
+	if larkTokenInvalid(err) {
+		s.invalidateToken()
+		tok, terr := s.accessToken()
+		if terr != nil {
+			return err
+		}
+		*token = tok
+		err = s.sendOneOnce(*token, typ, id, text)
+		if err == nil {
+			return nil
+		}
+	}
+	if larkTransient(err) {
+		time.Sleep(time.Second)
+		return s.sendOneOnce(*token, typ, id, text)
+	}
+	return err
+}
+
+func (s *larkSender) sendOneOnce(token, typ, id, text string) error {
 	if typ == larkIDMobile {
 		uid, err := s.userIDByMobile(token, id)
 		if err != nil {
@@ -261,6 +357,9 @@ func (s *larkSender) doJSON(token, method, u string, payload any, out any) error
 	}
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode >= 500 {
+		return &larkHTTPStatusError{Status: resp.StatusCode}
+	}
 	return json.Unmarshal(b, out)
 }
 

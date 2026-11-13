@@ -121,6 +121,7 @@ const (
 	URNSidebarCloudPostgres = "um.sidebar.cloud-postgres"
 	URNSidebarCloudMySQL    = "um.sidebar.cloud-mysql"
 	URNSidebarCloudRedis    = "um.sidebar.cloud-redis"
+	URNSidebarCloudKafka    = "um.sidebar.cloud-kafka"
 	URNSidebarCloudHost     = "um.sidebar.cloud-host"
 	URNSidebarCloudPolicies = "um.sidebar.cloud-policies"
 	URNSidebarCloudAccounts = "um.sidebar.cloud-accounts"
