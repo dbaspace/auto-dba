@@ -394,15 +394,16 @@ func (h *TicketHandler) GetTargetApprovers(c *gin.Context) {
 		}
 	}
 	if strings.EqualFold(strings.TrimSpace(c.Query("issue_type")), store.IssueTypeMigration) {
-		if allowed := h.migrationApproverWhitelist(); len(allowed) > 0 {
-			for _, name := range allowed {
-				if len(list) == 0 || usernameInList(name, list) {
-					add(name)
-				}
-			}
-			c.JSON(http.StatusOK, gin.H{"data": out, "resource_tenant_id": resourceTid})
+		names, err := listCreateDBApproverNames(h.Store)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 			return
 		}
+		for _, name := range names {
+			out = append(out, item{Type: "user", Name: name})
+		}
+		c.JSON(http.StatusOK, gin.H{"data": out, "resource_tenant_id": resourceTid})
+		return
 	}
 	for _, name := range list {
 		add(name)
@@ -1264,7 +1265,7 @@ func (h *TicketHandler) validateTransferAssignee(it *store.Issue, newAssignee st
 	if strings.EqualFold(strings.TrimSpace(it.Submitter), newAssignee) {
 		return "不能将审核人转给提交人本人"
 	}
-	if it.IssueType == store.IssueTypeCreateDB {
+	if it.IssueType == store.IssueTypeCreateDB || it.IssueType == store.IssueTypeMigration {
 		ok, err := createDBApproverAllowed(h.Store, newAssignee)
 		if err != nil {
 			return err.Error()
@@ -1281,37 +1282,11 @@ func (h *TicketHandler) validateTransferAssignee(it *store.Issue, newAssignee st
 	if err := requireTenantMemberUsernames(h.Store, tid, []string{newAssignee}); err != nil {
 		return err.Error()
 	}
-	switch it.IssueType {
-	case store.IssueTypeMigration:
-		if !h.migrationApproverAllowed(newAssignee) {
-			return "审核人不在迁移审批人列表"
-		}
-		approvers := h.resolveApproversForIssue(it)
-		if len(approvers) > 0 && !usernameInList(newAssignee, approvers) {
-			return "审核人不在审批人列表"
-		}
-		return ""
-	default:
-		approvers := h.resolveApproversForIssue(it)
-		if len(approvers) > 0 && !usernameInList(newAssignee, approvers) {
-			return "审核人不在审批人列表"
-		}
-		return ""
+	approvers := h.resolveApproversForIssue(it)
+	if len(approvers) > 0 && !usernameInList(newAssignee, approvers) {
+		return "审核人不在审批人列表"
 	}
-}
-
-// migrationApproverWhitelist 返回 migration_approver_user_ids；未配置时为 nil（不限制）。
-func (h *TicketHandler) migrationApproverWhitelist() []string {
-	raw, _ := h.Store.GetGlobalArg("migration_approver_user_ids")
-	if strings.TrimSpace(raw) == "" {
-		return nil
-	}
-	return store.ParseApproverWhitelist(raw)
-}
-
-func (h *TicketHandler) migrationApproverAllowed(name string) bool {
-	allowed := h.migrationApproverWhitelist()
-	return len(allowed) == 0 || usernameInList(name, allowed)
+	return ""
 }
 
 func (h *TicketHandler) syncMigrationAssigneeAfterTransfer(it *store.Issue, newAssignee string) {

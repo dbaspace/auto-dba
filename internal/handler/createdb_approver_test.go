@@ -55,3 +55,25 @@ func TestCreateDBTransferRejectsOutsider(t *testing.T) {
 		t.Fatalf("self: %q", msg)
 	}
 }
+
+func TestResolveMigrationApproverEmptyPool(t *testing.T) {
+	_, err := resolveMigrationApprover(nil, "")
+	if err == nil || err.Error() != createDBApproverDenied {
+		t.Fatalf("empty pool: %v", err)
+	}
+	_, err = resolveMigrationApprover(nil, "chenjiachi")
+	if err == nil || err.Error() != createDBApproverDenied {
+		t.Fatalf("outsider: %v", err)
+	}
+}
+
+func TestMigrationTransferUsesCreateDBPool(t *testing.T) {
+	h := &TicketHandler{}
+	it := &store.Issue{IssueType: store.IssueTypeMigration, Submitter: "alice", TenantID: "biz"}
+	if msg := h.validateTransferAssignee(it, "chenjiachi"); msg != createDBApproverDenied {
+		t.Fatalf("transfer: %q", msg)
+	}
+	if msg := h.validateTransferAssignee(it, "alice"); msg != "不能将审核人转给提交人本人" {
+		t.Fatalf("self: %q", msg)
+	}
+}

@@ -353,25 +353,10 @@ func (h *MigrationHandler) Create(c *gin.Context) {
 		if preferred == "" {
 			preferred = strings.TrimSpace(req.AssignedTo)
 		}
-		if preferred == "" {
-			def, _ := h.Store.GetGlobalArg("migration_approver_user_ids")
-			if def == "" {
-				def, _ = h.Store.GetGlobalArg("sync_default_approver")
-			}
-			preferred = strings.TrimSpace(def)
-			if i := strings.IndexAny(preferred, ",，"); i >= 0 {
-				preferred = strings.TrimSpace(preferred[:i])
-			}
-		}
 		var aerr error
-		reviewer, aerr = resolveTenantAssignee(h.Store, middleware.TenantID(c), preferred)
+		reviewer, aerr = resolveMigrationApprover(h.Store, preferred)
 		if aerr != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"message": aerr.Error()})
-			return
-		}
-		th := &TicketHandler{Store: h.Store}
-		if approvers := th.resolveApprovers(t.SourceID, t.SourceDB); len(approvers) > 0 && !usernameInList(reviewer, approvers) {
-			c.JSON(http.StatusBadRequest, gin.H{"message": "审核人不在实例/库审批人名单中"})
 			return
 		}
 		t.AssignedApprover = reviewer
@@ -574,14 +559,9 @@ func (h *MigrationHandler) resubmit(c *gin.Context, t *store.MigrationTask, req 
 			preferred = strings.TrimSpace(t.AssignedApprover)
 		}
 		var aerr error
-		reviewer, aerr = resolveTenantAssignee(h.Store, middleware.TenantID(c), preferred)
+		reviewer, aerr = resolveMigrationApprover(h.Store, preferred)
 		if aerr != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"message": aerr.Error()})
-			return
-		}
-		th := &TicketHandler{Store: h.Store}
-		if approvers := th.resolveApprovers(t.SourceID, t.SourceDB); len(approvers) > 0 && !usernameInList(reviewer, approvers) {
-			c.JSON(http.StatusBadRequest, gin.H{"message": "审核人不在实例/库审批人名单中"})
 			return
 		}
 		t.AssignedApprover = reviewer
@@ -1299,15 +1279,12 @@ func (h *MigrationHandler) Update(c *gin.Context) {
 				c.JSON(http.StatusBadRequest, gin.H{"message": "不能将审核人转给提交人本人"})
 				return
 			}
-			th := &TicketHandler{Store: h.Store}
-			if !th.migrationApproverAllowed(newApprover) {
-				c.JSON(http.StatusBadRequest, gin.H{"message": "审核人不在迁移审批人列表"})
+			resolved, aerr := resolveMigrationApprover(h.Store, newApprover)
+			if aerr != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"message": aerr.Error()})
 				return
 			}
-			if approvers := th.resolveApprovers(t.SourceID, t.SourceDB); len(approvers) > 0 && !usernameInList(newApprover, approvers) {
-				c.JSON(http.StatusBadRequest, gin.H{"message": "审核人不在实例/库审批人名单中"})
-				return
-			}
+			newApprover = resolved
 			t.AssignedApprover = newApprover
 			t.AssignedApproverLogin = newApprover
 			if t.IssueID != "" {

@@ -201,6 +201,26 @@ func resolveCreateDBApprover(db *store.DB, preferred string) (string, error) {
 	return "", fmt.Errorf("%s", createDBApproverDenied)
 }
 
+// resolveMigrationApprover 数据迁移审核人与建库同一池，不要求加入任务租户。
+// preferred 为空时用池中第一人（sync_default_approver 在前）。
+func resolveMigrationApprover(db *store.DB, preferred string) (string, error) {
+	preferred = strings.TrimSpace(preferred)
+	if i := strings.IndexAny(preferred, ",，"); i >= 0 {
+		preferred = strings.TrimSpace(preferred[:i])
+	}
+	if preferred != "" {
+		return resolveCreateDBApprover(db, preferred)
+	}
+	pool, err := listCreateDBApproverNames(db)
+	if err != nil {
+		return "", err
+	}
+	if len(pool) == 0 {
+		return "", fmt.Errorf("%s", createDBApproverDenied)
+	}
+	return pool[0], nil
+}
+
 func (h *CreateDBHandler) CheckSQL(c *gin.Context) {
 	var req struct {
 		DBType      string   `json:"db_type"`

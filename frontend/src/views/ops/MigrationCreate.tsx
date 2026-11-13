@@ -166,7 +166,7 @@ export default function MigrationCreate() {
     oss_configured: false,
     oss_envs: [],
   })
-  const [extraApprovers, setExtraApprovers] = useState<string[]>([])
+  const [approverNames, setApproverNames] = useState<string[]>([])
   const [form, setForm] = useState<MigForm>(emptyForm())
   const approvalOn = settings.approval_enabled !== false
 
@@ -179,18 +179,7 @@ export default function MigrationCreate() {
     setForm((f) => ({ ...f, ...patch }))
   }
 
-  const approvers = useMemo(() => {
-    const set = new Set(
-      String(settings.approver_user_ids || '')
-        .split(/[,，\s]+/)
-        .map((s) => s.trim())
-        .filter(Boolean),
-    )
-    for (const u of extraApprovers) if (u) set.add(u)
-    const src = instances.find((i) => i.id === form.source_instance_id)
-    for (const u of src?.approvers || []) if (u) set.add(u)
-    return [...set]
-  }, [settings.approver_user_ids, extraApprovers, instances, form.source_instance_id])
+  const approvers = approverNames
 
   const endpointsOk = useMemo(
     () => Boolean(srcConn?.connected && tgtConn?.connected),
@@ -443,12 +432,12 @@ export default function MigrationCreate() {
 
   useEffect(() => {
     ;(async () => {
-      const [instRes, domainRes, envRes, setRes, argRes] = await Promise.all([
+      const [instRes, domainRes, envRes, setRes, approverRes] = await Promise.all([
         api.get('/instances'),
         api.get('/access-domains').catch(() => ({ data: { data: [] } })),
         api.get('/environments').catch(() => ({ data: { data: [] } })),
         api.get('/migration/settings').catch(() => ({ data: { data: {} } })),
-        api.get('/global-args').catch(() => ({ data: { data: [] } })),
+        api.get('/create-db/approvers').catch(() => ({ data: { data: [] } })),
       ])
       setInstances(instRes.data.data || [])
       setAccessDomains(domainRes.data.data || [])
@@ -467,14 +456,11 @@ export default function MigrationCreate() {
           speed_limit = p.default_speed_limit as number
         return { ...f, batch_size, speed_limit }
       })
-      const args = argRes.data.data || []
-      const extras: string[] = []
-      String(args.find((a: any) => a.key === 'sync_default_approver')?.value || '')
-        .split(/[,，\s]+/)
-        .map((str) => str.trim())
+      const names: string[] = (approverRes.data.data || [])
+        .map((x: any) => (typeof x === 'string' ? x : x?.name || x?.username || ''))
+        .map((s: string) => String(s).trim())
         .filter(Boolean)
-        .forEach((u) => extras.push(u))
-      setExtraApprovers(extras)
+      setApproverNames(names)
       if (editTaskId) {
         const { data: taskRes } = await api.get(`/migration/tasks/${editTaskId}`)
         const t = taskRes.data
@@ -522,17 +508,7 @@ export default function MigrationCreate() {
         }
       }
       setForm((f) => {
-        if (!f.assigned_approver) {
-          const set = new Set(
-            String(s.approver_user_ids || '')
-              .split(/[,，\s]+/)
-              .map((str) => str.trim())
-              .filter(Boolean),
-          )
-          for (const u of extras) if (u) set.add(u)
-          const first = [...set][0]
-          if (first) return { ...f, assigned_approver: first }
-        }
+        if (!f.assigned_approver && names[0]) return { ...f, assigned_approver: names[0] }
         return f
       })
       if (!editTaskId) restoreDraft()
