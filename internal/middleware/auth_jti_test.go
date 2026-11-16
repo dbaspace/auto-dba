@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -292,6 +293,40 @@ func TestAuthExpiredTokenPromptsRelogin(t *testing.T) {
 		t.Fatal(err)
 	}
 	if body["code"] != "session_expired" || body["message"] != "登录已过期，请重新登录" {
+		t.Fatalf("body=%s", w.Body.String())
+	}
+}
+
+type unavailableGate struct{}
+
+func (unavailableGate) Enabled() bool  { return true }
+func (unavailableGate) FailOpen() bool { return false }
+func (unavailableGate) Valid(context.Context, string, string) (bool, time.Time, error) {
+	return false, time.Time{}, errors.New("redis down")
+}
+
+func TestAuthRedisUnavailableKeepsSession(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	secret := "sec"
+	tok, _, err := SignSessionToken(secret, "u1", "admin", "admin", "", "", false, 20*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := gin.New()
+	r.Use(Auth(&secret, nil, unavailableGate{}))
+	r.GET("/x", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	var body map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["code"] != "session_unavailable" || body["message"] != "会话服务暂不可用，请稍后重试" {
 		t.Fatalf("body=%s", w.Body.String())
 	}
 }

@@ -183,7 +183,7 @@ func (d *DB) ListAccessDomains(dbType, envCode, q string) ([]AccessDomain, error
 		like := "%" + q + "%"
 		args = append(args, like, like, like)
 	}
-	query += ` ORDER BY env_code, domain`
+	query += ` ORDER BY created_at DESC, domain`
 	rows, err := d.Query(query, args...)
 	if err != nil {
 		return nil, err
@@ -220,7 +220,7 @@ func (d *DB) ListAccessDomainsInTenant(tenantID, dbType, envCode, q string) ([]A
 		like := "%" + q + "%"
 		args = append(args, like, like, like)
 	}
-	query += ` ORDER BY env_code, domain`
+	query += ` ORDER BY created_at DESC, domain`
 	rows, err := d.Query(query, args...)
 	if err != nil {
 		return nil, err

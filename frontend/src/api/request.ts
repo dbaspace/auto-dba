@@ -131,7 +131,13 @@ client.interceptors.response.use(
       if (reqToken && currentToken && reqToken !== currentToken) {
         return Promise.reject(err)
       }
-      const code = err.response?.data?.code
+      const code = String(err.response?.data?.code || '')
+      // 503 / session_unavailable 只是会话服务暂时不可用，保留当前 token。
+      const dropLogin = code === 'session_expired' || code === 'session_revoked' || code === ''
+      if (!dropLogin) {
+        if (!(err.config as AxiosRequestConfig)?.silent) message.error(msg)
+        return Promise.reject(err)
+      }
       if (code === 'session_expired') {
         msg = err.response?.data?.message || '登录已过期，请重新登录'
       } else if (code === 'session_revoked') {

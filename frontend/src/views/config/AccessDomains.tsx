@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { Button, Dropdown, Input, Modal, Pagination, Select, Tabs, Tag, message } from 'antd'
+import dayjs from 'dayjs'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import api from '../../api/request'
 import Auth from '../../components/Auth'
@@ -23,6 +24,7 @@ interface DomainRow {
   domain?: string
   env_code?: string
   db_type?: string
+  created_at?: string
 }
 
 const OTHER = '__other__'
@@ -31,6 +33,17 @@ function typeKey(t?: string) {
   const n = String(t || '').toLowerCase()
   if (n === 'postgresql' || n === 'pg' || n === 'pgsql') return 'postgres'
   return n
+}
+
+function domainCreatedAt(v?: string) {
+  const t = Date.parse(v || '')
+  return Number.isNaN(t) ? 0 : t
+}
+
+function formatDomainTime(v?: string) {
+  if (!v) return '—'
+  const d = dayjs(v)
+  return d.isValid() ? d.format('YYYY-MM-DD HH:mm:ss') : v
 }
 
 export default function AccessDomains() {
@@ -138,7 +151,11 @@ export default function AccessDomains() {
           (r.env_code || '').toLowerCase().includes(kw),
       )
     }
-    return list
+    return [...list].sort((a, b) => {
+      const d = domainCreatedAt(b.created_at) - domainCreatedAt(a.created_at)
+      if (d !== 0) return d
+      return String(a.domain || '').localeCompare(String(b.domain || ''))
+    })
   }, [rows, activeType, knownTypes, q, envFilter, tenantFilter])
 
   const pagedRows = useMemo(() => {
@@ -187,6 +204,7 @@ export default function AccessDomains() {
         `同步完成：新建 ${r.created || 0}，更新 ${r.updated || 0}，删除 ${r.deleted || 0}` +
           (body.db_type ? `（仅 ${body.db_type}）` : '（全部类型）'),
       )
+      setPage(1)
       await load()
     } catch (e: any) {
       message.error(e?.response?.data?.message || e?.message || '同步失败')
@@ -486,6 +504,13 @@ export default function AccessDomains() {
               width: 220,
               ellipsis: true,
               render: (_: unknown, row: DomainRow) => row.instance_name || row.instance_id || '—',
+            },
+            {
+              title: '创建时间',
+              dataIndex: 'created_at',
+              key: 'created_at',
+              width: 180,
+              render: (v: string) => formatDomainTime(v),
             },
           ]}
         />

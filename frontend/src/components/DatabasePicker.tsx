@@ -18,6 +18,8 @@ interface Props {
   options?: DbOption[]
   loading?: boolean
   disabled?: boolean
+  /** 加载失败时的原因。左右两侧都显示这句话，不再显示成没有已选库。 */
+  statusText?: string
 }
 
 export default function DatabasePicker({
@@ -26,6 +28,7 @@ export default function DatabasePicker({
   options = [],
   loading = false,
   disabled = false,
+  statusText = '',
 }: Props) {
   const [searchQ, setSearchQ] = useState('')
   const [hideSystemDb, setHideSystemDb] = useState(true)
@@ -132,7 +135,7 @@ export default function DatabasePicker({
         </div>
         <div className="panel-list">
           {!leftVisible.length ? (
-            <div className="empty">{loading ? '加载中…' : '无匹配库'}</div>
+            <div className="empty">{loading ? '加载中…' : statusText || '无匹配库'}</div>
           ) : (
             leftVisible.map((opt, index) => (
               <label key={opt.value} className="row" onClick={(e) => onRowClick(index, opt.value, e)}>
@@ -156,7 +159,7 @@ export default function DatabasePicker({
         </div>
         <div className="panel-list">
           {!selectedOptions.length ? (
-            <div className="empty">暂无已选数据库</div>
+            <div className="empty">{statusText || '暂无已选数据库'}</div>
           ) : (
             selectedOptions.map((opt) => (
               <div key={opt.value} className="row between">

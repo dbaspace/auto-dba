@@ -295,7 +295,7 @@ func Auth(secret *string, db *store.DB, sessions SessionGate, skipPrefixes ...st
 				return
 			}
 			if verr != nil {
-				c.JSON(http.StatusUnauthorized, gin.H{
+				c.JSON(http.StatusServiceUnavailable, gin.H{
 					"message": "会话服务暂不可用，请稍后重试", "code": "session_unavailable",
 					"diagnostic_message": verr.Error(),
 				})

@@ -36,6 +36,11 @@ function grantPrivs(perms: string[]) {
   return (perms || []).map((p) => PERM_SQL[p]).filter(Boolean).join(', ')
 }
 
+function apiErrorMessage(e: unknown, fallback: string) {
+  const err = e as { response?: { data?: { message?: string } }; message?: string }
+  return err?.response?.data?.message || err?.message || fallback
+}
+
 /** 与后端模板对齐的只读预览（FOR ROLE 提交时替换为真实库 owner） */
 function previewGrantSql(dbType: string, dbNames: string[], username: string, permissions: string[]) {
   const user = String(username || '').trim()
@@ -107,6 +112,8 @@ export default function DclGrants() {
   const [dbAccounts, setDbAccounts] = useState<string[]>([])
   const [accountLoading, setAccountLoading] = useState(false)
   const [dbLoading, setDbLoading] = useState(false)
+  const [dbLoadError, setDbLoadError] = useState('')
+  const [sourceError, setSourceError] = useState('')
   const [approverLoading, setApproverLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [defaultApprover, setDefaultApprover] = useState('')
@@ -182,12 +189,17 @@ export default function DclGrants() {
   async function loadDbs(instanceId: string) {
     if (!instanceId) {
       setDatabases([])
+      setDbLoadError('')
       return
     }
     setDbLoading(true)
+    setDbLoadError('')
     try {
       const { data } = await api.get('/databases', { params: { instance_id: instanceId } })
       setDatabases(data.data || [])
+    } catch (e) {
+      setDatabases([])
+      setDbLoadError(apiErrorMessage(e, '加载数据库失败'))
     } finally {
       setDbLoading(false)
     }
@@ -309,12 +321,22 @@ export default function DclGrants() {
 
   useEffect(() => {
     ;(async () => {
-      const [instRes, domRes] = await Promise.all([
-        api.get('/instances'),
-        api.get('/access-domains').catch(() => ({ data: { data: [] } })),
-      ])
-      const domains: AccessDomainRow[] = domRes.data.data || []
-      const instList = instRes.data.data || []
+      let domains: AccessDomainRow[] = []
+      let instList: any[] = []
+      let loadMsg = ''
+      try {
+        const instRes = await api.get('/instances')
+        instList = instRes.data.data || []
+      } catch (e) {
+        loadMsg = apiErrorMessage(e, '加载实例失败')
+      }
+      try {
+        const domRes = await api.get('/access-domains')
+        domains = domRes.data.data || []
+      } catch (e) {
+        if (!loadMsg) loadMsg = apiErrorMessage(e, '加载域名失败')
+      }
+      setSourceError(loadMsg)
       setInstances(instList)
       setAccessDomains(domains)
       const groups = await loadTicketEnvGroups()
@@ -457,6 +479,7 @@ export default function DclGrants() {
               )}
             />
           </Form.Item>
+          {sourceError ? <Alert type="error" showIcon style={{ marginBottom: 12 }} message={sourceError} /> : null}
           <Form.Item
             label="数据库账号"
             name="username"
@@ -532,6 +555,7 @@ export default function DclGrants() {
               onChange={(v) => patchForm({ db_ids: v })}
               options={dbOptions}
               loading={dbLoading}
+              statusText={dbLoadError}
               disabled={!form.env || !form.db_type || !form.instance_id}
             />
           </Form.Item>

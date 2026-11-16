@@ -53,6 +53,43 @@ func TestInstanceHitsMultiHost(t *testing.T) {
 	}
 }
 
+func TestInstanceHitsHostBothSides(t *testing.T) {
+	resolve := func(h string) []string {
+		if h == "dorisdb.test.restosuite.ai" {
+			return []string{"10.100.112.14"}
+		}
+		return nil
+	}
+	if !instanceHitsHosts("10.100.112.14", []string{"dorisdb.test.restosuite.ai"}, resolve) {
+		t.Fatal("实例是 IP、FE 是域名时应命中")
+	}
+	if instanceHitsHosts("10.100.112.14", []string{"other.example"}, resolve) {
+		t.Fatal("解析不到同一地址时不应命中")
+	}
+}
+
+func TestPickLinkedInstanceAnyTenantByHost(t *testing.T) {
+	cl := &store.SrCluster{ID: "c1", TenantID: "t-a", FeHost: "dorisdb.test.restosuite.ai", FeQueryPort: 9030}
+	resolve := func(h string) []string {
+		if h == "dorisdb.test.restosuite.ai" {
+			return []string{"10.100.112.14"}
+		}
+		return nil
+	}
+	insts := []store.Instance{
+		{ID: "http-port", TenantID: "t-b", DBType: "starrocks", Host: "10.100.112.14", Port: 8030, Password: "x"},
+		{ID: "mysql", TenantID: "t-b", DBType: "mysql", Host: "10.100.112.14", Port: 9030, Password: "x"},
+		{ID: "other-ten", TenantID: "t-b", DBType: "starrocks", Host: "10.100.112.14", Port: 9030, Password: "x"},
+	}
+	it, by := pickLinkedInstanceAnyTenant(insts, cl, []string{"dorisdb.test.restosuite.ai"}, resolve)
+	if it == nil || it.ID != "other-ten" || by != "host" {
+		t.Fatalf("跨租户按地址复用: %+v %s", it, by)
+	}
+	if it, _ := pickLinkedInstance(insts, cl, []string{"dorisdb.test.restosuite.ai"}, resolve); it != nil {
+		t.Fatalf("本租户匹配仍不收其它租户: %+v", it)
+	}
+}
+
 func TestAlignRegisteredFERoles(t *testing.T) {
 	nodes := []store.SrNode{
 		{ID: "a", Component: "fe", Host: "10.0.0.1", FeRole: "follower"},

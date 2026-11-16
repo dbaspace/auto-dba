@@ -135,21 +135,53 @@ func pickLinkedInstance(insts []store.Instance, cl *store.SrCluster, feHosts []s
 	return nil, ""
 }
 
+func expandHost(host string, resolve func(string) []string) []string {
+	out := []string{host}
+	if resolve == nil {
+		return out
+	}
+	out = append(out, resolve(host)...)
+	return out
+}
+
 func instanceHitsHosts(instHost string, feHosts []string, resolve func(string) []string) bool {
 	for _, addr := range splitHosts(instHost) {
-		cands := []string{addr}
-		if resolve != nil {
-			cands = append(cands, resolve(addr)...)
-		}
-		for _, c := range cands {
+		for _, c := range expandHost(addr, resolve) {
 			for _, fh := range feHosts {
-				if hostsEqual(c, fh) {
-					return true
+				for _, f := range expandHost(fh, resolve) {
+					if hostsEqual(c, f) {
+						return true
+					}
 				}
 			}
 		}
 	}
 	return false
+}
+
+// pickLinkedInstanceAnyTenant 只按 StarRocks 查询端口和 FE 地址匹配，不看租户、不看标签。
+func pickLinkedInstanceAnyTenant(insts []store.Instance, cl *store.SrCluster, feHosts []string, resolve func(string) []string) (*store.Instance, string) {
+	if cl == nil {
+		return nil, ""
+	}
+	port := feQueryPort(cl)
+	var hit *store.Instance
+	for i := range insts {
+		it := &insts[i]
+		if !isStarRocksInstance(*it) || it.Port != port {
+			continue
+		}
+		if !instanceHitsHosts(it.Host, feHosts, resolve) {
+			continue
+		}
+		if hit == nil || (strings.TrimSpace(hit.Password) == "" && strings.TrimSpace(it.Password) != "") {
+			hit = it
+		}
+	}
+	if hit != nil {
+		return hit, "host"
+	}
+	return nil, ""
 }
 
 // findLinkedInstance 集群关联的 StarRocks 资源实例（资源配置 → 实例管理）。
@@ -176,11 +208,17 @@ func (e *Engine) findLinkedInstance(cl *store.SrCluster, nodes []store.SrNode) (
 	if tid == "" {
 		return nil, ""
 	}
-	insts, err := e.Store.ListInstancesInTenant(tid, "", "")
+	fe := clusterFEHosts(cl, nodes)
+	if insts, err := e.Store.ListInstancesInTenant(tid, "", ""); err == nil {
+		if it, by := pickLinkedInstance(insts, cl, fe, lookupHost); it != nil {
+			return it, by
+		}
+	}
+	all, err := e.Store.ListInstances("", "")
 	if err != nil {
 		return nil, ""
 	}
-	return pickLinkedInstance(insts, cl, clusterFEHosts(cl, nodes), lookupHost)
+	return pickLinkedInstanceAnyTenant(all, cl, fe, lookupHost)
 }
 
 // LinkedInstance 供接口展示的关联实例摘要。
@@ -547,10 +585,13 @@ func (e *Engine) SyncRegistry(cl *store.SrCluster, removed []store.SrNode, who s
 	res := &RegistrySyncResult{}
 	nodes, _ := e.Store.ListSrNodes(cl.ID)
 	if withInstance {
-		if _, created, err := e.EnsureClusterInstance(cl, nodes, who); err != nil {
+		if it, created, err := e.EnsureClusterInstance(cl, nodes, who); err != nil {
 			res.Warnings = append(res.Warnings, "登记资源实例失败: "+err.Error())
 		} else {
 			res.InstanceCreated = created
+			if it != nil && !created && !sameClusterTenant(cl, *it) {
+				res.Warnings = append(res.Warnings, "已关联其它租户的已有实例，未再新建")
+			}
 		}
 	}
 	res.Instance = e.LinkedInstance(cl, nodes)
