@@ -114,7 +114,10 @@ terminal:
   ssh_insecure_host_key: false
   scripts_dir: ""
   static_dir: ""
+  # 无输入且无输出的空闲上限（秒）。有操作会续期。
   max_lifetime_sec: 1800
+  # 自打开终端起的最长存活（秒），默认 8 小时。
+  max_absolute_sec: 28800
 
 # DBA Copilot（密钥放 Nacos；勿把真实 api_key 提交仓库；不读库表全局参数）
 # Cursor 与 OpenAI 兼容网关勿混用同一段 base_url；通义/qwen 须 provider: openai

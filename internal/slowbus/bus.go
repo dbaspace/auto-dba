@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,9 +25,10 @@ import (
 // Bus 是平台自己的慢日志总线。kafka-go 0.4 的 Writer 不暴露幂等生产者序号，
 // 这里用 acks=all 的同步写入；重复投递由 dedupe_key 收成一行。
 type Bus struct {
-	writer *kafka.Writer
-	dlq    *kafka.Writer
-	reader *kafka.Reader
+	brokers []string
+	writer  *kafka.Writer
+	dlq     *kafka.Writer
+	reader  *kafka.Reader
 
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -77,7 +80,49 @@ func Open(cfg config.SlowlogBusConfig) (*Bus, error) {
 		StartOffset:    kafka.FirstOffset,
 	})
 	log.Printf("slowlog bus %s", cfg.LogLine())
-	return &Bus{writer: writer, dlq: dlq, reader: reader, done: make(chan struct{})}, nil
+	return &Bus{brokers: brokers, writer: writer, dlq: dlq, reader: reader, done: make(chan struct{})}, nil
+}
+
+// Probe 对慢日志总线做一次短连接。任一地址能连上即通过。
+func Probe(ctx context.Context, brokers string) error {
+	list := splitBrokers(brokers)
+	if len(list) == 0 {
+		return nil
+	}
+	dialer := &net.Dialer{Timeout: probeTimeout}
+	var timeouts []string
+	var other error
+	for _, addr := range list {
+		conn, err := dialer.DialContext(ctx, "tcp", addr)
+		if err == nil {
+			_ = conn.Close()
+			return nil
+		}
+		if dialTimedOut(err) {
+			timeouts = append(timeouts, addr)
+			continue
+		}
+		if other == nil {
+			other = err
+		}
+	}
+	if len(timeouts) == 0 && other != nil {
+		return fmt.Errorf("慢日志总线 %s 连接失败：%s", strings.Join(list, ","), other.Error())
+	}
+	addrs := timeouts
+	if len(addrs) == 0 {
+		addrs = list
+	}
+	return fmt.Errorf("慢日志总线 %s 连接超时", strings.Join(addrs, ","))
+}
+
+// IsDialTimeout 表示失败是到总线地址的 TCP 握手超时。
+func IsDialTimeout(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "连接超时") || dialTimedOut(err)
 }
 
 func newWriter(brokers []string, transport *kafka.Transport) *kafka.Writer {
@@ -129,7 +174,7 @@ func (b *Bus) Publish(ctx context.Context, msgs []Message) error {
 	}
 	if err := b.writer.WriteMessages(ctx, out...); err != nil {
 		b.produceErr.Add(1)
-		return redactErr(err)
+		return shortenWriteErr(err, len(out), b.brokers)
 	}
 	return nil
 }
@@ -187,7 +232,7 @@ func (b *Bus) Run(ctx context.Context, insert func(context.Context, []Message) e
 		row, bad := decodeRetry(msg.Value)
 		if bad {
 			if err := b.writeDLQ(ctx, msg); err != nil {
-				log.Printf("slowlog dlq: %v", redactErr(err))
+				log.Printf("slowlog dlq: %v", shortenWriteErr(err, 1, b.brokers))
 				select {
 				case <-ctx.Done():
 				case <-time.After(time.Second):
@@ -391,12 +436,107 @@ func keepRetention(ctx context.Context, client *kafka.Client, brokers []string, 
 }
 
 func redactErr(err error) error {
+	return shortenWriteErr(err, 0, nil)
+}
+
+var (
+	probeTimeout = 5 * time.Second
+	dialAddrRe   = regexp.MustCompile(`dial tcp (\S+): `)
+)
+
+func dialTimedOut(err error) bool {
+	if err == nil {
+		return false
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return true
+	}
+	s := err.Error()
+	return strings.Contains(s, "i/o timeout") || (strings.Contains(s, "dial tcp") && strings.Contains(s, "timeout"))
+}
+
+func shortenWriteErr(err error, batch int, brokers []string) error {
 	if err == nil {
 		return nil
 	}
-	s := err.Error()
-	if strings.Contains(strings.ToLower(s), "password") {
+	if strings.Contains(strings.ToLower(err.Error()), "password") {
 		return errors.New("kafka 连接失败")
 	}
-	return err
+	var we kafka.WriteErrors
+	if !errors.As(err, &we) {
+		if dialTimedOut(err) {
+			return dialTimeoutErr(batch, dialAddrs(err, brokers))
+		}
+		return err
+	}
+	failed := 0
+	var dials []string
+	var others []string
+	seenDial := map[string]bool{}
+	seenOther := map[string]bool{}
+	for _, item := range we {
+		if item == nil {
+			continue
+		}
+		failed++
+		if dialTimedOut(item) {
+			for _, addr := range dialAddrs(item, nil) {
+				if addr != "" && !seenDial[addr] {
+					seenDial[addr] = true
+					dials = append(dials, addr)
+				}
+			}
+			continue
+		}
+		text := item.Error()
+		if !seenOther[text] {
+			seenOther[text] = true
+			others = append(others, text)
+		}
+	}
+	if failed == 0 {
+		return err
+	}
+	if len(others) == 0 {
+		if len(dials) == 0 {
+			dials = brokers
+		}
+		n := failed
+		if batch > n {
+			n = batch
+		}
+		return dialTimeoutErr(n, dials)
+	}
+	if len(others) == 1 && len(dials) == 0 {
+		return errors.New(others[0])
+	}
+	parts := append(dials, others...)
+	return errors.New(strings.Join(parts, "; "))
+}
+
+func dialAddrs(err error, fallback []string) []string {
+	if err != nil {
+		if m := dialAddrRe.FindStringSubmatch(err.Error()); len(m) == 2 && m[1] != "" {
+			return []string{m[1]}
+		}
+	}
+	var out []string
+	for _, addr := range fallback {
+		if strings.TrimSpace(addr) != "" {
+			out = append(out, addr)
+		}
+	}
+	return out
+}
+
+func dialTimeoutErr(n int, addrs []string) error {
+	where := strings.Join(addrs, ",")
+	if where == "" {
+		where = "未配置地址"
+	}
+	if n > 0 {
+		return fmt.Errorf("慢日志总线 %s 连接超时，本批 %d 条未写入", where, n)
+	}
+	return fmt.Errorf("慢日志总线 %s 连接超时", where)
 }

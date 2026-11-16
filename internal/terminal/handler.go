@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -45,6 +46,7 @@ type execContent struct {
 	PermitWrite bool              `json:"permit_write"`
 	Title       string            `json:"title"`
 	MaxLifetime int               `json:"max_lifetime_sec"`
+	MaxAbsolute int               `json:"max_absolute_sec"`
 }
 
 type sessionClaims struct {
@@ -200,16 +202,19 @@ func (h *Handler) createSession(user, tenantID, instanceID, host, sshUser string
 	if sshPort <= 0 {
 		sshPort = 22
 	}
+	idle, abs := sessionLimits(tc)
 	ec := execContent{
 		Command:     "/bin/sh",
 		Args:        []string{script, host, sshUser, key, fmt.Sprintf("%d", sshPort)},
 		Envs:        envs,
 		PermitWrite: true,
 		Title:       "Node Terminal — " + host + " — " + filepath.Base(key),
-		MaxLifetime: tc.MaxLifetimeSec,
+		MaxLifetime: int(idle / time.Second),
+		MaxAbsolute: int(abs / time.Second),
 	}
 	raw, _ := json.Marshal(ec)
-	expires := time.Now().UTC().Add(time.Duration(tc.MaxLifetimeSec) * time.Second).Format(time.RFC3339)
+	// 重连窗口先按空闲时间；有输入或输出时再往后推，但不超过绝对上限。
+	expires := time.Now().UTC().Add(idle).Format(time.RFC3339)
 	s := &store.TerminalSession{
 		TenantID:    tenantID,
 		ActionName:  ActionNodeTerminal,
@@ -223,7 +228,7 @@ func (h *Handler) createSession(user, tenantID, instanceID, host, sshUser string
 	if err := h.Store.CreateTerminalSession(s); err != nil {
 		return "", "", err
 	}
-	tok, err := h.signSessionToken(s.ID, time.Duration(tc.MaxLifetimeSec)*time.Second)
+	tok, err := h.signSessionToken(s.ID, abs)
 	if err != nil {
 		return "", "", err
 	}
@@ -353,22 +358,61 @@ func (h *Handler) WS(c *gin.Context) {
 		return
 	}
 	defer ws.Close()
-	stopPing := keepAliveWS(ws, 20*time.Second, 60*time.Second)
+	stopPing := keepAliveWS(ws, 20*time.Second, conn.ReadIdle)
 	defer stopPing()
 
 	_ = h.Store.UpdateTerminalSessionStatus(sess.ID, store.TermStatusRunning)
 
-	maxLife := ec.MaxLifetime
-	if maxLife <= 0 {
-		maxLife = h.Cfg.Terminal.MaxLifetimeSec
+	idleSec, absSec := ec.MaxLifetime, ec.MaxAbsolute
+	if h.Cfg != nil {
+		if idleSec <= 0 {
+			idleSec = h.Cfg.Terminal.MaxLifetimeSec
+		}
+		if absSec <= 0 {
+			absSec = h.Cfg.Terminal.MaxAbsoluteSec
+		}
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), time.Duration(maxLife)*time.Second)
+	if idleSec <= 0 {
+		idleSec = 1800
+	}
+	if absSec <= 0 {
+		absSec = 8 * 3600
+	}
+	if absSec < idleSec {
+		absSec = idleSec
+	}
+	created := time.Now()
+	if t, err := time.Parse(time.RFC3339, sess.CreatedAt); err == nil {
+		created = t
+	}
+	absoluteAt := created.Add(time.Duration(absSec) * time.Second)
+	if !time.Now().Before(absoluteAt) {
+		_ = h.Store.UpdateTerminalSessionStatus(sess.ID, store.TermStatusExpired)
+		_, _ = conn.WrapperWs(ws).Write(conn.Output, []byte(terminalStopNotice(sess, "absolute", idleSec)))
+		return
+	}
+	dl := newSessionDeadline(time.Now(), time.Duration(idleSec)*time.Second, absoluteAt)
+	if exp, persist := dl.Touch(time.Now()); persist && h.Store != nil {
+		_ = h.Store.TouchTerminalSessionExpiry(sess.ID, exp.UTC().Format(time.RFC3339))
+	}
+
+	ctx, cancel := context.WithCancel(c.Request.Context())
 	defer cancel()
+	webConn := conn.WrapperWs(ws)
+	var endKind atomic.Value
+	var endOnce sync.Once
+	go watchSessionDeadline(ctx, cancel, dl, func(kind string) {
+		endOnce.Do(func() {
+			endKind.Store(kind)
+			_, _ = webConn.Write(conn.Output, []byte(terminalStopNotice(sess, kind, idleSec)))
+			_ = h.Store.UpdateTerminalSessionStatus(sess.ID, store.TermStatusExpired)
+		})
+	})
 
 	opts := []localcommand.Option{localcommand.WithEnvs(ec.Envs)}
 	lcmd, err := localcommand.New(ctx, ec.Command, ec.Args, opts...)
 	if err != nil {
-		_, _ = conn.WrapperWs(ws).Write(conn.Output, []byte("failed to start: "+err.Error()))
+		_, _ = webConn.Write(conn.Output, []byte("failed to start: "+err.Error()))
 		_ = h.Store.UpdateTerminalSessionStatus(sess.ID, store.TermStatusFailed)
 		return
 	}
@@ -380,13 +424,22 @@ func (h *Handler) WS(c *gin.Context) {
 	if ec.PermitWrite {
 		wtOpts = append(wtOpts, webtty.WithPermitWrite())
 	}
-	wt, err := webtty.New(conn.WrapperWs(ws), lcmd, wtOpts...)
+	wtOpts = append(wtOpts, webtty.WithOnActivity(func() {
+		exp, persist := dl.Touch(time.Now())
+		if persist && h.Store != nil {
+			_ = h.Store.TouchTerminalSessionExpiry(sess.ID, exp.UTC().Format(time.RFC3339))
+		}
+	}))
+	wt, err := webtty.New(webConn, lcmd, wtOpts...)
 	if err != nil {
 		lcmd.Close()
 		_ = h.Store.UpdateTerminalSessionStatus(sess.ID, store.TermStatusFailed)
 		return
 	}
 	runErr := wt.Run(ctx)
+	if kind, _ := endKind.Load().(string); kind != "" {
+		return
+	}
 	if runErr != nil && ctx.Err() == nil {
 		_ = h.Store.UpdateTerminalSessionStatus(sess.ID, store.TermStatusFailed)
 		return
@@ -405,28 +458,123 @@ func (h *Handler) writeTerminalNotice(c *gin.Context, sess *store.TerminalSessio
 	_, _ = conn.WrapperWs(ws).Write(conn.Output, []byte(terminalNotice(sess, status)))
 }
 
-func terminalNotice(sess *store.TerminalSession, status string) string {
-	host, user, key := "", "", ""
-	if sess != nil {
-		host = sess.Host
-		var ec execContent
-		if json.Unmarshal([]byte(sess.ExecContent), &ec) == nil {
-			if len(ec.Args) > 0 {
-				host = ec.Args[0]
-			}
-			if len(ec.Args) > 1 {
-				user = ec.Args[1]
-			}
-			if len(ec.Args) > 2 {
-				key = ec.Args[2]
-			}
-		}
+func terminalEndpoint(sess *store.TerminalSession) (host, user, key string) {
+	if sess == nil {
+		return "", "", ""
 	}
+	host = sess.Host
+	var ec execContent
+	if json.Unmarshal([]byte(sess.ExecContent), &ec) != nil {
+		return host, "", ""
+	}
+	// 实际会话参数是 script, host, user, key, port。旧通知测试和更早的记录是 host, user, key。
+	if len(ec.Args) >= 4 {
+		if strings.TrimSpace(host) == "" {
+			host = ec.Args[1]
+		}
+		return host, ec.Args[2], ec.Args[3]
+	}
+	if strings.TrimSpace(host) == "" && len(ec.Args) > 0 {
+		host = ec.Args[0]
+	}
+	if len(ec.Args) > 1 {
+		user = ec.Args[1]
+	}
+	if len(ec.Args) > 2 {
+		key = ec.Args[2]
+	}
+	return host, user, key
+}
+
+func terminalNotice(sess *store.TerminalSession, status string) string {
+	host, user, key := terminalEndpoint(sess)
 	switch status {
 	case store.TermStatusExpired:
-		return fmt.Sprintf("终端已超过最长存活时间，不是平台登录过期。主机 %s，用户 %s，私钥 %s。请从主机列表重新打开。\r\n", host, user, key)
+		return fmt.Sprintf("终端已空闲过久或超过最长存活时间，不是平台登录过期。主机 %s，用户 %s，私钥 %s。请从主机列表重新打开。\r\n", host, user, key)
 	default:
 		return fmt.Sprintf("远端 SSH 已退出，会话标为失败。这不是平台登录过期。主机 %s，用户 %s，私钥 %s。请用这把私钥核对目标机 authorized_keys，再从主机列表重新打开。\r\n", host, user, key)
+	}
+}
+
+func terminalStopNotice(sess *store.TerminalSession, kind string, idleSec int) string {
+	host, user, key := terminalEndpoint(sess)
+	if kind == "idle" {
+		mins := idleSec / 60
+		if mins < 1 {
+			mins = 1
+		}
+		return fmt.Sprintf("终端已空闲超过 %d 分钟，连接已关闭。这不是平台登录过期。主机 %s，用户 %s，私钥 %s。请从主机列表重新打开。\r\n", mins, host, user, key)
+	}
+	return fmt.Sprintf("终端已超过最长存活时间，不是平台登录过期。主机 %s，用户 %s，私钥 %s。请从主机列表重新打开。\r\n", host, user, key)
+}
+
+func sessionLimits(tc config.TerminalConfig) (idle, abs time.Duration) {
+	idleSec := tc.MaxLifetimeSec
+	if idleSec <= 0 {
+		idleSec = 1800
+	}
+	absSec := tc.MaxAbsoluteSec
+	if absSec <= 0 {
+		absSec = 8 * 3600
+	}
+	if absSec < idleSec {
+		absSec = idleSec
+	}
+	return time.Duration(idleSec) * time.Second, time.Duration(absSec) * time.Second
+}
+
+// watchSessionDeadline 空闲到点或绝对上限到点时通知并取消会话。有活动时只重置空闲计时。
+func watchSessionDeadline(ctx context.Context, cancel context.CancelFunc, d *sessionDeadline, onStop func(kind string)) {
+	if d == nil || cancel == nil {
+		return
+	}
+	absWait := time.Until(d.absolute)
+	if absWait < 0 {
+		absWait = 0
+	}
+	absTimer := time.NewTimer(absWait)
+	defer absTimer.Stop()
+	idleWait := time.Until(d.IdleAt())
+	if idleWait < 0 {
+		idleWait = 0
+	}
+	idleTimer := time.NewTimer(idleWait)
+	defer idleTimer.Stop()
+	resetIdle := func() {
+		if !idleTimer.Stop() {
+			select {
+			case <-idleTimer.C:
+			default:
+			}
+		}
+		wait := time.Until(d.IdleAt())
+		if wait < 0 {
+			wait = 0
+		}
+		idleTimer.Reset(wait)
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-absTimer.C:
+			if onStop != nil {
+				onStop("absolute")
+			}
+			cancel()
+			return
+		case <-idleTimer.C:
+			if d.IdleDue(time.Now()) {
+				if onStop != nil {
+					onStop("idle")
+				}
+				cancel()
+				return
+			}
+			resetIdle()
+		case <-d.ping:
+			resetIdle()
+		}
 	}
 }
 

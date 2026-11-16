@@ -34,10 +34,11 @@ const (
 )
 
 // SessionGate 可选 Redis 会话校验；nil 或不启用时鉴权与改造前一致。
+// Valid 的 renewed 非零表示本次把过期时间延长到该时刻。
 type SessionGate interface {
 	Enabled() bool
 	FailOpen() bool
-	Valid(ctx context.Context, userID, jti string) (bool, error)
+	Valid(ctx context.Context, userID, jti string) (ok bool, renewed time.Time, err error)
 }
 
 type Claims struct {
@@ -47,6 +48,7 @@ type Claims struct {
 	TenantID    string `json:"tid,omitempty"`
 	TenantCode  string `json:"tcode,omitempty"`
 	Impersonate bool   `json:"imp,omitempty"`
+	ExtendDate  string `json:"edd,omitempty"` // 东八区日期，当天已按自然日延长过
 	jwt.RegisteredClaims
 }
 
@@ -71,6 +73,7 @@ func SignSessionToken(secret, userID, username, role, tenantID, tenantCode strin
 		TenantID:    strings.TrimSpace(tenantID),
 		TenantCode:  strings.TrimSpace(tenantCode),
 		Impersonate: impersonate,
+		ExtendDate:  sessionstore.ShanghaiDay(now),
 		RegisteredClaims: jwt.RegisteredClaims{
 			ID:        jti,
 			Subject:   username,
@@ -82,18 +85,24 @@ func SignSessionToken(secret, userID, username, role, tenantID, tenantCode strin
 	return token, jti, err
 }
 
-// jwtRenewWithin 剩余不足该时长时，用原 jti 重签，把 exp 续到一个完整会话周期。
-const jwtRenewWithin = 12 * time.Hour
-
-// ResignSessionToken 沿用原 jti 重签。exp 为现在 + ttl，供有效期内换发。
+// ResignSessionToken 沿用原 jti 重签。exp 为现在 + ttl，延长日记今天。
 func ResignSessionToken(secret string, src *Claims, ttl time.Duration) (string, error) {
-	if strings.TrimSpace(secret) == "" || src == nil || strings.TrimSpace(src.ID) == "" || ttl <= 0 {
+	if ttl <= 0 {
+		return "", errors.New("session claims required")
+	}
+	return ResignSessionTokenUntil(secret, src, time.Now().Add(ttl))
+}
+
+// ResignSessionTokenUntil 沿用原 jti，把 exp 设成绝对时间，延长日记今天。
+func ResignSessionTokenUntil(secret string, src *Claims, exp time.Time) (string, error) {
+	if strings.TrimSpace(secret) == "" || src == nil || strings.TrimSpace(src.ID) == "" || !exp.After(time.Now()) {
 		return "", errors.New("session claims required")
 	}
 	now := time.Now()
 	c := *src
-	c.ExpiresAt = jwt.NewNumericDate(now.Add(ttl))
+	c.ExpiresAt = jwt.NewNumericDate(exp)
 	c.IssuedAt = jwt.NewNumericDate(now)
+	c.ExtendDate = sessionstore.ShanghaiDay(now)
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, c).SignedString([]byte(secret))
 }
 
@@ -271,8 +280,11 @@ func Auth(secret *string, db *store.DB, sessions SessionGate, skipPrefixes ...st
 			return
 		}
 		jti := strings.TrimSpace(claims.ID)
+		var renewed time.Time
 		if sessions != nil && sessions.Enabled() && jti != "" && !sessions.FailOpen() {
-			ok, verr := sessions.Valid(c.Request.Context(), claims.UserID, jti)
+			var ok bool
+			var verr error
+			ok, renewed, verr = sessions.Valid(c.Request.Context(), claims.UserID, jti)
 			if errors.Is(verr, sessionstore.ErrSessionExpired) {
 				c.JSON(http.StatusUnauthorized, gin.H{
 					"message":            "登录已过期，请重新登录",
@@ -298,8 +310,11 @@ func Auth(secret *string, db *store.DB, sessions SessionGate, skipPrefixes ...st
 				c.Abort()
 				return
 			}
+			if !renewed.IsZero() && db != nil {
+				_ = db.TouchUserSessionExpire(jti, renewed.UTC().Format(time.RFC3339))
+			}
 		}
-		renewAccessToken(c, sec, claims, sessions)
+		renewAccessToken(c, sec, claims, sessions, renewed)
 		c.Set(CtxUserID, claims.UserID)
 		c.Set(CtxUsername, claims.Username)
 		c.Set(CtxRole, claims.Role)
@@ -321,22 +336,43 @@ type sessionTTLSource interface {
 	SessionTTL() time.Duration
 }
 
-// renewAccessToken 在 JWT 剩余不足 12 小时时换发，响应头交给前端保存。jti 不变。
-func renewAccessToken(c *gin.Context, secret string, claims *Claims, sessions SessionGate) {
-	if claims == nil || claims.ExpiresAt == nil || strings.TrimSpace(secret) == "" || strings.TrimSpace(claims.ID) == "" {
+func redisSessionAuthority(sessions SessionGate) bool {
+	return sessions != nil && sessions.Enabled() && !sessions.FailOpen()
+}
+
+// renewAccessToken 只在跨自然日、会话仍有效时换发。jti 不变，响应头交给前端保存。
+// Redis 开启时以 Valid 返回的新过期时间为准；未启用 Redis 时按 JWT 延长日判断。
+func renewAccessToken(c *gin.Context, secret string, claims *Claims, sessions SessionGate, renewed time.Time) {
+	if claims == nil || strings.TrimSpace(secret) == "" || strings.TrimSpace(claims.ID) == "" {
 		return
 	}
-	remain := time.Until(claims.ExpiresAt.Time)
-	if remain <= 0 || remain >= jwtRenewWithin {
+	var exp time.Time
+	switch {
+	case !renewed.IsZero():
+		exp = renewed
+	case redisSessionAuthority(sessions):
 		return
-	}
-	ttl := 24 * time.Hour
-	if src, ok := sessions.(sessionTTLSource); ok {
-		if d := src.SessionTTL(); d > 0 {
-			ttl = d
+	default:
+		var anchor time.Time
+		if claims.IssuedAt != nil {
+			anchor = claims.IssuedAt.Time
 		}
+		var cur time.Time
+		if claims.ExpiresAt != nil {
+			cur = claims.ExpiresAt.Time
+		}
+		if !sessionstore.VisitExtend(time.Now(), cur, claims.ExtendDate, anchor) {
+			return
+		}
+		ttl := 24 * time.Hour
+		if src, ok := sessions.(sessionTTLSource); ok {
+			if d := src.SessionTTL(); d > 0 {
+				ttl = d
+			}
+		}
+		exp = time.Now().Add(ttl)
 	}
-	tok, err := ResignSessionToken(secret, claims, ttl)
+	tok, err := ResignSessionTokenUntil(secret, claims, exp)
 	if err != nil || tok == "" {
 		return
 	}

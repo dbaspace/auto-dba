@@ -19,29 +19,27 @@ import (
 // ErrSessionExpired 会话 expire_at 已过。调用方应提示重新登录，且不得续期。
 var ErrSessionExpired = errors.New("session expired")
 
-const slideMinInterval = time.Minute
-
 // Session 登录会话（Redis Hash field value；不存 JWT 明文）。
 type Session struct {
-	JTI      string `json:"jti"`
-	UserID   string `json:"user_id"`
-	TenantID string `json:"tenant_id,omitempty"`
-	Username string `json:"username"`
-	IP       string `json:"ip,omitempty"`
-	UA       string `json:"ua,omitempty"`
-	OnlineAt string `json:"online_at"`
-	ExpireAt string `json:"expire_at"`
-	Kind     string `json:"kind,omitempty"`   // normal | impersonate
-	Status   string `json:"status,omitempty"` // 展示用：会话有效
+	JTI        string `json:"jti"`
+	UserID     string `json:"user_id"`
+	TenantID   string `json:"tenant_id,omitempty"`
+	Username   string `json:"username"`
+	IP         string `json:"ip,omitempty"`
+	UA         string `json:"ua,omitempty"`
+	OnlineAt   string `json:"online_at"`
+	ExpireAt   string `json:"expire_at"`
+	ExtendDate string `json:"extend_date,omitempty"` // 东八区日期 2006-01-02，当天已延长过
+	Kind       string `json:"kind,omitempty"`        // normal | impersonate
+	Status     string `json:"status,omitempty"`      // 展示用：会话有效
 }
 
 // Store Redis 会话权威源；Enabled=false 时所有写/校验为 no-op，不影响现网。
 type Store struct {
-	mu        sync.RWMutex
-	rdb       *redis.Client
-	cfg       config.RedisConfig
-	jwtTTL    int // hours fallback
-	lastSlide map[string]time.Time
+	mu     sync.RWMutex
+	rdb    *redis.Client
+	cfg    config.RedisConfig
+	jwtTTL int // hours fallback
 }
 
 func New(cfg config.RedisConfig, jwtTTLHours int) *Store {
@@ -170,7 +168,53 @@ func (s *Store) SessionTTL() time.Duration {
 	return s.sessionTTL()
 }
 
+// PlanLoginExpiry 登录或重签前决定过期时间。
+// 上一窗口仍有效且延长日已是今天则沿用，否则从现在起一个 session TTL。
+func (s *Store) PlanLoginExpiry(ctx context.Context, userID string, now time.Time) (time.Time, string) {
+	ttl := s.sessionTTL()
+	fresh, today := now.Add(ttl), ShanghaiDay(now)
+	cli := s.client()
+	if cli == nil || strings.TrimSpace(userID) == "" {
+		return fresh, today
+	}
+	m, err := cli.HGetAll(ctx, s.userKey(userID)).Result()
+	if err != nil || len(m) == 0 {
+		return fresh, today
+	}
+	var best time.Time
+	bestDate := today
+	for _, raw := range m {
+		var sess Session
+		if json.Unmarshal([]byte(raw), &sess) != nil {
+			continue
+		}
+		exp, e := time.Parse(time.RFC3339, sess.ExpireAt)
+		if e != nil {
+			continue
+		}
+		kept, date := KeepOrFresh(now, ttl, exp, sess.ExtendDate, sess.OnlineAt)
+		if date == today && kept.Equal(exp) && (best.IsZero() || exp.After(best)) {
+			best = exp
+			bestDate = date
+		}
+	}
+	if best.IsZero() {
+		return fresh, today
+	}
+	return best, bestDate
+}
+
+func keyTTLUntil(expire, now time.Time) time.Duration {
+	d := expire.Sub(now)
+	if d < time.Second {
+		// 已过期的记录仍保留片刻，供本次鉴权读到后再吊销。
+		return time.Minute
+	}
+	return d
+}
+
 // Create 登录：同一账号只保留最新会话，写入前清空该用户旧 Hash。
+// ExpireAt 为空时按 PlanLoginExpiry 决定；调用方已算好则沿用，避免重签前先删会话导致窗口被重置。
 func (s *Store) Create(ctx context.Context, sess Session) error {
 	cli := s.client()
 	if cli == nil {
@@ -187,9 +231,19 @@ func (s *Store) Create(ctx context.Context, sess Session) error {
 	if sess.OnlineAt == "" {
 		sess.OnlineAt = now.UTC().Format(time.RFC3339)
 	}
-	ttl := s.sessionTTL()
-	if sess.ExpireAt == "" {
-		sess.ExpireAt = now.Add(ttl).UTC().Format(time.RFC3339)
+	if strings.TrimSpace(sess.ExpireAt) == "" {
+		exp, date := s.PlanLoginExpiry(ctx, sess.UserID, now)
+		sess.ExpireAt = exp.UTC().Format(time.RFC3339)
+		if strings.TrimSpace(sess.ExtendDate) == "" {
+			sess.ExtendDate = date
+		}
+	} else if strings.TrimSpace(sess.ExtendDate) == "" {
+		sess.ExtendDate = ShanghaiDay(now)
+	}
+	expAt, err := time.Parse(time.RFC3339, sess.ExpireAt)
+	if err != nil {
+		expAt = now.Add(s.sessionTTL())
+		sess.ExpireAt = expAt.UTC().Format(time.RFC3339)
 	}
 	uk := s.userKey(sess.UserID)
 	_ = cli.Del(ctx, uk).Err()
@@ -199,8 +253,7 @@ func (s *Store) Create(ctx context.Context, sess Session) error {
 	}
 	pipe := cli.Pipeline()
 	pipe.HSet(ctx, uk, sess.JTI, string(b))
-	// key TTL = max expire among fields（简化：用本次会话 TTL 刷新）
-	pipe.Expire(ctx, uk, ttl)
+	pipe.Expire(ctx, uk, keyTTLUntil(expAt, now))
 	score := float64(now.Unix())
 	if t, e := time.Parse(time.RFC3339, sess.OnlineAt); e == nil {
 		score = float64(t.Unix())
@@ -212,94 +265,56 @@ func (s *Store) Create(ctx context.Context, sess Session) error {
 
 // Valid 鉴权：HGET + expire_at。
 // 已过期则吊销并返回 ErrSessionExpired，不续期。
-// 仍有效则把 expire_at 与 key TTL 续到 now+sessionTTL；同一会话 1 分钟内不重复写。
-func (s *Store) Valid(ctx context.Context, userID, jti string) (bool, error) {
+// 仍有效且延长日不是今天时，把 expire_at 续到 now+sessionTTL 并返回新的过期时间；同一天不再写 Redis。
+// 第二个返回值为零表示本次没有延长。
+func (s *Store) Valid(ctx context.Context, userID, jti string) (bool, time.Time, error) {
 	cli := s.client()
 	if cli == nil {
-		return true, nil
+		return true, time.Time{}, nil
 	}
 	if userID == "" || jti == "" {
-		return false, nil
+		return false, time.Time{}, nil
 	}
 	uk := s.userKey(userID)
 	raw, err := cli.HGet(ctx, uk, jti).Result()
 	if err == redis.Nil {
-		return false, nil
+		return false, time.Time{}, nil
 	}
 	if err != nil {
-		return false, err
+		return false, time.Time{}, err
 	}
 	var sess Session
 	if err := json.Unmarshal([]byte(raw), &sess); err != nil {
-		return false, err
+		return false, time.Time{}, err
 	}
 	now := time.Now()
-	if exp, e := time.Parse(time.RFC3339, sess.ExpireAt); e == nil && now.After(exp) {
+	exp, expErr := time.Parse(time.RFC3339, sess.ExpireAt)
+	if expErr == nil && !now.Before(exp) {
 		_ = s.RevokeJTI(ctx, userID, jti)
-		s.forgetSlide(userID, jti)
-		return false, ErrSessionExpired
+		return false, time.Time{}, ErrSessionExpired
 	}
-	if !s.slideDue(userID, jti, now) {
-		return true, nil
+	var anchor time.Time
+	if t, e := time.Parse(time.RFC3339, sess.OnlineAt); e == nil {
+		anchor = t
+	}
+	if expErr != nil || !VisitExtend(now, exp, sess.ExtendDate, anchor) {
+		return true, time.Time{}, nil
 	}
 	ttl := s.sessionTTL()
-	sess.ExpireAt = now.Add(ttl).UTC().Format(time.RFC3339)
+	next := now.Add(ttl)
+	sess.ExpireAt = next.UTC().Format(time.RFC3339)
+	sess.ExtendDate = ShanghaiDay(now)
 	b, err := json.Marshal(sess)
 	if err != nil {
-		return true, nil
+		return true, time.Time{}, nil
 	}
 	pipe := cli.Pipeline()
 	pipe.HSet(ctx, uk, jti, string(b))
 	pipe.Expire(ctx, uk, ttl)
 	if _, err := pipe.Exec(ctx); err != nil {
-		return true, nil
+		return true, time.Time{}, nil
 	}
-	s.markSlid(userID, jti, now)
-	return true, nil
-}
-
-func slideKey(userID, jti string) string {
-	return userID + "\x00" + jti
-}
-
-func (s *Store) slideDue(userID, jti string, now time.Time) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.lastSlide == nil {
-		return true
-	}
-	prev, ok := s.lastSlide[slideKey(userID, jti)]
-	if !ok {
-		return true
-	}
-	return now.Sub(prev) >= slideMinInterval
-}
-
-func (s *Store) markSlid(userID, jti string, now time.Time) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.lastSlide == nil {
-		s.lastSlide = make(map[string]time.Time)
-	}
-	s.lastSlide[slideKey(userID, jti)] = now
-	if len(s.lastSlide) <= 4096 {
-		return
-	}
-	cut := now.Add(-2 * slideMinInterval)
-	for k, t := range s.lastSlide {
-		if t.Before(cut) {
-			delete(s.lastSlide, k)
-		}
-	}
-}
-
-func (s *Store) forgetSlide(userID, jti string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.lastSlide == nil {
-		return
-	}
-	delete(s.lastSlide, slideKey(userID, jti))
+	return true, next, nil
 }
 
 // RevokeJTI 踢单端 / 登出。

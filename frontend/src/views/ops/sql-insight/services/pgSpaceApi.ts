@@ -60,9 +60,10 @@ export async function fetchPgSpaceAdviceSummary() {
   return data?.data || null
 }
 
-export async function startPgSpaceCollect(instanceId?: string) {
+export async function startPgSpaceCollect(instanceId?: string, dbScope?: string) {
   const { data } = await api.post('/pg-space/collect', {
     instance_id: instanceId || undefined,
+    db_scope: dbScope || undefined,
   })
   return data?.data || null
 }

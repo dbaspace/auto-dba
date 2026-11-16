@@ -460,3 +460,18 @@ func TestValidateCreatePostgres(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestPreserveMySQLDiskUsedKeepsLastSample(t *testing.T) {
+	inst := &Instance{Extras: map[string]any{"InstanceId": "cdb-a"}}
+	PreserveMySQLDiskUsed(inst, map[string]any{"disk_used_mb": float64(1536)}, 2)
+	mb, ok := DiskUsedMB(inst.Extras)
+	if !ok || mb != 1536 || inst.DiskUsed != 2 {
+		t.Fatalf("kept mb=%d ok=%v gb=%d", mb, ok, inst.DiskUsed)
+	}
+	fresh := &Instance{Extras: map[string]any{"disk_used_mb": 0}, DiskUsed: 0}
+	PreserveMySQLDiskUsed(fresh, map[string]any{"disk_used_mb": float64(1536)}, 2)
+	mb, ok = DiskUsedMB(fresh.Extras)
+	if !ok || mb != 0 || fresh.DiskUsed != 0 {
+		t.Fatalf("new zero should win, mb=%d ok=%v gb=%d", mb, ok, fresh.DiskUsed)
+	}
+}

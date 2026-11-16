@@ -116,6 +116,18 @@ func (s *Service) runSlow(ctx context.Context, only string) (int, error) {
 	}
 	defer release()
 
+	cfg := config.Snapshot().SlowlogBus
+	if strings.TrimSpace(cfg.Brokers) != "" {
+		if err := slowbus.Probe(ctx, cfg.Brokers); err != nil {
+			s.closeBus()
+			s.noteKafkaDown(err)
+			return 0, err
+		}
+	}
+	roundCtx, stopRound := context.WithCancel(ctx)
+	defer stopRound()
+	halt := &slowHalt{stop: stopRound}
+
 	accounts, err := s.DB.ListCloudAccounts("", true)
 	if err != nil {
 		return 0, err
@@ -132,18 +144,38 @@ func (s *Service) runSlow(ctx context.Context, only string) (int, error) {
 			}
 			continue
 		}
-		n, err := s.slowAccount(ctx, &accounts[i], only)
+		n, err := s.slowAccount(roundCtx, &accounts[i], only, halt)
 		s.doneAccount(accounts[i].ID + ":slow")
 		total += n
-		if err != nil && !errors.Is(err, cloud.ErrNoKey) && first == nil {
+		if err != nil && !errors.Is(err, cloud.ErrNoKey) && !errors.Is(err, context.Canceled) && first == nil {
 			first = err
+		}
+		if roundCtx.Err() != nil {
+			break
 		}
 	}
 	s.purgeSlowDaily()
 	return total, first
 }
 
-func (s *Service) slowAccount(ctx context.Context, account *store.CloudAccount, only string) (int, error) {
+type slowHalt struct {
+	once sync.Once
+	stop context.CancelFunc
+}
+
+func (h *slowHalt) on(s *Service, err error) {
+	if h == nil || !slowbus.IsDialTimeout(err) {
+		return
+	}
+	h.once.Do(func() {
+		s.closeBus()
+		if h.stop != nil {
+			h.stop()
+		}
+	})
+}
+
+func (s *Service) slowAccount(ctx context.Context, account *store.CloudAccount, only string, halt *slowHalt) (int, error) {
 	reader, err := cloud.GetReader(account.Vendor, cloud.EnginePostgres)
 	if err != nil {
 		return 0, err
@@ -183,14 +215,18 @@ func (s *Service) slowAccount(ctx context.Context, account *store.CloudAccount, 
 				case sem <- struct{}{}:
 				}
 				defer func() { <-sem }()
+				if ctx.Err() != nil {
+					return
+				}
 				c := cred
 				if region != "" {
 					c.Region = region
 				}
 				n, err := s.slowOne(ctx, reader, c, account, inst, now)
+				halt.on(s, err)
 				mu.Lock()
 				total += n
-				if err != nil && !slowCloudTimeout(err) && first == nil {
+				if err != nil && !errors.Is(err, context.Canceled) && !slowCloudTimeout(err) && first == nil {
 					first = err
 				}
 				mu.Unlock()
@@ -265,10 +301,16 @@ func (s *Service) slowOne(ctx context.Context, reader cloud.Reader, cred cloud.C
 	total := 0
 	for _, seg := range plan.Windows {
 		if err := ctx.Err(); err != nil {
+			if errors.Is(err, context.Canceled) {
+				return total, err
+			}
 			return total, s.failSlow(row, cur, err, useKafka)
 		}
 		n, err := s.pullSlow(ctx, reader, cred, account, inst, seg, useKafka, publish, resetIngested)
 		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				return total, err
+			}
 			var send kafkaSendError
 			return total, s.failSlow(row, cur, err, errors.As(err, &send))
 		}

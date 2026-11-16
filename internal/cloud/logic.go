@@ -234,6 +234,39 @@ func KafkaListFields(extras map[string]any) (topicLimit, topicUsed, partLimit, p
 	return anyInt(extras["kafka_topic_limit"]), topicUsed, anyInt(extras["kafka_partition_limit"]), anyInt(extras["kafka_partition_used"]), anyStr(extras["kafka_instance_type"])
 }
 
+// DiskUsedMB 读取同步时写入的 MySQL 磁盘占用，单位 MB。ok 为假表示这次没有采到。
+func DiskUsedMB(extras map[string]any) (mb int, ok bool) {
+	if len(extras) == 0 {
+		return 0, false
+	}
+	v, exists := extras["disk_used_mb"]
+	if !exists || v == nil {
+		return 0, false
+	}
+	return anyInt(v), true
+}
+
+// PreserveMySQLDiskUsed 监控暂时失败时保留上次的占用，避免同步把已展示的使用量写成空。
+func PreserveMySQLDiskUsed(inst *Instance, prevExtras map[string]any, prevGB int) {
+	if inst == nil {
+		return
+	}
+	if _, ok := DiskUsedMB(inst.Extras); ok {
+		return
+	}
+	mb, ok := DiskUsedMB(prevExtras)
+	if !ok {
+		return
+	}
+	if inst.Extras == nil {
+		inst.Extras = map[string]any{}
+	}
+	inst.Extras["disk_used_mb"] = mb
+	if inst.DiskUsed == 0 && prevGB > 0 {
+		inst.DiskUsed = prevGB
+	}
+}
+
 // SystemDiskFromExtras 从云主机原始返回取系统盘大小（GB）和类型。
 func SystemDiskFromExtras(extras map[string]any) (gb int, diskType string) {
 	sys, ok := extras["SystemDisk"].(map[string]any)

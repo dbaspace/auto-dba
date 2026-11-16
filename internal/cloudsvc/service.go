@@ -396,6 +396,9 @@ func (s *Service) SyncAccountEngine(ctx context.Context, account *store.CloudAcc
 		}
 		seen = append(seen, inst.CloudID)
 		prev, _ := s.DB.GetCloudResourceByCloudID(account.Vendor, engine, inst.CloudID)
+		if engine == cloud.EngineMySQL && prev != nil {
+			cloud.PreserveMySQLDiskUsed(&inst, prev.Extras, prev.DiskUsedGB)
+		}
 		row := &store.CloudInstance{
 			TenantID: account.TenantID, Vendor: account.Vendor, Engine: engine, AccountID: account.ID, CloudID: inst.CloudID,
 			Name: inst.Name, Region: inst.Region, Status: inst.Status, CPU: inst.CPU, MemoryMB: inst.MemoryMB,

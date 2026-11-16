@@ -49,6 +49,58 @@ function parseDeep(raw: any): any {
   return raw
 }
 
+function plainText(v: unknown): string {
+  if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') return String(v)
+  return ''
+}
+
+function NarrativeView({ value }: { value: any }) {
+  if (!value) return null
+  if (typeof value === 'string') {
+    return (
+      <div>
+        <Title level={5}>结论</Title>
+        <Paragraph>{value}</Paragraph>
+      </div>
+    )
+  }
+  if (typeof value !== 'object') return null
+  const headline = plainText(value.headline)
+  const severity = plainText(value.overall_severity)
+  const causes = Array.isArray(value.root_causes) ? value.root_causes.map(plainText).filter(Boolean) : []
+  const actions = Array.isArray(value.actions)
+    ? value.actions.map((a: any) => (typeof a === 'string' ? a : plainText(a?.action))).filter(Boolean)
+    : []
+  if (!headline && !severity && !causes.length && !actions.length) return null
+  return (
+    <div>
+      <Title level={5}>结论</Title>
+      {headline ? <Paragraph>{headline}</Paragraph> : null}
+      {severity ? <Tag>{severity}</Tag> : null}
+      {causes.length ? (
+        <>
+          <Text strong>原因</Text>
+          <ul style={{ margin: '4px 0 8px', paddingLeft: 18 }}>
+            {causes.map((c: string, i: number) => (
+              <li key={`${i}-${c}`}>{c}</li>
+            ))}
+          </ul>
+        </>
+      ) : null}
+      {actions.length ? (
+        <>
+          <Text strong>建议</Text>
+          <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+            {actions.map((a: string, i: number) => (
+              <li key={`${i}-${a}`}>{a}</li>
+            ))}
+          </ul>
+        </>
+      ) : null}
+    </div>
+  )
+}
+
 export default function SmartAnalysisTab(props: { filter: SnapshotFilter; active: boolean }) {
   const { filter, active } = props
   const [view, setView] = useState<ViewKey>('runs')
@@ -297,12 +349,7 @@ export default function SmartAnalysisTab(props: { filter: SnapshotFilter; active
                 ))}
               </Space>
             ) : null}
-            {runDetail.narrative || runDetail.summary ? (
-              <Paragraph>
-                <Title level={5}>结论</Title>
-                {runDetail.narrative || runDetail.summary}
-              </Paragraph>
-            ) : null}
+            <NarrativeView value={runDetail.narrative || runDetail.narrative_text || runDetail.summary} />
             <Title level={5}>Findings</Title>
             <ResponsiveTable
               size="small"
@@ -313,11 +360,16 @@ export default function SmartAnalysisTab(props: { filter: SnapshotFilter; active
                 expandedRowRender: (r) => {
                   const deep = parseDeep(r.deep_analysis || r.evidence?.deep_analysis)
                   if (!deep) return <Text type="secondary">无深度分析</Text>
+                  const diagnosis = plainText(deep.diagnosis) || plainText(deep.summary)
+                  const suggestion = plainText(deep.suggestion)
+                  const actionText = Array.isArray(deep.actions)
+                    ? deep.actions.map((a: any) => (typeof a === 'string' ? a : plainText(a?.action))).filter(Boolean).join('；')
+                    : ''
                   return (
                     <div style={{ fontSize: 13 }}>
-                      {deep.diagnosis || deep.summary ? <Paragraph>{deep.diagnosis || deep.summary}</Paragraph> : null}
-                      {deep.suggestion || deep.actions ? (
-                        <Paragraph type="secondary">建议：{deep.suggestion || JSON.stringify(deep.actions)}</Paragraph>
+                      {diagnosis ? <Paragraph>{diagnosis}</Paragraph> : null}
+                      {suggestion || actionText ? (
+                        <Paragraph type="secondary">建议：{suggestion || actionText}</Paragraph>
                       ) : null}
                       <Button size="small" type="link" onClick={() => setFindingDeep(deep)}>
                         查看完整 deep_analysis

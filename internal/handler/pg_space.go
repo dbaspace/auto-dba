@@ -132,9 +132,9 @@ func (h *PgSpaceHandler) AdviceSummary(c *gin.Context) {
 }
 
 func (h *PgSpaceHandler) Collect(c *gin.Context) {
-	port, _ := strconv.ParseInt(c.Query("port"), 10, 64)
+	instanceID, host, port, dbScope := pgSpaceCollectArgs(c)
 	data, err := h.Svc.StartCollectJob(c.Request.Context(),
-		c.Query("instance_id"), c.Query("host"), port, pgSpaceOperator(c))
+		instanceID, host, port, pgSpaceOperator(c), dbScope)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
@@ -178,13 +178,47 @@ func (h *PgSpaceHandler) CollectCancel(c *gin.Context) {
 }
 
 func (h *PgSpaceHandler) jobControl(c *gin.Context, fn func(context.Context, string) (*pgspace.JobControlData, error)) {
-	jobID := strings.TrimSpace(c.Query("job_id"))
+	jobID := pgSpaceJobID(c)
 	data, err := fn(c.Request.Context(), jobID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": data, "message": "ok"})
+}
+
+type pgSpaceCollectBody struct {
+	InstanceID string `json:"instance_id"`
+	Host       string `json:"host"`
+	Port       int64  `json:"port"`
+	DBScope    string `json:"db_scope"`
+	DBName     string `json:"db_name"`
+}
+
+type pgSpaceJobBody struct {
+	JobID string `json:"job_id"`
+}
+
+// pgSpaceCollectArgs 同时接受 URL 参数和 JSON。已有 query 调用仍优先。
+func pgSpaceCollectArgs(c *gin.Context) (instanceID, host string, port int64, dbScope string) {
+	var body pgSpaceCollectBody
+	_ = c.ShouldBindJSON(&body)
+	instanceID = firstNonEmpty(c.Query("instance_id"), body.InstanceID)
+	host = firstNonEmpty(c.Query("host"), body.Host)
+	port = body.Port
+	if q := strings.TrimSpace(c.Query("port")); q != "" {
+		if n, err := strconv.ParseInt(q, 10, 64); err == nil {
+			port = n
+		}
+	}
+	dbScope = firstNonEmpty(c.Query("db_scope"), c.Query("db_name"), body.DBScope, body.DBName)
+	return instanceID, host, port, dbScope
+}
+
+func pgSpaceJobID(c *gin.Context) string {
+	var body pgSpaceJobBody
+	_ = c.ShouldBindJSON(&body)
+	return firstNonEmpty(c.Query("job_id"), body.JobID)
 }
 
 func pgSpaceOperator(c *gin.Context) string {

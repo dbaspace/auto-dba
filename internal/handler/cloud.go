@@ -256,6 +256,11 @@ func (h *CloudHandler) ListPostgres(c *gin.Context) {
 		if list[i].Engine == cloud.EngineKafka {
 			list[i].KafkaTopicLimit, list[i].KafkaTopicUsed, list[i].KafkaPartitionLimit, list[i].KafkaPartitionUsed, list[i].KafkaInstanceType = cloud.KafkaListFields(list[i].Extras)
 		}
+		if list[i].Engine == cloud.EngineMySQL {
+			if mb, ok := cloud.DiskUsedMB(list[i].Extras); ok {
+				list[i].DiskUsedMB = &mb
+			}
+		}
 		list[i].Extras = nil
 		if acc, _ := h.Store.GetCloudAccount(list[i].AccountID); acc != nil {
 			list[i].AccountName = acc.Name

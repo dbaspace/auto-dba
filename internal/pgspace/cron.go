@@ -66,7 +66,7 @@ func (s *Service) RunDailyCron(ctx context.Context) error {
 	if s == nil {
 		return nil
 	}
-	if _, err := s.StartCollectJob(ctx, "", "", 0, "system"); err != nil {
+	if _, err := s.StartCollectJob(ctx, "", "", 0, "system", ""); err != nil {
 		return err
 	}
 	retention := s.retentionDays()

@@ -21,7 +21,7 @@ type TenantHandler struct {
 	Sessions *sessionstore.Store
 }
 
-func (h *TenantHandler) bindSession(c *gin.Context, u *store.User, tid, jti string, impersonate bool, ttl time.Duration) error {
+func (h *TenantHandler) bindSession(c *gin.Context, u *store.User, tid, jti string, impersonate bool, expire time.Time, extendDate string) error {
 	if h.Sessions == nil || !h.Sessions.Enabled() || jti == "" {
 		return nil
 	}
@@ -34,11 +34,15 @@ func (h *TenantHandler) bindSession(c *gin.Context, u *store.User, tid, jti stri
 	if impersonate {
 		kind = "impersonate"
 	}
+	if extendDate == "" {
+		extendDate = sessionstore.ShanghaiDay(now)
+	}
 	sess := sessionstore.Session{
 		JTI: jti, UserID: u.ID, TenantID: tid, Username: u.Username,
 		IP: clientLoginIP(c), UA: truncateUA(c.Request.UserAgent()),
-		OnlineAt: now.Format(time.RFC3339), ExpireAt: now.Add(ttl).Format(time.RFC3339),
-		Kind: kind,
+		OnlineAt: now.Format(time.RFC3339), ExpireAt: expire.UTC().Format(time.RFC3339),
+		ExtendDate: extendDate,
+		Kind:       kind,
 	}
 	if err := h.Sessions.Create(c.Request.Context(), sess); err != nil {
 		return err
@@ -516,12 +520,13 @@ func (h *TenantHandler) Switch(c *gin.Context) {
 	if h.Secret != nil {
 		secret = h.Secret()
 	}
-	tok, jti, err := middleware.SignSessionToken(secret, u.ID, u.Username, u.Role, t.ID, t.Code, false, ttl)
+	expire, extendDate, dur := loginWindow(h.Sessions, c.Request.Context(), u.ID, ttl)
+	tok, jti, err := middleware.SignSessionToken(secret, u.ID, u.Username, u.Role, t.ID, t.Code, false, dur)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
-	if err := h.bindSession(c, u, t.ID, jti, false, ttl); err != nil {
+	if err := h.bindSession(c, u, t.ID, jti, false, expire, extendDate); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "写入登录会话失败: " + err.Error()})
 		return
 	}
@@ -565,12 +570,13 @@ func (h *TenantHandler) Impersonate(c *gin.Context) {
 	if h.Secret != nil {
 		secret = h.Secret()
 	}
-	tok, jti, err := middleware.SignSessionToken(secret, u.ID, u.Username, u.Role, t.ID, t.Code, true, ttl)
+	expire, extendDate, dur := loginWindow(h.Sessions, c.Request.Context(), u.ID, ttl)
+	tok, jti, err := middleware.SignSessionToken(secret, u.ID, u.Username, u.Role, t.ID, t.Code, true, dur)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
-	if err := h.bindSession(c, u, t.ID, jti, true, ttl); err != nil {
+	if err := h.bindSession(c, u, t.ID, jti, true, expire, extendDate); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "写入登录会话失败: " + err.Error()})
 		return
 	}
@@ -665,12 +671,13 @@ func (h *TenantHandler) ExitImpersonate(c *gin.Context) {
 	if h.Secret != nil {
 		secret = h.Secret()
 	}
-	tok, jti, err := middleware.SignSessionToken(secret, u.ID, u.Username, u.Role, t.ID, t.Code, false, ttl)
+	expire, extendDate, dur := loginWindow(h.Sessions, c.Request.Context(), u.ID, ttl)
+	tok, jti, err := middleware.SignSessionToken(secret, u.ID, u.Username, u.Role, t.ID, t.Code, false, dur)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
-	if err := h.bindSession(c, u, t.ID, jti, false, ttl); err != nil {
+	if err := h.bindSession(c, u, t.ID, jti, false, expire, extendDate); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "写入登录会话失败: " + err.Error()})
 		return
 	}

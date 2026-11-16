@@ -26,6 +26,17 @@ function specText(cpu?: number, memoryMB?: number) {
   return `${Number(cpu || 0)}核 / ${memoryText(memoryMB)}`
 }
 
+function usedStorageText(mb?: number | null, diskGB?: number) {
+  if (mb == null || Number.isNaN(Number(mb))) return '—'
+  const n = Number(mb)
+  const text = n < 1024
+    ? `${Math.round(n)} MB`
+    : `${n >= 10240 ? Math.round(n / 1024) : Math.round(n / 102.4) / 10} GB`
+  const cap = Number(diskGB || 0)
+  if (cap <= 0) return text
+  return `${text} / ${Math.round((n / (cap * 1024)) * 100)}%`
+}
+
 const diskTypeLabel: Record<string, string> = {
   CLOUD_BASIC: '普通云硬盘',
   CLOUD_PREMIUM: '高性能云硬盘',
@@ -512,7 +523,7 @@ export default function CloudPostgres({ engine = 'postgres' }: { engine?: string
       <Table
         rowKey="id"
         dataSource={shown}
-        scroll={{ x: engine === 'kafka' ? 1970 : 1300 }}
+        scroll={{ x: engine === 'kafka' ? 1970 : engine === 'mysql' ? 1440 : 1300 }}
         pagination={{
           current: page,
           pageSize,
@@ -567,6 +578,14 @@ export default function CloudPostgres({ engine = 'postgres' }: { engine?: string
               )
             },
           },
+          ...(engine === 'mysql'
+            ? [{
+                title: '使用存储',
+                dataIndex: 'disk_used_mb',
+                width: 140,
+                render: (v: number | null | undefined, r: { disk_gb?: number }) => usedStorageText(v, r.disk_gb),
+              }]
+            : []),
           ...(engine === 'kafka'
             ? [
                 { title: 'Topic 上限', dataIndex: 'kafka_topic_limit', width: 110, render: (v: number) => kafkaCount(v) },

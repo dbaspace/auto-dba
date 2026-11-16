@@ -2,6 +2,7 @@ package pgspace
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -13,6 +14,9 @@ import (
 )
 
 const jobAllKey = "__all__"
+
+// instanceCollectTimeout 单实例手动采集的总超时。全量定时任务不使用。
+var instanceCollectTimeout = 3 * time.Minute
 
 type jobCtl struct {
 	id     string
@@ -178,8 +182,8 @@ func (r *collectReporter) progressFn(ctx context.Context) progressFn {
 	}
 }
 
-// StartCollectJob 启动异步采集。
-func (s *Service) StartCollectJob(ctx context.Context, instanceID, host string, port int64, createdBy string) (*JobStartData, error) {
+// StartCollectJob 启动异步采集。dbScope 为空时沿用全局扫库开关；定时全量传空字符串。
+func (s *Service) StartCollectJob(ctx context.Context, instanceID, host string, port int64, createdBy, dbScope string) (*JobStartData, error) {
 	instanceID = strings.TrimSpace(instanceID)
 	host = strings.TrimSpace(host)
 
@@ -235,11 +239,11 @@ func (s *Service) StartCollectJob(ctx context.Context, instanceID, host string, 
 	m.byKey[key] = job.ID
 	m.mu.Unlock()
 
-	go s.runJob(ctl, job, physicals)
+	go s.runJob(ctl, job, physicals, dbScope)
 	return &JobStartData{JobID: job.ID, State: store.SpaceJobPending}, nil
 }
 
-func (s *Service) runJob(ctl *jobCtl, job *store.SpaceCollectJob, physicals []physicalInstance) {
+func (s *Service) runJob(ctl *jobCtl, job *store.SpaceCollectJob, physicals []physicalInstance, dbScope string) {
 	writeCtx := context.Background()
 	m := s.jobs()
 	defer m.cleanup(job.ID, ctl.key)
@@ -258,19 +262,43 @@ func (s *Service) runJob(ctl *jobCtl, job *store.SpaceCollectJob, physicals []ph
 	job.InstancesTotal = len(physicals)
 	_ = s.Store.UpdateSpaceCollectJobProgress(writeCtx, job)
 
-	reporter := &collectReporter{row: job, ctl: ctl, writeCtx: writeCtx, store: s.Store}
-	_, _, rerr := s.runCollectTargets(ctl.ctx, physicals, reporter)
-
-	finalState := store.SpaceJobSucceeded
-	errMsg := ""
-	switch {
-	case ctl.ctx.Err() != nil:
-		finalState = store.SpaceJobCanceled
-	case rerr != nil:
-		finalState = store.SpaceJobFailed
-		errMsg = rerr.Error()
+	runCtx := ctl.ctx
+	if job.Scope == store.SpaceJobScopeInstance {
+		var stop context.CancelFunc
+		runCtx, stop = context.WithTimeout(ctl.ctx, instanceCollectTimeout)
+		defer stop()
 	}
+
+	reporter := &collectReporter{row: job, ctl: ctl, writeCtx: writeCtx, store: s.Store}
+	_, _, rerr := s.runCollectTargets(runCtx, physicals, reporter, dbScope)
+
+	finalState, errMsg := collectFinish(ctl.ctx.Err() != nil, errors.Is(runCtx.Err(), context.DeadlineExceeded), rerr, job.CurrentInstance, job.CurrentDb)
 	_ = s.Store.SetSpaceCollectJobState(writeCtx, job.ID, finalState, errMsg, true)
+}
+
+// collectFinish 区分用户取消、单实例超时和其它失败。取消优先于超时。
+func collectFinish(parentCanceled, deadlineExceeded bool, runErr error, currentInstance, currentDB string) (state, msg string) {
+	switch {
+	case parentCanceled:
+		return store.SpaceJobCanceled, ""
+	case deadlineExceeded:
+		inst := strings.TrimSpace(currentInstance)
+		db := strings.TrimSpace(currentDB)
+		switch {
+		case inst != "" && db != "":
+			return store.SpaceJobFailed, fmt.Sprintf("采集超时，停在 %s 库 %s", inst, db)
+		case db != "":
+			return store.SpaceJobFailed, fmt.Sprintf("采集超时，停在库 %s", db)
+		case inst != "":
+			return store.SpaceJobFailed, fmt.Sprintf("采集超时，停在 %s", inst)
+		default:
+			return store.SpaceJobFailed, "采集超时"
+		}
+	case runErr != nil:
+		return store.SpaceJobFailed, runErr.Error()
+	default:
+		return store.SpaceJobSucceeded, ""
+	}
 }
 
 // GetJob 查询任务。

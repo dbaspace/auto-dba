@@ -61,7 +61,7 @@ type RedisConfig struct {
 	DB                   int    `yaml:"db"`
 	KeyPrefix            string `yaml:"key_prefix"`
 	SessionTTLHours      int    `yaml:"session_ttl_hours"`      // 0 = 回退 app.jwt_ttl_hours
-	SlidingExpire        bool   `yaml:"sliding_expire"`         // 已忽略：有效会话鉴权时一律把 expire_at 续到 now+TTL
+	SlidingExpire        bool   `yaml:"sliding_expire"`         // 已忽略：每个东八区自然日最多延长一次，超过 expire_at 未再访问则过期
 	FailMode             string `yaml:"fail_mode"`              // closed | open；open=鉴权不强制 Redis（不推荐生产）
 	MaxSessionsPerUser   int    `yaml:"max_sessions_per_user"`  // 0=不限制；1=新登录踢旧
 	ReconcileIntervalMin int    `yaml:"reconcile_interval_min"` // 默认 5
@@ -256,8 +256,11 @@ type TerminalConfig struct {
 	SSHHostKeyPolicy   string `yaml:"ssh_host_key_policy"`   // accept-new（默认）| strict | insecure
 	SSHKnownHostsFile  string `yaml:"ssh_known_hosts_file"`  // 平台自管 known_hosts，默认 config/terminal/known_hosts
 	ScriptsDir         string `yaml:"scripts_dir"`
-	MaxLifetimeSec     int    `yaml:"max_lifetime_sec"`
-	StaticDir          string `yaml:"static_dir"`
+	// MaxLifetimeSec 无输入且无输出时的空闲上限（秒），默认 1800。有键盘输入或终端输出会续期。
+	MaxLifetimeSec int `yaml:"max_lifetime_sec"`
+	// MaxAbsoluteSec 自会话创建起的最长存活（秒），默认 8 小时。到点即使仍在操作也断开。
+	MaxAbsoluteSec int    `yaml:"max_absolute_sec"`
+	StaticDir      string `yaml:"static_dir"`
 	// SSHKeyProfiles 按实例 idc（环境 code）选用的私钥档案；未命中回退全局钥
 	SSHKeyProfiles []SSHKeyProfile `yaml:"ssh_key_profiles,omitempty"`
 	// SSHKeyFingerprint 物化后 PEM 的 SHA-256 hex（不入 YAML）；供热更 Diff 感知仅改密钥
@@ -563,6 +566,12 @@ func applyTerminalDefaults(cfg *Config, configPath string) {
 	}
 	if t.MaxLifetimeSec <= 0 {
 		t.MaxLifetimeSec = 1800
+	}
+	if t.MaxAbsoluteSec <= 0 {
+		t.MaxAbsoluteSec = 8 * 3600
+	}
+	if t.MaxAbsoluteSec < t.MaxLifetimeSec {
+		t.MaxAbsoluteSec = t.MaxLifetimeSec
 	}
 	if t.SSHIdentityFile == "" {
 		t.SSHIdentityFile = filepath.Join(root, "config", "terminal", "id_rsa")

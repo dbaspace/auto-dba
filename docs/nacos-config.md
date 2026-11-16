@@ -149,8 +149,8 @@ redis:
   password: "***"            # 敏感，仅 Nacos
   db: 0
   key_prefix: "autodba:"
-  session_ttl_hours: 24      # 空则回退 app.jwt_ttl_hours
-  sliding_expire: false      # 已忽略：有效期内再次访问会把过期时间续到现在 + session_ttl；到期后提示重新登录
+  session_ttl_hours: 24      # 空则回退 app.jwt_ttl_hours。窗口从当天第一次仍有效的访问起算
+  sliding_expire: false      # 已忽略：每个东八区自然日最多延长一次；超过 expire_at 没有再访问则要重新登录
   fail_mode: closed          # closed=有 jti 时必须 Redis 命中；open=仅验 JWT
   max_sessions_per_user: 1   # 已固定为同一账号只保留最新登录（配置项保留兼容，运行时始终踢旧）
   reconcile_interval_min: 5

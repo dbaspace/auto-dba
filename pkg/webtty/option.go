@@ -41,6 +41,14 @@ func WithWindowTitle(windowTitle string) Option {
 	}
 }
 
+// WithOnActivity 在收到键盘输入或读到终端输出时调用，用来续期空闲计时。
+func WithOnActivity(fn func()) Option {
+	return func(wt *WebTTY) error {
+		wt.onActivity = fn
+		return nil
+	}
+}
+
 // WithReconnect enables reconnection on the master side.
 func WithReconnect(timeInSeconds int) Option {
 	return func(wt *WebTTY) error {

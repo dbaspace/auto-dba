@@ -328,8 +328,25 @@ func analysisRows(a *analysis, t connTarget, collectedAt time.Time) []*store.Spa
 	return all
 }
 
-func (s *Service) runCollectTargets(ctx context.Context, physicals []physicalInstance, reporter *collectReporter) (instancesProcessed, rowsWritten int, err error) {
-	scanAllFlag := s.scanAllDatabases()
+// resolveCollectScan 把页面库范围转成扫描方式。空范围沿用全局「是否扫全部库」。
+func resolveCollectScan(dbScope string, defaultAll bool) (scanMode, string) {
+	switch strings.TrimSpace(dbScope) {
+	case "":
+		if defaultAll {
+			return scanAll, ""
+		}
+		return scanNone, ""
+	case "__cluster__":
+		return scanNone, ""
+	case "__all__":
+		return scanAll, ""
+	default:
+		return scanOne, strings.TrimSpace(dbScope)
+	}
+}
+
+func (s *Service) runCollectTargets(ctx context.Context, physicals []physicalInstance, reporter *collectReporter, dbScope string) (instancesProcessed, rowsWritten int, err error) {
+	mode, specific := resolveCollectScan(dbScope, s.scanAllDatabases())
 	topN := s.topN()
 	collectedAt := time.Now().UTC()
 
@@ -341,11 +358,7 @@ func (s *Service) runCollectTargets(ctx context.Context, physicals []physicalIns
 		t := p.target
 		reporter.instanceStart(ctx, i, total, t.host)
 
-		mode := scanNone
-		if scanAllFlag {
-			mode = scanAll
-		}
-		opts := analyzeOptions{scanMode: mode, topN: topN}
+		opts := analyzeOptions{scanMode: mode, specificDb: specific, topN: topN}
 		if reporter != nil {
 			opts.onProgress = reporter.progressFn(ctx)
 		}
@@ -775,7 +788,14 @@ func rowsToDTO(rows []*store.SpaceRow) []*Object {
 func rowsToDatabaseItems(rows []*store.SpaceRow) []*DatabaseItem {
 	out := make([]*DatabaseItem, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, &DatabaseItem{DbName: r.DbName, SizeBytes: r.SizeBytes, TablespaceName: r.TablespaceName})
+		name := strings.TrimSpace(r.DbName)
+		if name == "" {
+			name = strings.TrimSpace(r.ObjectName)
+		}
+		if name == "" {
+			continue
+		}
+		out = append(out, &DatabaseItem{DbName: name, SizeBytes: r.SizeBytes, TablespaceName: r.TablespaceName})
 	}
 	return out
 }

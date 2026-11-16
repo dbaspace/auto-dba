@@ -31,6 +31,7 @@ type WebTTY struct {
 	columns     int
 	rows        int
 	reconnect   int // in seconds
+	onActivity  func()
 	masterPrefs []byte
 	mtod        string
 
@@ -92,6 +93,7 @@ func (wt *WebTTY) Run(ctx context.Context) error {
 			}
 
 			if n > 0 {
+				wt.noteActivity()
 				_, err = wt.conn.Write(conn.Output, buffer[:n])
 				if err != nil {
 					errCh <- errors.Wrapf(err, "write to webConn")
@@ -138,6 +140,12 @@ func (wt *WebTTY) Run(ctx context.Context) error {
 			}
 		}
 		return err
+	}
+}
+
+func (wt *WebTTY) noteActivity() {
+	if wt.onActivity != nil {
+		wt.onActivity()
 	}
 }
 
@@ -199,6 +207,7 @@ func (wt *WebTTY) handleWebConnReadEvent(data []byte) error {
 		if err != nil {
 			return errors.Wrapf(err, "failed to write received data to slave")
 		}
+		wt.noteActivity()
 	case conn.Ping:
 		_, err := wt.conn.Write(conn.Pong, nil)
 		if err != nil {

@@ -163,6 +163,18 @@ func (d *DB) ListOnlineUserSessionRows(limit int) ([]UserSession, error) {
 	return out, rows.Err()
 }
 
+// TouchUserSessionExpire 自然日首次延长后，把镜像里的过期时间对齐 Redis。
+func (d *DB) TouchUserSessionExpire(jti, expireAt string) error {
+	jti = strings.TrimSpace(jti)
+	expireAt = strings.TrimSpace(expireAt)
+	if d == nil || jti == "" || expireAt == "" {
+		return nil
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := d.Exec(`UPDATE tbl_user_sessions SET expire_at=?, updated_at=? WHERE jti=? AND status='online'`, expireAt, now, jti)
+	return err
+}
+
 // MarkUserSessionExpired 对账标过期。
 func (d *DB) MarkUserSessionExpired(jti string) error {
 	now := time.Now().UTC().Format(time.RFC3339)

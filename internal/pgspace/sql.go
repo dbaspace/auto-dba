@@ -27,6 +27,7 @@ ORDER BY size_bytes DESC`
 
 // pgSpaceTablesSQL 大表用量（分片聚合）。$1=分片剥离正则，$2=Top-N。
 // 含访问/缓存/热点 DML / VACUUM·ANALYZE 时间 / XID 年龄；膨胀仍在应用层估算。
+// heap_blks_* 只在 pg_statio_user_tables，不在 pg_stat_user_tables。
 const pgSpaceTablesSQL = `
 SELECT n.nspname AS schema_name,
        regexp_replace(c.relname, $1, '') AS logical_name,
@@ -39,8 +40,8 @@ SELECT n.nspname AS schema_name,
        SUM(COALESCE(st.n_dead_tup, 0))::bigint AS n_dead_tup,
        SUM(COALESCE(st.seq_scan, 0))::bigint AS seq_scan,
        SUM(COALESCE(st.idx_scan, 0))::bigint AS tbl_idx_scan,
-       SUM(COALESCE(st.heap_blks_read, 0))::bigint AS heap_blks_read,
-       SUM(COALESCE(st.heap_blks_hit, 0))::bigint AS heap_blks_hit,
+       SUM(COALESCE(io.heap_blks_read, 0))::bigint AS heap_blks_read,
+       SUM(COALESCE(io.heap_blks_hit, 0))::bigint AS heap_blks_hit,
        SUM(COALESCE(st.n_tup_ins, 0))::bigint AS n_tup_ins,
        SUM(COALESCE(st.n_tup_upd, 0))::bigint AS n_tup_upd,
        SUM(COALESCE(st.n_tup_del, 0))::bigint AS n_tup_del,
@@ -52,6 +53,7 @@ SELECT n.nspname AS schema_name,
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
 LEFT JOIN pg_stat_user_tables st ON st.relid = c.oid
+LEFT JOIN pg_statio_user_tables io ON io.relid = c.oid
 WHERE c.relkind = 'r'
   AND n.nspname NOT IN ('pg_catalog', 'information_schema')
   AND n.nspname !~ '^pg_'
@@ -72,8 +74,8 @@ SELECT n.nspname AS schema_name,
        SUM(COALESCE(st.n_dead_tup, 0))::bigint AS n_dead_tup,
        SUM(COALESCE(st.seq_scan, 0))::bigint AS seq_scan,
        SUM(COALESCE(st.idx_scan, 0))::bigint AS tbl_idx_scan,
-       SUM(COALESCE(st.heap_blks_read, 0))::bigint AS heap_blks_read,
-       SUM(COALESCE(st.heap_blks_hit, 0))::bigint AS heap_blks_hit,
+       SUM(COALESCE(io.heap_blks_read, 0))::bigint AS heap_blks_read,
+       SUM(COALESCE(io.heap_blks_hit, 0))::bigint AS heap_blks_hit,
        SUM(COALESCE(st.n_tup_ins, 0))::bigint AS n_tup_ins,
        SUM(COALESCE(st.n_tup_upd, 0))::bigint AS n_tup_upd,
        SUM(COALESCE(st.n_tup_del, 0))::bigint AS n_tup_del,
@@ -85,6 +87,7 @@ SELECT n.nspname AS schema_name,
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
 LEFT JOIN pg_stat_user_tables st ON st.relid = c.oid
+LEFT JOIN pg_statio_user_tables io ON io.relid = c.oid
 WHERE c.relkind = 'r'
   AND n.nspname NOT IN ('pg_catalog', 'information_schema')
   AND n.nspname !~ '^pg_'

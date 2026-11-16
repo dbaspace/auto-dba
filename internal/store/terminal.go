@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -89,5 +90,15 @@ func (d *DB) GetTerminalSession(id string) (*TerminalSession, error) {
 func (d *DB) UpdateTerminalSessionStatus(id, status string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := d.Exec(`UPDATE tbl_terminal_sessions SET status=?, updated_at=? WHERE id=?`, status, now, id)
+	return err
+}
+
+// TouchTerminalSessionExpiry 把重连有效期往后推。有输入或输出时调用，最多约每分钟一次。
+func (d *DB) TouchTerminalSessionExpiry(id, expiresAt string) error {
+	if strings.TrimSpace(id) == "" || strings.TrimSpace(expiresAt) == "" {
+		return nil
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := d.Exec(`UPDATE tbl_terminal_sessions SET expires_at=?, updated_at=? WHERE id=?`, expiresAt, now, id)
 	return err
 }

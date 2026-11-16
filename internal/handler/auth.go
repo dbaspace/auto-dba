@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1350,7 +1351,6 @@ func (h *AuthHandler) Me(c *gin.Context) {
 			if picked != nil {
 				ttl := time.Duration(h.Cfg.App.JWTTTLHours) * time.Hour
 				if old := middleware.JTI(c); old != "" && h.Sessions != nil && h.Sessions.Enabled() {
-					_ = h.Sessions.RevokeJTI(c.Request.Context(), u.ID, old)
 					_ = h.Store.MarkUserSessionOffline(old, "tenant_session_rebound", u.ID)
 				}
 				tok, ierr := h.issueLoginToken(c, u, picked.ID, picked.Code, false, ttl)
@@ -1437,9 +1437,8 @@ func (h *AuthHandler) SelectTenant(c *gin.Context) {
 		return
 	}
 	ttl := time.Duration(h.Cfg.App.JWTTTLHours) * time.Hour
-	// 选租户重签：先吊销旧 jti（若有），再签发新会话
+	// 选租户重签：旧 Redis 会话留给 issueLoginToken 先读过期时间，Create 时再换掉。
 	if old := middleware.JTI(c); old != "" && h.Sessions != nil && h.Sessions.Enabled() {
-		_ = h.Sessions.RevokeJTI(c.Request.Context(), u.ID, old)
 		_ = h.Store.MarkUserSessionOffline(old, "select_tenant", u.ID)
 	}
 	tok, err := h.issueLoginToken(c, u, t.ID, t.Code, false, ttl)
@@ -2011,10 +2010,32 @@ func (h *AuthHandler) ResetPassword(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true, "message": "密码已重置，请使用新密码登录"})
 }
 
+// loginWindow 决定本次登录的过期时间。Redis 开启时同一天沿用上一窗口，否则用 fallback。
+func loginWindow(sessions *sessionstore.Store, ctx context.Context, userID string, fallback time.Duration) (expire time.Time, extendDate string, ttl time.Duration) {
+	now := time.Now()
+	if fallback <= 0 {
+		fallback = 24 * time.Hour
+	}
+	if sessions != nil && sessions.Enabled() {
+		expire, extendDate = sessions.PlanLoginExpiry(ctx, userID, now)
+	} else {
+		expire = now.Add(fallback)
+		extendDate = sessionstore.ShanghaiDay(now)
+	}
+	ttl = time.Until(expire)
+	if ttl < time.Second {
+		ttl = time.Second
+		expire = time.Now().Add(ttl)
+	}
+	return expire, extendDate, ttl
+}
+
 // issueLoginToken 签发 JWT；若启用 Redis 会话则先写 Redis 再镜像元库。
+// JWT 有效期与会话 expire_at 对齐：同一东八区自然日再次登录不把窗口重置到现在 + TTL。
 func (h *AuthHandler) issueLoginToken(c *gin.Context, u *store.User, tid, tcode string, impersonate bool, ttl time.Duration) (token string, err error) {
 	secret := h.Cfg.App.JWTSecret
-	tok, jti, err := middleware.SignSessionToken(secret, u.ID, u.Username, u.Role, tid, tcode, impersonate, ttl)
+	expire, extendDate, tokenTTL := loginWindow(h.Sessions, c.Request.Context(), u.ID, ttl)
+	tok, jti, err := middleware.SignSessionToken(secret, u.ID, u.Username, u.Role, tid, tcode, impersonate, tokenTTL)
 	if err != nil {
 		return "", err
 	}
@@ -2022,24 +2043,21 @@ func (h *AuthHandler) issueLoginToken(c *gin.Context, u *store.User, tid, tcode 
 		return tok, nil
 	}
 	now := time.Now().UTC()
-	exp := now.Add(ttl)
-	if h.Cfg.Redis.SessionTTLHours > 0 {
-		exp = now.Add(time.Duration(h.Cfg.Redis.SessionTTLHours) * time.Hour)
-	}
 	kind := "normal"
 	if impersonate {
 		kind = "impersonate"
 	}
 	sess := sessionstore.Session{
-		JTI:      jti,
-		UserID:   u.ID,
-		TenantID: tid,
-		Username: u.Username,
-		IP:       clientLoginIP(c),
-		UA:       truncateUA(c.Request.UserAgent()),
-		OnlineAt: now.Format(time.RFC3339),
-		ExpireAt: exp.Format(time.RFC3339),
-		Kind:     kind,
+		JTI:        jti,
+		UserID:     u.ID,
+		TenantID:   tid,
+		Username:   u.Username,
+		IP:         clientLoginIP(c),
+		UA:         truncateUA(c.Request.UserAgent()),
+		OnlineAt:   now.Format(time.RFC3339),
+		ExpireAt:   expire.UTC().Format(time.RFC3339),
+		ExtendDate: extendDate,
+		Kind:       kind,
 	}
 	if err := h.Sessions.Create(c.Request.Context(), sess); err != nil {
 		return "", fmt.Errorf("写入登录会话失败: %w", err)

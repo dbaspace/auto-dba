@@ -9,6 +9,9 @@ import (
 	"github.com/pkg/errors"
 )
 
+// ReadIdle 读超时。约为数个 Ping 间隔，避免一次 Pong 稍晚就把正在看输出的会话拆掉。
+const ReadIdle = 90 * time.Second
+
 type wsWrapper struct {
 	*websocket.Conn
 	l sync.Mutex
@@ -28,7 +31,11 @@ func (wsw *wsWrapper) Write(p []byte) (n int, err error) {
 		return 0, err
 	}
 	defer writer.Close()
-	return writer.Write(p)
+	n, err = writer.Write(p)
+	if err == nil && n > 0 {
+		_ = wsw.Conn.SetReadDeadline(time.Now().Add(ReadIdle))
+	}
+	return n, err
 }
 
 // Read reads data from the connection.
@@ -38,8 +45,8 @@ func (wsw *wsWrapper) Read(p []byte) (n int, err error) {
 		if err != nil {
 			return 0, err
 		}
-		// 有业务帧也刷新读超时，配合服务端协议层 Ping
-		_ = wsw.Conn.SetReadDeadline(time.Now().Add(90 * time.Second))
+		// 有业务帧也刷新读超时，配合服务端协议层 Ping 和下行输出
+		_ = wsw.Conn.SetReadDeadline(time.Now().Add(ReadIdle))
 
 		if msgType != websocket.TextMessage {
 			continue

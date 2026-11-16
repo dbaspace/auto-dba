@@ -42,6 +42,22 @@ import {
 
 const { Text } = Typography
 
+function awrEmptyText(startTime?: string, endTime?: string) {
+  const start = startTime ? dayjs(startTime) : null
+  const end = endTime ? dayjs(endTime) : null
+  const startDay = start?.isValid() ? start.format('YYYY-MM-DD') : ''
+  const endDay = end?.isValid() ? end.format('YYYY-MM-DD') : ''
+  const today = dayjs().format('YYYY-MM-DD')
+  if (startDay && endDay && startDay === endDay && startDay === today) {
+    return `今天（${startDay}）还没有 AWR 报告。每日报告在次日生成，请把时间范围包含昨天后再查询。`
+  }
+  if (startDay && endDay) {
+    const range = startDay === endDay ? startDay : `${startDay} 至 ${endDay}`
+    return `${range} 没有 AWR 报告。`
+  }
+  return '该时间范围内没有 AWR 报告。'
+}
+
 export default function AwrReportTab(props: { filter: SnapshotFilter; active: boolean }) {
   const { filter, active } = props
   const [loading, setLoading] = useState(false)
@@ -276,7 +292,7 @@ export default function AwrReportTab(props: { filter: SnapshotFilter; active: bo
           onChange: setCurrent,
           showTotal: (t) => `共 ${t} 条`,
         }}
-          locale={{ emptyText: <Empty description="暂无报告。请在右上角「设置」中配置 Prometheus 后生成。" /> }}
+          locale={{ emptyText: <Empty description={awrEmptyText(filter.startTime, filter.endTime)} /> }}
         columns={[
           { title: '报告日', dataIndex: 'report_date', width: 120 },
           { title: '实例', dataIndex: 'instance_id', width: 180, ellipsis: true },

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Button,
   Drawer,
@@ -50,6 +50,38 @@ function sizeCol(title: string, key: string) {
   }
 }
 
+function collectState(st: any): string {
+  return String(st?.state || st?.status || '').toLowerCase()
+}
+
+function isTerminalCollect(state: string): boolean {
+  return ['succeeded', 'success', 'done', 'completed', 'failed', 'cancelled', 'canceled', 'error', 'interrupted'].includes(state)
+}
+
+function isCollectSuccess(state: string): boolean {
+  return ['succeeded', 'success', 'done', 'completed'].includes(state)
+}
+
+function collectPercent(st: any): number {
+  const instTotal = Number(st?.instances_total) || 0
+  const instDone = Number(st?.instances_done) || 0
+  const dbTotal = Number(st?.db_total) || 0
+  const dbDone = Number(st?.db_done) || 0
+  if (instTotal <= 0) return 0
+  let frac = Math.min(Math.max(instDone, 0), instTotal)
+  if (frac < instTotal && dbTotal > 0) {
+    frac += Math.min(Math.max(dbDone, 0), dbTotal) / dbTotal
+  }
+  return Math.max(0, Math.min(100, Math.round((frac / instTotal) * 100)))
+}
+
+function collectProgressStatus(state: string): 'success' | 'exception' | 'active' | 'normal' {
+  if (isCollectSuccess(state)) return 'success'
+  if (['failed', 'error', 'interrupted'].includes(state)) return 'exception'
+  if (['canceled', 'cancelled', 'paused'].includes(state)) return 'normal'
+  return 'active'
+}
+
 export default function PgSpaceTab(props: {
   filter: SnapshotFilter
   active: boolean
@@ -67,10 +99,14 @@ export default function PgSpaceTab(props: {
   const [historyTotal, setHistoryTotal] = useState(0)
   const [dbOptions, setDbOptions] = useState<{ label: string; value: string }[]>([])
   const [trend, setTrend] = useState<any>(null)
+  const [trendDb, setTrendDb] = useState('')
   const [taskOpen, setTaskOpen] = useState(false)
   const [jobs, setJobs] = useState<any[]>([])
   const [activeJobId, setActiveJobId] = useState('')
   const [jobStatus, setJobStatus] = useState<any>(null)
+  const notedKey = useRef('')
+  const sawRunning = useRef('')
+  const expectResult = useRef('')
 
   const hasInstance = Boolean(filter.instanceId)
 
@@ -83,10 +119,15 @@ export default function PgSpaceTab(props: {
       const res = await fetchPgSpaceDatabases(filter.instanceId)
       const list = Array.isArray(res.databases) ? res.databases : []
       setDbOptions(
-        list.map((d: any) => ({
-          label: `${d.db_name}${d.size_bytes != null ? ` (${formatBytes(d.size_bytes)})` : ''}`,
-          value: d.db_name,
-        })),
+        list
+          .map((d: any) => {
+            const name = String(d.db_name || d.object_name || '').trim()
+            return {
+              label: `${name}${d.size_bytes != null ? ` (${formatBytes(d.size_bytes)})` : ''}`,
+              value: name,
+            }
+          })
+          .filter((d: { value: string }) => d.value),
       )
     } catch {
       setDbOptions([])
@@ -158,8 +199,21 @@ export default function PgSpaceTab(props: {
     }
   }, [view, filter.instanceId])
 
+  useEffect(() => {
+    const names = dbOptions.map((o) => o.value).filter(Boolean)
+    if (!names.length) {
+      setTrendDb('')
+      return
+    }
+    setTrendDb((cur) => {
+      if (cur && names.includes(cur)) return cur
+      if (dbScope && names.includes(dbScope)) return dbScope
+      return names[0]
+    })
+  }, [dbOptions, dbScope])
+
   const loadTrend = useCallback(async () => {
-    if (!filter.instanceId) {
+    if (!filter.instanceId || !trendDb) {
       setTrend(null)
       return
     }
@@ -168,17 +222,18 @@ export default function PgSpaceTab(props: {
       setTrend(
         await fetchPgSpaceTrend({
           instance_id: filter.instanceId,
+          object_type: 'database',
+          object_name: trendDb,
           start_time: filter.startTime,
           end_time: filter.endTime,
         }),
       )
-    } catch (e: any) {
-      message.error(e?.response?.data?.message || e?.message || '加载趋势失败')
+    } catch {
       setTrend(null)
     } finally {
       setLoading(false)
     }
-  }, [filter.instanceId, filter.startTime, filter.endTime])
+  }, [filter.instanceId, filter.startTime, filter.endTime, trendDb])
 
   useEffect(() => {
     if (!active) return
@@ -193,32 +248,90 @@ export default function PgSpaceTab(props: {
     else void loadAdvice()
   }, [active, view, loadOverview, loadHistory, loadTrend, loadAdvice, tick])
 
-  async function pollJob(jobId: string) {
-    setActiveJobId(jobId)
-    for (let i = 0; i < 60; i++) {
-      const st = await fetchPgSpaceCollectStatus(jobId)
-      setJobStatus(st)
-      const state = String(st?.state || st?.status || '').toLowerCase()
-      if (['succeeded', 'success', 'done', 'completed'].includes(state)) {
-        message.success('采集完成')
-        setTick((n) => n + 1)
-        return
+  useEffect(() => {
+    if (!taskOpen || !activeJobId) return
+    let stop = false
+    let timer = 0
+    const jobId = activeJobId
+    const pull = async () => {
+      try {
+        const st = await fetchPgSpaceCollectStatus(jobId)
+        if (stop) return
+        setJobStatus(st)
+        try {
+          const list = await fetchPgSpaceCollectJobs(20)
+          if (!stop) setJobs(asArray(list))
+        } catch {
+          /* 列表刷新失败不影响进度 */
+        }
+        const state = collectState(st)
+        if (isCollectActive(state)) sawRunning.current = jobId
+        if (isTerminalCollect(state)) {
+          const key = `${jobId}:${state}`
+          const shouldNote = notedKey.current !== key && (sawRunning.current === jobId || expectResult.current === jobId)
+          if (shouldNote) {
+            notedKey.current = key
+            expectResult.current = ''
+            const errText = String(st?.error || st?.error_message || '')
+            if (isCollectSuccess(state)) {
+              message.success('采集完成')
+              setTick((n) => n + 1)
+            } else if (state === 'canceled' || state === 'cancelled') {
+              message.info('采集已取消')
+            } else if (state === 'interrupted') {
+              message.warning(errText || '采集已中断')
+            } else {
+              message.error(errText || '采集失败')
+            }
+          }
+          return
+        }
+      } catch {
+        /* 下一轮再查 */
       }
-      if (['failed', 'cancelled', 'canceled', 'error'].includes(state)) {
-        message.error(st?.error_message || '采集失败')
-        return
-      }
-      await new Promise((r) => setTimeout(r, 2000))
+      if (stop) return
+      timer = window.setTimeout(() => {
+        void pull()
+      }, 2000)
     }
-  }
+    void pull()
+    return () => {
+      stop = true
+      window.clearTimeout(timer)
+    }
+  }, [taskOpen, activeJobId])
 
   async function openTasks() {
     setTaskOpen(true)
     try {
-      const list = await fetchPgSpaceCollectJobs(20)
-      setJobs(asArray(list))
+      const list = asArray(await fetchPgSpaceCollectJobs(20))
+      setJobs(list)
+      if (!activeJobId) {
+        const running = list.find((j) => isCollectActive(collectState(j)))
+        if (running) setActiveJobId(String(running.id || running.job_id))
+      }
     } catch (e: any) {
       message.error(e?.response?.data?.message || e?.message || '加载任务失败')
+    }
+  }
+
+  async function trackJob(jobId: string) {
+    setTaskOpen(true)
+    setActiveJobId(jobId)
+    try {
+      setJobStatus(await fetchPgSpaceCollectStatus(jobId))
+    } catch (e: any) {
+      message.error(e?.response?.data?.message || e?.message || '加载任务失败')
+    }
+  }
+
+  async function runControl(fn: (id: string) => Promise<unknown>) {
+    if (!activeJobId) return
+    try {
+      await fn(activeJobId)
+      setJobStatus(await fetchPgSpaceCollectStatus(activeJobId))
+    } catch (e: any) {
+      message.error(e?.response?.data?.message || e?.message || '操作失败')
     }
   }
 
@@ -226,8 +339,8 @@ export default function PgSpaceTab(props: {
     setCollecting(true)
     setTaskOpen(true)
     try {
-      const start = await startPgSpaceCollect(filter.instanceId || undefined)
-      const jobId = start?.job_id || start?.id
+      const start = await startPgSpaceCollect(filter.instanceId || undefined, dbScope)
+      const jobId = String(start?.job_id || start?.id || '')
       const list = await fetchPgSpaceCollectJobs(20)
       setJobs(asArray(list))
       if (!jobId) {
@@ -235,8 +348,9 @@ export default function PgSpaceTab(props: {
         setTick((n) => n + 1)
         return
       }
-      message.info('采集任务已启动…')
-      await pollJob(String(jobId))
+      expectResult.current = jobId
+      setActiveJobId(jobId)
+      message.info(start?.reused ? '已有采集任务在进行' : '采集任务已启动')
     } catch (e: any) {
       message.error(e?.response?.data?.message || e?.message || '采集失败')
     } finally {
@@ -346,6 +460,18 @@ export default function PgSpaceTab(props: {
               <InputNumber size="small" min={5} max={100} value={topN} onChange={(v) => setTopN(Number(v) || 20)} />
             </>
           ) : null}
+          {view === 'trend' ? (
+            <Select
+              size="small"
+              showSearch
+              optionFilterProp="label"
+              style={{ width: 240 }}
+              placeholder="选择数据库"
+              value={trendDb || undefined}
+              onChange={setTrendDb}
+              options={dbOptions}
+            />
+          ) : null}
           <Button size="small" icon={<ReloadOutlined />} loading={loading} onClick={() => setTick((n) => n + 1)}>
             刷新
           </Button>
@@ -433,7 +559,11 @@ export default function PgSpaceTab(props: {
 
       {view === 'trend' ? (
         <div style={{ height: 360 }}>
-          {trend ? <ChartBox option={trendOption} height="360px" /> : <Empty description={loading ? '加载中…' : '暂无趋势数据'} />}
+          {trendDb && Array.isArray(trend?.points) && trend.points.length > 0 ? (
+            <ChartBox option={trendOption} height="360px" />
+          ) : (
+            <Empty description={loading ? '加载中…' : trendDb ? '该库在所选时间范围内没有快照' : '暂无库快照，请先采集'} />
+          )}
         </div>
       ) : null}
 
@@ -494,28 +624,44 @@ export default function PgSpaceTab(props: {
         <Empty description="暂无汇总数据，可切换实时直连或先手动采集" />
       ) : null}
 
-      <Drawer open={taskOpen} title="表空间采集任务" width={560} onClose={() => setTaskOpen(false)}>
+      <Drawer open={taskOpen} title="表空间采集任务" width={640} onClose={() => setTaskOpen(false)}>
         {activeJobId ? (
           <div style={{ marginBottom: 16 }}>
-            <Typography.Text>当前任务：{activeJobId}</Typography.Text>
+            <Typography.Text ellipsis>当前任务：{activeJobId}</Typography.Text>
             <Progress
               style={{ marginTop: 8 }}
-              percent={(() => {
-                const p = Number(jobStatus?.progress ?? jobStatus?.percent)
-                if (!Number.isFinite(p)) return undefined
-                return Math.round(p <= 1 ? p * 100 : p)
-              })()}
-              status="active"
+              percent={collectPercent(jobStatus)}
+              status={collectProgressStatus(collectState(jobStatus))}
             />
             <Typography.Text type="secondary">状态：{jobStatus?.state || jobStatus?.status || '-'}</Typography.Text>
+            {jobStatus?.current_instance ? (
+              <div>
+                <Typography.Text type="secondary">当前实例：{jobStatus.current_instance}</Typography.Text>
+              </div>
+            ) : null}
+            {jobStatus?.current_db ? (
+              <div>
+                <Typography.Text type="secondary">当前库：{jobStatus.current_db}</Typography.Text>
+              </div>
+            ) : null}
+            {jobStatus?.current_stage ? (
+              <div>
+                <Typography.Text type="secondary">阶段：{jobStatus.current_stage}</Typography.Text>
+              </div>
+            ) : null}
+            {jobStatus?.error ? (
+              <div>
+                <Typography.Text type="danger">{jobStatus.error}</Typography.Text>
+              </div>
+            ) : null}
             <Space style={{ marginTop: 8 }}>
-              <Button size="small" onClick={() => void pausePgSpaceCollect(activeJobId).then(() => pollJob(activeJobId))}>
+              <Button size="small" onClick={() => void runControl(pausePgSpaceCollect)}>
                 暂停
               </Button>
-              <Button size="small" onClick={() => void resumePgSpaceCollect(activeJobId).then(() => pollJob(activeJobId))}>
+              <Button size="small" onClick={() => void runControl(resumePgSpaceCollect)}>
                 恢复
               </Button>
-              <Button size="small" danger onClick={() => void cancelPgSpaceCollect(activeJobId)}>
+              <Button size="small" danger onClick={() => void runControl(cancelPgSpaceCollect)}>
                 取消
               </Button>
             </Space>
@@ -527,13 +673,18 @@ export default function PgSpaceTab(props: {
           dataSource={jobs}
           pagination={false}
           columns={[
-            { title: '任务', dataIndex: 'id', width: 120, render: (v, r) => v || r.job_id },
+            { title: '任务', dataIndex: 'id', width: 140, ellipsis: true, render: (v, r) => v || r.job_id },
             { title: '状态', dataIndex: 'state', width: 100, render: (v, r) => v || r.status },
+            {
+              title: '说明',
+              ellipsis: true,
+              render: (_: any, r: any) => r.error || r.current_db || r.current_instance || r.current_stage || '',
+            },
             {
               title: '操作',
               width: 80,
               render: (_: any, r: any) => (
-                <Button type="link" size="small" onClick={() => void pollJob(String(r.id || r.job_id))}>
+                <Button type="link" size="small" onClick={() => void trackJob(String(r.id || r.job_id))}>
                   跟踪
                 </Button>
               ),

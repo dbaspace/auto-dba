@@ -89,8 +89,8 @@ type ttlGate struct{ ttl time.Duration }
 
 func (g ttlGate) Enabled() bool  { return false }
 func (g ttlGate) FailOpen() bool { return false }
-func (g ttlGate) Valid(context.Context, string, string) (bool, error) {
-	return true, nil
+func (g ttlGate) Valid(context.Context, string, string) (bool, time.Time, error) {
+	return true, time.Time{}, nil
 }
 func (g ttlGate) SessionTTL() time.Duration { return g.ttl }
 
@@ -98,19 +98,108 @@ type expiredGate struct{}
 
 func (expiredGate) Enabled() bool  { return true }
 func (expiredGate) FailOpen() bool { return false }
-func (expiredGate) Valid(context.Context, string, string) (bool, error) {
-	return false, sessionstore.ErrSessionExpired
+func (expiredGate) Valid(context.Context, string, string) (bool, time.Time, error) {
+	return false, time.Time{}, sessionstore.ErrSessionExpired
 }
 
-func TestAuthRenewsTokenWhenRemainingUnder12h(t *testing.T) {
+type holdGate struct{}
+
+func (holdGate) Enabled() bool  { return true }
+func (holdGate) FailOpen() bool { return false }
+func (holdGate) Valid(context.Context, string, string) (bool, time.Time, error) {
+	return true, time.Time{}, nil
+}
+
+type renewGate struct{ until time.Time }
+
+func (g renewGate) Enabled() bool  { return true }
+func (g renewGate) FailOpen() bool { return false }
+func (g renewGate) Valid(context.Context, string, string) (bool, time.Time, error) {
+	return true, g.until, nil
+}
+
+func TestAuthDoesNotRenewSameDay(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	secret := "sec"
-	tok, jti, err := SignSessionToken(secret, "u1", "admin", "admin", "", "", false, time.Hour)
+	tok, _, err := SignSessionToken(secret, "u1", "admin", "admin", "", "", false, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
 	r := gin.New()
 	r.Use(Auth(&secret, nil, ttlGate{ttl: 24 * time.Hour}))
+	r.GET("/x", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if got := w.Header().Get("X-Access-Token"); got != "" {
+		t.Fatal("same calendar day must not renew")
+	}
+}
+
+func TestAuthRenewsOnNextShanghaiDay(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	secret := "sec"
+	now := time.Now()
+	issued := now.Add(-36 * time.Hour)
+	claims := Claims{
+		UserID: "u1", Username: "admin", Role: "admin",
+		ExtendDate: sessionstore.ShanghaiDay(issued),
+		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        "jti-old",
+			Subject:   "admin",
+			ExpiresAt: jwt.NewNumericDate(now.Add(10 * time.Hour)),
+			IssuedAt:  jwt.NewNumericDate(issued),
+		},
+	}
+	tok, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(secret))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := gin.New()
+	r.Use(Auth(&secret, nil, ttlGate{ttl: 24 * time.Hour}))
+	r.GET("/x", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	got := w.Header().Get("X-Access-Token")
+	if got == "" {
+		t.Fatal("missing renewed token")
+	}
+	next := &Claims{}
+	if _, err := jwt.ParseWithClaims(got, next, func(t *jwt.Token) (any, error) {
+		return []byte(secret), nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if next.ID != "jti-old" {
+		t.Fatalf("jti=%q", next.ID)
+	}
+	if next.ExtendDate != sessionstore.ShanghaiDay(time.Now()) {
+		t.Fatalf("edd=%s", next.ExtendDate)
+	}
+	if next.ExpiresAt == nil || next.ExpiresAt.Time.Before(time.Now().Add(23*time.Hour)) {
+		t.Fatalf("exp=%v", next.ExpiresAt)
+	}
+}
+
+func TestAuthRenewsWhenRedisExtends(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	secret := "sec"
+	tok, jti, err := SignSessionToken(secret, "u1", "admin", "admin", "", "", false, 20*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	until := time.Now().Add(24 * time.Hour)
+	r := gin.New()
+	r.Use(Auth(&secret, nil, renewGate{until: until}))
 	r.GET("/x", func(c *gin.Context) { c.Status(http.StatusNoContent) })
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/x", nil)
@@ -132,8 +221,30 @@ func TestAuthRenewsTokenWhenRemainingUnder12h(t *testing.T) {
 	if claims.ID != jti {
 		t.Fatalf("jti=%q want %q", claims.ID, jti)
 	}
-	if claims.ExpiresAt == nil || claims.ExpiresAt.Time.Before(time.Now().Add(23*time.Hour)) {
-		t.Fatalf("exp=%v", claims.ExpiresAt)
+	if claims.ExpiresAt == nil || claims.ExpiresAt.Time.Before(until.Add(-time.Second)) || claims.ExpiresAt.Time.After(until.Add(time.Second)) {
+		t.Fatalf("exp=%v want %v", claims.ExpiresAt, until)
+	}
+}
+
+func TestAuthRedisSameDayDoesNotRenew(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	secret := "sec"
+	tok, _, err := SignSessionToken(secret, "u1", "admin", "admin", "", "", false, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := gin.New()
+	r.Use(Auth(&secret, nil, holdGate{}))
+	r.GET("/x", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if got := w.Header().Get("X-Access-Token"); got != "" {
+		t.Fatal("redis same day must not renew")
 	}
 }
 

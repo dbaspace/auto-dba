@@ -548,6 +548,7 @@ type CloudInstance struct {
 	MemoryMB      int    `json:"memory_mb"`
 	DiskGB        int    `json:"disk_gb"`
 	DiskUsedGB    int    `json:"disk_used_gb"`
+	DiskUsedMB    *int   `json:"disk_used_mb,omitempty"`
 	Version       string `json:"version"`
 	Zone          string `json:"zone"`
 	PayType       string `json:"pay_type"`

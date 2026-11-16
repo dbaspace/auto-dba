@@ -14,5 +14,5 @@ exec ssh -tt -p "$PORT" \
   -o StrictHostKeyChecking=no \
   -o UserKnownHostsFile=/dev/null \
   -o ServerAliveInterval=30 \
-  -o ServerAliveCountMax=3 \
+  -o ServerAliveCountMax=10 \
   -i "$SSHKEY" "$USER@$HOST"

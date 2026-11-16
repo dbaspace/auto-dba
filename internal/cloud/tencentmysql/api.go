@@ -81,6 +81,7 @@ func (r Reader) ListInstances(ctx context.Context, cred cloud.Cred) ([]cloud.Ins
 			break
 		}
 	}
+	r.fillDiskUsed(ctx, cred, out)
 	return out, nil
 }
 
@@ -116,6 +117,137 @@ func mapInstance(row map[string]any, region string) cloud.Instance {
 		Port:     tencentapi.Num(row["Vport"]),
 		Extras:   row,
 	}
+}
+
+// fillDiskUsed 用云监控的磁盘占用补使用量。失败时留下空值，由同步保留上次结果。
+func (r Reader) fillDiskUsed(ctx context.Context, cred cloud.Cred, list []cloud.Instance) {
+	const batch = 10
+	for i := 0; i < len(list); i += batch {
+		end := i + batch
+		if end > len(list) {
+			end = len(list)
+		}
+		used, err := r.diskUsedMB(ctx, cred, list[i:end])
+		if err != nil {
+			continue
+		}
+		for j := i; j < end; j++ {
+			mb, ok := used[list[j].CloudID]
+			if !ok {
+				continue
+			}
+			applyDiskUsed(&list[j], mb)
+		}
+	}
+}
+
+func (r Reader) diskUsedMB(ctx context.Context, cred cloud.Cred, list []cloud.Instance) (map[string]int, error) {
+	instances := make([]any, 0, len(list))
+	for _, inst := range list {
+		if strings.TrimSpace(inst.CloudID) == "" {
+			continue
+		}
+		instances = append(instances, map[string]any{
+			"Dimensions": []map[string]string{{"Name": "InstanceId", "Value": inst.CloudID}},
+		})
+	}
+	if len(instances) == 0 {
+		return nil, nil
+	}
+	end := time.Now()
+	start := end.Add(-15 * time.Minute)
+	raw, err := r.monitor().Call(ctx, cred, "GetMonitorData", map[string]any{
+		"Namespace":  "QCE/CDB",
+		"MetricName": "Capacity",
+		"Period":     60,
+		"StartTime":  start.In(time.FixedZone("CST", 8*3600)).Format("2006-01-02T15:04:05+08:00"),
+		"EndTime":    end.In(time.FixedZone("CST", 8*3600)).Format("2006-01-02T15:04:05+08:00"),
+		"Instances":  instances,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		Response struct {
+			DataPoints []struct {
+				Dimensions []struct {
+					Name  string `json:"Name"`
+					Value string `json:"Value"`
+				} `json:"Dimensions"`
+				Values []any `json:"Values"`
+			} `json:"DataPoints"`
+		} `json:"Response"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, err
+	}
+	out := map[string]int{}
+	for _, p := range resp.Response.DataPoints {
+		id := ""
+		for _, d := range p.Dimensions {
+			if d.Name == "InstanceId" && d.Value != "" {
+				id = d.Value
+				break
+			}
+		}
+		if id == "" {
+			continue
+		}
+		mb, ok := lastMB(p.Values)
+		if !ok {
+			continue
+		}
+		out[id] = mb
+	}
+	return out, nil
+}
+
+func (r Reader) monitor() *tencentapi.Client {
+	var do func(*http.Request) (*http.Response, error)
+	if r.Client != nil {
+		do = r.Client.Do
+	}
+	return &tencentapi.Client{
+		Host:    "monitor.tencentcloudapi.com",
+		Service: "monitor",
+		Version: "2018-07-24",
+		Do:      do,
+	}
+}
+
+func applyDiskUsed(inst *cloud.Instance, mb int) {
+	if inst == nil {
+		return
+	}
+	if mb < 0 {
+		mb = 0
+	}
+	if inst.Extras == nil {
+		inst.Extras = map[string]any{}
+	}
+	inst.Extras["disk_used_mb"] = mb
+	inst.DiskUsed = mbToGB(mb)
+}
+
+func mbToGB(mb int) int {
+	if mb <= 0 {
+		return 0
+	}
+	return (mb + 512) / 1024
+}
+
+func lastMB(values []any) (int, bool) {
+	for i := len(values) - 1; i >= 0; i-- {
+		if values[i] == nil {
+			continue
+		}
+		n, ok := values[i].(float64)
+		if !ok || n < 0 {
+			continue
+		}
+		return int(n + 0.5), true
+	}
+	return 0, false
 }
 
 func (r Reader) ListSpecs(ctx context.Context, cred cloud.Cred, zone string) ([]cloud.Spec, error) {

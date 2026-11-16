@@ -61,8 +61,8 @@ redis:
   password: ""
   db: 0
   key_prefix: "autodba:"
-  # session_ttl_hours: 24   # 空则回退 app.jwt_ttl_hours
-  # sliding_expire 已忽略：有效会话在鉴权时把过期时间续到当前时间 + TTL，到期后不再续期
+  # session_ttl_hours: 24   # 空则回退 app.jwt_ttl_hours。窗口从当天第一次仍有效的访问起算
+  # sliding_expire 已忽略：每个东八区自然日最多延长一次；超过 expire_at 没有再访问则要重新登录
   sliding_expire: false
   fail_mode: closed         # closed=鉴权要求 Redis 会话；open=仅验 JWT
   max_sessions_per_user: 1  # 同一账号只保留最新登录；新登录踢掉该账号其它会话
@@ -143,7 +143,10 @@ terminal:
   ssh_insecure_host_key: false
   scripts_dir: ""
   static_dir: ""
+  # 无输入且无输出的空闲上限（秒）。psql 敲命令或有结果会续期。
   max_lifetime_sec: 1800
+  # 自打开终端起的最长存活（秒），默认 8 小时。到点即使仍在操作也断开。
+  max_absolute_sec: 28800
 
 # DBA Copilot（密钥放 Nacos；勿把真实 api_key 提交仓库；不读库表全局参数）
 # Cursor 与 OpenAI 兼容网关勿混用同一段 base_url；通义/qwen 须 provider: openai
