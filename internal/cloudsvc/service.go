@@ -387,6 +387,13 @@ func (s *Service) SyncAccountEngine(ctx context.Context, account *store.CloudAcc
 			}
 			inst.Host = ip
 		}
+		if enr, ok := reader.(cloud.InstanceEnricher); ok {
+			evCred := base
+			evCred.Region = inst.Region
+			if err := enr.Enrich(ctx, evCred, &inst); err != nil {
+				regionErrs = append(regionErrs, account.Name+"/"+engine+"/"+inst.Region+"/"+inst.CloudID+": "+err.Error())
+			}
+		}
 		seen = append(seen, inst.CloudID)
 		prev, _ := s.DB.GetCloudResourceByCloudID(account.Vendor, engine, inst.CloudID)
 		row := &store.CloudInstance{

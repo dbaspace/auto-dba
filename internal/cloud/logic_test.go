@@ -101,8 +101,35 @@ func TestNetFromExtras(t *testing.T) {
 	if host != "10.3.3.3" || port != 0 {
 		t.Fatalf("host %s %d", host, port)
 	}
+	host, port = NetFromExtras(EngineKafka, map[string]any{"VipList": []any{map[string]any{"Vip": "10.4.4.4", "Vport": "9092"}}})
+	if host != "10.4.4.4" || port != 9092 {
+		t.Fatalf("kafka list %s %d", host, port)
+	}
+	host, port = NetFromExtras(EngineKafka, map[string]any{"Vip": "10.4.4.5"})
+	if host != "10.4.4.5" || port != 9092 {
+		t.Fatalf("kafka default port %s %d", host, port)
+	}
+	host, port = NetFromExtras(EngineMySQL, map[string]any{"VipList": []any{map[string]any{"Vip": "10.4.4.4", "Vport": "9092"}}})
+	if host != "" || port != 0 {
+		t.Fatalf("mysql ignores kafka list %s %d", host, port)
+	}
 	if h, p := NetFromExtras(EnginePostgres, nil); h != "" || p != 0 {
 		t.Fatalf("empty %s %d", h, p)
+	}
+}
+
+func TestKafkaListFieldsTopicUsedFallback(t *testing.T) {
+	_, used, _, _, _ := KafkaListFields(map[string]any{"TopicNum": float64(9), "kafka_topic_limit": float64(80)})
+	if used != 9 {
+		t.Fatalf("topic num %d", used)
+	}
+	_, used, _, _, _ = KafkaListFields(map[string]any{"CreatedTopics": float64(3), "TopicNum": float64(9)})
+	if used != 3 {
+		t.Fatalf("created topics %d", used)
+	}
+	_, used, _, _, _ = KafkaListFields(map[string]any{"kafka_topic_used": float64(4), "CreatedTopics": float64(3)})
+	if used != 4 {
+		t.Fatalf("stored used %d", used)
 	}
 }
 

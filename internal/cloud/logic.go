@@ -182,13 +182,56 @@ func NetFromExtras(engine string, extras map[string]any) (host string, port int)
 	case EngineRedis:
 		return anyStr(extras["WanIp"]), anyInt(extras["Port"])
 	case EngineKafka:
-		return anyStr(extras["Vip"]), anyInt(extras["Vport"])
+		return kafkaNet(extras)
 	case EngineHost:
 		if ips, ok := extras["PrivateIpAddresses"].([]any); ok && len(ips) > 0 {
 			return anyStr(ips[0]), 0
 		}
 	}
 	return "", 0
+}
+
+// kafkaNet 先用 Vip，没有再用 VipList。有地址但没有端口时用 9092。
+func kafkaNet(extras map[string]any) (string, int) {
+	host := anyStr(extras["Vip"])
+	port := anyInt(extras["Vport"])
+	if host == "" {
+		if list, ok := extras["VipList"].([]any); ok {
+			for _, item := range list {
+				m, ok := item.(map[string]any)
+				if !ok {
+					continue
+				}
+				if h := anyStr(m["Vip"]); h != "" {
+					host = h
+					if p := anyInt(m["Vport"]); p > 0 {
+						port = p
+					}
+					break
+				}
+			}
+		}
+	}
+	if host != "" && port <= 0 {
+		port = 9092
+	}
+	return host, port
+}
+
+// KafkaListFields 从已保存的 extras 取出 Kafka 列表要展示的配额和集群类型。
+// 已用主题优先读本次写入的 kafka_topic_used，没有时用属性里的 CreatedTopics，再没有用清单里的 TopicNum。
+func KafkaListFields(extras map[string]any) (topicLimit, topicUsed, partLimit, partUsed int, instanceType string) {
+	if len(extras) == 0 {
+		return 0, 0, 0, 0, ""
+	}
+	topicUsed = anyInt(extras["kafka_topic_used"])
+	if topicUsed <= 0 {
+		topicUsed = anyInt(extras["CreatedTopics"])
+	}
+	if topicUsed <= 0 {
+		topicUsed = anyInt(extras["TopicNum"])
+	}
+	return anyInt(extras["kafka_topic_limit"]), topicUsed, anyInt(extras["kafka_partition_limit"]), anyInt(extras["kafka_partition_used"]), anyStr(extras["kafka_instance_type"])
 }
 
 // SystemDiskFromExtras 从云主机原始返回取系统盘大小（GB）和类型。

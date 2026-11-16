@@ -559,11 +559,16 @@ type CloudInstance struct {
 	Intranet      string `json:"intranet,omitempty"`
 	Port          int    `json:"port,omitempty"`
 	// SystemDiskGB/SystemDiskType、DataDisks 从云主机原始返回解析，不入库。
-	SystemDiskGB   int             `json:"system_disk_gb,omitempty"`
-	SystemDiskType string          `json:"system_disk_type,omitempty"`
-	DataDisks      []CloudDataDisk `json:"data_disks,omitempty"`
-	Extras         map[string]any  `json:"extras,omitempty"`
-	SyncedAt       string          `json:"synced_at"`
+	SystemDiskGB        int             `json:"system_disk_gb,omitempty"`
+	SystemDiskType      string          `json:"system_disk_type,omitempty"`
+	DataDisks           []CloudDataDisk `json:"data_disks,omitempty"`
+	KafkaTopicLimit     int             `json:"kafka_topic_limit,omitempty"`
+	KafkaTopicUsed      int             `json:"kafka_topic_used,omitempty"`
+	KafkaPartitionLimit int             `json:"kafka_partition_limit,omitempty"`
+	KafkaPartitionUsed  int             `json:"kafka_partition_used,omitempty"`
+	KafkaInstanceType   string          `json:"kafka_instance_type,omitempty"`
+	Extras              map[string]any  `json:"extras,omitempty"`
+	SyncedAt            string          `json:"synced_at"`
 }
 
 // CloudDataDisk 是列表上的一块数据盘，不入库。

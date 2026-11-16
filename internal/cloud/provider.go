@@ -130,6 +130,11 @@ type Reader interface {
 	DescribeTask(ctx context.Context, cred Cred, cloudID, taskID string) (Task, error)
 }
 
+// InstanceEnricher 同步时为单个实例补清单接口没有的字段。失败由调用方记下，不中断整批同步。
+type InstanceEnricher interface {
+	Enrich(ctx context.Context, cred Cred, inst *Instance) error
+}
+
 // Writer 只给工单执行器。不包含隔离、销毁、备份恢复、账号口令和外网开关。
 type Writer interface {
 	Vendor() string

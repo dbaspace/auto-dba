@@ -96,6 +96,23 @@ function intranetLabel(row: { intranet?: string; port?: number }) {
   return port > 0 ? `${host}:${port}` : host
 }
 
+function kafkaCount(v?: number) {
+  return v ? v : '—'
+}
+
+function kafkaClusterLabel(v?: string) {
+  switch (String(v || '').trim().toLowerCase()) {
+    case 'profession':
+      return '专业版'
+    case 'premium':
+      return '高级版'
+    case 'standard':
+      return '标准版'
+    default:
+      return v || '—'
+  }
+}
+
 const reconcileLabel: Record<string, string> = {
   linked: '已关联',
   cloud_only: '云上未关联',
@@ -495,7 +512,7 @@ export default function CloudPostgres({ engine = 'postgres' }: { engine?: string
       <Table
         rowKey="id"
         dataSource={shown}
-        scroll={{ x: 1300 }}
+        scroll={{ x: engine === 'kafka' ? 1970 : 1300 }}
         pagination={{
           current: page,
           pageSize,
@@ -529,11 +546,12 @@ export default function CloudPostgres({ engine = 'postgres' }: { engine?: string
             ),
           },
           { title: '状态', dataIndex: 'status' },
-          { title: '规格', render: (_, r) => specText(r.cpu, r.memory_mb) },
+          ...(engine === 'kafka' ? [] : [{ title: '规格', render: (_: unknown, r: { cpu?: number; memory_mb?: number }) => specText(r.cpu, r.memory_mb) }]),
           {
             title: '磁盘 GB',
             dataIndex: 'disk_gb',
             render: (v, r) => {
+              if (engine === 'kafka') return v || '—'
               if (engine !== 'host') return v
               const lines = [
                 systemDiskText(r.system_disk_gb, r.system_disk_type),
@@ -549,6 +567,16 @@ export default function CloudPostgres({ engine = 'postgres' }: { engine?: string
               )
             },
           },
+          ...(engine === 'kafka'
+            ? [
+                { title: 'Topic 上限', dataIndex: 'kafka_topic_limit', width: 110, render: (v: number) => kafkaCount(v) },
+                { title: 'Topic 使用', dataIndex: 'kafka_topic_used', width: 110, render: (v: number) => kafkaCount(v) },
+                { title: '分区上限', dataIndex: 'kafka_partition_limit', width: 110, render: (v: number) => kafkaCount(v) },
+                { title: '分区已用', dataIndex: 'kafka_partition_used', width: 110, render: (v: number) => kafkaCount(v) },
+                { title: '版本', dataIndex: 'version', width: 100, render: (v: string) => v || '—' },
+                { title: '集群类型', dataIndex: 'kafka_instance_type', width: 110, render: (v: string) => kafkaClusterLabel(v) },
+              ]
+            : []),
           {
             title: '平台实例',
             dataIndex: 'instance_name',

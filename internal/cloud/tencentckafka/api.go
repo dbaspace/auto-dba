@@ -96,19 +96,142 @@ func mapInstance(row map[string]any, region string) cloud.Instance {
 	if region == "" {
 		region = tencentapi.Str(row["Region"])
 	}
-	port := tencentapi.Num(row["Vport"])
-	return cloud.Instance{
+	inst := cloud.Instance{
 		CloudID: tencentapi.Str(row["InstanceId"]),
 		Name:    tencentapi.Str(row["InstanceName"]),
 		Region:  region,
 		Status:  mapStatus(tencentapi.Num(row["Status"])),
-		DiskGB:  tencentapi.Num(row["DiskSize"]),
 		Version: tencentapi.Str(row["Version"]),
 		Zone:    tencentapi.Str(row["ZoneId"]),
-		Host:    tencentapi.Str(row["Vip"]),
-		Port:    port,
 		Extras:  row,
 	}
+	applyKafkaFacts(&inst)
+	return inst
+}
+
+// Enrich 用实例属性补磁盘容量、主题和分区配额。清单里已有的版本不被覆盖。
+func (r Reader) Enrich(ctx context.Context, cred cloud.Cred, inst *cloud.Instance) error {
+	if inst == nil || strings.TrimSpace(inst.CloudID) == "" {
+		return nil
+	}
+	raw, err := r.call(ctx, cred, "DescribeInstanceAttributes", map[string]any{"InstanceId": inst.CloudID})
+	if err != nil {
+		return err
+	}
+	var resp struct {
+		Response struct {
+			Result map[string]any `json:"Result"`
+		} `json:"Response"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return err
+	}
+	if len(resp.Response.Result) == 0 {
+		return fmt.Errorf("实例属性为空")
+	}
+	if inst.Extras == nil {
+		inst.Extras = map[string]any{}
+	}
+	for k, v := range resp.Response.Result {
+		if v == nil || v == "" {
+			continue
+		}
+		inst.Extras[k] = v
+	}
+	applyKafkaFacts(inst)
+	return nil
+}
+
+func applyKafkaFacts(inst *cloud.Instance) {
+	if inst == nil {
+		return
+	}
+	row := inst.Extras
+	if row == nil {
+		row = map[string]any{}
+		inst.Extras = row
+	}
+	if disk := kafkaDiskGB(row); disk > 0 {
+		inst.DiskGB = disk
+	}
+	if inst.Version == "" {
+		if v := tencentapi.Str(row["Version"]); v != "" {
+			inst.Version = v
+		}
+	}
+	host, port := cloud.NetFromExtras(cloud.EngineKafka, row)
+	if host != "" {
+		row["Vip"] = host
+		inst.Host = host
+	}
+	if port > 0 {
+		row["Vport"] = port
+		inst.Port = port
+	}
+	if n := kafkaTopicLimit(row); n > 0 {
+		row["kafka_topic_limit"] = n
+	}
+	if n := kafkaTopicUsed(row); n > 0 {
+		row["kafka_topic_used"] = n
+	}
+	if n := kafkaPartitionLimit(row); n > 0 {
+		row["kafka_partition_limit"] = n
+	}
+	if n := kafkaPartitionUsed(row); n > 0 {
+		row["kafka_partition_used"] = n
+	}
+	if typ := tencentapi.Str(row["InstanceType"]); typ != "" {
+		row["kafka_instance_type"] = typ
+	}
+}
+
+func kafkaDiskGB(row map[string]any) int {
+	if n := tencentapi.Num(row["DiskSize"]); n > 0 {
+		return n
+	}
+	cfg, ok := row["DynamicDiskConfig"].(map[string]any)
+	if !ok {
+		return 0
+	}
+	return tencentapi.Num(cfg["DiskQuota"])
+}
+
+func kafkaTopicUsed(row map[string]any) int {
+	if n := tencentapi.Num(row["CreatedTopics"]); n > 0 {
+		return n
+	}
+	return tencentapi.Num(row["TopicNum"])
+}
+
+func kafkaTopicLimit(row map[string]any) int {
+	if n := tencentapi.Num(row["MaxTopicNumber"]); n > 0 {
+		return n
+	}
+	created := tencentapi.Num(row["CreatedTopics"])
+	remain := tencentapi.Num(row["RemainingTopics"])
+	if created > 0 || remain > 0 {
+		return created + remain
+	}
+	return 0
+}
+
+func kafkaPartitionLimit(row map[string]any) int {
+	if n := tencentapi.Num(row["MaxPartitionNumber"]); n > 0 {
+		return n
+	}
+	created := tencentapi.Num(row["CreatedPartitions"])
+	remain := tencentapi.Num(row["RemainingPartitions"])
+	if created > 0 || remain > 0 {
+		return created + remain
+	}
+	return 0
+}
+
+func kafkaPartitionUsed(row map[string]any) int {
+	if n := tencentapi.Num(row["CreatedPartitions"]); n > 0 {
+		return n
+	}
+	return tencentapi.Num(row["PartitionNum"])
 }
 
 func mapStatus(n int) string {
