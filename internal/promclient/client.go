@@ -176,14 +176,7 @@ func (c *Client) do(ctx context.Context, path string, q url.Values, timeout time
 		return nil, fmt.Errorf("prometheus 响应过大（>%dMB），请缩小时间范围或增大 step", maxBodyBytes>>20)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		msg := strings.TrimSpace(string(raw))
-		if len(msg) > 240 {
-			msg = msg[:240] + "…"
-		}
-		if msg == "" {
-			return nil, fmt.Errorf("prometheus http %d", resp.StatusCode)
-		}
-		return nil, fmt.Errorf("prometheus http %d: %s", resp.StatusCode, msg)
+		return nil, promStatusError(resp.StatusCode, raw)
 	}
 	var out apiResponse
 	if err := json.Unmarshal(raw, &out); err != nil {
@@ -204,6 +197,28 @@ func (c *Client) do(ctx context.Context, path string, q url.Values, timeout time
 		return nil, fmt.Errorf("prometheus result json: %w", err)
 	}
 	return samples, nil
+}
+
+func promStatusError(status int, raw []byte) error {
+	msg := strings.TrimSpace(string(raw))
+	if promHTMLBody(msg) {
+		if status == http.StatusGatewayTimeout {
+			return fmt.Errorf("Prometheus 网关超时（504）")
+		}
+		return fmt.Errorf("prometheus http %d", status)
+	}
+	if len(msg) > 240 {
+		msg = msg[:240] + "…"
+	}
+	if msg == "" {
+		return fmt.Errorf("prometheus http %d", status)
+	}
+	return fmt.Errorf("prometheus http %d: %s", status, msg)
+}
+
+func promHTMLBody(msg string) bool {
+	s := strings.ToLower(strings.TrimSpace(msg))
+	return strings.HasPrefix(s, "<html") || strings.HasPrefix(s, "<!doctype") || strings.HasPrefix(s, "<head") || strings.Contains(s, "<html")
 }
 
 // SampleToPoints 将 range 结果转为点列。

@@ -1744,7 +1744,7 @@ func (h *DCLHandler) Submit(c *gin.Context) {
 	tid := middleware.TenantID(c)
 	uid := middleware.UserID(c)
 	for _, name := range dbs {
-		ok, _, msg, err := th.canActOnTarget(tid, instID, name, uid)
+		ok, msg, err := th.canSubmitDCLTarget(c, instID, name, uid)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 			return
@@ -1758,7 +1758,7 @@ func (h *DCLHandler) Submit(c *gin.Context) {
 	if resourceTid == "" {
 		resourceTid = tid
 	}
-	reviewer, aerr := resolveTenantAssignee(h.Store, resourceTid, req.reviewer())
+	reviewer, aerr := resolveDCLReviewer(h.Store, resourceTid, req.reviewer())
 	if aerr != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": aerr.Error()})
 		return

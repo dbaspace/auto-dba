@@ -110,6 +110,7 @@ export default function DclGrants() {
   const [approverLoading, setApproverLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [defaultApprover, setDefaultApprover] = useState('')
+  const [whitelistApprovers, setWhitelistApprovers] = useState<string[]>([])
   const [antdForm] = Form.useForm()
 
   function patchForm(patch: Partial<ReturnType<typeof emptyForm>>) {
@@ -143,14 +144,16 @@ export default function DclGrants() {
 
   const approverOptions = useMemo(() => {
     const set = new Set<string>()
+    set.add('admin')
     if (defaultApprover) set.add(defaultApprover)
+    for (const a of whitelistApprovers) if (a) set.add(a)
     for (const a of currentInst?.approvers || []) if (a) set.add(a)
     for (const id of form.db_ids || []) {
       const db = databases.find((d) => d.id === id)
       for (const a of db?.approvers || []) if (a) set.add(a)
     }
     return [...set]
-  }, [defaultApprover, currentInst, form.db_ids, databases])
+  }, [defaultApprover, whitelistApprovers, currentInst, form.db_ids, databases])
 
   const sourcePlaceholder = !form.env
     ? '请先选择环境'
@@ -320,7 +323,9 @@ export default function DclGrants() {
       try {
         const args = (await api.get('/global-args')).data.data || []
         const def = args.find((a: any) => a.key === 'sync_default_approver')?.value || ''
+        const white = String(args.find((a: any) => a.key === 'issue_global_approver_whitelist')?.value || '')
         setDefaultApprover(def)
+        setWhitelistApprovers(white.split(/[,，\s]+/).map((s: string) => s.trim()).filter(Boolean))
         setForm((f) => {
           if (!f.assigned_to && def) {
             const next = { ...f, assigned_to: def }
@@ -540,8 +545,12 @@ export default function DclGrants() {
                   并通知密码；按库查询 owner 后执行 CONNECT / USAGE / 表与序列授权 /
                   ALTER DEFAULT PRIVILEGES（无 schema CREATE）。
                 </p>
+              ) : form.db_type === 'starrocks' ? (
+                <p className="hint">
+                  审批通过后：账号不存在则 CREATE USER '账号'@'%' IDENTIFIED BY … 并通知密码；再按表、视图、物化视图和库分别 GRANT。
+                </p>
               ) : (
-                <p className="hint">审批通过后将按库执行 GRANT；账号须事先存在。</p>
+                <p className="hint">审批通过后按库执行 GRANT 权限 ON `库`.* TO '账号'@'%'。账号须事先存在。</p>
               )}
             </div>
           ) : null}

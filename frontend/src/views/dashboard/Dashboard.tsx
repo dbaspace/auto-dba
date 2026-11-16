@@ -149,6 +149,7 @@ export default function Dashboard() {
   const [creatorOpen, setCreatorOpen] = useState(false)
   const [auditStats, setAuditStats] = useState<any>(null)
   const [auditLoading, setAuditLoading] = useState(false)
+  const [auditError, setAuditError] = useState(false)
 
   const filtersRef = useRef(filters)
   filtersRef.current = filters
@@ -242,14 +243,17 @@ export default function Dashboard() {
   async function loadAuditStats() {
     if (!isAdmin) {
       setAuditStats(null)
+      setAuditError(false)
       return
     }
     setAuditLoading(true)
+    setAuditError(false)
     try {
       const res = await api.get('/query-audits/stats', { params: { days: 7 }, silent: true })
       setAuditStats(res.data.data || null)
     } catch {
       setAuditStats(null)
+      setAuditError(true)
     } finally {
       setAuditLoading(false)
     }
@@ -720,7 +724,11 @@ export default function Dashboard() {
               <Button type="link" onClick={() => navigate('/config/query-audits')}>查看明细 &gt;</Button>
             </div>
             <Skeleton loading={auditLoading} active paragraph={{ rows: 4 }}>
-              {!hasAuditData ? (
+              {auditError ? (
+                <div className="chart-card">
+                  <Empty description="统计加载失败" imageStyle={{ height: 56 }} />
+                </div>
+              ) : !hasAuditData ? (
                 <div className="chart-card">
                   <Empty description="近 7 天暂无查询审计" imageStyle={{ height: 56 }} />
                 </div>

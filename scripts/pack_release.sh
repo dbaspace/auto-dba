@@ -157,6 +157,21 @@ copy_terminal_runtime() {
   cp -a assets/terminal "$stage/assets/"
 }
 
+# SR 控制台本地 css/js（相对包根：assets/starrocks-webroot）。缺失时 BE 查询页没有样式。
+copy_starrocks_webroot() {
+  local stage="$1"
+  if [[ ! -d assets/starrocks-webroot/be ]]; then
+    echo "缺少 assets/starrocks-webroot/be/" >&2
+    exit 1
+  fi
+  if [[ ! -f assets/starrocks-webroot/be/starrocks.css || ! -f assets/starrocks-webroot/be/starrocks.js ]]; then
+    echo "缺少 assets/starrocks-webroot/be 下的 starrocks.css 或 starrocks.js" >&2
+    exit 1
+  fi
+  mkdir -p "$stage/assets"
+  cp -a assets/starrocks-webroot "$stage/assets/"
+}
+
 # Nacos 管理页本地静态资源（相对包根：assets/nacos-console）；缺失时仍可全量回源，但不打进包。
 copy_nacos_console_assets() {
   local stage="$1"
@@ -229,12 +244,14 @@ if [[ "$MODE" == "backend" ]]; then
   cp -a bin/auto-dba "$STAGE/bin/auto-dba"
   copy_config_examples "$STAGE/config"
   copy_terminal_runtime "$STAGE"
+  copy_starrocks_webroot "$STAGE"
   copy_nacos_console_assets "$STAGE"
   copy_agents "$STAGE"
   cat >"$STAGE/README-RELEASE.txt" <<EOF
 KeePlus 后端 API 包
 ==================
 含二进制、主机终端运行文件（scripts/terminal、assets/terminal）、
+SR 控制台样式（assets/starrocks-webroot）、
 Nacos 控制台静态资源（assets/nacos-console，若有），以及
 Node/DB/Platform Agent 与 SQL 执行器 sql-agent（deploy/*/bin），无前端。
 
@@ -243,7 +260,8 @@ Node/DB/Platform Agent 与 SQL 执行器 sql-agent（deploy/*/bin），无前端
 3. cd 本目录后：./bin/auto-dba -config config/config.yaml
 4. API：http://服务器:8800/api/v1/...
 5. 主机终端需本包根下 scripts/terminal/node-terminal.sh，并配置 terminal.ssh_identity_file
-6. 集群/库部署 SSH 下发 Agent，以及 SQL 执行器下发：工作目录须为本包根（已含 deploy/node-agent、deploy/sql-agent 等制品）
+6. SR 控制台样式在本包根 assets/starrocks-webroot，工作目录须为本包根
+7. 集群/库部署 SSH 下发 Agent，以及 SQL 执行器下发：工作目录须为本包根（已含 deploy/node-agent、deploy/sql-agent 等制品）
 
 说明：docs/deploy.md、docs/terminal.md、docs/db-cluster.md
 EOF
@@ -264,6 +282,7 @@ cp -a frontend/dist "$STAGE/frontend/dist"
 cp -a bin/auto-dba "$STAGE/bin/auto-dba"
 copy_config_examples "$STAGE/config"
 copy_terminal_runtime "$STAGE"
+copy_starrocks_webroot "$STAGE"
 copy_nacos_console_assets "$STAGE"
 copy_agents "$STAGE"
 if [[ -f deploy/nginx.conf.example ]]; then
@@ -274,7 +293,7 @@ cat >"$STAGE/README-RELEASE.txt" <<EOF
 KeePlus 一体发布包（推荐 CentOS 手工部署）
 ========================================
 工作目录必须为本包根（含 frontend/dist、scripts/terminal、assets/terminal、
-assets/nacos-console（若有）、deploy/*/bin Agent 制品）。
+assets/starrocks-webroot、assets/nacos-console（若有）、deploy/*/bin Agent 制品）。
 
 1. 配置 Nacos 或 config/config.yaml
 2. 开启静态托管（页面与 API 同端口，无需 5174）：
@@ -284,7 +303,8 @@ assets/nacos-console（若有）、deploy/*/bin Agent 制品）。
 3. 启动：./bin/auto-dba
 4. 浏览器：http://服务器:8800/
 5. 主机 Web 终端依赖 scripts/terminal/node-terminal.sh（已打入本包）与 terminal.ssh_identity_file
-6. Node/DB/Platform Agent 与 SQL 执行器 sql-agent 已打入 deploy/*/bin，SSH 下发无需再本机构建
+6. SR 控制台样式在 assets/starrocks-webroot（已打入本包）。工作目录须为本包根，否则 BE 查询页没有样式
+7. Node/DB/Platform Agent 与 SQL 执行器 sql-agent 已打入 deploy/*/bin，SSH 下发无需再本机构建
 
 运行机无需 Node/pnpm。说明：docs/deploy.md、docs/terminal.md、docs/db-cluster.md
 EOF

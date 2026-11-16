@@ -6,6 +6,7 @@ import { useNavigate } from 'react-router-dom'
 import api from '../../api/request'
 import ChartBox from '../dashboard/ChartBox'
 import HostDiskAnalysis from './HostDiskAnalysis'
+import PgStorageAnalysis from './PgStorageAnalysis'
 import { groupInstanceTypes, parseInstanceTypes, type InstanceTypeOption } from '../../utils/instanceTypes'
 import './InstanceOverview.css'
 
@@ -362,6 +363,7 @@ export default function InstanceOverview() {
   const tableWrapRef = useRef<HTMLDivElement>(null)
   const [tableScrollY, setTableScrollY] = useState(320)
   const [analysisOpen, setAnalysisOpen] = useState(false)
+  const [pgAnalysisOpen, setPgAnalysisOpen] = useState(false)
   const [typeOptions, setTypeOptions] = useState<InstanceTypeOption[]>(FALLBACK_TYPES)
   const [envs, setEnvs] = useState<EnvOpt[]>([])
   const [rows, setRows] = useState<Row[]>([])
@@ -988,6 +990,11 @@ export default function InstanceOverview() {
               <div className="value">{summary.beBad}</div>
             </div>
           </>
+        ) : engine === 'postgres' ? (
+          <div className="ov-card">
+            <div className="label">主库 / 从库</div>
+            <div className="value">{summary.primary} / {summary.replica}</div>
+          </div>
         ) : (
           <>
             <div className="ov-card">
@@ -1006,6 +1013,12 @@ export default function InstanceOverview() {
             <div className="value">{summary.versions}<span className="unit">种</span></div>
           </div>
         )}
+        {engine === 'postgres' ? (
+          <button type="button" className="ov-card ov-card-action" onClick={() => setPgAnalysisOpen(true)}>
+            <span className="ov-card-action-title">智能分析</span>
+            <span className="label">库增长、QPS/TPS、锁与 CPU</span>
+          </button>
+        ) : null}
       </div>
       {showHost ? null : (
         <div className="instance-overview-note">
@@ -1050,6 +1063,14 @@ export default function InstanceOverview() {
         <HostDiskAnalysis
           open={analysisOpen}
           onClose={() => setAnalysisOpen(false)}
+          hosts={rows.map((r) => ({ host: r.host, domain: r.domain }))}
+          envs={envs}
+        />
+      ) : null}
+      {engine === 'postgres' ? (
+        <PgStorageAnalysis
+          open={pgAnalysisOpen}
+          onClose={() => setPgAnalysisOpen(false)}
           hosts={rows.map((r) => ({ host: r.host, domain: r.domain }))}
           envs={envs}
         />

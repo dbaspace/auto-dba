@@ -9,6 +9,9 @@ import (
 // AnalysisKindHostDisk 是主机磁盘增长分析。后续其它分析复用本表，只换 kind。
 const AnalysisKindHostDisk = "host_disk"
 
+// AnalysisKindPGStorage 是 PostgreSQL 总览智能分析：库文件增长，以及 QPS/TPS、锁和 CPU。
+const AnalysisKindPGStorage = "pg_storage"
+
 // AnalysisReport 是一条已保存的分析报告。Scope 和 Payload 是 JSON 文本，不按项目拆列。
 type AnalysisReport struct {
 	ID        string

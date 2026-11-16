@@ -1318,6 +1318,25 @@ func (h *AuthHandler) ListQueryAudits(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": list, "total": total})
 }
 
+func (h *AuthHandler) QueryAuditStats(c *gin.Context) {
+	if !requireAdminViewer(h.Store, c, "仅管理员可查看查询审计") {
+		return
+	}
+	days, _ := strconv.Atoi(c.Query("days"))
+	if days <= 0 {
+		days = 7
+	}
+	if days > 31 {
+		days = 31
+	}
+	stats, err := h.Store.QueryAuditStats(days)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": stats})
+}
+
 // menusForUserInTenant 按租户成员角色出菜单；tenantID 空则空树（不再回退平台全量角色菜单）。
 // 非审计会话：若 JWT tid 已非有效成员（如加入业务租户后被移出 default），自动换票到唯一剩余租户，
 // 或多租户时返回 need_tenant_select，避免空菜单 + 业务 API 403。

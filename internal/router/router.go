@@ -198,6 +198,7 @@ func Init(e *gin.Engine, d Deps) {
 	}
 	secured.GET("/login-logs", d.Auth.ListLoginLogs)
 	secured.GET("/query-audits", d.Auth.ListQueryAudits)
+	secured.GET("/query-audits/stats", d.Auth.QueryAuditStats)
 
 	if d.ClientAccess != nil {
 		ca := secured.Group("/client-access")
@@ -686,6 +687,8 @@ func Init(e *gin.Engine, d Deps) {
 		secured.POST("/instance-overview/collect", d.InstanceOverview.Collect)
 		secured.POST("/instance-overview/host-disk-trend", d.InstanceOverview.HostDiskTrend)
 		secured.GET("/instance-overview/host-disk-trend/jobs/:id", d.InstanceOverview.HostDiskTrendJob)
+		secured.POST("/instance-overview/pg-storage-trend", d.InstanceOverview.PGStorageTrend)
+		secured.GET("/instance-overview/pg-storage-trend/jobs/:id", d.InstanceOverview.PGStorageTrendJob)
 		secured.GET("/analysis-reports", d.InstanceOverview.ListAnalysisReports)
 		secured.GET("/analysis-reports/:id", d.InstanceOverview.GetAnalysisReport)
 	}

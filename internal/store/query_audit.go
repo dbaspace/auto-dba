@@ -266,3 +266,176 @@ func (d *DB) ListNotifyAuditsByTicket(ticketNo string, limit int) ([]QueryAudit,
 	}
 	return out, rows.Err()
 }
+
+// QueryAuditKindCount 是一类查询的次数。
+type QueryAuditKindCount struct {
+	Kind  string `json:"kind"`
+	Count int    `json:"count"`
+}
+
+// QueryAuditTrendPoint 是本地日历上的一天。
+type QueryAuditTrendPoint struct {
+	Date   string `json:"date"`
+	Total  int    `json:"total"`
+	Failed int    `json:"failed"`
+}
+
+// QueryAuditUserCount 是一个用户的查询次数。
+type QueryAuditUserCount struct {
+	Username    string `json:"username"`
+	DisplayName string `json:"display_name"`
+	Count       int    `json:"count"`
+}
+
+// QueryAuditStats 是工作台近 N 天的查询审计汇总。范围与明细列表相同，不按租户再滤。
+type QueryAuditStats struct {
+	Total        int                    `json:"total"`
+	Success      int                    `json:"success"`
+	Failed       int                    `json:"failed"`
+	SuccessRate  float64                `json:"success_rate"`
+	AvgElapsedMS float64                `json:"avg_elapsed_ms"`
+	Today        int                    `json:"today"`
+	ByKind       []QueryAuditKindCount  `json:"by_kind"`
+	Trend        []QueryAuditTrendPoint `json:"trend"`
+	TopUsers     []QueryAuditUserCount  `json:"top_users"`
+	SlowTop      []QueryAudit           `json:"slow_top"`
+}
+
+// QueryAuditStats 统计本地日历上的近 days 天，含当天。days 由调用方限制在 1–31。
+func (d *DB) QueryAuditStats(days int) (*QueryAuditStats, error) {
+	if days < 1 {
+		days = 7
+	}
+	now := time.Now()
+	loc := now.Location()
+	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc).AddDate(0, 0, -(days - 1))
+	from := start.UTC().Format(time.RFC3339)
+	to := now.UTC().Format(time.RFC3339)
+	out := &QueryAuditStats{
+		ByKind:   []QueryAuditKindCount{},
+		Trend:    []QueryAuditTrendPoint{},
+		TopUsers: []QueryAuditUserCount{},
+		SlowTop:  []QueryAudit{},
+	}
+	var totalN, elapsedSum, successN, failedN int64
+	if err := d.QueryRow(
+		`SELECT COUNT(1),
+			COALESCE(SUM(CASE WHEN success=1 THEN 1 ELSE 0 END),0),
+			COALESCE(SUM(CASE WHEN success=0 THEN 1 ELSE 0 END),0),
+			COALESCE(SUM(elapsed_ms),0)
+		 FROM tbl_query_audits WHERE created_at>=? AND created_at<=?`,
+		from, to,
+	).Scan(&totalN, &successN, &failedN, &elapsedSum); err != nil {
+		return nil, err
+	}
+	out.Total = int(totalN)
+	out.Success = int(successN)
+	out.Failed = int(failedN)
+	if out.Total > 0 {
+		out.SuccessRate = float64(out.Success) / float64(out.Total)
+		out.AvgElapsedMS = float64(elapsedSum) / float64(out.Total)
+	}
+	todayFrom := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc).UTC().Format(time.RFC3339)
+	var todayN int64
+	if err := d.QueryRow(
+		`SELECT COUNT(1) FROM tbl_query_audits WHERE created_at>=? AND created_at<=?`,
+		todayFrom, to,
+	).Scan(&todayN); err != nil {
+		return nil, err
+	}
+	out.Today = int(todayN)
+	kindRows, err := d.Query(
+		`SELECT kind, COUNT(1) FROM tbl_query_audits
+		 WHERE created_at>=? AND created_at<=?
+		 GROUP BY kind ORDER BY COUNT(1) DESC, kind`,
+		from, to,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer kindRows.Close()
+	for kindRows.Next() {
+		var row QueryAuditKindCount
+		var n int64
+		if err := kindRows.Scan(&row.Kind, &n); err != nil {
+			return nil, err
+		}
+		row.Count = int(n)
+		out.ByKind = append(out.ByKind, row)
+	}
+	if err := kindRows.Err(); err != nil {
+		return nil, err
+	}
+	userRows, err := d.Query(
+		`SELECT username, COALESCE(MAX(display_name),''), COUNT(1)
+		 FROM tbl_query_audits
+		 WHERE created_at>=? AND created_at<=?
+		 GROUP BY username
+		 ORDER BY COUNT(1) DESC, username
+		 LIMIT 5`,
+		from, to,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer userRows.Close()
+	for userRows.Next() {
+		var row QueryAuditUserCount
+		var n int64
+		if err := userRows.Scan(&row.Username, &row.DisplayName, &n); err != nil {
+			return nil, err
+		}
+		row.Count = int(n)
+		out.TopUsers = append(out.TopUsers, row)
+	}
+	if err := userRows.Err(); err != nil {
+		return nil, err
+	}
+	slowRows, err := d.Query(
+		`SELECT id, kind, username, target, statement, elapsed_ms, created_at
+		 FROM tbl_query_audits
+		 WHERE created_at>=? AND created_at<=?
+		 ORDER BY elapsed_ms DESC, created_at DESC
+		 LIMIT 5`,
+		from, to,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer slowRows.Close()
+	for slowRows.Next() {
+		var it QueryAudit
+		if err := slowRows.Scan(&it.ID, &it.Kind, &it.Username, &it.Target, &it.Statement, &it.ElapsedMS, &it.CreatedAt); err != nil {
+			return nil, err
+		}
+		out.SlowTop = append(out.SlowTop, it)
+	}
+	if err := slowRows.Err(); err != nil {
+		return nil, err
+	}
+	trend, err := d.queryAuditTrend(start, now)
+	if err != nil {
+		return nil, err
+	}
+	out.Trend = trend
+	return out, nil
+}
+
+func (d *DB) queryAuditTrend(start, end time.Time) ([]QueryAuditTrendPoint, error) {
+	out := []QueryAuditTrendPoint{}
+	to := end.UTC().Format(time.RFC3339)
+	for day := start; !day.After(end); day = day.AddDate(0, 0, 1) {
+		next := day.AddDate(0, 0, 1)
+		var total, failed int64
+		if err := d.QueryRow(
+			`SELECT COUNT(1), COALESCE(SUM(CASE WHEN success=0 THEN 1 ELSE 0 END),0)
+			 FROM tbl_query_audits
+			 WHERE created_at>=? AND created_at<? AND created_at<=?`,
+			day.UTC().Format(time.RFC3339), next.UTC().Format(time.RFC3339), to,
+		).Scan(&total, &failed); err != nil {
+			return nil, err
+		}
+		out = append(out, QueryAuditTrendPoint{Date: day.Format("2006-01-02"), Total: int(total), Failed: int(failed)})
+	}
+	return out, nil
+}

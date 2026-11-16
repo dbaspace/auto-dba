@@ -34,6 +34,8 @@ type OverviewHandler struct {
 	hostDiskAt map[string]map[string]string
 	// trendJobs 是后台磁盘分析，同一租户同时只保留一条。
 	trendJobs map[string]*trendJob
+	// pgTrendJobs 是 PostgreSQL 智能分析，与主机磁盘分析分开，互不占用对方的进行中任务。
+	pgTrendJobs map[string]*trendJob
 }
 
 type overviewJob struct {
@@ -55,6 +57,7 @@ type overviewRow struct {
 	Domain          string                 `json:"domain,omitempty"`
 	App             string                 `json:"app,omitempty"`
 	CloudInstanceID string                 `json:"-"`
+	IDC             string                 `json:"-"`
 	Sample          *instoverview.Sample   `json:"sample,omitempty"`
 	HostInfo        *instoverview.HostInfo `json:"host_info,omitempty"`
 }
@@ -242,6 +245,8 @@ func (h *OverviewHandler) listRows(tid, userID, dbType, env, q string) ([]overvi
 		if store.IsHostInstanceType(norm) {
 			domain = instoverview.HostDisplayDomain(inst.Tags, inst.Domains, inst.DomainName)
 			app = instoverview.HostAppName(inst.Tags)
+		} else {
+			domain = strings.TrimSpace(inst.DomainName)
 		}
 		if needle != "" && !strings.Contains(strings.ToLower(name+" "+host+" "+domain+" "+app), needle) {
 			continue
@@ -250,6 +255,7 @@ func (h *OverviewHandler) listRows(tid, userID, dbType, env, q string) ([]overvi
 			ID: inst.ID, Name: name, DBType: norm, Host: host, Port: inst.Port,
 			EnvID: envID, Collectable: !instoverview.Unsupported(norm), Domain: domain, App: app,
 			CloudInstanceID: strings.TrimSpace(inst.CloudInstanceID),
+			IDC:             strings.TrimSpace(inst.IDC),
 		}
 		if envID == "" {
 			row.EnvName = "未设置环境"

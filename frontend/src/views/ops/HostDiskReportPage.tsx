@@ -1,15 +1,19 @@
 import { useEffect, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useDispatch } from 'react-redux'
+import { useLocation, useParams } from 'react-router-dom'
 import { Alert, Spin } from 'antd'
 import api from '../../api/request'
+import { tabKey, updateTabMeta } from '../../store/tabsSlice'
 import HostDiskReportBody, { parseReportScope, reportLabel, type ReportScope, type TrendResp } from './HostDiskReportBody'
+import PgStorageReportBody, { type PGTrendResp } from './PgStorageReportBody'
 import './InstanceOverview.css'
 
 type ReportDetail = {
   id: string
+  kind?: string
   title?: string
   scope?: string | ReportScope
-  payload?: TrendResp
+  payload?: TrendResp | PGTrendResp
   created_at?: string
 }
 
@@ -31,6 +35,8 @@ function analysisRange(report: ReportDetail) {
 
 export default function HostDiskReportPage() {
   const { id } = useParams()
+  const location = useLocation()
+  const dispatch = useDispatch()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [report, setReport] = useState<ReportDetail | null>(null)
@@ -59,10 +65,15 @@ export default function HostDiskReportPage() {
     }
   }, [id])
 
+  const pg = report?.kind === 'pg_storage'
+  useEffect(() => {
+    if (!pg) return
+    dispatch(updateTabMeta({ key: tabKey(location.pathname, location.search), title: '智能分析报告' }))
+  }, [pg, dispatch, location.pathname, location.search])
   return (
     <div className="ops-page host-disk-report">
       <div className="ops-title">
-        <h1>磁盘分析报告</h1>
+        <h1>{pg ? '智能分析报告' : '磁盘分析报告'}</h1>
       </div>
       {loading ? <Spin /> : null}
       {error ? <Alert type="error" showIcon message={error} /> : null}
@@ -70,7 +81,11 @@ export default function HostDiskReportPage() {
         <>
           <div className="host-disk-report-meta">{reportLabel(report.created_at || '', report.scope)}</div>
           <div className="host-disk-report-range">{analysisRange(report)}</div>
-          <HostDiskReportBody resp={report.payload} showNote={false} />
+          {pg ? (
+            <PgStorageReportBody resp={report.payload as PGTrendResp} showNote />
+          ) : (
+            <HostDiskReportBody resp={report.payload as TrendResp} showNote={false} />
+          )}
         </>
       ) : null}
     </div>

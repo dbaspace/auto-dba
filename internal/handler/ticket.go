@@ -986,6 +986,17 @@ func (h *TicketHandler) List(c *gin.Context) {
 			mergeExtra(extra)
 		}
 	}
+	if (typeQ == "" || typeQ == store.IssueTypeDCL) && h.canReviewDCLAcrossTenants(c) {
+		if extra, e2 := h.Store.ListIssuesInTenant("", store.IssueTypeDCL, c.Query("status"), c.Query("q"), "", true); e2 == nil {
+			for _, it := range extra {
+				if _, ok := seen[it.ID]; ok {
+					continue
+				}
+				seen[it.ID] = struct{}{}
+				list = append(list, it)
+			}
+		}
+	}
 	names := tenantNameMap(h.Store)
 	instCache := map[string]*store.Instance{}
 	for i := range list {
@@ -2175,6 +2186,9 @@ func (h *TicketHandler) actorCanApproveIssue(c *gin.Context, it *store.Issue) bo
 	if store.IsCloudIssueType(it.IssueType) {
 		return h.cloudChangeReviewer(c)
 	}
+	if it.IssueType == store.IssueTypeDCL && dclReviewerBypassesTenant(h.Store, user) {
+		return true
+	}
 	return h.Store.CanApproveIssue(it, user, priv)
 }
 
@@ -2253,6 +2267,9 @@ func (h *TicketHandler) loadIssueForActor(c *gin.Context, id string) (*store.Iss
 		return raw, nil
 	}
 	if raw.IssueType == store.IssueTypeResourceApply && h.isPlatformResourceApplyReviewer(c) {
+		return raw, nil
+	}
+	if raw.IssueType == store.IssueTypeDCL && h.canReviewDCLAcrossTenants(c) {
 		return raw, nil
 	}
 	if store.IsCloudIssueType(raw.IssueType) && h.cloudChangeReviewer(c) {

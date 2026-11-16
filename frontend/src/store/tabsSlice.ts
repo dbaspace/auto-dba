@@ -103,7 +103,10 @@ function normalizeCachedTabTitle(path: string, title: string, menus?: MenuNode[]
   const migTitle = migrationDetailTitle(p)
   if (migTitle) return migTitle
   const reportTitle = diskReportTitle(p)
-  if (reportTitle) return reportTitle
+  if (reportTitle) {
+    if (title.trim() === '智能分析报告') return title
+    return reportTitle
+  }
   const cloudTitle = cloudRouteTitle(p)
   if (cloudTitle) return cloudTitle
   const routeTitle = pageRouteTitle(p)
