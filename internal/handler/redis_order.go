@@ -71,6 +71,19 @@ func (h *RedisHandler) UpdateCommandRules(c *gin.Context) {
 	})
 }
 
+// Reviewers GET /redis/reviewers — 与云 PostgreSQL 工单相同的审核人：平台管理员、dba 租户、全局审核白名单。
+func (h *RedisHandler) Reviewers(c *gin.Context) {
+	names, err := listPlatformChangeReviewers(h.Store)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	if names == nil {
+		names = []string{}
+	}
+	c.JSON(http.StatusOK, gin.H{"data": names})
+}
+
 func (h *RedisHandler) Instances(c *gin.Context) {
 	list, err := h.Store.ListInstancesInTenant(effectiveListTenantID(h.Store, c), "redis", "")
 	if err != nil {
@@ -140,7 +153,7 @@ func (h *RedisHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
-	assigned, aerr := resolveTenantAssignee(h.Store, middleware.TenantID(c), req.AssignedTo)
+	assigned, aerr := resolveRedisAssignee(h.Store, middleware.TenantID(c), req.AssignedTo)
 	if aerr != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": aerr.Error()})
 		return

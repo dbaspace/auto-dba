@@ -2189,41 +2189,18 @@ func (h *TicketHandler) actorCanApproveIssue(c *gin.Context, it *store.Issue) bo
 	if it.IssueType == store.IssueTypeDCL && dclReviewerBypassesTenant(h.Store, user) {
 		return true
 	}
+	if it.IssueType == store.IssueTypeRedis {
+		return h.Store.CanApproveIssue(it, user, priv) || h.cloudChangeReviewer(c)
+	}
 	return h.Store.CanApproveIssue(it, user, priv)
 }
 
 // cloudChangeReviewer 云变更只能由平台管理员、dba 租户活跃成员或全局审核白名单审批。
 func (h *TicketHandler) cloudChangeReviewer(c *gin.Context) bool {
-	if h == nil || h.Store == nil || c == nil {
+	if h == nil || c == nil {
 		return false
 	}
-	username := strings.TrimSpace(middleware.Username(c))
-	userID := strings.TrimSpace(middleware.UserID(c))
-	if username == "" {
-		return false
-	}
-	u, _ := h.Store.GetUserByUsername(username)
-	if u != nil && u.IsLoginBlocked() {
-		return false
-	}
-	if h.Store.IsGlobalApprover(username) {
-		return true
-	}
-	if userID == "" && u != nil {
-		userID = u.ID
-	}
-	if userID == "" {
-		return false
-	}
-	if ok, _ := h.Store.UserIsPlatformAdmin(userID); ok {
-		return true
-	}
-	if t, _ := h.Store.GetTenantByCode(store.DBATenantCode); t != nil {
-		if ok, _ := h.Store.IsActiveTenantMember(t.ID, userID); ok {
-			return true
-		}
-	}
-	return false
+	return platformChangeReviewer(h.Store, middleware.Username(c), middleware.UserID(c))
 }
 
 // actorCanExecuteIssue 加固开启时：提交人、可审批人、特权角色或持有 tickets.execute URN。

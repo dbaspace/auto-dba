@@ -693,13 +693,13 @@ export default function SrClusterPage() {
           fe_user: d.username || 'root',
         })
         if (!opts?.silent) {
-          message.success(`已从 FE 管理获取密码（${d.matched_by || '匹配'}）`)
+          message.success(`已从实例管理获取密码（${d.matched_by || '域名'}）`)
         }
         return String(d.password)
       }
     } catch (e: any) {
       if (!opts?.silent) {
-        message.warning(e?.response?.data?.message || '未从 FE 管理匹配到密码')
+        message.warning(e?.response?.data?.message || '未匹配到实例账号')
       }
     }
     return ''
@@ -714,6 +714,7 @@ export default function SrClusterPage() {
         fe_user: clusterForm.getFieldValue('fe_user') || 'root',
         fe_query_port: 9030,
         hosts,
+        domain: monitorDomain || undefined,
       })
       const layout = data?.data || {}
       const feNodes: Record<string, unknown>[] = clusterForm.getFieldValue('fe_nodes') || []
@@ -736,7 +737,7 @@ export default function SrClusterPage() {
     } catch (e: any) {
       message.warning(e?.response?.data?.message || e.message || '目录探测失败（可手填）')
     }
-  }, [clusterForm])
+  }, [clusterForm, monitorDomain])
 
   const probeRegisterFERoles = useCallback(async () => {
     const feNodes: { host?: string }[] = clusterForm.getFieldValue('fe_nodes') || []
@@ -756,6 +757,7 @@ export default function SrClusterPage() {
         fe_password: password,
         fe_user: clusterForm.getFieldValue('fe_user') || 'root',
         fe_query_port: 9030,
+        domain: monitorDomain || undefined,
       })
       const roles: { host?: string; role?: string }[] = data?.data || []
       const map: Record<string, string> = {}
@@ -793,7 +795,7 @@ export default function SrClusterPage() {
     } finally {
       setFeProbeBusy(false)
     }
-  }, [clusterForm, resolveFePasswordFromAdmin, probeRegisterLayout])
+  }, [clusterForm, monitorDomain, resolveFePasswordFromAdmin, probeRegisterLayout])
   const loadHosts = useCallback(async () => {
     try {
       const res = await api.get('/instances', { params: { db_type: 'host' } })
@@ -1530,7 +1532,7 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
     else parts.push('Agent 可暂空，登记后到配置中心 → Agent管理 → Node Agent 批量下发再补绑')
     message.success(parts.join('；'))
     void resolveFePasswordFromAdmin({ silent: true }).then((pwd) => {
-      if (pwd) message.info('已从 FE 管理自动填入密码', 3)
+      if (pwd) message.info('已从实例管理自动填入密码', 3)
     })
   }
 
@@ -2675,6 +2677,7 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
               init_now: registering ? false : !!v.init_now,
               register_existing: registering,
               source_monitor_task: registering ? monitorTask : undefined,
+              source_monitor_domain: registering ? monitorDomain : undefined,
             })
             message.success(
               registering
@@ -2844,7 +2847,7 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
           {clusterModalMode === 'register' ? (
             <div style={{ marginBottom: 12 }}>
               <Space wrap>
-                <Button onClick={() => void resolveFePasswordFromAdmin()}>从 FE 管理获取密码</Button>
+                <Button onClick={() => void resolveFePasswordFromAdmin()}>从实例获取密码</Button>
                 <Button loading={feProbeBusy} onClick={() => void probeRegisterFERoles()}>
                   探测 FE 角色与目录
                 </Button>

@@ -431,6 +431,7 @@ func (h *SrClusterHandler) ProbeLayout(c *gin.Context) {
 		FeUser      string   `json:"fe_user"`
 		FeQueryPort int      `json:"fe_query_port"`
 		Hosts       []string `json:"hosts"`
+		Domain      string   `json:"domain"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
@@ -444,15 +445,7 @@ func (h *SrClusterHandler) ProbeLayout(c *gin.Context) {
 	user := strings.TrimSpace(req.FeUser)
 	pass := req.FePassword
 	if strings.TrimSpace(pass) == "" {
-		cl := &store.SrCluster{FeHost: host, FeUser: user}
-		nodes := []store.SrNode{{Component: "fe", Host: host}}
-		for _, hst := range req.Hosts {
-			hst = strings.TrimSpace(hst)
-			if hst != "" && !strings.EqualFold(hst, host) {
-				nodes = append(nodes, store.SrNode{Component: "fe", Host: hst})
-			}
-		}
-		if u, p, ok := h.eng().LookupFeAdminCredForProbe(cl, nodes); ok {
+		if u, p, ok := h.eng().LookupInstanceCredByDomain(middleware.TenantID(c), req.Domain); ok {
 			user, pass = u, p
 		}
 	}
@@ -530,6 +523,7 @@ func (h *SrClusterHandler) ProbeFERoles(c *gin.Context) {
 		FeUser      string   `json:"fe_user"`
 		FeQueryPort int      `json:"fe_query_port"`
 		Hosts       []string `json:"hosts"`
+		Domain      string   `json:"domain"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
@@ -543,16 +537,7 @@ func (h *SrClusterHandler) ProbeFERoles(c *gin.Context) {
 	user := strings.TrimSpace(req.FeUser)
 	pass := req.FePassword
 	if strings.TrimSpace(pass) == "" {
-		// 表单未填时按 FE 管理凭据回退
-		cl := &store.SrCluster{FeHost: host, FeUser: user}
-		nodes := []store.SrNode{{Component: "fe", Host: host}}
-		for _, hst := range req.Hosts {
-			hst = strings.TrimSpace(hst)
-			if hst != "" && !strings.EqualFold(hst, host) {
-				nodes = append(nodes, store.SrNode{Component: "fe", Host: hst})
-			}
-		}
-		if u, p, ok := h.eng().LookupFeAdminCredForProbe(cl, nodes); ok {
+		if u, p, ok := h.eng().LookupInstanceCredByDomain(middleware.TenantID(c), req.Domain); ok {
 			user, pass = u, p
 		}
 	}
@@ -562,7 +547,7 @@ func (h *SrClusterHandler) ProbeFERoles(c *gin.Context) {
 		if port <= 0 {
 			port = 9030
 		}
-		c.JSON(http.StatusBadRequest, gin.H{"message": fmt.Sprintf("无法连接 FE %s:%d（%v）。请填写密码或先在 FE 管理配置凭据", host, port, err)})
+		c.JSON(http.StatusBadRequest, gin.H{"message": fmt.Sprintf("无法连接 FE %s:%d（%v）。请填写密码，或先在实例管理登记同一域名并保存密码", host, port, err)})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": roles})
@@ -571,11 +556,12 @@ func (h *SrClusterHandler) ProbeFERoles(c *gin.Context) {
 func (h *SrClusterHandler) CreateCluster(c *gin.Context) {
 	var req struct {
 		store.SrCluster
-		FePassword        string         `json:"fe_password"`
-		Nodes             []store.SrNode `json:"nodes"`
-		InitNow           bool           `json:"init_now"`
-		RegisterExisting  bool           `json:"register_existing"`
-		SourceMonitorTask string         `json:"source_monitor_task"`
+		FePassword          string         `json:"fe_password"`
+		Nodes               []store.SrNode `json:"nodes"`
+		InitNow             bool           `json:"init_now"`
+		RegisterExisting    bool           `json:"register_existing"`
+		SourceMonitorTask   string         `json:"source_monitor_task"`
+		SourceMonitorDomain string         `json:"source_monitor_domain"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
@@ -744,7 +730,11 @@ func (h *SrClusterHandler) CreateCluster(c *gin.Context) {
 	cl.FePasswordSet = cl.FePasswordEnc != ""
 	out := gin.H{"cluster": cl, "nodes": req.Nodes}
 	if req.RegisterExisting {
-		res := h.eng().SyncRegistry(&cl, nil, who, true)
+		var extra []string
+		if d := strings.TrimSpace(req.SourceMonitorDomain); d != "" {
+			extra = []string{d}
+		}
+		res := h.eng().SyncRegistry(&cl, nil, who, true, extra...)
 		out["registry"] = res
 		warnings = append(warnings, res.Warnings...)
 		if len(warnings) > 0 {

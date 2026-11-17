@@ -305,7 +305,7 @@ export default function DolphinOps() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const { data } = await api.get('/dsadmin')
+      const { data } = await api.get('/dsadmin', { params: { for_console: '1' } })
       const list: DsRow[] = data.data || []
       setRows(list)
       setEnv((prev) => {

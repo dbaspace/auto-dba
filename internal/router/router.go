@@ -795,6 +795,7 @@ func Init(e *gin.Engine, d Deps) {
 		secured.GET("/redis/command-rules", d.Redis.GetCommandRules)
 		secured.PUT("/redis/command-rules", d.Redis.UpdateCommandRules)
 		secured.GET("/redis/instances", d.Redis.Instances)
+		secured.GET("/redis/reviewers", d.Redis.Reviewers)
 		secured.POST("/redis/orders", d.Redis.Create)
 	}
 

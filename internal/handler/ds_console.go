@@ -131,10 +131,17 @@ func dsFetchUserInfo(loginURL, sessionID string) map[string]any {
 	return parsed.Data
 }
 
-func (h *DsAdminHandler) loadPlainCredential(env, tenantID string) (*store.DsAdmin, string, error) {
+func (h *DsAdminHandler) loadPlainCredential(c *gin.Context, env, tenantID string) (*store.DsAdmin, string, error) {
 	it, err := h.Store.GetDsAdminByEnvInTenant(env, tenantID)
 	if err != nil {
 		return nil, "", err
+	}
+	// 平台管理员在默认租户下也能打开记在其它租户上的海豚环境。
+	if it == nil && strings.TrimSpace(tenantID) != "" && dsPlatformAdmin(h.Store, c) {
+		it, err = h.Store.GetDsAdminByEnvInTenant(env, "")
+		if err != nil {
+			return nil, "", err
+		}
 	}
 	if it == nil {
 		return nil, "", fmt.Errorf("该环境未配置海豚调度")
@@ -146,8 +153,36 @@ func (h *DsAdminHandler) loadPlainCredential(env, tenantID string) (*store.DsAdm
 	return it, plain, nil
 }
 
-func (h *DsAdminHandler) ensureDSSession(env, tenantID string) (*dsCachedSession, *store.DsAdmin, error) {
-	it, plain, err := h.loadPlainCredential(env, tenantID)
+func dsPlatformAdmin(db *store.DB, c *gin.Context) bool {
+	if db == nil || c == nil {
+		return false
+	}
+	ok, err := db.UserIsPlatformAdmin(middleware.UserID(c))
+	return err == nil && ok
+}
+
+// dsConsoleListTenant 海豚管理控制台：平台管理员看全部环境；配置页和普通成员仍用当前租户。
+func dsConsoleListTenant(current string, forConsole, platformAdmin bool) string {
+	if forConsole && platformAdmin {
+		return ""
+	}
+	return current
+}
+
+// 只挂在海豚代理页面：海豚读写 localStorage.user 时落到 ds-embed-user，不改平台登录用户。
+const dsEmbedUserShim = `<script id="auto-dba-ds-user-shim">(function(){` +
+	`var KEY='user',ALT='ds-embed-user',p=Storage.prototype,get=p.getItem,set=p.setItem,remove=p.removeItem;` +
+	`p.getItem=function(k){if(this===localStorage&&k===KEY)return get.call(this,ALT);return get.call(this,k);};` +
+	`p.setItem=function(k,v){if(this===localStorage&&k===KEY)return set.call(this,ALT,v);return set.call(this,k,v);};` +
+	`p.removeItem=function(k){if(this===localStorage&&k===KEY)return remove.call(this,ALT);return remove.call(this,k);};` +
+	`})();</script>`
+
+func (h *DsAdminHandler) ensureDSSession(c *gin.Context, env string) (*dsCachedSession, *store.DsAdmin, error) {
+	tenantID := ""
+	if c != nil {
+		tenantID = middleware.TenantID(c)
+	}
+	it, plain, err := h.loadPlainCredential(c, env, tenantID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -183,7 +218,7 @@ func (h *DsAdminHandler) Warm(c *gin.Context) {
 		return
 	}
 	start := time.Now()
-	_, _, err := h.ensureDSSession(env, middleware.TenantID(c))
+	_, _, err := h.ensureDSSession(c, env)
 	elapsed := time.Since(start).Milliseconds()
 	if err != nil {
 		log.Printf("ds_warm env=%s err=%v elapsed_ms=%d", env, err, elapsed)
@@ -204,7 +239,7 @@ func (h *DsAdminHandler) ConsoleBootstrap(c *gin.Context) {
 		return
 	}
 	sessStart := time.Now()
-	sess, it, err := h.ensureDSSession(env, middleware.TenantID(c))
+	sess, it, err := h.ensureDSSession(c, env)
 	sessMs := time.Since(sessStart).Milliseconds()
 	if err != nil {
 		fallback := ""
@@ -244,7 +279,7 @@ func (h *DsAdminHandler) ConsoleBootstrap(c *gin.Context) {
 正在打开 DolphinScheduler 控制台…
 <script>
 (function () {
-  try { localStorage.setItem('user', JSON.stringify(%s)); } catch (e) {}
+  try { localStorage.setItem('ds-embed-user', JSON.stringify(%s)); } catch (e) {}
   var next = %q;
   var fallback = %q;
   try {
@@ -994,6 +1029,10 @@ func rewriteDSBody(raw []byte, ctype, loginURL, proxyBase string) ([]byte, bool)
 		// 在完整 <head...> 开标签之后插入 CSP meta（勿 Replace("<head", ...)，否则会留下多余的 >）
 		text = insertAfterHeadOpen(text, `<meta http-equiv="Content-Security-Policy" content="frame-ancestors *">`)
 	}
+	if isHTML && !strings.Contains(text, "auto-dba-ds-user-shim") {
+		// 插在 head 最前，早于海豚自己的脚本。后插入的内容更靠近 <head>。
+		text = insertAfterHeadOpen(text, dsEmbedUserShim)
+	}
 	if needEmbed {
 		if strings.Contains(text, "</head>") {
 			text = strings.Replace(text, "</head>", dsEmbedChrome+"</head>", 1)
@@ -1038,7 +1077,7 @@ func copyDSResponseHeaders(dst http.Header, src http.Header) {
 func (h *DsAdminHandler) Proxy(c *gin.Context) {
 	start := time.Now()
 	env := strings.TrimSpace(c.Param("env"))
-	sess, _, err := h.ensureDSSession(env, middleware.TenantID(c))
+	sess, _, err := h.ensureDSSession(c, env)
 	if err != nil {
 		c.Header("Content-Type", "text/html; charset=utf-8")
 		c.String(http.StatusBadGateway, `<!DOCTYPE html><html><body style="font-family:sans-serif;padding:24px;color:#c00">%s</body></html>`, html.EscapeString(err.Error()))

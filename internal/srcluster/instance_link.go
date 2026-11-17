@@ -200,7 +200,7 @@ func (e *Engine) clusterTenantID(cl *store.SrCluster) string {
 	return tid
 }
 
-func (e *Engine) findLinkedInstance(cl *store.SrCluster, nodes []store.SrNode) (*store.Instance, string) {
+func (e *Engine) findLinkedInstance(cl *store.SrCluster, nodes []store.SrNode, extraDomains ...string) (*store.Instance, string) {
 	if e == nil || e.Store == nil || cl == nil {
 		return nil, ""
 	}
@@ -218,7 +218,147 @@ func (e *Engine) findLinkedInstance(cl *store.SrCluster, nodes []store.SrNode) (
 	if err != nil {
 		return nil, ""
 	}
-	return pickLinkedInstanceAnyTenant(all, cl, fe, lookupHost)
+	if it, by := pickLinkedInstanceAnyTenant(all, cl, fe, lookupHost); it != nil {
+		return it, by
+	}
+	domains := append([]string{}, extraDomains...)
+	domains = append(domains, e.monitorDomains(cl, nodes)...)
+	if it := pickLinkedInstanceByDomain(all, cl, domains); it != nil {
+		return it, "domain"
+	}
+	return nil, ""
+}
+
+func (e *Engine) monitorDomains(cl *store.SrCluster, nodes []store.SrNode) []string {
+	if e == nil || e.Store == nil || cl == nil {
+		return nil
+	}
+	job, err := e.findClusterMonitorJob(cl, nodes)
+	if err != nil || job == nil {
+		return nil
+	}
+	var out []string
+	add := func(v string) {
+		v = strings.TrimSpace(v)
+		if v == "" || net.ParseIP(v) != nil {
+			return
+		}
+		out = append(out, v)
+	}
+	if job.Labels != nil {
+		add(job.Labels["domain"])
+	}
+	for _, g := range job.TargetGroups {
+		if g.Labels != nil {
+			add(g.Labels["domain"])
+		}
+	}
+	return out
+}
+
+func normalizeLinkDomain(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	return strings.TrimRight(s, ".")
+}
+
+func instanceLinkDomains(it store.Instance) []string {
+	var out []string
+	add := func(s string) {
+		s = normalizeLinkDomain(s)
+		if s == "" {
+			return
+		}
+		out = append(out, s)
+	}
+	add(it.DomainName)
+	for _, d := range it.Domains {
+		add(d)
+	}
+	for _, t := range it.Tags {
+		k, v, ok := strings.Cut(strings.TrimSpace(t), "=")
+		if ok && strings.EqualFold(strings.TrimSpace(k), "domain") {
+			add(v)
+		}
+	}
+	return out
+}
+
+func instanceHasLinkDomain(it store.Instance, want map[string]struct{}) bool {
+	for _, d := range instanceLinkDomains(it) {
+		if _, ok := want[d]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// PickStarRocksByDomain 按域名、域名列表或 domain= 标签匹配 StarRocks 实例。有密码的优先。不看端口。
+func PickStarRocksByDomain(insts []store.Instance, domain string) *store.Instance {
+	want := normalizeLinkDomain(domain)
+	if want == "" || net.ParseIP(want) != nil {
+		return nil
+	}
+	set := map[string]struct{}{want: {}}
+	var withPass, any *store.Instance
+	for i := range insts {
+		it := &insts[i]
+		if !isStarRocksInstance(*it) || !instanceHasLinkDomain(*it, set) {
+			continue
+		}
+		if any == nil {
+			any = it
+		}
+		if strings.TrimSpace(it.Password) != "" && withPass == nil {
+			withPass = it
+		}
+	}
+	if withPass != nil {
+		return withPass
+	}
+	return any
+}
+
+// pickLinkedInstanceByDomain 查询端口一致时，用域名命中实例。先本租户，再优先已有密码。
+func pickLinkedInstanceByDomain(insts []store.Instance, cl *store.SrCluster, domains []string) *store.Instance {
+	if cl == nil {
+		return nil
+	}
+	want := map[string]struct{}{}
+	for _, d := range domains {
+		d = normalizeLinkDomain(d)
+		if d == "" || net.ParseIP(d) != nil {
+			continue
+		}
+		want[d] = struct{}{}
+	}
+	if len(want) == 0 {
+		return nil
+	}
+	port := feQueryPort(cl)
+	var samePass, same, otherPass, other *store.Instance
+	for i := range insts {
+		it := &insts[i]
+		if !isStarRocksInstance(*it) || it.Port != port || !instanceHasLinkDomain(*it, want) {
+			continue
+		}
+		hasPass := strings.TrimSpace(it.Password) != ""
+		switch {
+		case sameClusterTenant(cl, *it) && hasPass && samePass == nil:
+			samePass = it
+		case sameClusterTenant(cl, *it) && same == nil:
+			same = it
+		case hasPass && otherPass == nil:
+			otherPass = it
+		case other == nil:
+			other = it
+		}
+	}
+	for _, it := range []*store.Instance{samePass, same, otherPass, other} {
+		if it != nil {
+			return it
+		}
+	}
+	return nil
 }
 
 // LinkedInstance 供接口展示的关联实例摘要。
@@ -230,7 +370,7 @@ func (e *Engine) LinkedInstance(cl *store.SrCluster, nodes []store.SrNode) *Inst
 	return &InstanceLink{ID: it.ID, Name: it.Name, Host: it.Host, Port: it.Port, PasswordSet: strings.TrimSpace(it.Password) != "", MatchedBy: by}
 }
 
-// feCredentials 连 FE 的账号密码：preferCluster 时集群密码优先；否则实例 → FeAdmin → 集群。
+// feCredentials 连 FE 的账号密码：preferCluster 时集群密码优先；否则实例，再否则集群密码。
 func (e *Engine) feCredentials(cl *store.SrCluster, nodes []store.SrNode, preferCluster bool) (user, pass string, err error) {
 	user = strings.TrimSpace(cl.FeUser)
 	if user == "" {
@@ -248,100 +388,37 @@ func (e *Engine) feCredentials(cl *store.SrCluster, nodes []store.SrNode, prefer
 			return user, p, nil
 		}
 	}
-	if u, p, ok := e.lookupFeAdminCred(cl, nodes); ok {
-		return u, p, nil
-	}
 	pass, err = secret.Decrypt(e.Secret, cl.FePasswordEnc)
 	return user, pass, err
 }
 
-func stripHostPort(ep string) string {
-	ep = strings.TrimSpace(ep)
-	if ep == "" {
-		return ""
+// LookupInstanceCredByDomain 按实例域名或 domain= 标签取登录账号和密码。
+func (e *Engine) LookupInstanceCredByDomain(tenantID, domain string) (user, pass string, ok bool) {
+	if e == nil || e.Store == nil {
+		return "", "", false
 	}
-	if h, _, ok := strings.Cut(ep, ":"); ok {
-		// 仅当后缀像端口时截断
-		allDigit := true
-		for _, c := range ep[len(h)+1:] {
-			if c < '0' || c > '9' {
-				allDigit = false
-				break
-			}
-		}
-		if allDigit && len(ep) > len(h)+1 {
-			return h
-		}
+	insts, err := e.Store.ListInstancesInTenant(tenantID, "", "")
+	if err != nil {
+		return "", "", false
 	}
-	return ep
+	it := PickStarRocksByDomain(insts, domain)
+	if it == nil || strings.TrimSpace(it.Password) == "" {
+		return "", "", false
+	}
+	plain, err := secret.Decrypt(e.Secret, it.Password)
+	if err != nil || plain == "" {
+		return "", "", false
+	}
+	user = strings.TrimSpace(it.Username)
+	if user == "" {
+		user = "root"
+	}
+	return user, plain, true
 }
 
-// LookupFeAdminCredForProbe 供登记探测在表单无密码时回退 FE 管理凭据。
-func (e *Engine) LookupFeAdminCredForProbe(cl *store.SrCluster, nodes []store.SrNode) (user, pass string, ok bool) {
-	return e.lookupFeAdminCred(cl, nodes)
-}
-
-// ExportFeCredentials 供 handler 取 FE 账号密码（实例 → FeAdmin → 集群密码）。
+// ExportFeCredentials 供 handler 取 FE 账号密码（实例，否则集群密码）。
 func (e *Engine) ExportFeCredentials(cl *store.SrCluster, nodes []store.SrNode) (user, pass string, err error) {
 	return e.feCredentials(cl, nodes, false)
-}
-
-// lookupFeAdminCred 按 FE 节点主机匹配配置中心 FE 管理凭据。
-func (e *Engine) lookupFeAdminCred(cl *store.SrCluster, nodes []store.SrNode) (user, pass string, ok bool) {
-	if e.Store == nil {
-		return "", "", false
-	}
-	list, err := e.Store.ListFeAdmins("", "")
-	if err != nil || len(list) == 0 {
-		return "", "", false
-	}
-	hosts := make([]string, 0, len(nodes)+1)
-	if h := strings.TrimSpace(cl.FeHost); h != "" {
-		hosts = append(hosts, h)
-	}
-	for _, n := range nodes {
-		if n.Component == "fe" && strings.TrimSpace(n.Host) != "" {
-			hosts = append(hosts, n.Host)
-		}
-	}
-	want := map[string]struct{}{}
-	for _, h := range hosts {
-		h = strings.ToLower(strings.TrimSpace(h))
-		if h != "" {
-			want[h] = struct{}{}
-		}
-	}
-	if len(want) == 0 {
-		return "", "", false
-	}
-	for i := range list {
-		it := &list[i]
-		if strings.TrimSpace(it.PasswordEnc) == "" {
-			continue
-		}
-		for _, ep := range strings.FieldsFunc(it.FeNode, func(r rune) bool {
-			return r == ',' || r == '，' || r == ';' || r == '\n'
-		}) {
-			host := stripHostPort(strings.TrimSpace(ep))
-			if host == "" {
-				continue
-			}
-			host = strings.ToLower(host)
-			if _, hit := want[host]; !hit {
-				continue
-			}
-			p, derr := secret.Decrypt(e.Secret, it.PasswordEnc)
-			if derr != nil || p == "" {
-				continue
-			}
-			u := strings.TrimSpace(it.Username)
-			if u == "" {
-				u = "root"
-			}
-			return u, p, true
-		}
-	}
-	return "", "", false
 }
 
 func buildFEDSN(user, pass, host string, port int) string {
@@ -486,11 +563,11 @@ func envCode(env *store.Environment, cl *store.SrCluster) string {
 }
 
 // EnsureClusterInstance 在资源配置中登记集群对应的 StarRocks 实例：已有匹配实例只补标签，否则新建。
-func (e *Engine) EnsureClusterInstance(cl *store.SrCluster, nodes []store.SrNode, who string) (*store.Instance, bool, error) {
+func (e *Engine) EnsureClusterInstance(cl *store.SrCluster, nodes []store.SrNode, who string, extraDomains ...string) (*store.Instance, bool, error) {
 	if e == nil || e.Store == nil || cl == nil || cl.ID == "" {
 		return nil, false, fmt.Errorf("集群无效")
 	}
-	if it, _ := e.findLinkedInstance(cl, nodes); it != nil {
+	if it, _ := e.findLinkedInstance(cl, nodes, extraDomains...); it != nil {
 		tag := clusterTag(cl.ID)
 		for _, t := range it.Tags {
 			if strings.EqualFold(strings.TrimSpace(t), tag) {
@@ -581,11 +658,11 @@ func (r *RegistrySyncResult) Summary() string {
 }
 
 // SyncRegistry 同步集群到配置中心：withInstance 时登记/关联资源实例，随后同步监控目标注册；removed 为本次下线的节点。
-func (e *Engine) SyncRegistry(cl *store.SrCluster, removed []store.SrNode, who string, withInstance bool) *RegistrySyncResult {
+func (e *Engine) SyncRegistry(cl *store.SrCluster, removed []store.SrNode, who string, withInstance bool, extraDomains ...string) *RegistrySyncResult {
 	res := &RegistrySyncResult{}
 	nodes, _ := e.Store.ListSrNodes(cl.ID)
 	if withInstance {
-		if it, created, err := e.EnsureClusterInstance(cl, nodes, who); err != nil {
+		if it, created, err := e.EnsureClusterInstance(cl, nodes, who, extraDomains...); err != nil {
 			res.Warnings = append(res.Warnings, "登记资源实例失败: "+err.Error())
 		} else {
 			res.InstanceCreated = created

@@ -10,8 +10,32 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"auto-dba/internal/secret"
+	"auto-dba/internal/srcluster"
 	"auto-dba/internal/store"
 )
+
+func instanceLoginByDomain(db *store.DB, sec, tenantID, domain string) (user, pass string, err error) {
+	if db == nil || strings.TrimSpace(domain) == "" {
+		return "", "", fmt.Errorf("未匹配到实例账号")
+	}
+	insts, err := db.ListInstancesInTenant(tenantID, "", "")
+	if err != nil {
+		return "", "", err
+	}
+	it := srcluster.PickStarRocksByDomain(insts, domain)
+	if it == nil || strings.TrimSpace(it.Password) == "" {
+		return "", "", fmt.Errorf("未匹配到实例账号")
+	}
+	plain, err := secret.Decrypt(sec, it.Password)
+	if err != nil || strings.TrimSpace(plain) == "" {
+		return "", "", fmt.Errorf("未匹配到实例账号")
+	}
+	user = strings.TrimSpace(it.Username)
+	if user == "" {
+		user = "root"
+	}
+	return user, plain, nil
+}
 
 type FeAdminHandler struct {
 	Store  *store.DB
@@ -74,15 +98,7 @@ func (h *FeAdminHandler) Create(c *gin.Context) {
 	if strings.TrimSpace(it.Username) == "" {
 		it.Username = "root"
 	}
-	// 允许无密码创建（从监控同步后补凭据）；有密码则加密落库
-	if plain := strings.TrimSpace(it.Password); plain != "" {
-		enc, err := secret.Encrypt(h.Secret, plain)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
-			return
-		}
-		it.PasswordEnc = enc
-	}
+	it.Password = ""
 	it.CreatedBy = actorName(c)
 	it.UpdatedBy = it.CreatedBy
 	it.Password = ""
@@ -186,91 +202,21 @@ func (h *FeAdminHandler) ResolveCredential(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
-	list, err := h.Store.ListFeAdminsInTenant(effectiveListTenantID(h.Store, c), "", "")
+	user, plain, err := instanceLoginByDomain(h.Store, h.Secret, effectiveListTenantID(h.Store, c), req.Domain)
 	if err != nil {
+		if err.Error() == "未匹配到实例账号" {
+			c.JSON(http.StatusNotFound, gin.H{"message": err.Error()})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
-	hit, by := matchFeAdmin(list, req.Hosts, req.TaskName, req.Environment, req.Domain)
-	if hit == nil {
-		c.JSON(http.StatusNotFound, gin.H{"message": "未匹配到 FE 管理凭据，请先在配置中心 · FE 管理同步并补充密码"})
-		return
-	}
-	if strings.TrimSpace(hit.PasswordEnc) == "" {
-		c.JSON(http.StatusNotFound, gin.H{"message": "已匹配 FE 管理记录但尚未设置密码，请先编辑补充"})
-		return
-	}
-	plain, err := secret.Decrypt(h.Secret, hit.PasswordEnc)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": "解密失败"})
-		return
-	}
-	user := strings.TrimSpace(hit.Username)
-	if user == "" {
-		user = "root"
-	}
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{
-		"fe_admin_id": hit.ID,
-		"username":    user,
-		"password":    plain,
-		"matched_by":  by,
-		"task_name":   hit.TaskName,
-		"domain":      hit.Domain,
+		"username":   user,
+		"password":   plain,
+		"matched_by": "domain",
+		"domain":     strings.TrimSpace(req.Domain),
 	}})
-}
-
-// matchFeAdmin 优先 fe_node∩hosts，其次 task+env+domain，再次 domain。
-func matchFeAdmin(list []store.FeAdmin, hosts []string, task, env, domain string) (*store.FeAdmin, string) {
-	normHosts := map[string]struct{}{}
-	for _, h := range hosts {
-		h = feHostOnly(h)
-		if h != "" {
-			normHosts[strings.ToLower(h)] = struct{}{}
-		}
-	}
-	if len(normHosts) > 0 {
-		for i := range list {
-			it := &list[i]
-			for _, ep := range strings.FieldsFunc(it.FeNode, func(r rune) bool {
-				return r == ',' || r == '，' || r == ';' || r == '\n'
-			}) {
-				ep = feHostOnly(strings.TrimSpace(ep))
-				if ep == "" {
-					continue
-				}
-				if _, ok := normHosts[strings.ToLower(ep)]; ok {
-					return it, "fe_node"
-				}
-			}
-		}
-	}
-	task, env, domain = strings.TrimSpace(task), strings.TrimSpace(env), strings.TrimSpace(domain)
-	if task != "" && env != "" && domain != "" {
-		want := feAdminSyncKey(task, env, domain)
-		for i := range list {
-			if feAdminSyncKey(list[i].TaskName, list[i].Environment, list[i].Domain) == want {
-				return &list[i], "task_env_domain"
-			}
-		}
-	}
-	if domain != "" {
-		dl := strings.ToLower(domain)
-		for i := range list {
-			if strings.ToLower(strings.TrimSpace(list[i].Domain)) == dl {
-				return &list[i], "domain"
-			}
-		}
-	}
-	return nil, ""
-}
-
-func feHostOnly(ep string) string {
-	ep = strings.TrimSpace(ep)
-	if ep == "" {
-		return ""
-	}
-	h, _ := splitHostPortLoose(ep)
-	return strings.TrimSpace(h)
 }
 
 func (h *FeAdminHandler) Update(c *gin.Context) {
@@ -291,21 +237,13 @@ func (h *FeAdminHandler) Update(c *gin.Context) {
 		Domain:      firstNonEmpty(asString(raw["domain"]), exist.Domain),
 		Port:        exist.Port,
 		FeNode:      firstNonEmpty(asString(raw["fe_node"]), exist.FeNode),
-		Username:    firstNonEmpty(asString(raw["username"]), exist.Username),
+		Username:    exist.Username,
 		PasswordEnc: exist.PasswordEnc,
 		CreatedBy:   exist.CreatedBy,
 		UpdatedBy:   actorName(c),
 	}
 	if _, ok := raw["port"]; ok {
 		it.Port = asInt(raw["port"])
-	}
-	if plain := strings.TrimSpace(asString(raw["password"])); plain != "" && plain != "******" {
-		enc, err := secret.Encrypt(h.Secret, plain)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
-			return
-		}
-		it.PasswordEnc = enc
 	}
 	if err := h.Store.UpdateFeAdmin(&it); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
@@ -332,7 +270,8 @@ func (h *DsAdminHandler) List(c *gin.Context) {
 	if env == "" {
 		env = c.Query("env")
 	}
-	list, err := h.Store.ListDsAdminsInTenant(effectiveListTenantID(h.Store, c), env, c.Query("keyword"))
+	tid := dsConsoleListTenant(effectiveListTenantID(h.Store, c), c.Query("for_console") == "1", dsPlatformAdmin(h.Store, c))
+	list, err := h.Store.ListDsAdminsInTenant(tid, env, c.Query("keyword"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return

@@ -66,6 +66,20 @@ function isProdEnv(env: string) {
   return e === 'prod' || e.includes('prod') || e.includes('生产')
 }
 
+function unionApproverNames(primary: string[], extra: string[]) {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const raw of [...primary, ...extra]) {
+    const name = String(raw || '').trim()
+    if (!name) continue
+    const key = name.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(name)
+  }
+  return out
+}
+
 function parseScriptLocal(text: string, catalog: CmdItem[], blacklist: Set<string>) {
   const byName = new Map(catalog.map((c) => [c.name.toUpperCase(), c]))
   let commentCount = 0
@@ -156,6 +170,7 @@ export default function RedisOrder() {
   const [antdForm] = Form.useForm()
   const [accessDomains, setAccessDomains] = useState<AccessDomainRow[]>([])
   const [instById, setInstById] = useState<Record<string, any>>({})
+  const [reviewerPool, setReviewerPool] = useState<string[]>([])
   const [envGroups, setEnvGroups] = useState<TicketEnvGroup[]>([])
   const [catalog, setCatalog] = useState<CmdItem[]>([])
   const [blacklist, setBlacklist] = useState<Set<string>>(() => new Set())
@@ -204,12 +219,15 @@ export default function RedisOrder() {
   }, [accessDomains, form.env, envGroups])
 
   const currentInst = useMemo(() => instById[form.instance_id], [instById, form.instance_id])
-  const approvers = useMemo(() => currentInst?.approvers || [], [currentInst])
+  const approvers = useMemo(
+    () => unionApproverNames(currentInst?.approvers || [], form.instance_id ? reviewerPool : []),
+    [currentInst, form.instance_id, reviewerPool],
+  )
   const approverPlaceholder = !form.instance_id
     ? '请先选择 Redis 地址'
     : !approvers.length
       ? '该实例未配置审批人员，可手动填写'
-      : '选填，来自实例中配置的审批人员'
+      : '选填，来自实例审批人，以及管理员、dba 租户和审核白名单'
 
   const scriptStats = useMemo(
     () => parseScriptLocal(form.command, catalog, blacklist),
@@ -248,10 +266,14 @@ export default function RedisOrder() {
   async function loadData() {
     setInstLoading(true)
     try {
-      const [domRes, catRes] = await Promise.all([
+      const [domRes, catRes, revRes] = await Promise.all([
         api.get('/access-domains', { params: { db_type: 'redis' } }),
         api.get('/redis/command-catalog'),
+        api.get('/redis/reviewers', { silent: true }).catch(() => ({ data: { data: [] } })),
       ])
+      setReviewerPool(
+        (revRes.data.data || []).map((name: string) => String(name || '').trim()).filter(Boolean),
+      )
       const domains: AccessDomainRow[] = domRes.data.data || []
       setAccessDomains(domains)
       const groups = await loadTicketEnvGroups()
@@ -461,11 +483,13 @@ export default function RedisOrder() {
                 allowClear
                 placeholder={approverPlaceholder}
                 options={approvers.map((a: string) => ({ value: a, label: a }))}
-                filterOption={(input, option) =>
-                  String(option?.value || '')
+                filterOption={(input, option) => {
+                  const q = String(input || '').trim().toLowerCase()
+                  if (!q || approvers.some((name) => name.toLowerCase() === q)) return true
+                  return String(option?.value || '')
                     .toLowerCase()
-                    .includes(String(input || '').toLowerCase())
-                }
+                    .includes(q)
+                }}
               />
             </Form.Item>
 

@@ -10,7 +10,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"auto-dba/internal/secret"
 	"auto-dba/internal/store"
 )
 
@@ -183,12 +182,10 @@ func (h *StarRocksWebHandler) resolveAuth(c *gin.Context, req *starrocksWebPageR
 		if it == nil {
 			return "", "", "", fmt.Errorf("FE 凭据不存在")
 		}
-		plain, e := secret.Decrypt(h.Secret, it.PasswordEnc)
+		user, pass, e = instanceLoginByDomain(h.Store, h.Secret, effectiveListTenantID(h.Store, c), it.Domain)
 		if e != nil {
-			return "", "", "", fmt.Errorf("解密失败")
+			return "", "", "", e
 		}
-		user = strings.TrimSpace(it.Username)
-		pass = plain
 
 		if kind == "be" {
 			if override == "" {

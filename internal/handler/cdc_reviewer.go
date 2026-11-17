@@ -168,29 +168,10 @@ const cdcReviewerDenied = "CDC 审核人须为 admin、全局审核白名单或 
 
 // cdcReviewerInPool 平台管理员、issue_global_approver_whitelist、dba 租户活跃成员。不要求加入 CDC 任务租户。
 func (h *CDCHandler) cdcReviewerInPool(username string) bool {
-	username = strings.TrimSpace(username)
-	if username == "" || h == nil || h.Store == nil {
+	if h == nil {
 		return false
 	}
-	u, _ := h.Store.GetUserByUsername(username)
-	if u != nil && u.IsLoginBlocked() {
-		return false
-	}
-	if h.Store.IsGlobalApprover(username) {
-		return true
-	}
-	if u == nil {
-		return false
-	}
-	if ok, _ := h.Store.UserIsPlatformAdmin(u.ID); ok {
-		return true
-	}
-	if t, _ := h.Store.GetTenantByCode(store.DBATenantCode); t != nil {
-		if ok, _ := h.Store.IsActiveTenantMember(t.ID, u.ID); ok {
-			return true
-		}
-	}
-	return false
+	return platformChangeReviewer(h.Store, username, "")
 }
 
 // cdcSuperReviewer 与审核人池相同：不受实例/库审批人名单拦截。

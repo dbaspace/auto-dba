@@ -90,6 +90,31 @@ func TestPickLinkedInstanceAnyTenantByHost(t *testing.T) {
 	}
 }
 
+func TestPickLinkedInstanceByDomain(t *testing.T) {
+	cl := &store.SrCluster{ID: "c1", TenantID: "t-a", FeQueryPort: 9030}
+	domains := []string{"dorisdb.report.eu.restosuite.ai"}
+	insts := []store.Instance{
+		{ID: "http", TenantID: "t-a", DBType: "starrocks", Host: "10.1.1.1", Port: 8030, Password: "x", Domains: []string{"dorisdb.report.eu.restosuite.ai"}},
+		{ID: "tag-only", TenantID: "t-b", DBType: "starrocks", Host: "doris.example", Port: 9030, Password: "x", Tags: []string{"domain=dorisdb.report.eu.restosuite.ai"}},
+		{ID: "listed", TenantID: "t-a", DBType: "starrocks", Host: "dorisdb.eu.restosuite.ai", Port: 9030, Password: "enc", Domains: []string{"dorisdb.supply.eu.restosuite.ai", "dorisdb.report.eu.restosuite.ai"}},
+	}
+	it := pickLinkedInstanceByDomain(insts, cl, domains)
+	if it == nil || it.ID != "listed" {
+		t.Fatalf("域名列表且本租户优先: %+v", it)
+	}
+	it = pickLinkedInstanceByDomain(insts[:2], cl, domains)
+	if it == nil || it.ID != "tag-only" {
+		t.Fatalf("标签 domain= 应命中: %+v", it)
+	}
+	if pickLinkedInstanceByDomain(insts[:1], cl, domains) != nil {
+		t.Fatal("8030 不应并进 9030")
+	}
+	got := PickStarRocksByDomain(insts[:1], "dorisdb.report.eu.restosuite.ai")
+	if got == nil || got.ID != "http" {
+		t.Fatalf("FE 取凭据不看端口: %+v", got)
+	}
+}
+
 func TestAlignRegisteredFERoles(t *testing.T) {
 	nodes := []store.SrNode{
 		{ID: "a", Component: "fe", Host: "10.0.0.1", FeRole: "follower"},

@@ -13,18 +13,16 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-
-	"auto-dba/internal/secret"
 )
 
 const (
-	srProxyPrefixFE       = "/api/v1/starrocks-fe-proxy/"
-	srProxyPrefixBE       = "/api/v1/starrocks-be-proxy/"
-	srLocalStaticURL      = "/starrocks-webroot/static"
-	srLocalWebrootURL     = "/starrocks-webroot"
-	srBeDefaultPort       = 8040
-	srProxyBodyLim        = 8 << 20
-	srWebrootRelDir       = "assets/starrocks-webroot"
+	srProxyPrefixFE   = "/api/v1/starrocks-fe-proxy/"
+	srProxyPrefixBE   = "/api/v1/starrocks-be-proxy/"
+	srLocalStaticURL  = "/starrocks-webroot/static"
+	srLocalWebrootURL = "/starrocks-webroot"
+	srBeDefaultPort   = 8040
+	srProxyBodyLim    = 8 << 20
+	srWebrootRelDir   = "assets/starrocks-webroot"
 )
 
 var srProxyHTTP = &http.Client{
@@ -96,9 +94,9 @@ func (h *StarRocksWebHandler) resolveFeUpstream(c *gin.Context, id string) (base
 	if it == nil {
 		return "", "", "", fmt.Errorf("FE 凭据不存在")
 	}
-	plain, e := secret.Decrypt(h.Secret, it.PasswordEnc)
+	user, pass, e = instanceLoginByDomain(h.Store, h.Secret, effectiveListTenantID(h.Store, c), it.Domain)
 	if e != nil {
-		return "", "", "", fmt.Errorf("解密失败")
+		return "", "", "", e
 	}
 	host := firstFeNode(it.FeNode)
 	if host == "" {
@@ -115,7 +113,7 @@ func (h *StarRocksWebHandler) resolveFeUpstream(c *gin.Context, id string) (base
 	if err != nil {
 		return "", "", "", err
 	}
-	return base, strings.TrimSpace(it.Username), plain, nil
+	return base, user, pass, nil
 }
 
 func normalizeBeHostURL(host string) (string, error) {

@@ -120,7 +120,7 @@ export default function FeAdmin() {
       message.success(
         `已从监控同步：新建 ${d.created || 0}，更新拓扑 ${d.updated || 0}` +
           (d.skipped ? `，跳过 ${d.skipped}` : '') +
-          '。请编辑补充账号密码。',
+          '。登录账号和密码按实例的域名或标签匹配。',
       )
       await load()
     } catch (e: any) {
@@ -134,7 +134,7 @@ export default function FeAdmin() {
     setEditingId('')
     setReadonly(false)
     form.resetFields()
-    form.setFieldsValue({ port: 8030, username: 'root', fe_nodes: [] })
+    form.setFieldsValue({ port: 8030, fe_nodes: [] })
     if (preview[0]) applyPreview(preview[0].task_name)
     setVisible(true)
   }
@@ -144,7 +144,6 @@ export default function FeAdmin() {
     setReadonly(viewOnly)
     form.setFieldsValue({
       ...row,
-      password: '',
       fe_nodes: splitFeNodes(row.fe_node),
     })
     setVisible(true)
@@ -159,11 +158,11 @@ export default function FeAdmin() {
         fe_node: joinFeNodes(values.fe_nodes),
       }
       delete payload.fe_nodes
+      delete payload.username
+      delete payload.password
       if (editingId) {
-        if (!payload.password) delete payload.password
         await api.put(`/feadmin/${editingId}`, payload)
       } else {
-        if (!payload.password) delete payload.password
         await api.post('/feadmin', payload)
       }
       message.success('已保存')
@@ -205,19 +204,6 @@ export default function FeAdmin() {
       ),
     },
     {
-      title: '用户名',
-      dataIndex: 'username',
-      key: 'username',
-      width: 120,
-      render: (v: string, row: FeRow) => (
-        <Space size={4}>
-          <span>{v || '-'}</span>
-          {!row.password ? <Tag color="warning">待补凭据</Tag> : null}
-        </Space>
-      ),
-    },
-    { title: '密码', dataIndex: 'password', key: 'password', width: 100, render: (v: string) => v || '（未设）' },
-    {
       title: '操作',
       key: 'action',
       width: 200,
@@ -245,7 +231,7 @@ export default function FeAdmin() {
         showIcon
         message={
           <span>
-            请先在 <Link to="/config/monitor-targets">监控目标注册</Link> 登记 StarRocks FE 目标组（label 含 fe），再点「从监控同步」拉取拓扑（含全部 FE 节点），最后编辑补充账号密码。
+            请先在 <Link to="/config/monitor-targets">监控目标注册</Link> 登记 StarRocks FE 目标组（label 含 fe），再点「从监控同步」拉取拓扑。登录账号和密码从实例管理里域名或 domain= 标签相同的 StarRocks 实例读取。
           </span>
         }
       />
@@ -321,16 +307,6 @@ export default function FeAdmin() {
               options={feNodeOptions}
               tokenSeparators={[',', '，', ';', ' ']}
             />
-          </Form.Item>
-          <Form.Item name="username" label="用户名" rules={[{ required: true }]} extra="同步后默认可为 root，请按现场修改">
-            <Input />
-          </Form.Item>
-          <Form.Item
-            name="password"
-            label="密码"
-            extra={editingId ? '留空表示不修改密码；未设密码请在此补充' : '可稍后编辑补充'}
-          >
-            <Input.Password placeholder={editingId ? '******' : '可选，同步后补全'} />
           </Form.Item>
         </Form>
       </Modal>
