@@ -688,6 +688,9 @@ func (d *DB) ensureLoginLogsTable() error {
 	if err := d.ensureJobRegTables(); err != nil {
 		return err
 	}
+	if err := d.ensureCDCListExtra(); err != nil {
+		return err
+	}
 	return d.ensureTenancy()
 }
 

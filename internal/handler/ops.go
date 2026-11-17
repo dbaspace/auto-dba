@@ -988,12 +988,12 @@ func (h *SlotHandler) List(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
-	tasks, err := h.Store.ListCDCInTenant(tid, "", "")
+	tasks, sourceIDs, err := h.Store.ListCDCSlotTasksInTenant(tid)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
-	insts, err := h.Store.ListInstancesInTenant(tid, "", "")
+	insts, err := h.Store.ListPostgresInstanceEndpoints(sourceIDs)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return

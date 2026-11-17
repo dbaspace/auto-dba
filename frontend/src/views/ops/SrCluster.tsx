@@ -184,6 +184,24 @@ function envRecordLabel(e: { id?: string; code?: string; name?: string }): strin
   return e.name || e.code || e.id || ''
 }
 
+function trimPath(p: unknown): string {
+  return String(p || '').trim().replace(/\/+$/, '')
+}
+
+function hostsEqualEndpoint(a?: string, b?: string): boolean {
+  const ah = (endpointHost(a || '') || String(a || '').trim()).toLowerCase()
+  const bh = (endpointHost(b || '') || String(b || '').trim()).toLowerCase()
+  return !!ah && ah === bh
+}
+
+// 探测到的目录等于全局默认时返回空串（留空走全局）；没有探测结果时返回 undefined，不覆盖已填值。
+function layoutOverride(probed: unknown, globalDefault: string): string | undefined {
+  const p = trimPath(probed)
+  if (!p) return undefined
+  if (p === trimPath(globalDefault)) return ''
+  return p
+}
+
 function endpointHost(ep: string): string {
   const s = (ep || '').trim()
   if (!s) return ''
@@ -370,6 +388,10 @@ export default function SrClusterPage() {
   const currentTenantLabel = currentTenant?.name || currentTenant?.code || '当前租户'
   const [tab, setTab] = useState('clusters')
   const [clusters, setClusters] = useState<SrCluster[]>([])
+  const [clusterNameQuery, setClusterNameQuery] = useState('')
+  const [clusterEnvFilter, setClusterEnvFilter] = useState('')
+  const detailRef = useRef<HTMLDivElement>(null)
+  const [detailScroll, setDetailScroll] = useState(0)
   const [agents, setAgents] = useState<SrAgent[]>([])
   const [agentStatus, setAgentStatus] = useState<Record<string, { status: string; message?: string }>>({})
   const [agentActingId, setAgentActingId] = useState('')
@@ -706,10 +728,13 @@ export default function SrClusterPage() {
   }, [clusterForm, monitorDomain, monitorTask])
 
   const probeRegisterLayout = useCallback(async (hosts: string[], password: string) => {
-    if (!hosts.length) return
+    const feNodesNow: { host?: string; is_primary_fe?: boolean }[] = clusterForm.getFieldValue('fe_nodes') || []
+    const primary = feNodesNow.find((n) => n.is_primary_fe)
+    const feHost = endpointHost(primary?.host || '') || String(primary?.host || '').trim() || hosts[0]
+    if (!feHost) return
     try {
       const { data } = await api.post('/sr-cluster/probe-layout', {
-        fe_host: hosts[0],
+        fe_host: feHost,
         fe_password: password,
         fe_user: clusterForm.getFieldValue('fe_user') || 'root',
         fe_query_port: 9030,
@@ -719,25 +744,36 @@ export default function SrClusterPage() {
       const layout = data?.data || {}
       const feNodes: Record<string, unknown>[] = clusterForm.getFieldValue('fe_nodes') || []
       const beNodes: Record<string, unknown>[] = clusterForm.getFieldValue('be_nodes') || []
-      if (layout.fe_software_base) {
-        clusterForm.setFieldValue('fe_nodes', feNodes.map((n) => ({ ...n, software_base: layout.fe_software_base })))
+      const feSoft = layoutOverride(layout.fe_software_base, layoutDefaults.fe_software_base)
+      if (feSoft !== undefined) {
+        clusterForm.setFieldValue('fe_nodes', feNodes.map((n) => ({ ...n, software_base: feSoft })))
       }
-      if (layout.be_software_base || layout.be_data_root) {
-        clusterForm.setFieldValue('be_nodes', beNodes.map((n) => ({
-          ...n,
-          ...(layout.be_software_base ? { software_base: layout.be_software_base } : {}),
-          ...(layout.be_data_root ? { data_root: layout.be_data_root } : {}),
-        })))
+      const probedBE: { host?: string; software_base?: string; data_root?: string; sys_minidump_dir?: string }[] = layout.be_nodes || []
+      if (probedBE.length) {
+        clusterForm.setFieldValue('be_nodes', beNodes.map((n) => {
+          const hit = probedBE.find((b) => hostsEqualEndpoint(b.host, String(n.host || '')))
+          if (!hit) return n
+          const next = { ...n }
+          const soft = layoutOverride(hit.software_base, layoutDefaults.be_software_base)
+          if (soft !== undefined) next.software_base = soft
+          const dataRoot = layoutOverride(hit.data_root, layoutDefaults.be_data_root)
+          if (dataRoot !== undefined) next.data_root = dataRoot
+          return next
+        }))
       }
-      if (layout.fe_software_base || layout.be_software_base || layout.be_data_root) {
-        message.success(`已回填到节点：FE=${layout.fe_software_base || '—'} BE=${layout.be_software_base || '—'} 数据=${layout.be_data_root || '—'}。清空某一节点的目录则该节点改走全局`)
-      }
+      const dump = layout.be_sys_minidump_dir
+        || (probedBE.length === 1 ? probedBE[0].sys_minidump_dir : '')
+      const dumpText = dump || (probedBE.length > 1 ? '各 BE 不同，已按主机填写' : '—')
+      message.success(
+        `已回填。采样 FE ${layout.sample_fe_host || feHost}，meta_dir=${layout.fe_meta_dir || '—'}，sys_log_dir=${layout.fe_internal_log_dir || '—'}，sys_minidump_dir=${dumpText}。与全局默认相同的目录已留空`,
+        8,
+      )
       const warns: string[] = layout.warnings || []
       if (warns.length) message.warning(warns.join('；'), 8)
     } catch (e: any) {
       message.warning(e?.response?.data?.message || e.message || '目录探测失败（可手填）')
     }
-  }, [clusterForm, monitorDomain])
+  }, [clusterForm, monitorDomain, layoutDefaults])
 
   const probeRegisterFERoles = useCallback(async () => {
     const feNodes: { host?: string }[] = clusterForm.getFieldValue('fe_nodes') || []
@@ -961,15 +997,33 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
 
   const openCluster = async (row: SrCluster) => {
     if (selected?.id === row.id) {
-      setSelected(null)
-      setNodes([])
+      setDetailScroll((n) => n + 1)
       return
     }
     setSelected(row)
     setClusterInst(null)
     setClusterMon(null)
     await reloadClusterDetail(row.id, row)
+    setDetailScroll((n) => n + 1)
   }
+
+  useEffect(() => {
+    if (!detailScroll) return
+    const scroll = () => {
+      const el = detailRef.current
+      if (!el) return
+      const panel = el.closest('.app-tab-panel') as HTMLElement | null
+      if (panel) {
+        const top = el.getBoundingClientRect().top - panel.getBoundingClientRect().top + panel.scrollTop
+        panel.scrollTo({ top: Math.max(0, top - 8), behavior: 'auto' })
+        return
+      }
+      el.scrollIntoView({ block: 'start', behavior: 'auto' })
+    }
+    scroll()
+    const timer = window.setTimeout(scroll, 50)
+    return () => window.clearTimeout(timer)
+  }, [detailScroll])
 
   const reloadClusterDetail = async (clusterId: string, fallback?: SrCluster) => {
     const res = await api.get(`/sr-cluster/clusters/${clusterId}`)
@@ -1561,10 +1615,28 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
             label: '集群',
             children: (
               <Space direction="vertical" style={{ width: '100%' }} size="middle">
-                <Space>
+                <Space wrap>
+                  <Select
+                    style={{ width: 160 }}
+                    value={clusterEnvFilter}
+                    onChange={(v) => setClusterEnvFilter(v || '')}
+                    options={[
+                      { value: '', label: '全部' },
+                      ...Array.from(new Set(clusters.map((c) => (c.environment || '').trim()).filter(Boolean)))
+                        .sort((a, b) => a.localeCompare(b))
+                        .map((env) => ({ value: env, label: env })),
+                    ]}
+                  />
+                  <Input
+                    allowClear
+                    placeholder="按名称搜索"
+                    style={{ width: 200 }}
+                    value={clusterNameQuery}
+                    onChange={(e) => setClusterNameQuery(e.target.value)}
+                  />
+                  <Button onClick={loadClusters}>刷新</Button>
                   <Button type="primary" onClick={() => openClusterModal('create')}>新建集群</Button>
                   <Button onClick={() => openClusterModal('register')}>登记已有集群</Button>
-                  <Button onClick={loadClusters}>刷新</Button>
                 </Space>
                 {impersonating ? (
                   <Alert
@@ -1577,7 +1649,12 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                 <Table
                   rowKey="id"
                   loading={loading}
-                  dataSource={clusters}
+                  dataSource={clusters.filter((c) => {
+                    if (clusterEnvFilter && (c.environment || '') !== clusterEnvFilter) return false
+                    const q = clusterNameQuery.trim().toLowerCase()
+                    if (q && !(c.name || '').toLowerCase().includes(q)) return false
+                    return true
+                  })}
                   pagination={false}
                   onRow={(row) => ({ onClick: () => openCluster(row), style: { cursor: 'pointer' } })}
                   columns={[
@@ -1592,9 +1669,7 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                             onClick={(e) => { e.stopPropagation(); void openCluster(row) }}
                           >
                             {name}
-                            <span style={{ marginLeft: 4, opacity: 0.55, fontSize: 12 }}>
-                              {selected?.id === row.id ? '收起' : '详情'}
-                            </span>
+                            <span style={{ marginLeft: 4, opacity: 0.55, fontSize: 12 }}>详情</span>
                           </Button>
                           <Tag color={row.source === 'register' ? 'blue' : 'default'}>
                             {row.source === 'register' ? '登记' : '新建'}
@@ -1638,6 +1713,7 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                   ]}
                 />
                 {selected && (
+                  <div ref={detailRef}>
                   <Card
                     title={`集群 · ${selected.name}`}
                     extra={(
@@ -2073,6 +2149,7 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                       )
                     })()}
                   </Card>
+                  </div>
                 )}
               </Space>
             ),
@@ -2872,7 +2949,7 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                 </Button>
               </Space>
               <div className="muted" style={{ marginTop: 4 }}>
-                连接首个 FE（:9030）探测角色，并从 ADMIN SHOW FRONTEND CONFIG / BE :8040/varz 回填到各节点目录。节点留空则使用全局配置。
+                目录探测连接勾选的首 FE（:9030），读取 meta_dir / sys_log_dir，并按每台 BE 的 :8040/varz 回填。与全局默认相同的目录留空。软件目录会作为后续升级替换 bin/lib 的路径。
               </div>
             </div>
           ) : null}

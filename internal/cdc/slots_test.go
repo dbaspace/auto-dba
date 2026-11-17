@@ -240,6 +240,35 @@ func TestPlanSlotCollectUsesTagDomainWhenNoHost(t *testing.T) {
 	}
 }
 
+func TestAttachSlotCDCSlimExtraMatchesFull(t *testing.T) {
+	inst := store.Instance{ID: "i1", Host: "10.0.0.8", Port: 5432, DomainName: "pg.example"}
+	fat := `-- auto-dba-cdc:{"slot_name":"slot_bill","connector_name":"conn_bill","publication_name":"pub_bill","connect_base_url":"http://10.1.2.3:8083","topic_prefix":"bill","debezium_config":{"database.hostname":"pg.bill.example","database.port":"5433","table.include.list":"db.t1,db.t2","schema.include.list":"public"},"tables":["t1","t2"]}`
+	slim := `-- auto-dba-cdc:{"slot_name":"slot_bill","connector_name":"conn_bill","publication_name":"pub_bill","connect_base_url":"http://10.1.2.3:8083","topic_prefix":"bill","debezium_config":{"database.hostname":"pg.bill.example","database.port":"5433"}}`
+	slots := []store.SyncSlot{{Host: inst.Host, Port: 5432, SlotName: "slot_bill", Database: "db_bill"}}
+	full := AttachSlotCDC(slots, []store.CDCTask{{
+		ID: "t1", Name: "bill", TaskType: "init", SourceID: inst.ID, SourceDB: "db_bill", Description: fat,
+	}}, []store.Instance{inst})
+	narrow := AttachSlotCDC(slots, []store.CDCTask{{
+		ID: "t1", Name: "bill", TaskType: "init", SourceID: inst.ID, SourceDB: "db_bill", Description: slim,
+	}}, []store.Instance{inst})
+	if full[0].TaskName != "pub_bill" || full[0].ConnectorName != "conn_bill" || full[0].Topic != "bill" || full[0].SourceHost != "pg.bill.example" || full[0].SourcePort != 5433 {
+		t.Fatalf("full = %+v", full[0])
+	}
+	if narrow[0].TaskName != full[0].TaskName || narrow[0].ConnectorName != full[0].ConnectorName || narrow[0].Topic != full[0].Topic || narrow[0].SourceHost != full[0].SourceHost || narrow[0].SourcePort != full[0].SourcePort || narrow[0].Connector != full[0].Connector {
+		t.Fatalf("slim = %+v full = %+v", narrow[0], full[0])
+	}
+	if strings.Contains(slim, "table.include.list") || strings.Contains(slim, `"tables"`) {
+		t.Fatal("slim extra still carries table lists")
+	}
+	orphan := FillSlotConnectFallback(AttachSlotCDC([]store.SyncSlot{{
+		Host: inst.Host, Port: 5432, SlotName: "missing", Database: "db_x",
+		ConnectMetaBase: "http://10.2.2.2:8083", ConnectMetaTask: "from-slot", ConnectMetaTopic: "from-slot",
+	}}, []store.CDCTask{{ID: "bad", Name: "bad", SourceID: inst.ID, Description: ""}}, []store.Instance{inst}))
+	if orphan[0].TaskName != "from-slot" || orphan[0].Topic != "from-slot" || orphan[0].Connector != "10.2.2.2:8083" {
+		t.Fatalf("fallback = %+v", orphan[0])
+	}
+}
+
 func TestResolveSlotConnectorUsesConnectMeta(t *testing.T) {
 	slot := store.SyncSlot{
 		Host: "pg.bj.restosuite.cn", Port: 5432, SlotName: "bj_slot_db_data_front", Database: "db_data_front",

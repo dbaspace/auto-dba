@@ -106,6 +106,9 @@ func (d *DB) migrateFast() error {
 			if err := d.ensureJobRegTables(); err != nil {
 				return err
 			}
+			if err := d.ensureCDCListExtra(); err != nil {
+				return err
+			}
 			if err := d.ensureSystemNoticeTables(); err != nil {
 				return err
 			}
