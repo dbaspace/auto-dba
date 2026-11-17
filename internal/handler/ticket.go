@@ -892,23 +892,12 @@ func (h *TicketHandler) prepareDQLSubmit(c *gin.Context, req *ticketSubmitReq) e
 	return nil
 }
 
-// fillIssueListMeta 补列表展示用的环境、数据库类型：优先实例，其次 sql_content。
-func fillIssueListMeta(st *store.DB, it *store.Issue, instCache map[string]*store.Instance) {
+// applyIssueListPrefix 用正文前缀补列表上仍空的环境和数据库类型，不把正文放进响应。
+func applyIssueListPrefix(it *store.Issue, raw string) {
 	if it == nil {
 		return
 	}
-	if id := strings.TrimSpace(it.InstanceID); id != "" && st != nil {
-		inst, ok := instCache[id]
-		if !ok {
-			inst, _ = st.GetInstance(id)
-			instCache[id] = inst
-		}
-		if inst != nil {
-			it.Env = strings.TrimSpace(inst.IDC)
-			it.DBType = strings.TrimSpace(inst.DBType)
-		}
-	}
-	raw := strings.TrimSpace(it.SQLContent)
+	raw = strings.TrimSpace(raw)
 	if raw == "" || raw[0] != '{' {
 		return
 	}
@@ -942,7 +931,7 @@ func (h *TicketHandler) List(c *gin.Context) {
 	role := middleware.Role(c)
 	user := middleware.Username(c)
 	tid := effectiveListTenantID(h.Store, c)
-	list, err := h.Store.ListIssuesInTenant(tid, c.Query("type"), c.Query("status"), c.Query("q"), user, middleware.IsPrivileged(role))
+	list, err := h.Store.ListIssueSummariesInTenant(tid, c.Query("type"), c.Query("status"), c.Query("q"), user, middleware.IsPrivileged(role))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
@@ -972,22 +961,22 @@ func (h *TicketHandler) List(c *gin.Context) {
 	}
 	if typeQ == "" || typeQ == store.IssueTypeResourceApply {
 		if h.isPlatformResourceApplyReviewer(c) {
-			if extra, e2 := h.Store.ListResourceApplyAcrossTenants(c.Query("status"), c.Query("q")); e2 == nil {
+			if extra, e2 := h.Store.ListResourceApplySummariesAcrossTenants(c.Query("status"), c.Query("q")); e2 == nil {
 				mergeExtra(extra)
 			}
 		} else if user != "" {
-			if extra, e2 := h.Store.ListResourceApplyAssignedToAcrossTenants(user, c.Query("status"), c.Query("q")); e2 == nil {
+			if extra, e2 := h.Store.ListIssueSummariesAssignedToAcrossTenants(user, store.IssueTypeResourceApply, c.Query("status"), c.Query("q")); e2 == nil {
 				mergeExtra(extra)
 			}
 		}
 	}
 	if user != "" && typeQ != store.IssueTypeResourceApply {
-		if extra, e2 := h.Store.ListIssuesAssignedToAcrossTenants(user, typeQ, c.Query("status"), c.Query("q")); e2 == nil {
+		if extra, e2 := h.Store.ListIssueSummariesAssignedToAcrossTenants(user, typeQ, c.Query("status"), c.Query("q")); e2 == nil {
 			mergeExtra(extra)
 		}
 	}
 	if (typeQ == "" || typeQ == store.IssueTypeDCL) && h.canReviewDCLAcrossTenants(c) {
-		if extra, e2 := h.Store.ListIssuesInTenant("", store.IssueTypeDCL, c.Query("status"), c.Query("q"), "", true); e2 == nil {
+		if extra, e2 := h.Store.ListIssueSummariesInTenant("", store.IssueTypeDCL, c.Query("status"), c.Query("q"), "", true); e2 == nil {
 			for _, it := range extra {
 				if _, ok := seen[it.ID]; ok {
 					continue
@@ -998,12 +987,26 @@ func (h *TicketHandler) List(c *gin.Context) {
 		}
 	}
 	names := tenantNameMap(h.Store)
-	instCache := map[string]*store.Instance{}
+	var prefixIDs []string
 	for i := range list {
 		if n := names[list[i].TenantID]; n != "" {
 			list[i].TenantName = n
 		}
-		fillIssueListMeta(h.Store, &list[i], instCache)
+		list[i].SQLContent = ""
+		if list[i].Env == "" || list[i].DBType == "" {
+			prefixIDs = append(prefixIDs, list[i].ID)
+		}
+	}
+	if len(prefixIDs) > 0 {
+		prefixes, perr := h.Store.ListIssueSQLPrefixes(prefixIDs)
+		if perr != nil {
+			log.Printf("ticket list sql prefix: %v", perr)
+		} else {
+			for i := range list {
+				applyIssueListPrefix(&list[i], prefixes[list[i].ID])
+				list[i].SQLContent = ""
+			}
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{"data": list})
 }

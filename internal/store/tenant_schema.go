@@ -295,7 +295,18 @@ func (d *DB) ensureBusinessTenantIDColumns() error {
 			return err
 		}
 	}
-	return nil
+	var issueTables int
+	if err := d.db.QueryRow(`
+		SELECT COUNT(1) FROM information_schema.tables
+		WHERE table_schema = 'public' AND table_name = $1
+	`, "tbl_issues").Scan(&issueTables); err != nil {
+		return err
+	}
+	if issueTables == 0 {
+		return nil
+	}
+	return d.ensureIndexIfMissing("idx_issues_tenant_created",
+		`CREATE INDEX IF NOT EXISTS idx_issues_tenant_created ON tbl_issues(tenant_id, created_at DESC)`)
 }
 
 func (d *DB) bootstrapDefaultTenant() error {

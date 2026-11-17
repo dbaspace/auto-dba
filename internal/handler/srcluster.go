@@ -445,9 +445,12 @@ func (h *SrClusterHandler) ProbeLayout(c *gin.Context) {
 	user := strings.TrimSpace(req.FeUser)
 	pass := req.FePassword
 	if strings.TrimSpace(pass) == "" {
-		if u, p, ok := h.eng().LookupInstanceCredByDomain(middleware.TenantID(c), req.Domain); ok {
-			user, pass = u, p
+		u, p, lerr := lookupRegisterInstanceCred(h.Store, h.Secret, c, req.Domain)
+		if lerr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"message": lerr.Error()})
+			return
 		}
+		user, pass = u, p
 	}
 	res, err := h.eng().ProbeLayout(c.Request.Context(), host, user, pass, req.FeQueryPort)
 	if err != nil {
@@ -537,9 +540,12 @@ func (h *SrClusterHandler) ProbeFERoles(c *gin.Context) {
 	user := strings.TrimSpace(req.FeUser)
 	pass := req.FePassword
 	if strings.TrimSpace(pass) == "" {
-		if u, p, ok := h.eng().LookupInstanceCredByDomain(middleware.TenantID(c), req.Domain); ok {
-			user, pass = u, p
+		u, p, lerr := lookupRegisterInstanceCred(h.Store, h.Secret, c, req.Domain)
+		if lerr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"message": lerr.Error()})
+			return
 		}
+		user, pass = u, p
 	}
 	roles, err := h.eng().ProbeFERoles(c.Request.Context(), host, user, pass, req.FeQueryPort)
 	if err != nil {

@@ -164,6 +164,153 @@ func (d *DB) ListIssuesInTenant(tenantID, issueType, status, q, viewer string, v
 	return out, rows.Err()
 }
 
+// issueSummaryFilter 工单列表摘要的筛选。不读取 sql_content。
+type issueSummaryFilter struct {
+	TenantID             string
+	IssueType            string
+	Status               string
+	Q                    string
+	Viewer               string
+	ViewAll              bool
+	Assignee             string
+	ExcludeCDC           bool
+	ExcludeResourceApply bool
+}
+
+// ListIssueSummariesInTenant 工单列表用，不含 SQL 正文。环境、库类型来自关联实例。
+func (d *DB) ListIssueSummariesInTenant(tenantID, issueType, status, q, viewer string, viewAll bool) ([]Issue, error) {
+	return d.listIssueSummaries(issueSummaryFilter{
+		TenantID: tenantID, IssueType: issueType, Status: status, Q: q, Viewer: viewer, ViewAll: viewAll,
+		ExcludeCDC: true,
+	})
+}
+
+// ListResourceApplySummariesAcrossTenants 全平台平台资源申请摘要。
+func (d *DB) ListResourceApplySummariesAcrossTenants(status, q string) ([]Issue, error) {
+	return d.listIssueSummaries(issueSummaryFilter{
+		IssueType: IssueTypeResourceApply, Status: status, Q: q, ViewAll: true,
+	})
+}
+
+// ListIssueSummariesAssignedToAcrossTenants 全平台指派给指定用户的工单摘要。
+func (d *DB) ListIssueSummariesAssignedToAcrossTenants(assignee, issueType, status, q string) ([]Issue, error) {
+	if strings.TrimSpace(assignee) == "" {
+		return []Issue{}, nil
+	}
+	return d.listIssueSummaries(issueSummaryFilter{
+		Assignee: assignee, IssueType: issueType, Status: status, Q: q, ViewAll: true,
+		ExcludeResourceApply: strings.TrimSpace(issueType) == "",
+	})
+}
+
+func (d *DB) listIssueSummaries(f issueSummaryFilter) ([]Issue, error) {
+	query := `SELECT i.id, i.ticket_no, i.issue_type, i.instance_id, COALESCE(i.domain,''), i.database_id, i.db_name, i.description, i.status, i.submitter, i.assigned_to, i.reject_reason, i.need_rollback, i.scheduled_at, i.created_at, i.updated_at, COALESCE(i.tenant_id,''), COALESCE(i.exec_progress,''), COALESCE(inst.idc,''), COALESCE(inst.db_type,'')
+		FROM tbl_issues i LEFT JOIN tbl_instances inst ON inst.id = i.instance_id WHERE 1=1`
+	var args []any
+	if assignee := strings.TrimSpace(f.Assignee); assignee != "" {
+		query += ` AND LOWER(i.assigned_to)=LOWER(?)`
+		args = append(args, assignee)
+	}
+	if tid := strings.TrimSpace(f.TenantID); tid != "" {
+		query += ` AND i.tenant_id=?`
+		args = append(args, tid)
+	}
+	if issueType := strings.TrimSpace(f.IssueType); issueType != "" {
+		query += ` AND i.issue_type=?`
+		args = append(args, issueType)
+	} else if f.ExcludeResourceApply {
+		query += ` AND i.issue_type<>?`
+		args = append(args, IssueTypeResourceApply)
+	} else if f.ExcludeCDC && d.BoolArg("ticket_exclude_cdc_when_empty", true) {
+		query += ` AND i.issue_type<>?`
+		args = append(args, IssueTypeCDC)
+	}
+	if status := strings.TrimSpace(f.Status); status != "" {
+		query += ` AND i.status=?`
+		args = append(args, status)
+	}
+	if q := strings.TrimSpace(f.Q); q != "" {
+		like := "%" + q + "%"
+		query += ` AND (i.ticket_no LIKE ? OR i.db_name LIKE ? OR i.description LIKE ?)`
+		args = append(args, like, like, like)
+	}
+	if !f.ViewAll && strings.TrimSpace(f.Viewer) != "" && strings.TrimSpace(f.Assignee) == "" {
+		query += ` AND (i.submitter=? OR i.assigned_to=?)`
+		args = append(args, f.Viewer, f.Viewer)
+	}
+	query += ` ORDER BY i.created_at DESC`
+	rows, err := d.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Issue
+	for rows.Next() {
+		var it Issue
+		var tid string
+		var prog sql.NullString
+		if err := rows.Scan(
+			&it.ID, &it.TicketNo, &it.IssueType, &it.InstanceID, &it.Domain, &it.DatabaseID, &it.DBName, &it.Description,
+			&it.Status, &it.Submitter, &it.AssignedTo, &it.RejectReason, &it.NeedRollback, &it.ScheduledAt, &it.CreatedAt, &it.UpdatedAt, &tid, &prog,
+			&it.Env, &it.DBType,
+		); err != nil {
+			return nil, err
+		}
+		it.TenantID = strings.TrimSpace(tid)
+		it.Env = strings.TrimSpace(it.Env)
+		it.DBType = strings.TrimSpace(it.DBType)
+		it.Type = it.IssueType
+		it.ExecProgressRaw = prog.String
+		it.ExecProgress = ParseExecProgress(prog.String)
+		out = append(out, it)
+	}
+	if out == nil {
+		out = []Issue{}
+	}
+	return out, rows.Err()
+}
+
+// ListIssueSQLPrefixes 只取仍缺展示字段的工单正文前 4096 个字符。
+func (d *DB) ListIssueSQLPrefixes(ids []string) (map[string]string, error) {
+	out := map[string]string{}
+	if d == nil || len(ids) == 0 {
+		return out, nil
+	}
+	const chunk = 400
+	for start := 0; start < len(ids); start += chunk {
+		end := start + chunk
+		if end > len(ids) {
+			end = len(ids)
+		}
+		part := ids[start:end]
+		ph := make([]string, len(part))
+		args := make([]any, len(part))
+		for i, id := range part {
+			ph[i] = "?"
+			args[i] = id
+		}
+		q := `SELECT id, LEFT(COALESCE(sql_content,''), 4096) FROM tbl_issues WHERE id IN (` + strings.Join(ph, ",") + `) AND LEFT(COALESCE(sql_content,''), 1)='{'`
+		rows, err := d.Query(q, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var id, raw string
+			if err := rows.Scan(&id, &raw); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			out[id] = raw
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+	}
+	return out, nil
+}
+
 // ListResourceApplyAcrossTenants 全平台平台资源申请（不按 tenant_id 过滤），供平台管理员/白名单审核。
 func (d *DB) ListResourceApplyAcrossTenants(status, q string) ([]Issue, error) {
 	return d.ListIssuesInTenant("", IssueTypeResourceApply, status, q, "", true)

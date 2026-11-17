@@ -115,6 +115,33 @@ func TestPickLinkedInstanceByDomain(t *testing.T) {
 	}
 }
 
+func TestPickStarRocksCredByDomain(t *testing.T) {
+	bj := store.Instance{
+		ID: "bj", TenantID: "other", DBType: "StarRocks", Host: "dorisdb.bj.restosuite.cn", Port: 9030,
+		Username: "root", Password: "enc",
+		Domains: []string{"dorisdb.report.bj.restosuite.cn", "dorisdb.bj.restosuite.cn"},
+		Tags:    []string{"domain=dorisdb.report.bj.restosuite.cn", "idc=beijing"},
+	}
+	got := PickStarRocksCredByDomain([]store.Instance{bj}, "https://dorisdb.bj.restosuite.cn:9030/db", "t-home")
+	if got == nil || got.ID != "bj" {
+		t.Fatalf("域名列表应命中 starrocks-bj-report: %+v", got)
+	}
+	hostOnly := store.Instance{ID: "host", TenantID: "t", DBType: "starrocks", Host: "dorisdb.bj.restosuite.cn:9030", Password: "p"}
+	got = PickStarRocksCredByDomain([]store.Instance{hostOnly}, "dorisdb.bj.restosuite.cn", "t")
+	if got == nil || got.ID != "host" {
+		t.Fatalf("连接主机应去掉端口: %+v", got)
+	}
+	empty := store.Instance{ID: "empty", TenantID: "t", DBType: "starrocks", Domains: []string{"dorisdb.bj.restosuite.cn"}}
+	got = PickStarRocksCredByDomain([]store.Instance{empty, bj}, "dorisdb.bj.restosuite.cn", "t")
+	if got == nil || got.ID != "bj" {
+		t.Fatalf("本租户没密码时应使用已保存密码的实例: %+v", got)
+	}
+	got = PickStarRocksCredByDomain([]store.Instance{empty}, "dorisdb.bj.restosuite.cn", "t")
+	if got == nil || got.ID != "empty" {
+		t.Fatalf("只有空密码实例时仍要返回它: %+v", got)
+	}
+}
+
 func TestAlignRegisteredFERoles(t *testing.T) {
 	nodes := []store.SrNode{
 		{ID: "a", Component: "fe", Host: "10.0.0.1", FeRole: "follower"},

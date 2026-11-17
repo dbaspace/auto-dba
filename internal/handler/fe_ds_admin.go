@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -9,14 +10,20 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"auto-dba/internal/middleware"
 	"auto-dba/internal/secret"
 	"auto-dba/internal/srcluster"
 	"auto-dba/internal/store"
 )
 
+var (
+	errNoInstanceAccount     = errors.New("未匹配到实例账号")
+	errInstancePasswordEmpty = errors.New("已匹配实例但未保存密码")
+)
+
 func instanceLoginByDomain(db *store.DB, sec, tenantID, domain string) (user, pass string, err error) {
 	if db == nil || strings.TrimSpace(domain) == "" {
-		return "", "", fmt.Errorf("未匹配到实例账号")
+		return "", "", errNoInstanceAccount
 	}
 	insts, err := db.ListInstancesInTenant(tenantID, "", "")
 	if err != nil {
@@ -24,11 +31,86 @@ func instanceLoginByDomain(db *store.DB, sec, tenantID, domain string) (user, pa
 	}
 	it := srcluster.PickStarRocksByDomain(insts, domain)
 	if it == nil || strings.TrimSpace(it.Password) == "" {
-		return "", "", fmt.Errorf("未匹配到实例账号")
+		return "", "", errNoInstanceAccount
 	}
 	plain, err := secret.Decrypt(sec, it.Password)
 	if err != nil || strings.TrimSpace(plain) == "" {
-		return "", "", fmt.Errorf("未匹配到实例账号")
+		return "", "", errNoInstanceAccount
+	}
+	user = strings.TrimSpace(it.Username)
+	if user == "" {
+		user = "root"
+	}
+	return user, plain, nil
+}
+
+// instancesForRegisterCred 与当前用户能打开并测试连接的实例相同。
+func instancesForRegisterCred(db *store.DB, c *gin.Context) ([]store.Instance, error) {
+	if db == nil || c == nil {
+		return nil, nil
+	}
+	tid := middleware.TenantID(c)
+	auditing := platformAdminAuditing(db, c) && !listScopeTenant(c)
+	var list []store.Instance
+	var err error
+	if auditing {
+		list, err = db.ListInstances("", "")
+	} else {
+		list, err = db.ListInstancesInTenant(tid, "", "")
+		if err != nil {
+			return nil, err
+		}
+		hosted, herr := db.ListInstanceIDsForTenantDatabases(tid)
+		if herr != nil {
+			return nil, herr
+		}
+		list, err = appendInstancesByIDs(db, list, hosted, "", "")
+		if err != nil {
+			return nil, err
+		}
+		granted, gerr := grantedVisibleInstanceIDs(db, tid, middleware.UserID(c))
+		if gerr != nil {
+			return nil, gerr
+		}
+		list, err = appendInstancesByIDs(db, list, granted, "", "")
+	}
+	if err != nil {
+		return nil, err
+	}
+	user := middleware.Username(c)
+	role := middleware.Role(c)
+	kept := make([]store.Instance, 0, len(list))
+	for i := range list {
+		viewer := db.ViewerOfInTenant(user, role, list[i].TenantID)
+		if list[i].VisibleTo(viewer) {
+			kept = append(kept, list[i])
+		}
+	}
+	return kept, nil
+}
+
+// lookupRegisterInstanceCred 登记已有集群按 domain 取当前用户可见实例的账号和密码。
+func lookupRegisterInstanceCred(db *store.DB, sec string, c *gin.Context, domain string) (user, pass string, err error) {
+	if strings.TrimSpace(domain) == "" {
+		return "", "", errNoInstanceAccount
+	}
+	insts, err := instancesForRegisterCred(db, c)
+	if err != nil {
+		return "", "", err
+	}
+	it := srcluster.PickStarRocksCredByDomain(insts, domain, middleware.TenantID(c))
+	if it == nil {
+		return "", "", errNoInstanceAccount
+	}
+	if strings.TrimSpace(it.Password) == "" {
+		return "", "", errInstancePasswordEmpty
+	}
+	plain, err := secret.Decrypt(sec, it.Password)
+	if err != nil {
+		return "", "", fmt.Errorf("解密已存密码失败")
+	}
+	if strings.TrimSpace(plain) == "" {
+		return "", "", errInstancePasswordEmpty
 	}
 	user = strings.TrimSpace(it.Username)
 	if user == "" {
@@ -202,9 +284,9 @@ func (h *FeAdminHandler) ResolveCredential(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
-	user, plain, err := instanceLoginByDomain(h.Store, h.Secret, effectiveListTenantID(h.Store, c), req.Domain)
+	user, plain, err := lookupRegisterInstanceCred(h.Store, h.Secret, c, req.Domain)
 	if err != nil {
-		if err.Error() == "未匹配到实例账号" {
+		if errors.Is(err, errNoInstanceAccount) || errors.Is(err, errInstancePasswordEmpty) {
 			c.JSON(http.StatusNotFound, gin.H{"message": err.Error()})
 			return
 		}

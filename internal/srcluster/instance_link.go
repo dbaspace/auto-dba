@@ -318,6 +318,92 @@ func PickStarRocksByDomain(insts []store.Instance, domain string) *store.Instanc
 	return any
 }
 
+// credDomainKey 去掉协议、路径和端口，供登记集群按 domain 对齐实例。
+func credDomainKey(s string) string {
+	s = strings.TrimSpace(s)
+	s = strings.TrimPrefix(s, "https://")
+	s = strings.TrimPrefix(s, "http://")
+	if i := strings.IndexAny(s, "/"); i >= 0 {
+		s = s[:i]
+	}
+	if h, _, err := net.SplitHostPort(s); err == nil {
+		s = h
+	}
+	return normalizeLinkDomain(s)
+}
+
+func instanceCredDomainKeys(it store.Instance) []string {
+	raw := []string{it.DomainName}
+	raw = append(raw, it.Domains...)
+	raw = append(raw, splitHosts(it.Host)...)
+	for _, t := range it.Tags {
+		k, v, ok := strings.Cut(strings.TrimSpace(t), "=")
+		if ok && strings.EqualFold(strings.TrimSpace(k), "domain") {
+			raw = append(raw, v)
+		}
+	}
+	var out []string
+	seen := map[string]struct{}{}
+	for _, s := range raw {
+		key := credDomainKey(s)
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, key)
+	}
+	return out
+}
+
+func instanceHasCredDomain(it store.Instance, want string) bool {
+	if want == "" {
+		return false
+	}
+	for _, key := range instanceCredDomainKeys(it) {
+		if key == want {
+			return true
+		}
+	}
+	return false
+}
+
+// PickStarRocksCredByDomain 按域名、域名列表、domain= 标签或连接主机匹配。先本租户且已有密码。
+func PickStarRocksCredByDomain(insts []store.Instance, domain, preferTenant string) *store.Instance {
+	want := credDomainKey(domain)
+	if want == "" {
+		return nil
+	}
+	preferTenant = strings.TrimSpace(preferTenant)
+	var samePass, otherPass, same, other *store.Instance
+	for i := range insts {
+		it := &insts[i]
+		if !isStarRocksInstance(*it) || !instanceHasCredDomain(*it, want) {
+			continue
+		}
+		sameTenant := preferTenant != "" && strings.TrimSpace(it.TenantID) == preferTenant
+		hasPass := strings.TrimSpace(it.Password) != ""
+		switch {
+		case sameTenant && hasPass && samePass == nil:
+			samePass = it
+		case hasPass && otherPass == nil:
+			otherPass = it
+		case sameTenant && same == nil:
+			same = it
+		case other == nil:
+			other = it
+		}
+	}
+	for _, it := range []*store.Instance{samePass, otherPass, same, other} {
+		if it != nil {
+			return it
+		}
+	}
+	return nil
+}
+
 // pickLinkedInstanceByDomain 查询端口一致时，用域名命中实例。先本租户，再优先已有密码。
 func pickLinkedInstanceByDomain(insts []store.Instance, cl *store.SrCluster, domains []string) *store.Instance {
 	if cl == nil {
