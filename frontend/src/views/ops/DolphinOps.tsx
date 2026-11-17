@@ -243,6 +243,7 @@ function polishDsChrome(iframe: HTMLIFrameElement | null) {
         const series = opt.series || []
         const isBar = series.some((s: { type?: string }) => s?.type === 'bar')
         if (!isBar) return
+        if (node.getAttribute('data-auto-dba-bar-fixed') === '1') return
         const h = node.clientHeight || 0
         if (h < 400) node.style.setProperty('height', '400px', 'important')
         node.style.setProperty('overflow', 'visible', 'important')
@@ -259,7 +260,7 @@ function polishDsChrome(iframe: HTMLIFrameElement | null) {
           },
           false,
         )
-        inst.resize?.()
+        node.setAttribute('data-auto-dba-bar-fixed', '1')
       } catch {
         /* ignore */
       }
@@ -295,12 +296,6 @@ export default function DolphinOps() {
     pushEnvStateToIframe()
     polishDsChrome(iframeRef.current)
   }, [pushEnvStateToIframe])
-
-  useEffect(() => {
-    if (!readyEnv) return
-    const id = window.setInterval(() => polishDsChrome(iframeRef.current), 200)
-    return () => window.clearInterval(id)
-  }, [readyEnv])
 
   const load = useCallback(async () => {
     setLoading(true)

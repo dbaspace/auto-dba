@@ -744,9 +744,16 @@ export default function SrClusterPage() {
       const layout = data?.data || {}
       const feNodes: Record<string, unknown>[] = clusterForm.getFieldValue('fe_nodes') || []
       const beNodes: Record<string, unknown>[] = clusterForm.getFieldValue('be_nodes') || []
-      const feSoft = layoutOverride(layout.fe_software_base, layoutDefaults.fe_software_base)
-      if (feSoft !== undefined) {
-        clusterForm.setFieldValue('fe_nodes', feNodes.map((n) => ({ ...n, software_base: feSoft })))
+      const probedFE: { host?: string; software_base?: string; clear_software?: boolean }[] = layout.fe_nodes || []
+      if (probedFE.length) {
+        clusterForm.setFieldValue('fe_nodes', feNodes.map((n) => {
+          const hit = probedFE.find((b) => hostsEqualEndpoint(b.host, String(n.host || '')))
+          if (!hit) return n
+          if (hit.clear_software) return { ...n, software_base: '' }
+          const soft = layoutOverride(hit.software_base, layoutDefaults.fe_software_base)
+          if (soft === undefined) return n
+          return { ...n, software_base: soft }
+        }))
       }
       const probedBE: { host?: string; software_base?: string; data_root?: string; sys_minidump_dir?: string }[] = layout.be_nodes || []
       if (probedBE.length) {
@@ -754,8 +761,8 @@ export default function SrClusterPage() {
           const hit = probedBE.find((b) => hostsEqualEndpoint(b.host, String(n.host || '')))
           if (!hit) return n
           const next = { ...n }
-          const soft = layoutOverride(hit.software_base, layoutDefaults.be_software_base)
-          if (soft !== undefined) next.software_base = soft
+          const soft = trimPath(hit.software_base)
+          if (soft) next.software_base = soft
           const dataRoot = layoutOverride(hit.data_root, layoutDefaults.be_data_root)
           if (dataRoot !== undefined) next.data_root = dataRoot
           return next
@@ -765,7 +772,7 @@ export default function SrClusterPage() {
         || (probedBE.length === 1 ? probedBE[0].sys_minidump_dir : '')
       const dumpText = dump || (probedBE.length > 1 ? '各 BE 不同，已按主机填写' : '—')
       message.success(
-        `已回填。采样 FE ${layout.sample_fe_host || feHost}，meta_dir=${layout.fe_meta_dir || '—'}，sys_log_dir=${layout.fe_internal_log_dir || '—'}，sys_minidump_dir=${dumpText}。与全局默认相同的目录已留空`,
+        `已回填。采样 FE ${layout.sample_fe_host || feHost}，meta_dir=${layout.fe_meta_dir || '—'}，sys_log_dir=${layout.fe_internal_log_dir || '—'}，sys_minidump_dir=${dumpText}。FE 与全局默认相同的目录已留空，BE 软件目录按各台探测结果填写`,
         8,
       )
       const warns: string[] = layout.warnings || []
@@ -2949,7 +2956,7 @@ sha256sum StarRocks-3.2.10.${art.role}.tar.gz`}
                 </Button>
               </Space>
               <div className="muted" style={{ marginTop: 4 }}>
-                目录探测连接勾选的首 FE（:9030），读取 meta_dir / sys_log_dir，并按每台 BE 的 :8040/varz 回填。与全局默认相同的目录留空。软件目录会作为后续升级替换 bin/lib 的路径。
+                目录探测逐台连接 FE（:9030），读取该台的 meta_dir / sys_log_dir，并按每台 BE 的 :8040/varz 回填。FE 与全局默认相同的目录留空，BE 软件目录显示该台探测结果。软件目录会作为后续升级替换 bin/lib 的路径。
               </div>
             </div>
           ) : null}

@@ -154,6 +154,71 @@ func TestAssignBEProbeSummaryPerNode(t *testing.T) {
 	}
 }
 
+func TestFeSoftwareFromDirs(t *testing.T) {
+	base, warn := feSoftwareFromDirs("/home/dorisdb_base/fe/meta", "/home/dorisdb_base/fe/log")
+	if warn != "" || base != "/home/dorisdb_base" {
+		t.Fatalf("default path base=%q warn=%q", base, warn)
+	}
+	base, warn = feSoftwareFromDirs("/home/dorisdb/fe/meta", "/home/dorisdb/fe/log")
+	if base != "" || warn == "" {
+		t.Fatalf("truncated should not be written base=%q warn=%q", base, warn)
+	}
+	base, warn = feSoftwareFromDirs("/home/dorisdb", "")
+	if base != "" || warn == "" {
+		t.Fatalf("truncated bare path base=%q warn=%q", base, warn)
+	}
+	if !isTruncatedDefaultPrefix("/home/dorisdb") || isTruncatedDefaultPrefix("/home/dorisdb_base") {
+		t.Fatal("prefix check")
+	}
+	if isTruncatedDefaultPrefix("/data1/dorisdb_base") {
+		t.Fatal("other root is not a truncated default")
+	}
+}
+
+func TestAssignFEProbeSummaryPerNode(t *testing.T) {
+	out := &LayoutProbeResult{FENodes: []LayoutFENode{
+		{Host: "10.0.0.1", SoftwareBase: "/home/dorisdb_base", MetaDir: "/home/dorisdb_base/fe/meta"},
+		{Host: "10.0.0.2", SoftwareBase: "/data1/dorisdb_base", MetaDir: "/data1/dorisdb_base/fe/meta"},
+	}}
+	assignFEProbeSummary(out, false)
+	if out.FeSoftwareBase != "" {
+		t.Fatalf("cluster field should stay empty, got %q", out.FeSoftwareBase)
+	}
+	if out.FENodes[0].SoftwareBase != "/home/dorisdb_base" || out.FENodes[1].SoftwareBase != "/data1/dorisdb_base" {
+		t.Fatalf("per node changed: %+v", out.FENodes)
+	}
+	same := &LayoutProbeResult{FENodes: []LayoutFENode{
+		{Host: "10.0.0.1", SoftwareBase: "/home/dorisdb_base"},
+		{Host: "10.0.0.2", SoftwareBase: "/home/dorisdb_base"},
+	}}
+	assignFEProbeSummary(same, false)
+	if same.FeSoftwareBase != "/home/dorisdb_base" {
+		t.Fatalf("agreed base got %q", same.FeSoftwareBase)
+	}
+	assignFEProbeSummary(same, true)
+	same.FeSoftwareBase = ""
+	assignFEProbeSummary(same, true)
+	if same.FeSoftwareBase != "" {
+		t.Fatalf("connect failure should not fill cluster field, got %q", same.FeSoftwareBase)
+	}
+}
+
+func TestLayoutBENodeSoftwarePerNode(t *testing.T) {
+	a := layoutBENodeFromVarz("10.0.0.1", 8040, "sys_minidump_dir=/home/dorisdb_base/be\nstorage_root_path=/data/dorisdb/be/storage\n")
+	b := layoutBENodeFromVarz("10.0.0.2", 8040, "sys_minidump_dir=/resto/dorisdb_base/be\nstorage_root_path=/data/dorisdb/be/storage\n")
+	if a.SoftwareBase != "/home/dorisdb_base" || b.SoftwareBase != "/resto/dorisdb_base" {
+		t.Fatalf("a=%q b=%q", a.SoftwareBase, b.SoftwareBase)
+	}
+	onlyLog := layoutBENodeFromVarz("10.0.0.3", 8040, "storage_root_path=/data/dorisdb/be/storage\nsys_log_dir=/home/dorisdb_base/be/log\n")
+	if onlyLog.SoftwareBase != "/home/dorisdb_base" || onlyLog.DataRoot != "/data/dorisdb/be/storage" {
+		t.Fatalf("log fallback %+v", onlyLog)
+	}
+	storageOnly := layoutBENodeFromVarz("10.0.0.4", 8040, "storage_root_path=/data/dorisdb/be/storage\n")
+	if storageOnly.SoftwareBase != "" || storageOnly.DataRoot != "/data/dorisdb/be/storage" {
+		t.Fatalf("storage must not become software %+v", storageOnly)
+	}
+}
+
 func TestFrontendConfigIndexes(t *testing.T) {
 	key, alias, val := frontendConfigIndexes([]string{"", "", "", "", "", ""})
 	if key != 0 || alias != 1 || val != 2 {

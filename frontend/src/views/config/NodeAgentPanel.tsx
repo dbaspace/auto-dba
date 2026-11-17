@@ -149,10 +149,19 @@ export default function NodeAgentPanel() {
       const host = a.host_instance_id ? hosts.find((h) => h.id === a.host_instance_id) : undefined
       if (agentEnvId && host?.env_id !== agentEnvId) return false
       if (!q) return true
-      const parts = [a.base_url, host?.host, host?.domain_name, ...(host?.domains || [])]
+      const parts = [a.name, a.base_url, host?.name, host?.host, host?.domain_name, ...(host?.domains || [])]
       return parts.some((p) => String(p || '').toLowerCase().includes(q))
     })
   }, [agents, hosts, agentEnvId, agentAddr])
+  const filteredDeploys = useMemo(() => {
+    const q = agentAddr.trim().toLowerCase()
+    if (!q) return deploys
+    return deploys.filter((d) => {
+      const host = hosts.find((h) => h.id === d.host_instance_id)
+      const parts = [d.base_url, host?.name, host?.host, host?.domain_name, ...(host?.domains || [])]
+      return parts.some((p) => String(p || '').toLowerCase().includes(q))
+    })
+  }, [deploys, hosts, agentAddr])
 
   const openDeploy = async () => {
     deployForm.resetFields()
@@ -206,7 +215,7 @@ export default function NodeAgentPanel() {
         />
         <Input
           allowClear
-          placeholder="地址：主机、域名或 URL"
+          placeholder="地址或名称：主机、域名、URL、Agent 名"
           style={{ width: 240 }}
           value={agentAddr}
           onChange={(e) => { setAgentAddr(e.target.value); setAgentPage(1) }}
@@ -369,7 +378,7 @@ export default function NodeAgentPanel() {
         rowKey="id"
         size="small"
         title={() => '下发记录'}
-        dataSource={deploys}
+        dataSource={filteredDeploys}
         pagination={{ pageSize: 10, size: 'small', showSizeChanger: true, showTotal: (t) => `共 ${t} 条` }}
         columns={[
           {

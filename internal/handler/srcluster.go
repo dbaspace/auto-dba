@@ -452,7 +452,7 @@ func (h *SrClusterHandler) ProbeLayout(c *gin.Context) {
 		}
 		user, pass = u, p
 	}
-	res, err := h.eng().ProbeLayout(c.Request.Context(), host, user, pass, req.FeQueryPort)
+	res, err := h.eng().ProbeLayout(c.Request.Context(), host, user, pass, req.FeQueryPort, req.Hosts)
 	if err != nil {
 		port := req.FeQueryPort
 		if port <= 0 {
@@ -502,7 +502,13 @@ func (h *SrClusterHandler) ProbeClusterLayout(c *gin.Context) {
 			}
 		}
 	}
-	res, err := h.eng().ProbeLayout(c.Request.Context(), host, user, pass, cl.FeQueryPort)
+	var feHosts []string
+	for _, n := range nodes {
+		if strings.EqualFold(n.Component, "fe") && strings.TrimSpace(n.Host) != "" {
+			feHosts = append(feHosts, n.Host)
+		}
+	}
+	res, err := h.eng().ProbeLayout(c.Request.Context(), host, user, pass, cl.FeQueryPort, feHosts)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return

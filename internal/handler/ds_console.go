@@ -606,17 +606,30 @@ body .n-layout-scroll-container {
   function fillSelect(box, state) {
     var sel = box.querySelector('select');
     if (!sel) return;
+    if (document.activeElement === sel) return;
     var cur = String(state.env || '');
     var opts = state.options || [];
-    var html = '';
+    var items = [];
+    var parts = [];
     for (var i = 0; i < opts.length; i++) {
       var v = String(opts[i].value || opts[i].label || '');
       if (!v) continue;
       var lab = String(opts[i].label || v);
-      html += '<option value="' + v.replace(/"/g, '&quot;') + '"' + (v === cur ? ' selected' : '') + '>' + lab.replace(/</g, '&lt;') + '</option>';
+      items.push({ value: v, label: lab });
+      parts.push(v + '\t' + lab);
     }
-    if (sel.innerHTML !== html) sel.innerHTML = html;
-    else if (cur && sel.value !== cur) sel.value = cur;
+    var key = parts.join('\n');
+    if (sel.getAttribute('data-env-key') !== key) {
+      while (sel.firstChild) sel.removeChild(sel.firstChild);
+      for (var j = 0; j < items.length; j++) {
+        var opt = document.createElement('option');
+        opt.value = items[j].value;
+        opt.textContent = items[j].label;
+        sel.appendChild(opt);
+      }
+      sel.setAttribute('data-env-key', key);
+    }
+    if (cur && sel.value !== cur) sel.value = cur;
   }
   function mountEnvControl() {
     if (mounting) return;
@@ -690,7 +703,7 @@ body .n-layout-scroll-container {
   function hideSider() {
     document.querySelectorAll(
       '.n-layout-sider, .n-layout-toggle-bar, .n-layout-toggle-button, .n-layout-toggle-bar__top, .n-layout-toggle-bar__bottom, .n-layout-sider-toggle-button, [class*="layout-toggle"], [class*="toggle-bar"], [class*="toggle-button"]'
-    ).forEach(removeEl);
+    ).forEach(markHide);
 
     var header = document.querySelector('.n-layout-header');
     var headerBottom = 48;
@@ -706,13 +719,13 @@ body .n-layout-scroll-container {
         var t = (btn.textContent || '').replace(/\s+/g, '');
         var rect = btn.getBoundingClientRect ? btn.getBoundingClientRect() : null;
         if (/fold|collapsed|hamburger|menu-fold|MenuFold/i.test(cls)) {
-          removeEl(btn);
+          markHide(btn);
           return;
         }
         if (!rect || rect.left > 80 || rect.top > headerBottom) return;
         if (rect.width > 48 || rect.height > 48) return;
         /* 纯图标按钮（无「界面设置」等文案） */
-        if (t.length === 0 || t.length <= 1) removeEl(btn);
+        if (t.length === 0 || t.length <= 1) markHide(btn);
       });
 
       /* 清掉 header 子树过大的左缩进 */
@@ -730,10 +743,11 @@ body .n-layout-scroll-container {
       header.style.setProperty('margin-left', '0', 'important');
     }
 
-    /* 左上角窄条/箭头（含无文本 ToggleBar）：物理删掉 */
+    /* 左上角窄条/箭头：只加隐藏 class，避免删掉后被 Vue 立刻加回来 */
     document.querySelectorAll('div, button, span, a, i, svg').forEach(function (el) {
       if (!el || !el.parentNode) return;
       if (isProtectedChrome(el)) return;
+      if (el.classList && el.classList.contains('auto-dba-hide-ds-user')) return;
       var rect = el.getBoundingClientRect ? el.getBoundingClientRect() : null;
       if (!rect || rect.width < 2 || rect.height < 2) return;
       if (rect.left >= 28 || rect.top > headerBottom) return;
@@ -741,7 +755,7 @@ body .n-layout-scroll-container {
       var cls = String(el.className || '');
       var t = (el.textContent || '').replace(/\s+/g, '');
       if (/toggle|sider|fold|hamburger/i.test(cls) || isToggleText(t) || t.length <= 2) {
-        removeEl(el);
+        markHide(el);
       }
     });
 
@@ -884,6 +898,7 @@ body .n-layout-scroll-container {
           if (series[i] && series[i].type === 'bar') { isBar = true; break; }
         }
         if (!isBar) return;
+        if (el.getAttribute('data-auto-dba-bar-fixed') === '1') return;
         var h = el.clientHeight || 0;
         if (h < 400) el.style.setProperty('height', '400px', 'important');
         el.style.setProperty('overflow', 'visible', 'important');
@@ -896,7 +911,7 @@ body .n-layout-scroll-container {
         var gridPatch = { bottom: 88 };
         var xAxisPatch = { axisLabel: { interval: 0, hideOverlap: false } };
         inst.setOption({ grid: gridPatch, xAxis: xAxisPatch }, false);
-        if (typeof inst.resize === 'function') inst.resize();
+        el.setAttribute('data-auto-dba-bar-fixed', '1');
       } catch (e) {}
     });
   }
@@ -928,22 +943,35 @@ body .n-layout-scroll-container {
     } catch (e) {}
     fittingViewport = false;
   }
+  var ticking = false;
   function tick() {
-    stripStrayBodyText();
-    hideUser();
-    hideSider();
-    hideWatermark();
-    mountEnvControl();
-    fixBarChartLabels();
+    if (ticking) return;
+    ticking = true;
+    try {
+      stripStrayBodyText();
+      hideUser();
+      hideSider();
+      hideWatermark();
+      mountEnvControl();
+      fixBarChartLabels();
+    } finally {
+      /* 等本次改动触发的观察回调先结束，再允许下一轮 */
+      setTimeout(function () { ticking = false; }, 0);
+    }
+  }
+  function mutationInEnv(node) {
+    if (!node) return false;
+    if (node.id === 'auto-dba-ds-env') return true;
+    return !!(node.closest && node.closest('#auto-dba-ds-env'));
   }
   var timer = 0;
   function schedule() {
-    if (timer) return;
+    if (ticking || timer) return;
     timer = setTimeout(function () { timer = 0; tick(); }, 40);
   }
   var stylePinTimer = 0;
   function schedulePin() {
-    if (stylePinTimer) return;
+    if (ticking || stylePinTimer) return;
     stylePinTimer = setTimeout(function () { stylePinTimer = 0; shrinkHeader(); hideSider(); }, 0);
   }
   tick();
@@ -972,14 +1000,22 @@ body .n-layout-scroll-container {
   setTimeout(tick, 200);
   setTimeout(tick, 800);
   setTimeout(tick, 2000);
-  setInterval(tick, 250);
   if (document.documentElement) {
-    new MutationObserver(schedule).observe(document.documentElement, { childList: true, subtree: true });
+    new MutationObserver(function (mutations) {
+      if (ticking) return;
+      for (var i = 0; i < mutations.length; i++) {
+        var node = mutations[i].target;
+        if (mutationInEnv(node)) continue;
+        schedule();
+        return;
+      }
+    }).observe(document.documentElement, { childList: true, subtree: true });
     /* Vue 写回 style.top/left 时立刻再钉 */
     new MutationObserver(function (mutations) {
+      if (ticking) return;
       for (var i = 0; i < mutations.length; i++) {
         var t = mutations[i].target;
-        if (!t || !t.getAttribute) continue;
+        if (!t || !t.getAttribute || mutationInEnv(t)) continue;
         var st = t.getAttribute('style') || '';
         if (/top\s*:\s*(4[8-9]|[5-7]\d)\s*px/i.test(st) || /left\s*:\s*[1-9]\d*\s*px/i.test(st)) {
           schedulePin();

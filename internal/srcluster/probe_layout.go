@@ -26,8 +26,20 @@ type LayoutProbeResult struct {
 	SampleBEHost   string   `json:"sample_be_host,omitempty"`
 	BeHTTPPort     int      `json:"be_http_port,omitempty"`
 	Warnings       []string `json:"warnings,omitempty"`
+	// FENodes 每台 FE 自己的软件根。各台不一致或有截断结果时 FeSoftwareBase 留空。
+	FENodes []LayoutFENode `json:"fe_nodes,omitempty"`
 	// BENodes 每台 BE 自己的软件根与数据目录。各台不一致时 BeSoftwareBase / BeDataRoot 留空。
 	BENodes []LayoutBENode `json:"be_nodes,omitempty"`
+}
+
+// LayoutFENode 单台 FE 从本机 9030 读到的安装根。
+type LayoutFENode struct {
+	Host          string `json:"host,omitempty"`
+	QueryPort     int    `json:"query_port,omitempty"`
+	SoftwareBase  string `json:"software_base,omitempty"`
+	MetaDir       string `json:"meta_dir,omitempty"`
+	SysLogDir     string `json:"sys_log_dir,omitempty"`
+	ClearSoftware bool   `json:"clear_software,omitempty"`
 }
 
 // LayoutBENode 单台 BE 从 /varz 读到的安装根与数据目录。
@@ -42,6 +54,7 @@ type LayoutBENode struct {
 
 var (
 	reVarzMinidump = regexp.MustCompile(`(?m)^sys_minidump_dir=(.+)$`)
+	reVarzBELog    = regexp.MustCompile(`(?m)^sys_log_dir=(.+)$`)
 	reVarzStorage  = regexp.MustCompile(`(?m)^storage_root_path=(.+)$`)
 )
 
@@ -218,9 +231,180 @@ func ParseBEVarz(body string) (minidump, storage string) {
 	return minidump, storage
 }
 
-// ProbeLayout 连接 FE 查配置 + BE /varz，推断登记用路径（不写库）。
-func (e *Engine) ProbeLayout(ctx context.Context, feHost, user, pass string, queryPort int) (*LayoutProbeResult, error) {
+// isTruncatedDefaultPrefix 判断安装根是不是全局默认的字符串前缀。
+// /home/dorisdb 相对 /home/dorisdb_base 少了 _base，这种结果不能拿去升级。
+func isTruncatedDefaultPrefix(p string) bool {
+	p = strings.TrimRight(strings.TrimSpace(p), "/")
+	def := strings.TrimRight(store.DefaultSrSoftwareBase, "/")
+	if p == "" || def == "" || p == def {
+		return false
+	}
+	return strings.HasPrefix(def, p)
+}
+
+// feSoftwareFromDirs 由一台 FE 的 meta_dir、sys_log_dir 得到安装根。
+// 截断或无法确定时 base 为空，warn 说明原因，调用方不要写入节点。
+func feSoftwareFromDirs(metaDir, logDir string) (base, warn string) {
+	metaDir = strings.TrimSpace(metaDir)
+	logDir = strings.TrimSpace(logDir)
+	fromLog, logAnchored := inferRoleSoftwareBase(logDir, "fe")
+	fromMeta, metaAnchored := inferRoleSoftwareBase(metaDir, "fe")
+	chosen, uncertain := chooseFeSoftwareBase(fromMeta, fromLog, metaAnchored, logAnchored)
+	chosen = strings.TrimRight(strings.TrimSpace(chosen), "/")
+	if uncertain || chosen == "" {
+		if metaDir == "" && logDir == "" {
+			return "", ""
+		}
+		return "", fmt.Sprintf(
+			"FE 软件安装根无法确定（meta_dir=%s，sys_log_dir=%s），未写入软件目录，避免升级替换错目录",
+			displayPath(metaDir), displayPath(logDir))
+	}
+	if isTruncatedDefaultPrefix(chosen) {
+		return "", fmt.Sprintf(
+			"FE 软件目录 %s 是全局默认 %s 的截断，未写入（meta_dir=%s，sys_log_dir=%s）",
+			chosen, strings.TrimRight(store.DefaultSrSoftwareBase, "/"), displayPath(metaDir), displayPath(logDir))
+	}
+	if fromLog != "" && fromMeta != "" && strings.TrimRight(fromLog, "/") != strings.TrimRight(fromMeta, "/") {
+		return chosen, fmt.Sprintf(
+			"FE sys_log_dir 与 meta_dir 推断不一致：%s vs %s，软件目录采用 %s",
+			strings.TrimRight(fromLog, "/"), strings.TrimRight(fromMeta, "/"), displayPath(chosen))
+	}
+	return chosen, ""
+}
+
+func normalizeFEHosts(primary string, hosts []string) []string {
+	seen := map[string]struct{}{}
+	var out []string
+	add := func(h string) {
+		h = strings.TrimSpace(h)
+		if h == "" {
+			return
+		}
+		key := strings.ToLower(h)
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, h)
+	}
+	if len(hosts) == 0 {
+		add(primary)
+		return out
+	}
+	for _, h := range hosts {
+		add(h)
+	}
+	if len(out) == 0 {
+		add(primary)
+	}
+	return out
+}
+
+func openFE(ctx context.Context, user, pass, host string, port int) (*sql.DB, error) {
+	dsn := buildFEDSN(user, pass, host, port) + "?timeout=8s&readTimeout=8s&writeTimeout=8s"
+	db, err := sql.Open("mysql", dsn)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(1)
+	pctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	if err := db.PingContext(pctx); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return db, nil
+}
+
+func readFELayout(ctx context.Context, user, pass, host string, port int) (LayoutFENode, []string, error) {
+	node := LayoutFENode{Host: host, QueryPort: port}
+	db, err := openFE(ctx, user, pass, host, port)
+	if err != nil {
+		return node, nil, err
+	}
+	defer db.Close()
+	var warns []string
+	logDir, logErr := queryFeLogDir(ctx, db)
+	if logErr != nil {
+		warns = append(warns, fmt.Sprintf("读取 FE %s sys_log_dir 失败: %s", host, logErr.Error()))
+	} else {
+		node.SysLogDir = strings.TrimSpace(logDir)
+	}
+	metaDir, metaErr := queryFrontendConfigValue(ctx, db, "meta_dir")
+	if metaErr != nil {
+		warns = append(warns, fmt.Sprintf("读取 FE %s meta_dir 失败: %s", host, metaErr.Error()))
+	} else {
+		node.MetaDir = strings.TrimSpace(metaDir)
+	}
+	base, warn := feSoftwareFromDirs(node.MetaDir, node.SysLogDir)
+	node.SoftwareBase = base
+	if warn != "" {
+		warns = append(warns, fmt.Sprintf("FE %s: %s", host, warn))
+		if base == "" && (node.MetaDir != "" || node.SysLogDir != "") {
+			node.ClearSoftware = true
+		}
+	}
+	return node, warns, nil
+}
+
+// assignFEProbeSummary 全部连上且软件根一致时填写集群级字段。
+func assignFEProbeSummary(out *LayoutProbeResult, connectFailed bool) {
+	if out == nil || connectFailed || len(out.FENodes) == 0 {
+		return
+	}
+	soft := strings.TrimRight(strings.TrimSpace(out.FENodes[0].SoftwareBase), "/")
+	if soft == "" || isTruncatedDefaultPrefix(soft) {
+		return
+	}
+	for _, n := range out.FENodes[1:] {
+		s := strings.TrimRight(strings.TrimSpace(n.SoftwareBase), "/")
+		if s == "" || s != soft {
+			return
+		}
+	}
+	out.FeSoftwareBase = soft
+}
+
+func anchoredRoleBase(p, role string) (string, bool) {
+	base, anchored := inferRoleSoftwareBase(p, role)
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	if !anchored || base == "" || base == "/" {
+		return "", false
+	}
+	return base, true
+}
+
+// beSoftwareFromVarz 优先用带 be 目录锚点的 sys_minidump_dir，否则用 sys_log_dir。
+// 数据目录 storage_root_path 不参与软件根推断。
+func beSoftwareFromVarz(minidump, logDir string) string {
+	if base, ok := anchoredRoleBase(minidump, "be"); ok {
+		return base
+	}
+	if base, ok := anchoredRoleBase(logDir, "be"); ok {
+		return base
+	}
+	return ""
+}
+
+func varzFirst(body string, re *regexp.Regexp) string {
+	if re == nil {
+		return ""
+	}
+	m := re.FindStringSubmatch(body)
+	if len(m) != 2 {
+		return ""
+	}
+	return strings.TrimSpace(m[1])
+}
+
+// ProbeLayout 逐台 FE 查本机配置，再按 BE /varz 推断登记用路径（不写库）。
+// feHosts 为表单里的全部 FE。为空时只探测 feHost。
+func (e *Engine) ProbeLayout(ctx context.Context, feHost, user, pass string, queryPort int, feHosts []string) (*LayoutProbeResult, error) {
 	feHost = strings.TrimSpace(feHost)
+	hosts := normalizeFEHosts(feHost, feHosts)
+	if feHost == "" && len(hosts) > 0 {
+		feHost = hosts[0]
+	}
 	if feHost == "" {
 		return nil, fmt.Errorf("fe_host 为空")
 	}
@@ -231,48 +415,64 @@ func (e *Engine) ProbeLayout(ctx context.Context, feHost, user, pass string, que
 	if user == "" {
 		user = "root"
 	}
-	cctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	timeout := 45 * time.Second
+	if n := len(hosts); n > 1 {
+		timeout = time.Duration(n)*12*time.Second + 45*time.Second
+	}
+	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	dsn := buildFEDSN(user, pass, feHost, queryPort)
-	db, err := sql.Open("mysql", dsn)
-	if err != nil {
-		return nil, err
-	}
-	defer db.Close()
-	db.SetMaxOpenConns(1)
-
 	out := &LayoutProbeResult{SampleFEHost: feHost}
-
-	var fromLog, fromMeta string
-	var logAnchored, metaAnchored bool
-	internalLog, logErr := queryFeLogDir(cctx, db)
-	if logErr != nil {
-		out.Warnings = append(out.Warnings, "读取 FE sys_log_dir 失败: "+logErr.Error())
-	} else {
-		out.FeInternalLog = internalLog
-		fromLog, logAnchored = inferRoleSoftwareBase(internalLog, "fe")
+	connectFailed := false
+	for _, h := range hosts {
+		node, warns, err := readFELayout(cctx, user, pass, h, queryPort)
+		if err != nil {
+			connectFailed = true
+			out.Warnings = append(out.Warnings, fmt.Sprintf("连接 FE %s:%d 失败: %v", h, queryPort, err))
+			continue
+		}
+		out.Warnings = append(out.Warnings, warns...)
+		out.FENodes = append(out.FENodes, node)
 	}
-	metaDir, err := queryFrontendConfigValue(cctx, db, "meta_dir")
-	if err != nil {
-		out.Warnings = append(out.Warnings, "读取 FE meta_dir 失败: "+err.Error())
-	} else {
-		out.FeMetaDir = metaDir
-		fromMeta, metaAnchored = inferRoleSoftwareBase(metaDir, "fe")
-	}
-	chosen, uncertain := chooseFeSoftwareBase(fromMeta, fromLog, metaAnchored, logAnchored)
-	if uncertain {
-		out.Warnings = append(out.Warnings, fmt.Sprintf(
-			"FE 软件安装根无法确定（meta_dir=%s，sys_log_dir=%s），未写入软件目录，避免升级替换错目录",
-			displayPath(metaDir), displayPath(internalLog)))
-	} else {
-		out.FeSoftwareBase = chosen
-		if fromLog != "" && fromMeta != "" && strings.TrimRight(fromLog, "/") != strings.TrimRight(fromMeta, "/") {
-			out.Warnings = append(out.Warnings, fmt.Sprintf(
-				"FE sys_log_dir 与 meta_dir 推断不一致：%s vs %s，软件目录采用 %s",
-				strings.TrimRight(fromLog, "/"), strings.TrimRight(fromMeta, "/"), displayPath(chosen)))
+	for _, n := range out.FENodes {
+		if hostsEqual(n.Host, feHost) || out.FeMetaDir == "" {
+			out.FeMetaDir = n.MetaDir
+			out.FeInternalLog = n.SysLogDir
+			if hostsEqual(n.Host, feHost) {
+				break
+			}
 		}
 	}
+	assignFEProbeSummary(out, connectFailed)
+	if isTruncatedDefaultPrefix(out.FeSoftwareBase) {
+		out.Warnings = append(out.Warnings, fmt.Sprintf(
+			"FE 软件目录 %s 是全局默认的截断，不与 BE 对齐，也不写入", out.FeSoftwareBase))
+		out.FeSoftwareBase = ""
+	}
+	if len(out.FENodes) == 0 {
+		if len(out.Warnings) == 0 {
+			return nil, fmt.Errorf("无法连接 FE")
+		}
+		return out, fmt.Errorf("%s", out.Warnings[0])
+	}
+
+	db, err := openFE(cctx, user, pass, feHost, queryPort)
+	if err != nil {
+		for _, n := range out.FENodes {
+			if hostsEqual(n.Host, feHost) {
+				continue
+			}
+			db, err = openFE(cctx, user, pass, n.Host, queryPort)
+			if err == nil {
+				break
+			}
+		}
+	}
+	if err != nil || db == nil {
+		out.Warnings = append(out.Warnings, "无法连接 FE 查询 BE 列表")
+		return out, nil
+	}
+	defer db.Close()
 
 	beRows, err := queryProcRowsDB(cctx, db, "/backends", false)
 	if err != nil {
@@ -302,10 +502,12 @@ func (e *Engine) ProbeLayout(ctx context.Context, feHost, user, pass string, que
 		out.BENodes = append(out.BENodes, layoutBENodeFromVarz(r.Host, port, body))
 	}
 	assignBEProbeSummary(out, failed)
-	if aligned, did := alignFeSoftwareBaseWithBE(out.FeSoftwareBase, out.BeSoftwareBase); did {
-		out.Warnings = append(out.Warnings, fmt.Sprintf(
-			"FE 探测过浅（%s），已与 BE 对齐为 %s", out.FeSoftwareBase, aligned))
-		out.FeSoftwareBase = aligned
+	if !isTruncatedDefaultPrefix(out.FeSoftwareBase) {
+		if aligned, did := alignFeSoftwareBaseWithBE(out.FeSoftwareBase, out.BeSoftwareBase); did && !isTruncatedDefaultPrefix(aligned) {
+			out.Warnings = append(out.Warnings, fmt.Sprintf(
+				"FE 探测过浅（%s），已与 BE 对齐为 %s", out.FeSoftwareBase, aligned))
+			out.FeSoftwareBase = aligned
+		}
 	}
 	return out, nil
 }
@@ -320,13 +522,14 @@ func displayPath(p string) string {
 
 func layoutBENodeFromVarz(host string, port int, body string) LayoutBENode {
 	md, st := ParseBEVarz(body)
+	logDir := varzFirst(body, reVarzBELog)
 	st = strings.TrimRight(strings.TrimSpace(st), "/")
 	return LayoutBENode{
 		Host:         host,
 		HTTPPort:     port,
 		MinidumpDir:  strings.TrimSpace(md),
 		StorageRoot:  st,
-		SoftwareBase: InferBeSoftwareBaseFromMinidump(md),
+		SoftwareBase: beSoftwareFromVarz(md, logDir),
 		DataRoot:     st,
 	}
 }
@@ -537,6 +740,15 @@ func fetchBEVarz(ctx context.Context, host string, port int) (string, error) {
 	return string(b), nil
 }
 
+func findLayoutFE(nodes []LayoutFENode, host string) *LayoutFENode {
+	for i := range nodes {
+		if hostsEqual(nodes[i].Host, host) {
+			return &nodes[i]
+		}
+	}
+	return nil
+}
+
 func findLayoutBE(nodes []LayoutBENode, host string) *LayoutBENode {
 	for i := range nodes {
 		if hostsEqual(nodes[i].Host, host) {
@@ -567,13 +779,16 @@ func (e *Engine) ApplyLayoutProbe(cl *store.SrCluster, nodes []store.SrNode, res
 	if err := e.Store.UpdateSrCluster(cl); err != nil {
 		return err
 	}
-	feBase := strings.TrimRight(strings.TrimSpace(res.FeSoftwareBase), "/")
 	for i := range nodes {
 		n := &nodes[i]
 		switch strings.ToLower(n.Component) {
 		case "fe":
-			if feBase != "" {
-				n.SoftwarePath = feBase + "/fe"
+			fn := findLayoutFE(res.FENodes, n.Host)
+			if fn == nil || fn.ClearSoftware || isTruncatedDefaultPrefix(fn.SoftwareBase) {
+				break
+			}
+			if s := strings.TrimRight(strings.TrimSpace(fn.SoftwareBase), "/"); s != "" {
+				n.SoftwarePath = s + "/fe"
 			}
 		case "be":
 			bn := findLayoutBE(res.BENodes, n.Host)
