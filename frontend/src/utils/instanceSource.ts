@@ -14,6 +14,8 @@ export type AccessDomainRow = {
   domain?: string
   env_code?: string
   db_type?: string
+  approvers?: string[]
+  port?: number
 }
 
 /** 与后端 NormalizeEngineType / AccessDomains.typeKey 对齐 */

@@ -184,9 +184,20 @@ func FormatAssigneeTransferLine(oldUser, newUser, by string) string {
 		time.Now().UTC().Format(time.RFC3339))
 }
 
-// FormatWhitelistApprovalLine 白名单审批审计。
+// FormatWhitelistApprovalLine 白名单审批审计。新记录用 FormatProxyApprovalLine，此格式仍供旧数据展示。
 func FormatWhitelistApprovalLine(actor, action string) string {
 	return fmt.Sprintf("%s_by_whitelist=%s at=%s",
 		strings.TrimSpace(action), strings.TrimSpace(actor),
+		time.Now().UTC().Format(time.RFC3339))
+}
+
+// FormatProxyApprovalLine 代审审计。role 为 platform_admin、whitelist 或 dba_tenant。
+func FormatProxyApprovalLine(actor, designated, role, action string) string {
+	action = strings.TrimSpace(action)
+	if action != "rejected" {
+		action = "approved"
+	}
+	return fmt.Sprintf("proxy_%s by=%s for=%s role=%s at=%s",
+		action, strings.TrimSpace(actor), strings.TrimSpace(designated), strings.TrimSpace(role),
 		time.Now().UTC().Format(time.RFC3339))
 }

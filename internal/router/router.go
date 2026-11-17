@@ -277,6 +277,7 @@ func Init(e *gin.Engine, d Deps) {
 		secured.DELETE("/access-domains/:id", requireURN(store.URNDomainsDelete), d.AccessDomain.Delete)
 		secured.POST("/access-domains/assign-tenant", requireURN(store.URNTenantsImpersonate), d.AccessDomain.AssignTenantBatch)
 		secured.POST("/access-domains/:id/assign-tenant", requireURN(store.URNTenantsImpersonate), d.AccessDomain.AssignTenant)
+		secured.PUT("/access-domains/:id/approvers", requireURN(store.URNDomainsEdit), d.AccessDomain.UpdateApprovers)
 	}
 
 	secured.GET("/instances", d.Inst.List)
@@ -1349,12 +1350,7 @@ func serveSPA(e *gin.Engine, root string) {
 		}
 		if full != root {
 			if info, err := os.Stat(full); err == nil && !info.IsDir() {
-				if strings.HasPrefix(urlPath, "/assets/") {
-					c.Header("Cache-Control", "public, max-age=31536000, immutable")
-				} else if strings.EqualFold(filepath.Base(full), "index.html") {
-					c.Header("Cache-Control", "no-cache")
-				}
-				c.File(full)
+				serveSPAFile(c, full, urlPath, info)
 				return
 			}
 			if isSPAAssetPath(urlPath) {
@@ -1362,9 +1358,8 @@ func serveSPA(e *gin.Engine, root string) {
 				return
 			}
 		}
-		if _, err := os.Stat(index); err == nil {
-			c.Header("Cache-Control", "no-cache")
-			c.File(index)
+		if info, err := os.Stat(index); err == nil {
+			serveSPAFile(c, index, urlPath, info)
 			return
 		}
 		c.Status(http.StatusNotFound)

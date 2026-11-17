@@ -12,16 +12,18 @@ import (
 
 // AccessDomain 访问域名资源（由实例 domains / domain_name 同步，可按租户划拨）。
 type AccessDomain struct {
-	ID           string `json:"id"`
-	TenantID     string `json:"tenant_id"`
-	TenantName   string `json:"tenant_name,omitempty"`
-	InstanceID   string `json:"instance_id"`
-	InstanceName string `json:"instance_name,omitempty"` // 运行时填充，非表列
-	Domain       string `json:"domain"`
-	EnvCode      string `json:"env_code"`
-	DBType       string `json:"db_type"`
-	CreatedAt    string `json:"created_at"`
-	UpdatedAt    string `json:"updated_at"`
+	ID           string   `json:"id"`
+	TenantID     string   `json:"tenant_id"`
+	TenantName   string   `json:"tenant_name,omitempty"`
+	InstanceID   string   `json:"instance_id"`
+	InstanceName string   `json:"instance_name,omitempty"` // 运行时填充，非表列
+	Domain       string   `json:"domain"`
+	EnvCode      string   `json:"env_code"`
+	DBType       string   `json:"db_type"`
+	Approvers    []string `json:"approvers,omitempty"`
+	Port         int      `json:"port,omitempty"` // 运行时填充，非表列
+	CreatedAt    string   `json:"created_at"`
+	UpdatedAt    string   `json:"updated_at"`
 }
 
 // SyncAccessDomainsResult 同步统计。
@@ -32,7 +34,7 @@ type SyncAccessDomainsResult struct {
 	Skipped int `json:"skipped"`
 }
 
-const accessDomainCols = `id, COALESCE(tenant_id,''), COALESCE(instance_id,''), domain, COALESCE(env_code,''), COALESCE(db_type,''), created_at, updated_at`
+const accessDomainCols = `id, COALESCE(tenant_id,''), COALESCE(instance_id,''), domain, COALESCE(env_code,''), COALESCE(db_type,''), COALESCE(approvers,''), created_at, updated_at`
 
 func normalizeAccessDomainHost(s string) string {
 	s = strings.TrimSpace(s)
@@ -87,10 +89,14 @@ func (d *DB) ensureAccessDomainsTable() error {
 		domain TEXT NOT NULL,
 		env_code TEXT NOT NULL DEFAULT '',
 		db_type TEXT NOT NULL,
+		approvers TEXT NOT NULL DEFAULT '',
 		created_at TEXT NOT NULL,
 		updated_at TEXT NOT NULL,
 		UNIQUE(domain, db_type)
 	)`); err != nil {
+		return err
+	}
+	if _, err := d.Exec(`ALTER TABLE tbl_access_domains ADD COLUMN IF NOT EXISTS approvers TEXT NOT NULL DEFAULT ''`); err != nil {
 		return err
 	}
 	if _, err := d.Exec(`CREATE INDEX IF NOT EXISTS idx_access_domains_tenant ON tbl_access_domains(tenant_id)`); err != nil {
@@ -105,9 +111,11 @@ func (d *DB) ensureAccessDomainsTable() error {
 
 func scanAccessDomain(row interface{ Scan(dest ...any) error }) (*AccessDomain, error) {
 	var it AccessDomain
-	if err := row.Scan(&it.ID, &it.TenantID, &it.InstanceID, &it.Domain, &it.EnvCode, &it.DBType, &it.CreatedAt, &it.UpdatedAt); err != nil {
+	var approvers string
+	if err := row.Scan(&it.ID, &it.TenantID, &it.InstanceID, &it.Domain, &it.EnvCode, &it.DBType, &approvers, &it.CreatedAt, &it.UpdatedAt); err != nil {
 		return nil, err
 	}
+	it.Approvers = decodeStringSlice(approvers)
 	return &it, nil
 }
 
@@ -421,7 +429,50 @@ func (d *DB) AssignAccessDomainTenant(id, toTenantID string) error {
 	return tx.Commit()
 }
 
+// UpdateAccessDomainApprovers 只写 Redis 域名的审核人。同步和划拨不调用这里。
+func (d *DB) UpdateAccessDomainApprovers(id string, approvers []string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("域名不存在")
+	}
+	row, err := d.GetAccessDomain(id)
+	if err != nil {
+		return err
+	}
+	if row == nil {
+		return fmt.Errorf("域名不存在")
+	}
+	if NormalizeEngineType(row.DBType) != "redis" {
+		return fmt.Errorf("仅 Redis 域名可设置审核人")
+	}
+	seen := map[string]struct{}{}
+	cleaned := make([]string, 0, len(approvers))
+	for _, raw := range approvers {
+		name := strings.TrimSpace(raw)
+		if name == "" {
+			continue
+		}
+		key := strings.ToLower(name)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		cleaned = append(cleaned, name)
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	res, err := d.Exec(`UPDATE tbl_access_domains SET approvers=?, updated_at=? WHERE id=?`, encodeJSON(cleaned), now, id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("域名不存在")
+	}
+	return nil
+}
+
 // SyncAccessDomainsFromInstance 按实例 domains 同步；新行归属默认租户；禁止跨 db_type 覆盖。
+// 不写入、不覆盖 approvers，也不把实例审核人抄到域名上。
 func (d *DB) SyncAccessDomainsFromInstance(it *Instance) (SyncAccessDomainsResult, error) {
 	var res SyncAccessDomainsResult
 	if it == nil || strings.TrimSpace(it.ID) == "" {

@@ -1,123 +1,127 @@
 import React, { useMemo } from 'react'
 import { Navigate, Route, Routes, useParams } from 'react-router-dom'
 import Dashboard from '../views/dashboard/Dashboard'
-import CdcList from '../views/ops/CdcList'
-import CdcDetail from '../views/ops/CdcDetail'
-import CdcCreate from '../views/ops/CdcCreate'
-import TicketList from '../views/tickets/TicketList'
-import TicketDetail from '../views/tickets/TicketDetail'
-import DclGrants from '../views/tickets/DclGrants'
-import ResourceApply from '../views/tickets/ResourceApply'
-import CreateDb from '../views/tickets/CreateDb'
-import DdlOrder from '../views/tickets/DdlOrder'
-import DmlOrder from '../views/tickets/DmlOrder'
-import DqlExport from '../views/tickets/DqlExport'
-import KafkaOrder from '../views/ops/KafkaOrder'
-import RedisOrder from '../views/ops/RedisOrder'
-import SlotList from '../views/ops/SlotList'
-import Multilang from '../views/ops/Multilang'
-import DolphinOps from '../views/ops/DolphinOps'
-import NacosOps from '../views/ops/NacosOps'
-import SrNodes from '../views/ops/SrNodes'
-import ClusterDeployHub from '../views/ops/ClusterDeployHub'
-import ClusterDeployEngine from '../views/ops/ClusterDeployEngine'
-import Sessions from '../views/ops/Sessions'
-import MysqlSlow from '../views/ops/MysqlSlow'
-import SqlInsight from '../views/ops/SqlInsight'
-import CloudPostgres from '../views/ops/cloud/CloudPostgres'
-import CloudPolicies from '../views/ops/cloud/CloudPolicies'
-import CloudAccounts from '../views/ops/cloud/CloudAccounts'
-import InstanceOverview from '../views/ops/InstanceOverview'
-import HostDiskReportPage from '../views/ops/HostDiskReportPage'
-import DbMonitor from '../views/ops/DbMonitor'
-import RedisRdb from '../views/ops/redis-rdb/RedisRdb'
-import Migration from '../views/ops/Migration'
-import MigrationCreate from '../views/ops/MigrationCreate'
-import MigrationDetail from '../views/ops/MigrationDetail'
-import MigrationSettings from '../views/ops/MigrationSettings'
-import MigrationSchemaCompare from '../views/ops/MigrationSchemaCompare'
-import Flashback from '../views/flashback/Flashback'
-import FlashbackCloud from '../views/flashback/FlashbackCloud'
-import Environments from '../views/config/Environments'
-import DnsRecords from '../views/dns/DnsRecords'
-import DnsZones from '../views/dns/DnsZones'
-import DnsNodes from '../views/dns/DnsNodes'
-import DnsChanges from '../views/dns/DnsChanges'
-import DnsTools from '../views/dns/DnsTools'
-import DnsInspect from '../views/dns/DnsInspect'
-import Regions from '../views/config/Regions'
-import Users from '../views/config/Users'
-import Tenants from '../views/config/Tenants'
-import Roles from '../views/config/Roles'
-import GlobalArgs from '../views/config/GlobalArgs'
-import SystemNotice from '../views/config/SystemNotice'
-import SqlInsightSettings from '../views/config/SqlInsightSettings'
-import LoginLogs from '../views/config/LoginLogs'
-import LoginSessions from '../views/config/LoginSessions'
-import QueryAudits from '../views/config/QueryAudits'
-import ExportWhitelist from '../views/config/ExportWhitelist'
-import ClientAccess from '../views/config/ClientAccess'
-import MyAccessTokens from '../views/config/MyAccessTokens'
-import Connectors from '../views/config/Connectors'
-import MonitorTargets from '../views/config/MonitorTargets'
-import FeAdmin from '../views/config/FeAdmin'
-import DsAdmin from '../views/config/DsAdmin'
-import NacosAdmin from '../views/config/NacosAdmin'
-import ScheduledJobs from '../views/config/ScheduledJobs'
-import AuthConfig from '../views/config/AuthConfig'
-import ReviewRules from '../views/config/ReviewRules'
-import Instances from '../views/config/Instances'
-import Databases from '../views/config/Databases'
-import AccessDomains from '../views/config/AccessDomains'
-import Accounts from '../views/config/Accounts'
-import Menus from '../views/config/Menus'
-import RunHistory from '../views/archive/RunHistory'
-import Masking from '../views/archive/Masking'
-import Report from '../views/archive/Report'
-import ArchiveDashboard from '../views/archive/Dashboard'
-import ArchiveOrder from '../views/archive/ArchiveOrder'
-import TaskList from '../views/archive/TaskList'
-import ArchiveMonitor from '../views/archive/Monitor'
-import ArchiveSettings from '../views/archive/Settings'
-import KafkaQuery from '../views/query/KafkaQuery'
-import RedisQuery from '../views/query/RedisQuery'
-import CommonQuery from '../views/query/CommonQuery'
-import Terminal from '../views/ops/Terminal'
-import HaMaintain from '../views/ops/HaMaintain'
-import BackupPolicies from '../views/backup/Policies'
-import BackupRuns from '../views/backup/Runs'
-import BackupRestore from '../views/backup/Restore'
-import BackupSettings from '../views/backup/Settings'
-import K8sClusters from '../views/k8s/Clusters'
-import K8sOverview from '../views/k8s/Overview'
-import K8sWorkloads from '../views/k8s/Workloads'
-import { K8sNetwork, K8sNodes, K8sStorage } from '../views/k8s/ResourceList'
-import K8sResources from '../views/k8s/Resources'
-import K8sOperators from '../views/k8s/Operators'
-import K8sDBClusters from '../views/k8s/DBClusters'
-import K8sApps from '../views/k8s/Apps'
-import AgentManage from '../views/config/AgentManage'
-import OssUpload from '../views/config/OssUpload'
-import CmdbAssets from '../views/cmdb/Assets'
-import CmdbTopology from '../views/cmdb/Topology'
-import CmdbTags from '../views/cmdb/Tags'
-import CmdbDiscover from '../views/cmdb/Discover'
-import CmdbImportExport from '../views/cmdb/ImportExport'
-import CmdbAudit from '../views/cmdb/Audit'
-import CmdbSync from '../views/cmdb/Sync'
-import TodoFollowUp from '../views/todo/TodoFollowUp'
-import ActiveAlerts from '../views/alerts/ActiveAlerts'
-import AlertActivity from '../views/alerts/AlertActivity'
-import AlertHistory from '../views/alerts/AlertHistory'
-import AlertRules from '../views/alerts/AlertRules'
-import AIOpsKnowledge from '../views/aiops/Knowledge'
-import AiAssistant from '../views/aiops/AiAssistant'
-import AIOpsIncidents from '../views/aiops/Incidents'
-import AlertRoutes from '../views/alerts/AlertRoutes'
-import AlertInhibitions from '../views/alerts/AlertInhibitions'
-import AlertOncall from '../views/alerts/AlertOncall'
-import AlertSilences from '../views/alerts/AlertSilences'
-import MenuPagePlaceholder from '../views/MenuPagePlaceholder'
+import {
+  AccessDomains,
+  Accounts,
+  ActiveAlerts,
+  AgentManage,
+  AIOpsIncidents,
+  AIOpsKnowledge,
+  AiAssistant,
+  AlertActivity,
+  AlertHistory,
+  AlertInhibitions,
+  AlertOncall,
+  AlertRoutes,
+  AlertRules,
+  AlertSilences,
+  ArchiveDashboard,
+  ArchiveMonitor,
+  ArchiveOrder,
+  ArchiveSettings,
+  AuthConfig,
+  BackupPolicies,
+  BackupRestore,
+  BackupRuns,
+  BackupSettings,
+  CdcCreate,
+  CdcDetail,
+  CdcList,
+  ClientAccess,
+  CloudAccounts,
+  CloudPolicies,
+  CloudPostgres,
+  ClusterDeployEngine,
+  ClusterDeployHub,
+  CmdbAssets,
+  CmdbAudit,
+  CmdbDiscover,
+  CmdbImportExport,
+  CmdbSync,
+  CmdbTags,
+  CmdbTopology,
+  CommonQuery,
+  Connectors,
+  CreateDb,
+  Databases,
+  DbMonitor,
+  DclGrants,
+  DdlOrder,
+  DmlOrder,
+  DnsChanges,
+  DnsInspect,
+  DnsNodes,
+  DnsRecords,
+  DnsTools,
+  DnsZones,
+  DolphinOps,
+  DqlExport,
+  DsAdmin,
+  Environments,
+  ExportWhitelist,
+  FeAdmin,
+  Flashback,
+  FlashbackCloud,
+  GlobalArgs,
+  HaMaintain,
+  HostDiskReportPage,
+  InstanceOverview,
+  Instances,
+  K8sApps,
+  K8sClusters,
+  K8sDBClusters,
+  K8sNetwork,
+  K8sNodes,
+  K8sOperators,
+  K8sOverview,
+  K8sResources,
+  K8sStorage,
+  K8sWorkloads,
+  KafkaOrder,
+  KafkaQuery,
+  LoginLogs,
+  LoginSessions,
+  Masking,
+  Menus,
+  MenuPagePlaceholder,
+  Migration,
+  MigrationCreate,
+  MigrationDetail,
+  MigrationSchemaCompare,
+  MigrationSettings,
+  MonitorTargets,
+  Multilang,
+  MyAccessTokens,
+  MysqlSlow,
+  NacosAdmin,
+  NacosOps,
+  OssUpload,
+  QueryAudits,
+  RedisOrder,
+  RedisQuery,
+  RedisRdb,
+  Regions,
+  Report,
+  ResourceApply,
+  ReviewRules,
+  Roles,
+  RunHistory,
+  ScheduledJobs,
+  Sessions,
+  SlotList,
+  SqlInsight,
+  SqlInsightSettings,
+  SrNodes,
+  SystemNotice,
+  TaskList,
+  Tenants,
+  Terminal,
+  TicketDetail,
+  TicketList,
+  TodoFollowUp,
+  Users,
+} from './lazyPages'
 
 function RedirectWithId({ toPrefix }: { toPrefix: string }) {
   const { id } = useParams()
@@ -138,6 +142,7 @@ export function TabPagePanel({ pathname, search }: { pathname: string; search?: 
   )
 
   return (
+    <React.Suspense fallback={<div style={{ padding: 24, color: '#667085' }}>加载中…</div>}>
     <Routes location={loc}>
       <Route path="/ops/dashboard" element={<Dashboard />} />
       <Route path="/metadata/database/search/dashboard" element={<Navigate to="/ops/dashboard" replace />} />
@@ -350,5 +355,6 @@ export function TabPagePanel({ pathname, search }: { pathname: string; search?: 
 
       <Route path="*" element={<MenuPagePlaceholder pathname={pathname} />} />
     </Routes>
+    </React.Suspense>
   )
 }

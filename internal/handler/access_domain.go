@@ -54,6 +54,7 @@ func (h *AccessDomainHandler) enrichInstanceNames(list []store.AccessDomain) {
 		}
 		if inst != nil {
 			list[i].InstanceName = inst.Name
+			list[i].Port = inst.Port
 		}
 	}
 }
@@ -113,6 +114,47 @@ func (h *AccessDomainHandler) Sync(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": res, "ok": true})
+}
+
+// UpdateApprovers PUT /access-domains/:id/approvers 仅 Redis 域名。
+func (h *AccessDomainHandler) UpdateApprovers(c *gin.Context) {
+	id := strings.TrimSpace(c.Param("id"))
+	var req struct {
+		Approvers []string `json:"approvers"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "参数无效"})
+		return
+	}
+	row, err := h.Store.GetAccessDomain(id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	if row == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "域名不存在"})
+		return
+	}
+	if store.NormalizeEngineType(row.DBType) != "redis" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "仅 Redis 域名可设置审核人"})
+		return
+	}
+	if !platformAdminAuditing(h.Store, c) && strings.TrimSpace(row.TenantID) != strings.TrimSpace(middleware.TenantID(c)) {
+		c.JSON(http.StatusForbidden, gin.H{"message": "只能编辑本租户的 Redis 域名审核人"})
+		return
+	}
+	if err := h.Store.UpdateAccessDomainApprovers(id, req.Approvers); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	it, _ := h.Store.GetAccessDomain(id)
+	if it != nil {
+		list := []store.AccessDomain{*it}
+		h.enrichList(list)
+		c.JSON(http.StatusOK, gin.H{"data": list[0], "ok": true})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
 // AssignTenant POST /access-domains/:id/assign-tenant

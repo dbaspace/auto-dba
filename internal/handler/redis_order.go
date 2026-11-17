@@ -153,7 +153,14 @@ func (h *RedisHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
-	assigned, aerr := resolveRedisAssignee(h.Store, middleware.TenantID(c), req.AssignedTo)
+	var domainApprovers []string
+	if ad, err := h.Store.GetAccessDomainByDomainType(domain, "redis"); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	} else if ad != nil && strings.TrimSpace(ad.InstanceID) == instanceID {
+		domainApprovers = ad.Approvers
+	}
+	assigned, aerr := resolveRedisAssignee(h.Store, middleware.TenantID(c), req.AssignedTo, domainApprovers)
 	if aerr != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": aerr.Error()})
 		return
@@ -197,7 +204,9 @@ func (h *RedisHandler) Create(c *gin.Context) {
 		NeedRollback: string(extra),
 	}
 	stampTenantID(c, func(tid string) {
-		if issue != nil { issue.TenantID = tid }
+		if issue != nil {
+			issue.TenantID = tid
+		}
 	})
 	if err := h.Store.CreateIssue(issue); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})

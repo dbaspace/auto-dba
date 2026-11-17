@@ -160,6 +160,79 @@ func TestDeleteAccessDomainStripsInstance(t *testing.T) {
 	}
 }
 
+func TestSyncRedisDomainKeepsApprovers(t *testing.T) {
+	dsn := os.Getenv("AUTO_DBA_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set AUTO_DBA_TEST_DSN to run")
+	}
+	d, err := Open("postgres", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Close() })
+	if err := d.ensureAccessDomainsTable(); err != nil {
+		t.Fatal(err)
+	}
+	suf := uuid.NewString()[:8]
+	host := "redis-" + suf + ".example.com"
+	inst := &Instance{
+		TenantID: DefaultTenantID, Name: "redis-" + suf, DomainName: host, Port: 6379,
+		DBType: "redis", IDC: "test", Host: "127.0.0.1", Domains: []string{host},
+		Approvers: []string{"instance-reviewer"},
+	}
+	if err := d.CreateInstance(inst); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = d.DeleteAccessDomainsByInstance(inst.ID)
+		_, _ = d.Exec(`DELETE FROM tbl_instances WHERE id=?`, inst.ID)
+	})
+	if _, err := d.SyncAccessDomainsFromInstance(inst); err != nil {
+		t.Fatal(err)
+	}
+	row, err := d.GetAccessDomainByDomainType(host, "redis")
+	if err != nil || row == nil {
+		t.Fatalf("domain: %v %#v", err, row)
+	}
+	if len(row.Approvers) != 0 {
+		t.Fatalf("sync copied instance approvers: %v", row.Approvers)
+	}
+	if err := d.UpdateAccessDomainApprovers(row.ID, []string{"biz-owner", "biz-owner"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.SyncAccessDomainsFromInstance(inst); err != nil {
+		t.Fatal(err)
+	}
+	again, err := d.GetAccessDomain(row.ID)
+	if err != nil || again == nil {
+		t.Fatal(err)
+	}
+	if len(again.Approvers) != 1 || again.Approvers[0] != "biz-owner" {
+		t.Fatalf("sync overwrote domain approvers: %v", again.Approvers)
+	}
+	mysql := &Instance{
+		TenantID: DefaultTenantID, Name: "mysql-" + suf, DomainName: host, Port: 3306,
+		DBType: "mysql", IDC: "test", Host: "127.0.0.1", Domains: []string{host},
+	}
+	if err := d.CreateInstance(mysql); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = d.DeleteAccessDomainsByInstance(mysql.ID)
+		_, _ = d.Exec(`DELETE FROM tbl_instances WHERE id=?`, mysql.ID)
+	})
+	if _, err := d.SyncAccessDomainsFromInstance(mysql); err != nil {
+		t.Fatal(err)
+	}
+	mRow, err := d.GetAccessDomainByDomainType(host, "mysql")
+	if err != nil || mRow == nil {
+		t.Fatal(err)
+	}
+	if err := d.UpdateAccessDomainApprovers(mRow.ID, []string{"nope"}); err == nil {
+		t.Fatal("non-redis domain should reject approvers")
+	}
+}
+
 func TestNormalizeEngineType(t *testing.T) {
 	if NormalizeEngineType("PostgreSQL") != "postgres" {
 		t.Fatal(NormalizeEngineType("PostgreSQL"))

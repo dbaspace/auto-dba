@@ -40,10 +40,13 @@ func platformChangeReviewer(db *store.DB, username, userID string) bool {
 	return false
 }
 
-// resolveRedisAssignee 填写了审核人且属于云 PG 同一审核池时，不要求当前租户成员。
+// resolveRedisAssignee 填写了审核人且属于该 Redis 域名审核人或云 PG 同一审核池时，不要求当前租户成员。
 // 其余人仍须是当前租户活跃成员；未填则用 sync_default_approver，同样须是当前租户成员。
-func resolveRedisAssignee(db *store.DB, tenantID, preferred string) (string, error) {
+func resolveRedisAssignee(db *store.DB, tenantID, preferred string, domainApprovers []string) (string, error) {
 	preferred = strings.TrimSpace(preferred)
+	if name, ok := matchedName(preferred, domainApprovers); ok {
+		return name, nil
+	}
 	if preferred != "" && platformChangeReviewer(db, preferred, "") {
 		u, err := db.GetUserByUsername(preferred)
 		if err != nil {
@@ -113,4 +116,39 @@ func listPlatformChangeReviewers(db *store.DB) ([]string, error) {
 		}
 	}
 	return store.ExpandApproverNames(append(append(admins, whitelist...), dbaNames...)), nil
+}
+
+// redisTransferCandidates 更换 Redis 审核人的名单：该域名审核人在前，再并上平台审核池。不按实例租户过滤。
+func redisTransferCandidates(db *store.DB, instanceID, domain string) ([]string, error) {
+	var domainApprovers []string
+	domain = strings.TrimSpace(domain)
+	instanceID = strings.TrimSpace(instanceID)
+	if db != nil && domain != "" {
+		ad, err := db.GetAccessDomainByDomainType(domain, "redis")
+		if err != nil {
+			return nil, err
+		}
+		if ad != nil && (instanceID == "" || strings.TrimSpace(ad.InstanceID) == instanceID) {
+			domainApprovers = ad.Approvers
+		}
+	}
+	pool, err := listPlatformChangeReviewers(db)
+	if err != nil {
+		return nil, err
+	}
+	return store.ExpandApproverNames(append(append([]string{}, domainApprovers...), pool...)), nil
+}
+
+func matchedName(username string, list []string) (string, bool) {
+	username = strings.TrimSpace(username)
+	if username == "" {
+		return "", false
+	}
+	for _, v := range list {
+		v = strings.TrimSpace(v)
+		if v != "" && strings.EqualFold(v, username) {
+			return v, true
+		}
+	}
+	return "", false
 }

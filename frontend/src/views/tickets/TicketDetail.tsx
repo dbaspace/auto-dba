@@ -67,6 +67,73 @@ function cloudExecResult(it: any): string {
   return '尚未执行'
 }
 
+type ProxyApproval = {
+  action: 'approved' | 'rejected'
+  actor: string
+  forUser: string
+  role: string
+}
+
+function proxyRoleLabel(role: string) {
+  if (role === 'platform_admin') return '平台管理员'
+  if (role === 'whitelist') return '审核白名单'
+  if (role === 'dba_tenant') return 'dba 租户'
+  return role || '代审'
+}
+
+function proxyApprovalText(row: ProxyApproval) {
+  const act = row.action === 'rejected' ? '代驳回' : '代审批'
+  return `由 ${row.actor} 以${proxyRoleLabel(row.role)}${act}`
+}
+
+function parseProxyApprovals(raw: unknown): ProxyApproval[] {
+  let lines: unknown[] = []
+  if (Array.isArray(raw)) lines = raw
+  else {
+    try {
+      const parsed = JSON.parse(String(raw || '[]'))
+      lines = Array.isArray(parsed) ? parsed : []
+    } catch {
+      lines = []
+    }
+  }
+  const out: ProxyApproval[] = []
+  for (const line of lines) {
+    const s = String(line || '')
+    const legacy = s.match(/^(approved|rejected)_by_whitelist=(\S+)/)
+    if (legacy) {
+      out.push({
+        action: legacy[1] === 'rejected' ? 'rejected' : 'approved',
+        actor: legacy[2],
+        forUser: '',
+        role: 'whitelist',
+      })
+      continue
+    }
+    const cur = s.match(/^proxy_(approved|rejected) by=(\S+) for=(\S*) role=(\S+)/)
+    if (!cur) continue
+    out.push({
+      action: cur[1] === 'rejected' ? 'rejected' : 'approved',
+      actor: cur[2],
+      forUser: cur[3] === '-' ? '' : cur[3],
+      role: cur[4],
+    })
+  }
+  return out
+}
+
+function proxyForStep(rows: ProxyApproval[], designated: string, allowLegacy = false): ProxyApproval | null {
+  const want = designated.trim().toLowerCase()
+  let legacy: ProxyApproval | null = null
+  let matched: ProxyApproval | null = null
+  for (const row of rows) {
+    if (!row.forUser) legacy = row
+    else if (want && row.forUser.toLowerCase() === want) matched = row
+  }
+  if (matched) return matched
+  return allowLegacy ? legacy : null
+}
+
 function fmtTime(v: any): string {
   if (!v) return '-'
   const d = new Date(v)
@@ -628,6 +695,10 @@ export default function TicketDetail() {
     if (dqlExtra?.assignee_approved_by) return s === 'pending' ? 'dba' : 'assignee'
     return 'assignee'
   }, [dqlMultiStep, dqlExtra, item])
+  const proxyApprovals = useMemo(
+    () => parseProxyApprovals(item?.assignee_transfer_history),
+    [item?.assignee_transfer_history],
+  )
   const dqlApprovalSteps = useMemo(() => {
     type Step = { key: string; title: string; user: string; approvedBy: string; rejectedBy?: string }
     if (!isDQL) return [] as Step[]
@@ -958,6 +1029,7 @@ export default function TicketDetail() {
             instance_id: item.instance_id || '',
             db_name: item.db_name || '',
             issue_type: item.issue_type || '',
+            ...(item.issue_type === 'redis' ? { domain: item.domain || '' } : {}),
           },
         })
       const payload = res.data
@@ -1417,6 +1489,14 @@ export default function TicketDetail() {
               const displayUser = isCurrent
                 ? (item.assigned_to || step.user)
                 : (step.rejectedBy || step.approvedBy || step.user)
+              const designated = String(step.user || item.assigned_to || '')
+              const legacy = [...proxyApprovals].reverse().find((row) => !row.forUser)
+              const acted = String(step.approvedBy || step.rejectedBy || '').toLowerCase()
+              const proxy = proxyForStep(
+                proxyApprovals,
+                designated,
+                !isDQL || (!!legacy && acted === legacy.actor.toLowerCase()),
+              )
               return (
                 <div key={step.key} className={`flow-card ${cardClass}`}>
                   <div className="flow-card-head">{step.title}</div>
@@ -1482,6 +1562,7 @@ export default function TicketDetail() {
                             <span className="status-text muted">待审批</span>
                           )}
                         </div>
+                        {proxy ? <div className="user-sub">{proxyApprovalText(proxy)}</div> : null}
                         {state === 'danger' && item.reject_reason && (
                           <div className="remark-text">附言：{item.reject_reason}</div>
                         )}
@@ -1750,10 +1831,13 @@ export default function TicketDetail() {
                 )
                 const nodeClass =
                   state === 'active' ? 'is-current' : state === 'danger' ? 'is-fail' : state === 'done' ? 'is-ok' : 'is-idle'
-                const sub =
+                const designated = String(step.user || (!isDQL ? item.assigned_to : '') || '')
+                const proxy = state === 'active' ? null : proxyForStep(proxyApprovals, designated, !isDQL)
+                const subBase =
                   state === 'active' ? '待审批' : state === 'danger'
                     ? (item.status === 'canceled' ? '已取消' : '已驳回')
                     : state === 'done' ? '已通过' : '未开始'
+                const sub = proxy ? `${subBase} · ${proxyApprovalText(proxy)}` : subBase
                 return (
                   <React.Fragment key={step.key}>
                     {idx > 0 ? <div className="wf-line" /> : null}
@@ -1963,7 +2047,11 @@ export default function TicketDetail() {
             type="info"
             showIcon
             style={{ marginBottom: 8 }}
-            message="暂无其他候选人，请联系管理员在实例/库上配置审批人"
+            message={
+              item?.issue_type === 'redis'
+                ? '暂无其他候选人，请到「域名管理」为该 Redis 域名配置审核人'
+                : '暂无其他候选人，请联系管理员在实例/库上配置审批人'
+            }
           />
         )}
         <Select

@@ -83,3 +83,18 @@ func TestFormatAssigneeTransferLine(t *testing.T) {
 		t.Fatalf("line=%s", s)
 	}
 }
+
+func TestFormatProxyApprovalLine(t *testing.T) {
+	s := FormatProxyApprovalLine("admin", "chenjiachi", "platform_admin", "approved")
+	if !strings.Contains(s, "proxy_approved by=admin for=chenjiachi role=platform_admin") {
+		t.Fatalf("line=%s", s)
+	}
+	rej := FormatProxyApprovalLine("dba1", "bob", "dba_tenant", "nope")
+	if !strings.HasPrefix(rej, "proxy_approved ") {
+		t.Fatalf("unknown action should be approved, line=%s", rej)
+	}
+	rej = FormatProxyApprovalLine("dba1", "bob", "whitelist", "rejected")
+	if !strings.HasPrefix(rej, "proxy_rejected by=dba1 for=bob role=whitelist") {
+		t.Fatalf("line=%s", rej)
+	}
+}

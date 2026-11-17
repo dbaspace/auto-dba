@@ -360,6 +360,10 @@ func (h *TicketHandler) GetTargetApprovers(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "请先选择租户"})
 		return
 	}
+	if strings.EqualFold(strings.TrimSpace(c.Query("issue_type")), store.IssueTypeRedis) {
+		h.writeRedisTransferApprovers(c)
+		return
+	}
 	instID := strings.TrimSpace(c.Query("instance_id"))
 	dbName := strings.TrimSpace(c.Query("db_name"))
 	list := h.resolveApprovers(instID, dbName)
@@ -426,6 +430,27 @@ func (h *TicketHandler) GetTargetApprovers(c *gin.Context) {
 		msg = "未配置库/实例审批人，且无可用的默认审批人（须为资源所属租户成员）"
 	}
 	c.JSON(http.StatusOK, gin.H{"data": out, "resource_tenant_id": resourceTid, "message": msg})
+}
+
+func (h *TicketHandler) writeRedisTransferApprovers(c *gin.Context) {
+	names, err := redisTransferCandidates(h.Store, c.Query("instance_id"), c.Query("domain"))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	type item struct {
+		Type string `json:"type"`
+		Name string `json:"name"`
+	}
+	out := make([]item, 0, len(names))
+	for _, name := range names {
+		out = append(out, item{Type: "user", Name: name})
+	}
+	msg := ""
+	if len(out) == 0 {
+		msg = "请到「域名管理」为该 Redis 域名配置审核人"
+	}
+	c.JSON(http.StatusOK, gin.H{"data": out, "message": msg})
 }
 
 func (h *TicketHandler) CheckSQL(c *gin.Context) {
@@ -1053,7 +1078,6 @@ func (h *TicketHandler) Approve(c *gin.Context) {
 		return
 	}
 	user := middleware.Username(c)
-	priv := middleware.IsPrivileged(middleware.Role(c))
 	if !h.actorCanApproveIssue(c, it) {
 		msg := "仅指定审批人、超级审核白名单或管理员可批准"
 		if store.IsCloudIssueType(it.IssueType) {
@@ -1062,12 +1086,7 @@ func (h *TicketHandler) Approve(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"message": msg})
 		return
 	}
-	viaWhitelist := !priv && !strings.EqualFold(it.AssignedTo, user) && h.Store.IsGlobalApprover(user)
-	if viaWhitelist {
-		hist := store.AppendAssigneeTransferHistory(it.AssigneeTransferHistory, store.FormatWhitelistApprovalLine(user, "approved"))
-		_ = h.Store.UpdateIssueAssignee(it.ID, it.AssignedTo, hist)
-		it.AssigneeTransferHistory = hist
-	}
+	h.recordProxyApproval(c, it, user, "approved")
 	// DQL 多级审批：指定审批人 → DBA → 安全，全部通过后才 approved
 	if it.IssueType == store.IssueTypeDQL {
 		exBefore, _ := parseDQLApprovalExtra(it.NeedRollback)
@@ -1181,7 +1200,6 @@ func (h *TicketHandler) Reject(c *gin.Context) {
 		return
 	}
 	user := middleware.Username(c)
-	priv := middleware.IsPrivileged(middleware.Role(c))
 	if !h.actorCanApproveIssue(c, it) {
 		msg := "仅指定审批人、超级审核白名单或管理员可驳回"
 		if store.IsCloudIssueType(it.IssueType) {
@@ -1190,11 +1208,7 @@ func (h *TicketHandler) Reject(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"message": msg})
 		return
 	}
-	viaWhitelist := !priv && !strings.EqualFold(it.AssignedTo, user) && h.Store.IsGlobalApprover(user)
-	if viaWhitelist {
-		hist := store.AppendAssigneeTransferHistory(it.AssigneeTransferHistory, store.FormatWhitelistApprovalLine(user, "rejected"))
-		_ = h.Store.UpdateIssueAssignee(it.ID, it.AssignedTo, hist)
-	}
+	h.recordProxyApproval(c, it, user, "rejected")
 	if it.IssueType == store.IssueTypeDQL {
 		if err := markDQLRejected(it, user); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
@@ -1292,6 +1306,16 @@ func (h *TicketHandler) validateTransferAssignee(it *store.Issue, newAssignee st
 		}
 		if !ok {
 			return createDBApproverDenied
+		}
+		return ""
+	}
+	if it.IssueType == store.IssueTypeRedis {
+		names, err := redisTransferCandidates(h.Store, it.InstanceID, it.Domain)
+		if err != nil {
+			return err.Error()
+		}
+		if !usernameInList(newAssignee, names) {
+			return "审核人不在该 Redis 域名审核人或平台审核池中"
 		}
 		return ""
 	}
@@ -2168,6 +2192,55 @@ func (h *TicketHandler) isPlatformResourceApplyReviewer(c *gin.Context) bool {
 		return false
 	}
 	return h.Store.IsPlatformResourceApplyReviewer(middleware.UserID(c), middleware.Username(c))
+}
+
+// proxyApprovalRole 代审身份。顺序为平台管理员、审核白名单、dba 租户。都不是则不是代审身份。
+func (h *TicketHandler) proxyApprovalRole(c *gin.Context, username string) string {
+	if h == nil || h.Store == nil || c == nil {
+		return ""
+	}
+	username = strings.TrimSpace(username)
+	userID := strings.TrimSpace(middleware.UserID(c))
+	if userID != "" {
+		if ok, err := h.Store.UserIsPlatformAdmin(userID); err == nil && ok {
+			return "platform_admin"
+		}
+	}
+	if middleware.IsAdminRole(middleware.Role(c)) {
+		return "platform_admin"
+	}
+	if username != "" && h.Store.IsGlobalApprover(username) {
+		return "whitelist"
+	}
+	if userID != "" {
+		if t, err := h.Store.GetTenantByCode(store.DBATenantCode); err == nil && t != nil {
+			if ok, err := h.Store.IsActiveTenantMember(t.ID, userID); err == nil && ok {
+				return "dba_tenant"
+			}
+		}
+	}
+	return ""
+}
+
+// recordProxyApproval 操作人不是当前指定审批人，且属于管理员、白名单或 dba 租户时记下代审。
+func (h *TicketHandler) recordProxyApproval(c *gin.Context, it *store.Issue, actor, action string) {
+	if h == nil || h.Store == nil || it == nil {
+		return
+	}
+	actor = strings.TrimSpace(actor)
+	designated := strings.TrimSpace(it.AssignedTo)
+	if actor == "" || designated == "" || strings.EqualFold(actor, designated) {
+		return
+	}
+	role := h.proxyApprovalRole(c, actor)
+	if role == "" {
+		return
+	}
+	hist := store.AppendAssigneeTransferHistory(it.AssigneeTransferHistory, store.FormatProxyApprovalLine(actor, designated, role, action))
+	if err := h.Store.UpdateIssueAssignee(it.ID, it.AssignedTo, hist); err != nil {
+		return
+	}
+	it.AssigneeTransferHistory = hist
 }
 
 func (h *TicketHandler) actorCanApproveIssue(c *gin.Context, it *store.Issue) bool {

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Button, Dropdown, Input, Modal, Pagination, Select, Tabs, Tag, message } from 'antd'
+import { Alert, Button, Dropdown, Input, Modal, Pagination, Select, Tabs, Tag, message } from 'antd'
 import dayjs from 'dayjs'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import api from '../../api/request'
@@ -25,6 +25,7 @@ interface DomainRow {
   env_code?: string
   db_type?: string
   created_at?: string
+  approvers?: string[]
 }
 
 const OTHER = '__other__'
@@ -50,6 +51,7 @@ export default function AccessDomains() {
   const user = useAppSelector((s) => s.auth.user)
   const { hasUrn } = usePermission()
   const canDelete = hasUrn(Perm.domains.delete)
+  const canEdit = hasUrn(Perm.domains.edit)
   const impersonating = Boolean((user as { impersonating?: boolean })?.impersonating)
   const currentTenant = (user as { current_tenant?: { id?: string; name?: string; code?: string } })?.current_tenant
   const currentTenantId = String(currentTenant?.id || '')
@@ -70,6 +72,12 @@ export default function AccessDomains() {
   const [assigning, setAssigning] = useState(false)
   const [selectedKeys, setSelectedKeys] = useState<React.Key[]>([])
   const [deleting, setDeleting] = useState(false)
+  const [approverRow, setApproverRow] = useState<DomainRow | null>(null)
+  const [approverNames, setApproverNames] = useState<string[]>([])
+  const [memberOptions, setMemberOptions] = useState<{ value: string; label: string }[]>([])
+  const [memberLoading, setMemberLoading] = useState(false)
+  const [memberError, setMemberError] = useState('')
+  const [savingApprovers, setSavingApprovers] = useState(false)
 
   const knownTypes = useMemo(() => new Set(typeOptions.map((t) => typeKey(t.value))), [typeOptions])
 
@@ -148,7 +156,8 @@ export default function AccessDomains() {
           (r.domain || '').toLowerCase().includes(kw) ||
           (r.instance_id || '').toLowerCase().includes(kw) ||
           (r.instance_name || '').toLowerCase().includes(kw) ||
-          (r.env_code || '').toLowerCase().includes(kw),
+          (r.env_code || '').toLowerCase().includes(kw) ||
+          (r.approvers || []).some((a) => a.toLowerCase().includes(kw)),
       )
     }
     return [...list].sort((a, b) => {
@@ -333,6 +342,90 @@ export default function AccessDomains() {
     })
   }
 
+  const redisTab = typeKey(activeType) === 'redis'
+
+  function savedApproverOptions(names: string[]) {
+    const seen = new Set<string>()
+    const out: { value: string; label: string }[] = []
+    for (const raw of names) {
+      const name = String(raw || '').trim()
+      const key = name.toLowerCase()
+      if (!name || seen.has(key)) continue
+      seen.add(key)
+      out.push({ value: name, label: name })
+    }
+    return out
+  }
+
+  async function loadApproverMembers(row: DomainRow) {
+    const saved = (row.approvers || []).map((s) => String(s || '').trim()).filter(Boolean)
+    const tid = String(row.tenant_id || '').trim()
+    if (!tid) {
+      setMemberOptions(savedApproverOptions(saved))
+      setMemberError('该域名没有所属租户，无法列出成员')
+      return
+    }
+    setMemberLoading(true)
+    setMemberError('')
+    try {
+      const { data } = await api.get(`/tenants/${tid}/members`, { silent: true })
+      const opts: { value: string; label: string }[] = []
+      const seen = new Set<string>()
+      for (const m of data?.data || []) {
+        if (String(m?.status || '').toLowerCase() !== 'active') continue
+        const username = String(m?.username || '').trim()
+        const key = username.toLowerCase()
+        if (!username || seen.has(key)) continue
+        seen.add(key)
+        const display = String(m?.display_name || '').trim()
+        opts.push({ value: username, label: display ? `${display}（${username}）` : username })
+      }
+      for (const name of saved) {
+        const key = name.toLowerCase()
+        if (seen.has(key)) continue
+        seen.add(key)
+        opts.push({ value: name, label: name })
+      }
+      setMemberOptions(opts)
+    } catch (e: any) {
+      setMemberOptions(savedApproverOptions(saved))
+      setMemberError(e?.response?.data?.message || e?.message || '加载租户成员失败')
+    } finally {
+      setMemberLoading(false)
+    }
+  }
+
+  function openApprovers(row: DomainRow) {
+    const saved = (row.approvers || []).map((s) => String(s || '').trim()).filter(Boolean)
+    setApproverRow(row)
+    setApproverNames(saved)
+    setMemberOptions(savedApproverOptions(saved))
+    setMemberError('')
+    void loadApproverMembers(row)
+  }
+
+  async function saveApprovers() {
+    if (!approverRow?.id) return
+    setSavingApprovers(true)
+    try {
+      const seen = new Set<string>()
+      const approvers: string[] = []
+      for (const raw of approverNames) {
+        const name = String(raw || '').trim()
+        const key = name.toLowerCase()
+        if (!name || seen.has(key)) continue
+        seen.add(key)
+        approvers.push(name)
+      }
+      await api.put(`/access-domains/${approverRow.id}/approvers`, { approvers })
+      message.success('已保存审核人')
+      setApproverRow(null)
+      await load()
+    } finally {
+      setSavingApprovers(false)
+    }
+  }
+
   useEffect(() => {
     ;(async () => {
       await loadTypes()
@@ -512,6 +605,31 @@ export default function AccessDomains() {
               width: 180,
               render: (v: string) => formatDomainTime(v),
             },
+            ...(redisTab
+              ? [
+                  {
+                    title: '审核人',
+                    key: 'approvers',
+                    width: 180,
+                    ellipsis: true,
+                    render: (_: unknown, row: DomainRow) => (row.approvers || []).join(',') || '—',
+                  },
+                  ...(canEdit
+                    ? [
+                        {
+                          title: '操作',
+                          key: 'op',
+                          width: 80,
+                          render: (_: unknown, row: DomainRow) => (
+                            <Button type="link" size="small" onClick={() => openApprovers(row)}>
+                              编辑
+                            </Button>
+                          ),
+                        },
+                      ]
+                    : []),
+                ]
+              : []),
           ]}
         />
       </div>
@@ -561,6 +679,35 @@ export default function AccessDomains() {
             value: t.id,
             label: `${t.name || t.code || t.id}${t.id === currentTenantId ? '（当前工作租户）' : ''}`,
           }))}
+        />
+      </Modal>
+      <Modal
+        open={!!approverRow}
+        title="设置 Redis 域名审核人"
+        okText="保存"
+        confirmLoading={savingApprovers}
+        onCancel={() => !savingApprovers && setApproverRow(null)}
+        onOk={() => void saveApprovers()}
+      >
+        <p style={{ marginBottom: 12 }}>
+          域名「{approverRow?.domain}」的审核人只用于 Redis 工单，从所属租户
+          {approverRow?.tenant_name ? `「${approverRow.tenant_name}」` : ''}的成员中选择。一键同步不会覆盖这里填写的内容。
+        </p>
+        {memberError ? (
+          <Alert type="error" showIcon style={{ marginBottom: 12 }} message={memberError} />
+        ) : null}
+        <Select
+          mode="multiple"
+          showSearch
+          allowClear
+          optionFilterProp="label"
+          style={{ width: '100%' }}
+          placeholder={memberLoading ? '正在加载租户成员' : '选择该租户的成员'}
+          loading={memberLoading}
+          value={approverNames}
+          onChange={(v) => setApproverNames(v)}
+          options={memberOptions}
+          notFoundContent={memberLoading ? '正在加载' : '该租户暂无活跃成员'}
         />
       </Modal>
     </div>

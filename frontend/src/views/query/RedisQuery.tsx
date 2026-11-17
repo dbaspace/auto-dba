@@ -319,57 +319,19 @@ export default function RedisQuery() {
   async function loadMeta() {
     setInstLoading(true)
     try {
-      const [domRes, instRes] = await Promise.all([
-        api.get('/access-domains', { params: { db_type: 'redis' } }).catch(() => ({ data: { data: [] } })),
-        api.get('/instances', { params: { db_type: 'redis' } }),
-      ])
-      const instMap = new Map<string, any>()
-      for (const i of instRes.data.data || []) {
-        instMap.set(i.id, i)
-      }
-      const fromDomains: DomainEntry[] = (domRes.data.data || []).map((r: any) => {
-        const inst = instMap.get(r.instance_id)
-        return {
+      try {
+        const { data } = await api.get('/access-domains', { params: { db_type: 'redis' } })
+        const fromDomains: DomainEntry[] = (data.data || []).map((r: any) => ({
           id: r.id || `${r.domain}-${r.instance_id}`,
           domain: String(r.domain || '').trim(),
-          env_code: String(r.env_code || inst?.idc || '').trim(),
+          env_code: String(r.env_code || '').trim(),
           instance_id: String(r.instance_id || ''),
-          port: inst?.port,
-          instance_name: inst?.name,
-        }
-      }).filter((d: DomainEntry) => d.domain && d.instance_id)
-
-      if (fromDomains.length) {
+          port: r.port,
+          instance_name: r.instance_name,
+        })).filter((d: DomainEntry) => d.domain && d.instance_id)
         setDomains(fromDomains)
-      } else {
-        // 回退：尚未同步域名表时，由实例 domains 拼装
-        const fallback: DomainEntry[] = []
-        const seen = new Set<string>()
-        for (const i of instRes.data.data || []) {
-          const list: string[] = []
-          const add = (s: string) => {
-            const v = String(s || '').trim()
-            if (!v) return
-            const key = normalizeDomain(v)
-            if (seen.has(`${i.id}:${key}`)) return
-            seen.add(`${i.id}:${key}`)
-            list.push(v)
-          }
-          for (const d of i.domains || []) add(String(d))
-          if (!list.length) add(i.domain_name)
-          if (!list.length) add(i.host)
-          for (const dom of list) {
-            fallback.push({
-              id: `${i.id}:${normalizeDomain(dom)}`,
-              domain: dom,
-              env_code: String(i.idc || '').trim(),
-              instance_id: i.id,
-              port: i.port,
-              instance_name: i.name,
-            })
-          }
-        }
-        setDomains(fallback)
+      } catch {
+        setDomains([])
       }
       try {
         setHistory(JSON.parse(localStorage.getItem(HIST_KEY) || '[]'))
@@ -507,7 +469,7 @@ export default function RedisQuery() {
             })}
             {!instLoading && !envGroups.length ? (
               <p className="empty">
-                暂无 Redis 域名。请在「资源配置 → 域名管理」一键同步，或在实例中登记 domains。
+                暂无 Redis 域名。请先在「资源配置 → 域名管理」同步并划拨。
               </p>
             ) : null}
           </Spin>

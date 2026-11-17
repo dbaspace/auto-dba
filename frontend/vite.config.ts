@@ -100,5 +100,33 @@ export default defineConfig(() => {
       host: ep.vite_host,
       port: ep.vite_port,
     },
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks(id: string) {
+            if (!id.includes('node_modules')) return
+            if (id.includes('echarts') || id.includes('zrender')) return 'echarts'
+            if (
+              id.includes('/antd/') ||
+              id.includes('@ant-design') ||
+              id.includes('/rc-') ||
+              id.includes('@rc-component')
+            ) {
+              return 'antd'
+            }
+            if (
+              /\/node_modules\/react\//.test(id) ||
+              id.includes('/react-dom/') ||
+              id.includes('/scheduler/') ||
+              id.includes('react-router') ||
+              id.includes('react-redux') ||
+              id.includes('@reduxjs')
+            ) {
+              return 'react'
+            }
+          },
+        },
+      },
+    },
   }
 })

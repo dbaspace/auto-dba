@@ -1,6 +1,8 @@
 package router
 
 import (
+	"compress/gzip"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -90,6 +92,65 @@ func TestServeSPA_ExistingAssetLongCache(t *testing.T) {
 	cc := w.Header().Get("Cache-Control")
 	if !strings.Contains(cc, "max-age=31536000") {
 		t.Fatalf("Cache-Control=%q", cc)
+	}
+}
+
+func TestServeSPA_GzipAsset(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "index.html"), []byte("<html>index</html>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "assets"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	raw := strings.Repeat("console.log('auto-dba');", 80)
+	if err := os.WriteFile(filepath.Join(root, "assets", "app-abc.js"), []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	e := gin.New()
+	serveSPA(e, root)
+
+	req := httptest.NewRequest(http.MethodGet, "/assets/app-abc.js", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	w := httptest.NewRecorder()
+	e.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d", w.Code)
+	}
+	if w.Header().Get("Content-Encoding") != "gzip" {
+		t.Fatalf("Content-Encoding=%q", w.Header().Get("Content-Encoding"))
+	}
+	if !strings.Contains(w.Header().Get("Vary"), "Accept-Encoding") {
+		t.Fatalf("Vary=%q", w.Header().Get("Vary"))
+	}
+	if !strings.Contains(w.Header().Get("Cache-Control"), "max-age=31536000") {
+		t.Fatalf("Cache-Control=%q", w.Header().Get("Cache-Control"))
+	}
+	compressed := w.Body.Len()
+	zr, err := gzip.NewReader(w.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(zr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != raw {
+		t.Fatalf("decoded len=%d", len(got))
+	}
+	if compressed >= len(raw) {
+		t.Fatalf("gzip not smaller: %d >= %d", compressed, len(raw))
+	}
+
+	rangeReq := httptest.NewRequest(http.MethodGet, "/assets/app-abc.js", nil)
+	rangeReq.Header.Set("Accept-Encoding", "gzip")
+	rangeReq.Header.Set("Range", "bytes=0-10")
+	rw := httptest.NewRecorder()
+	e.ServeHTTP(rw, rangeReq)
+	if rw.Header().Get("Content-Encoding") == "gzip" {
+		t.Fatal("range request must not be gzipped")
 	}
 }
 

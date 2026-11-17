@@ -169,7 +169,6 @@ export default function RedisOrder() {
   formRef.current = form
   const [antdForm] = Form.useForm()
   const [accessDomains, setAccessDomains] = useState<AccessDomainRow[]>([])
-  const [instById, setInstById] = useState<Record<string, any>>({})
   const [reviewerPool, setReviewerPool] = useState<string[]>([])
   const [envGroups, setEnvGroups] = useState<TicketEnvGroup[]>([])
   const [catalog, setCatalog] = useState<CmdItem[]>([])
@@ -218,23 +217,29 @@ export default function RedisOrder() {
     )
   }, [accessDomains, form.env, envGroups])
 
-  const currentInst = useMemo(() => instById[form.instance_id], [instById, form.instance_id])
+  const selectedDomain = useMemo(
+    () =>
+      accessDomains.find(
+        (r) => String(r.instance_id || '') === form.instance_id && String(r.domain || '') === form.domain,
+      ),
+    [accessDomains, form.instance_id, form.domain],
+  )
   const approvers = useMemo(
-    () => unionApproverNames(currentInst?.approvers || [], form.instance_id ? reviewerPool : []),
-    [currentInst, form.instance_id, reviewerPool],
+    () => unionApproverNames(selectedDomain?.approvers || [], form.instance_id ? reviewerPool : []),
+    [selectedDomain, form.instance_id, reviewerPool],
   )
   const approverPlaceholder = !form.instance_id
     ? '请先选择 Redis 地址'
     : !approvers.length
-      ? '该实例未配置审批人员，可手动填写'
-      : '选填，来自实例审批人，以及管理员、dba 租户和审核白名单'
+      ? '该域名未配置审核人，可手动填写'
+      : '选填，来自该域名审核人，以及管理员、dba 租户和审核白名单'
 
   const scriptStats = useMemo(
     () => parseScriptLocal(form.command, catalog, blacklist),
     [form.command, catalog, blacklist],
   )
 
-  const prodRisk = isProdEnv(form.env) || isProdEnv(currentInst?.idc || '')
+  const prodRisk = isProdEnv(form.env) || isProdEnv(selectedDomain?.env_code || '')
 
   function onEnvChange(env: string) {
     patchForm({ env, instance_id: '', domain: '', assigned_to: '' })
@@ -243,23 +248,16 @@ export default function RedisOrder() {
     setCheckRows([])
   }
 
-  async function onSourceChange(key: string) {
+  function onSourceChange(key: string) {
     const parsed = parseSourceKey(key)
     if (!parsed) {
       patchForm({ instance_id: '', domain: '', assigned_to: '' })
       return
     }
-    let inst = instById[parsed.instance_id]
-    if (!inst) {
-      try {
-        const { data } = await api.get(`/instances/${parsed.instance_id}`, { silent: true })
-        inst = data.data
-        if (inst) setInstById((m) => ({ ...m, [parsed.instance_id]: inst }))
-      } catch {
-        /* keep empty approvers */
-      }
-    }
-    const first = (inst?.approvers || [])[0] || ''
+    const hit = accessDomains.find(
+      (r) => String(r.instance_id || '') === parsed.instance_id && String(r.domain || '') === parsed.domain,
+    )
+    const first = (hit?.approvers || []).map((s) => String(s || '').trim()).find(Boolean) || ''
     patchForm({ instance_id: parsed.instance_id, domain: parsed.domain, assigned_to: first })
   }
 

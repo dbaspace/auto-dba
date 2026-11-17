@@ -117,7 +117,7 @@ func TestResolveRedisAssigneeWhitelistSkipsTenant(t *testing.T) {
 		})
 	}
 
-	got, err := resolveRedisAssignee(db, "tenant-not-a-member", outsider)
+	got, err := resolveRedisAssignee(db, "tenant-not-a-member", outsider, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,8 +125,29 @@ func TestResolveRedisAssigneeWhitelistSkipsTenant(t *testing.T) {
 		t.Fatalf("whitelist assignee: got %q", got)
 	}
 
-	_, err = resolveRedisAssignee(db, "tenant-not-a-member", "no-such-redis-reviewer")
+	_, err = resolveRedisAssignee(db, "tenant-not-a-member", "no-such-redis-reviewer", nil)
 	if err == nil || !strings.Contains(err.Error(), "不是该租户的活跃成员") {
 		t.Fatalf("outsider should be rejected, got %v", err)
+	}
+}
+
+func TestValidateRedisTransferRejectsOutsidePool(t *testing.T) {
+	h := &TicketHandler{}
+	msg := h.validateTransferAssignee(&store.Issue{
+		IssueType: store.IssueTypeRedis,
+		Submitter: "admin",
+	}, "stranger")
+	if !strings.Contains(msg, "平台审核池") {
+		t.Fatalf("got %q", msg)
+	}
+}
+
+func TestResolveRedisAssigneeDomainApproverSkipsTenant(t *testing.T) {
+	got, err := resolveRedisAssignee(nil, "tenant-not-a-member", "Biz.Owner", []string{"biz.owner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "biz.owner" {
+		t.Fatalf("domain approver: got %q", got)
 	}
 }
