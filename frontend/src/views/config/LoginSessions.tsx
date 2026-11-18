@@ -15,6 +15,9 @@ interface SessRow {
   expire_at?: string
   kind?: string
   status?: string
+  presence?: string
+  last_active_at?: string
+  activity_source?: string
 }
 
 const PAGE_SIZE = 10
@@ -135,9 +138,30 @@ export default function LoginSessions() {
         pagination={false}
         columns={[
           { title: '用户名', dataIndex: 'username', width: 120 },
-          { title: '状态', dataIndex: 'status', width: 100, render: (v: string) => <Tag color="green">{v || '会话有效'}</Tag> },
+          { title: '状态', dataIndex: 'status', width: 100, render: (v: string) => <Tag color={v === 'PAT' ? 'blue' : 'green'}>{v || '会话有效'}</Tag> },
+          {
+            title: '使用状态',
+            dataIndex: 'presence',
+            width: 100,
+            render: (v: string) => (v === 'active' ? <Tag color="green">使用中</Tag> : <Tag>离开</Tag>),
+          },
+          {
+            title: '最近操作',
+            dataIndex: 'last_active_at',
+            width: 200,
+            render: (v: string, row: SessRow) => {
+              if (!v) return '无'
+              const text = fmtTime(v)
+              return row.activity_source === 'pat' ? `${text} PAT` : text
+            },
+          },
           { title: '登录时间', dataIndex: 'online_at', width: 170, render: fmtTime },
-          { title: '过期时间', dataIndex: 'expire_at', width: 170, render: fmtTime },
+          {
+            title: '过期时间',
+            dataIndex: 'expire_at',
+            width: 170,
+            render: (v: string, row: SessRow) => (row.kind === 'pat' && !v ? '不过期' : fmtTime(v)),
+          },
           { title: 'IP', dataIndex: 'ip', width: 130 },
           {
             title: 'UA',
@@ -149,18 +173,20 @@ export default function LoginSessions() {
             title: '操作',
             width: 200,
             render: (_: unknown, row: SessRow) => (
-              <Space>
-                <Popconfirm title="踢下该终端会话？" onConfirm={() => kick(row, false)}>
-                  <Button size="small" danger>
-                    踢会话
-                  </Button>
-                </Popconfirm>
-                <Popconfirm title="踢下该用户全部会话？" onConfirm={() => kick(row, true)}>
-                  <Button size="small" danger type="primary">
-                    踢全部
-                  </Button>
-                </Popconfirm>
-              </Space>
+              row.jti ? (
+                <Space>
+                  <Popconfirm title="踢下该终端会话？" onConfirm={() => kick(row, false)}>
+                    <Button size="small" danger>
+                      踢会话
+                    </Button>
+                  </Popconfirm>
+                  <Popconfirm title="踢下该用户全部会话？" onConfirm={() => kick(row, true)}>
+                    <Button size="small" danger type="primary">
+                      踢全部
+                    </Button>
+                  </Popconfirm>
+                </Space>
+              ) : null
             ),
           },
         ]}

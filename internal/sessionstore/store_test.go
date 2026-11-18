@@ -181,3 +181,62 @@ func TestValidExpiredDoesNotRenew(t *testing.T) {
 		t.Fatalf("expired session should be revoked, err=%v", err)
 	}
 }
+
+func TestTouchActiveKeepsExpire(t *testing.T) {
+	s, _ := newTestStore(t)
+	ctx := t.Context()
+	expire := time.Now().Add(5 * time.Hour).UTC().Format(time.RFC3339)
+	online := time.Now().Add(-2 * time.Hour).UTC().Format(time.RFC3339)
+	if err := s.Create(ctx, Session{
+		JTI: "j1", UserID: "u1", Username: "admin",
+		ExpireAt: expire, ExtendDate: "2020-01-01", OnlineAt: online, LastActiveAt: online,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	other := Session{JTI: "j2", UserID: "u1", Username: "admin", ExpireAt: expire, OnlineAt: online}
+	rawOther, _ := json.Marshal(other)
+	if err := s.rdb.HSet(ctx, s.userKey("u1"), "j2", string(rawOther)).Err(); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	if err := s.TouchActive(ctx, "u1", "j1", now); err != nil {
+		t.Fatal(err)
+	}
+	sess := loadSession(t, s, "u1", "j1")
+	if sess.ExpireAt != expire || sess.ExtendDate != "2020-01-01" {
+		t.Fatalf("expire changed: %+v", sess)
+	}
+	if sess.LastActiveAt == online {
+		t.Fatal("last_active_at not updated")
+	}
+	kept := loadSession(t, s, "u1", "j2")
+	if kept.JTI != "j2" || kept.LastActiveAt != "" {
+		t.Fatalf("other session changed: %+v", kept)
+	}
+	again := now.Add(10 * time.Second)
+	if err := s.TouchActive(ctx, "u1", "j1", again); err != nil {
+		t.Fatal(err)
+	}
+	sess2 := loadSession(t, s, "u1", "j1")
+	if sess2.LastActiveAt != sess.LastActiveAt {
+		t.Fatalf("repeat touch wrote redis: %s -> %s", sess.LastActiveAt, sess2.LastActiveAt)
+	}
+}
+
+func TestValidWithoutLastActiveAt(t *testing.T) {
+	s, _ := newTestStore(t)
+	ctx := t.Context()
+	expire := time.Now().Add(3 * time.Hour).UTC().Format(time.RFC3339)
+	body := `{"jti":"jold","user_id":"uold","username":"admin","online_at":"` + time.Now().UTC().Format(time.RFC3339) + `","expire_at":"` + expire + `","extend_date":"` + ShanghaiDay(time.Now()) + `"}`
+	if err := s.rdb.HSet(ctx, s.userKey("uold"), "jold", body).Err(); err != nil {
+		t.Fatal(err)
+	}
+	ok, renewed, err := s.Valid(ctx, "uold", "jold")
+	if err != nil || !ok || !renewed.IsZero() {
+		t.Fatalf("old session: ok=%v renewed=%v err=%v", ok, renewed, err)
+	}
+	sess := loadSession(t, s, "uold", "jold")
+	if sess.ExpireAt != expire {
+		t.Fatalf("expire_at=%s", sess.ExpireAt)
+	}
+}

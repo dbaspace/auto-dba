@@ -125,6 +125,12 @@ func Init(e *gin.Engine, d Deps) {
 		"/api/v1/auth/password/forgot", "/api/v1/auth/password/reset",
 		"/api/v1/k8s/agents/",
 	)
+	// 活动上报只经过鉴权，不进入闲置计时，避免每分钟上报把闲置退出续上。
+	if d.LoginSession != nil {
+		touch := e.Group("/api/v1")
+		touch.Use(auth)
+		touch.POST("/auth/sessions/touch", d.LoginSession.Touch)
+	}
 	secured := e.Group("/api/v1")
 	secured.Use(auth)
 	secured.Use(middleware.IdleSession(d.Auth.Store))

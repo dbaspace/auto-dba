@@ -21,17 +21,18 @@ var ErrSessionExpired = errors.New("session expired")
 
 // Session 登录会话（Redis Hash field value；不存 JWT 明文）。
 type Session struct {
-	JTI        string `json:"jti"`
-	UserID     string `json:"user_id"`
-	TenantID   string `json:"tenant_id,omitempty"`
-	Username   string `json:"username"`
-	IP         string `json:"ip,omitempty"`
-	UA         string `json:"ua,omitempty"`
-	OnlineAt   string `json:"online_at"`
-	ExpireAt   string `json:"expire_at"`
-	ExtendDate string `json:"extend_date,omitempty"` // 东八区日期 2006-01-02，当天已延长过
-	Kind       string `json:"kind,omitempty"`        // normal | impersonate
-	Status     string `json:"status,omitempty"`      // 展示用：会话有效
+	JTI          string `json:"jti"`
+	UserID       string `json:"user_id"`
+	TenantID     string `json:"tenant_id,omitempty"`
+	Username     string `json:"username"`
+	IP           string `json:"ip,omitempty"`
+	UA           string `json:"ua,omitempty"`
+	OnlineAt     string `json:"online_at"`
+	ExpireAt     string `json:"expire_at"`
+	ExtendDate   string `json:"extend_date,omitempty"` // 东八区日期 2006-01-02，当天已延长过
+	Kind         string `json:"kind,omitempty"`        // normal | impersonate
+	Status       string `json:"status,omitempty"`      // 展示用：会话有效
+	LastActiveAt string `json:"last_active_at,omitempty"`
 }
 
 // Store Redis 会话权威源；Enabled=false 时所有写/校验为 no-op，不影响现网。
@@ -231,6 +232,9 @@ func (s *Store) Create(ctx context.Context, sess Session) error {
 	if sess.OnlineAt == "" {
 		sess.OnlineAt = now.UTC().Format(time.RFC3339)
 	}
+	if strings.TrimSpace(sess.LastActiveAt) == "" {
+		sess.LastActiveAt = sess.OnlineAt
+	}
 	if strings.TrimSpace(sess.ExpireAt) == "" {
 		exp, date := s.PlanLoginExpiry(ctx, sess.UserID, now)
 		sess.ExpireAt = exp.UTC().Format(time.RFC3339)
@@ -315,6 +319,56 @@ func (s *Store) Valid(ctx context.Context, userID, jti string) (bool, time.Time,
 		return true, time.Time{}, nil
 	}
 	return true, next, nil
+}
+
+// TouchActive 只更新当前会话的 last_active_at。不改过期时间，不删除其它会话。
+// 距上次活动不足 PresenceTouchGap 时不写 Redis。
+func (s *Store) TouchActive(ctx context.Context, userID, jti string, now time.Time) error {
+	cli := s.client()
+	if cli == nil || strings.TrimSpace(userID) == "" || strings.TrimSpace(jti) == "" {
+		return nil
+	}
+	uk := s.userKey(userID)
+	raw, err := cli.HGet(ctx, uk, jti).Result()
+	if err == redis.Nil {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var sess Session
+	if err := json.Unmarshal([]byte(raw), &sess); err != nil {
+		return err
+	}
+	if sess.JTI == "" {
+		sess.JTI = jti
+	}
+	if t, e := time.Parse(time.RFC3339, sess.LastActiveAt); e == nil && now.Sub(t) < PresenceTouchGap {
+		return nil
+	}
+	prevExpire := sess.ExpireAt
+	prevExtend := sess.ExtendDate
+	sess.LastActiveAt = now.UTC().Format(time.RFC3339)
+	sess.ExpireAt = prevExpire
+	sess.ExtendDate = prevExtend
+	b, err := json.Marshal(sess)
+	if err != nil {
+		return err
+	}
+	return cli.HSet(ctx, uk, jti, string(b)).Err()
+}
+
+// UserHasSession 该用户在 Redis 里是否还有会话 Hash。
+func (s *Store) UserHasSession(ctx context.Context, userID string) (bool, error) {
+	cli := s.client()
+	if cli == nil || strings.TrimSpace(userID) == "" {
+		return false, nil
+	}
+	n, err := cli.Exists(ctx, s.userKey(userID)).Result()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
 }
 
 // RevokeJTI 踢单端 / 登出。

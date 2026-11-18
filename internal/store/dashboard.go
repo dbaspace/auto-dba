@@ -319,12 +319,8 @@ func (d *DB) DashboardTodos(f DashboardFilter, viewer string, page, pageSize int
 		if viewer != "" && !seeAllPendingRows && !strings.EqualFold(r.AssignedTo, viewer) {
 			continue
 		}
-		name := r.Description
-		if name == "" {
-			name = r.TicketNo + " " + r.DBName
-		}
 		appendTodo(DashboardTodo{
-			ID: r.ID, Name: strings.TrimSpace(name), CreatedBy: r.Submitter, CreatorName: r.Submitter,
+			ID: r.ID, Name: todoListName(r.TicketNo, r.DBName, r.Description), CreatedBy: r.Submitter, CreatorName: r.Submitter,
 			Status: r.Status, IssueType: r.IssueType, TenantID: r.TenantID,
 			CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt, Source: "issue",
 		})
@@ -335,12 +331,8 @@ func (d *DB) DashboardTodos(f DashboardFilter, viewer string, page, pageSize int
 			if r.Status != StatusPending {
 				continue
 			}
-			name := r.Description
-			if name == "" {
-				name = r.TicketNo + " " + r.DBName
-			}
 			appendTodo(DashboardTodo{
-				ID: r.ID, Name: strings.TrimSpace(name), CreatedBy: r.Submitter, CreatorName: r.Submitter,
+				ID: r.ID, Name: todoListName(r.TicketNo, r.DBName, r.Description), CreatedBy: r.Submitter, CreatorName: r.Submitter,
 				Status: r.Status, IssueType: r.IssueType, TenantID: r.TenantID,
 				CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt, Source: "issue",
 			})
@@ -389,6 +381,40 @@ func (d *DB) DashboardTodos(f DashboardFilter, viewer string, page, pageSize int
 		end = total
 	}
 	return todos[start:end], total, nil
+}
+
+// todoListName 是待办列表用的短标题。原因只留第一行开头，避免整段描述撑开工作台。
+func todoListName(ticketNo, dbName, description string) string {
+	var parts []string
+	if no := strings.TrimSpace(ticketNo); no != "" {
+		parts = append(parts, no)
+	}
+	if db := strings.TrimSpace(dbName); db != "" {
+		parts = append(parts, db)
+	}
+	if excerpt := todoReasonExcerpt(description); excerpt != "" {
+		parts = append(parts, excerpt)
+	}
+	return strings.Join(parts, " ")
+}
+
+func todoReasonExcerpt(description string) string {
+	s := strings.ReplaceAll(description, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "\n")
+	line := ""
+	for _, part := range strings.Split(s, "\n") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			line = part
+			break
+		}
+	}
+	const maxRunes = 40
+	runes := []rune(line)
+	if len(runes) > maxRunes {
+		return string(runes[:maxRunes])
+	}
+	return line
 }
 
 func (d *DB) DashboardActivities(f DashboardFilter, limit int) ([]DashboardActivity, error) {

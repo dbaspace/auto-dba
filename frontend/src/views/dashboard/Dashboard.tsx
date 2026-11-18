@@ -473,14 +473,14 @@ export default function Dashboard() {
       title: '工单',
       key: 'name',
       render: (_, row) => (
-        <span>
+        <div className="todo-name">
           <span className="todo-id">{shortId(row.id)}</span>
-          {row.name || '-'}
-          {row.source === 'migration' && <Tag color="blue" style={{ marginLeft: 6 }}>数据迁移</Tag>}
+          <span className="todo-name-text">{row.name || '-'}</span>
+          {row.source === 'migration' && <Tag color="blue" className="todo-name-tag">数据迁移</Tag>}
           {row.issue_type === 'resource_apply' && (row.tenant_name || row.tenant_id) ? (
-            <Tag style={{ marginLeft: 6 }}>{row.tenant_name || row.tenant_id}</Tag>
+            <Tag className="todo-name-tag">{row.tenant_name || row.tenant_id}</Tag>
           ) : null}
-        </span>
+        </div>
       ),
     },
     { title: '申请人', width: 100, render: (_, row) => row.creator_name || row.created_by || '-' },
@@ -566,6 +566,8 @@ export default function Dashboard() {
                 rowKey={(r, i) => String(r.id ?? i)}
                 dataSource={todos}
                 columns={todoColumns}
+                tableLayout="fixed"
+                scroll={{ x: '100%' }}
                 size="small"
                 loading={todoLoading}
                 pagination={false}

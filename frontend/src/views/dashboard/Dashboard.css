@@ -31,15 +31,19 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
   height: 100%;
   box-sizing: border-box;
+  overflow-x: hidden;
 }
 .todo-card .wb-head { flex-shrink: 0; }
 .todo-card .todo-table-wrap {
   flex: 1;
   min-height: 0;
+  min-width: 0;
   display: flex;
   flex-direction: column;
+  overflow-x: hidden;
 }
 .todo-card .ant-table-wrapper,
 .todo-card .ant-spin-nested-loading,
@@ -55,6 +59,12 @@
 .todo-card .ant-table-body {
   flex: 1;
 }
+.todo-card .ant-table-content { overflow-x: hidden !important; }
+.todo-card .ant-table-tbody > tr > td:first-child,
+.todo-card .ant-table-thead > tr > th:first-child {
+  max-width: 0;
+  overflow: hidden;
+}
 .todo-card .ant-table { font-size: 12px; }
 .todo-card .ant-table-thead > tr > th { padding: 6px 8px !important; font-size: 12px; }
 .todo-card .ant-table-tbody > tr > td { padding: 6px 8px !important; }
@@ -64,7 +74,21 @@
 .todo-card .ant-empty-image { height: 40px !important; }
 .todo-card .ant-empty-description { font-size: 12px; color: #909399; }
 .todo-card .pager { flex-shrink: 0; }
-.todo-id { color: #909399; margin-right: 6px; }
+.todo-name {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+.todo-id { color: #909399; margin-right: 6px; flex-shrink: 0; }
+.todo-name-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.todo-name-tag { margin-left: 6px; flex-shrink: 0; }
 .pager { display: flex; justify-content: flex-end; margin-top: 4px; }
 .pager .ant-pagination { margin: 0; }
 .act-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }

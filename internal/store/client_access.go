@@ -546,6 +546,73 @@ func (d *DB) LookupValidClientPAT(raw string) (*ClientPAT, *ClientAccessGrant, *
 	return &it, g, u, nil
 }
 
+// MaxPATLastUsedByUsers 返回这些用户未吊销令牌里最新的 last_used_at。
+func (d *DB) MaxPATLastUsedByUsers(userIDs []string) (map[string]string, error) {
+	out := map[string]string{}
+	if d == nil || len(userIDs) == 0 {
+		return out, nil
+	}
+	args := make([]any, 0, len(userIDs))
+	ph := make([]string, 0, len(userIDs))
+	for _, id := range userIDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		ph = append(ph, "?")
+		args = append(args, id)
+	}
+	if len(args) == 0 {
+		return out, nil
+	}
+	rows, err := d.Query(`SELECT user_id, MAX(last_used_at) FROM tbl_client_pats
+		WHERE COALESCE(revoked_at,'')='' AND user_id IN (`+strings.Join(ph, ",")+`)
+		GROUP BY user_id`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var uid, at string
+		if err := rows.Scan(&uid, &at); err != nil {
+			return nil, err
+		}
+		out[uid] = at
+	}
+	return out, rows.Err()
+}
+
+// RecentPATActivity 未吊销且 last_used_at 不早于 since 的令牌。调用方按用户取最新一条。
+type RecentPATActivity struct {
+	UserID     string
+	Username   string
+	LastUsedAt string
+	ExpiresAt  string
+}
+
+func (d *DB) ListRecentPATActivity(since string) ([]RecentPATActivity, error) {
+	if d == nil || strings.TrimSpace(since) == "" {
+		return nil, nil
+	}
+	rows, err := d.Query(`SELECT p.user_id, COALESCE(u.username,''), p.last_used_at, COALESCE(p.expires_at,'')
+		FROM tbl_client_pats p
+		LEFT JOIN tbl_users u ON u.id = p.user_id
+		WHERE COALESCE(p.revoked_at,'')='' AND p.last_used_at <> '' AND p.last_used_at >= ?`, since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []RecentPATActivity
+	for rows.Next() {
+		var it RecentPATActivity
+		if err := rows.Scan(&it.UserID, &it.Username, &it.LastUsedAt, &it.ExpiresAt); err != nil {
+			return nil, err
+		}
+		out = append(out, it)
+	}
+	return out, rows.Err()
+}
+
 func (d *DB) CreateClientAPIAudit(it *ClientAPIAudit) error {
 	if it == nil {
 		return nil

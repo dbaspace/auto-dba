@@ -4,13 +4,14 @@ import { useNavigate } from 'react-router-dom'
 import { useAppDispatch } from '../store'
 import { clearAuth } from '../store/authSlice'
 import { resetTabs } from '../store/tabsSlice'
-import { beginLogout } from '../api/request'
+import api, { beginLogout } from '../api/request'
 import { clearSystemNoticeDismissals } from '../utils/systemNoticeSession'
 import { clearQueryWorkspaces } from '../views/query/querySession'
 
 const LAST_ACTIVITY_KEY = 'last_activity_at'
 const CHECK_MS = 15_000
 const THROTTLE_MS = 1_000
+const REPORT_MS = 60_000
 
 function readLastActivity(): number {
   const raw = localStorage.getItem(LAST_ACTIVITY_KEY)
@@ -36,6 +37,26 @@ export default function useIdleLogout(timeoutMin: number | undefined | null) {
   const mins = Number(timeoutMin)
   const enabled = Number.isFinite(mins) && mins > 0
   const loggingOut = useRef(false)
+
+  useEffect(() => {
+    let lastReport = 0
+    const report = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+      const now = Date.now()
+      if (now - lastReport < REPORT_MS) return
+      lastReport = now
+      void api.post('/auth/sessions/touch', {}, { silent: true }).catch(() => {})
+    }
+    const events = ['mousemove', 'mousedown', 'keydown', 'scroll', 'touchstart'] as const
+    for (const ev of events) {
+      window.addEventListener(ev, report, { passive: true })
+    }
+    return () => {
+      for (const ev of events) {
+        window.removeEventListener(ev, report)
+      }
+    }
+  }, [])
 
   useEffect(() => {
     if (!enabled) return
