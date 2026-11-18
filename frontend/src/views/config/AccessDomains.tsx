@@ -72,8 +72,9 @@ export default function AccessDomains() {
   const [assigning, setAssigning] = useState(false)
   const [selectedKeys, setSelectedKeys] = useState<React.Key[]>([])
   const [deleting, setDeleting] = useState(false)
-  const [approverRow, setApproverRow] = useState<DomainRow | null>(null)
-  const [approverNames, setApproverNames] = useState<string[]>([])
+  const [batchMode, setBatchMode] = useState<'set' | 'revoke' | ''>('')
+  const [batchRows, setBatchRows] = useState<DomainRow[]>([])
+  const [batchNames, setBatchNames] = useState<string[]>([])
   const [memberOptions, setMemberOptions] = useState<{ value: string; label: string }[]>([])
   const [memberLoading, setMemberLoading] = useState(false)
   const [memberError, setMemberError] = useState('')
@@ -344,24 +345,14 @@ export default function AccessDomains() {
 
   const redisTab = typeKey(activeType) === 'redis'
 
-  function savedApproverOptions(names: string[]) {
-    const seen = new Set<string>()
-    const out: { value: string; label: string }[] = []
-    for (const raw of names) {
-      const name = String(raw || '').trim()
-      const key = name.toLowerCase()
-      if (!name || seen.has(key)) continue
-      seen.add(key)
-      out.push({ value: name, label: name })
-    }
-    return out
+  function selectedDomainRows() {
+    const set = new Set(selectedKeys.map(String))
+    return filteredRows.filter((r) => r.id && set.has(r.id))
   }
 
-  async function loadApproverMembers(row: DomainRow) {
-    const saved = (row.approvers || []).map((s) => String(s || '').trim()).filter(Boolean)
-    const tid = String(row.tenant_id || '').trim()
+  async function loadTenantMembers(tid: string) {
     if (!tid) {
-      setMemberOptions(savedApproverOptions(saved))
+      setMemberOptions([])
       setMemberError('该域名没有所属租户，无法列出成员')
       return
     }
@@ -380,46 +371,66 @@ export default function AccessDomains() {
         const display = String(m?.display_name || '').trim()
         opts.push({ value: username, label: display ? `${display}（${username}）` : username })
       }
-      for (const name of saved) {
-        const key = name.toLowerCase()
-        if (seen.has(key)) continue
-        seen.add(key)
-        opts.push({ value: name, label: name })
-      }
       setMemberOptions(opts)
     } catch (e: any) {
-      setMemberOptions(savedApproverOptions(saved))
+      setMemberOptions([])
       setMemberError(e?.response?.data?.message || e?.message || '加载租户成员失败')
     } finally {
       setMemberLoading(false)
     }
   }
 
-  function openApprovers(row: DomainRow) {
-    const saved = (row.approvers || []).map((s) => String(s || '').trim()).filter(Boolean)
-    setApproverRow(row)
-    setApproverNames(saved)
-    setMemberOptions(savedApproverOptions(saved))
+  function openApproverBatch(mode: 'set' | 'revoke') {
+    const picked = selectedDomainRows()
+    if (!picked.length) {
+      message.warning('请先勾选域名')
+      return
+    }
+    const tids = new Set(picked.map((r) => String(r.tenant_id || '').trim()))
+    const tid = [...tids][0]
+    if (tids.size !== 1 || !tid) {
+      message.warning('请选择同一租户下的域名')
+      return
+    }
+    setBatchMode(mode)
+    setBatchRows(picked)
+    setBatchNames([])
     setMemberError('')
-    void loadApproverMembers(row)
-  }
-
-  async function saveApprovers() {
-    if (!approverRow?.id) return
-    setSavingApprovers(true)
-    try {
-      const seen = new Set<string>()
-      const approvers: string[] = []
-      for (const raw of approverNames) {
+    if (mode === 'set') {
+      void loadTenantMembers(tid)
+      return
+    }
+    const seen = new Set<string>()
+    const opts: { value: string; label: string }[] = []
+    for (const row of picked) {
+      for (const raw of row.approvers || []) {
         const name = String(raw || '').trim()
         const key = name.toLowerCase()
         if (!name || seen.has(key)) continue
         seen.add(key)
-        approvers.push(name)
+        opts.push({ value: name, label: name })
       }
-      await api.put(`/access-domains/${approverRow.id}/approvers`, { approvers })
-      message.success('已保存审核人')
-      setApproverRow(null)
+    }
+    setMemberOptions(opts)
+  }
+
+  async function saveApproverBatch() {
+    if (!batchRows.length || !batchMode) return
+    const approvers = [...new Set(batchNames.map((s) => String(s || '').trim()).filter(Boolean))]
+    if (!approvers.length) {
+      message.warning(batchMode === 'set' ? '请选择要设置的审核人' : '请选择要撤销的审核人')
+      return
+    }
+    setSavingApprovers(true)
+    try {
+      const path = batchMode === 'set' ? '/access-domains/batch-approvers' : '/access-domains/batch-remove-approvers'
+      const { data } = await api.post(path, { ids: batchRows.map((r) => r.id), approvers })
+      const parts = [`已更新 ${data?.ok_count || 0} 个域名`]
+      if (data?.skip_count) parts.push(`跳过 ${data.skip_count} 个`)
+      if ((data?.dropped || []).length) parts.push(`已忽略非本租户成员：${data.dropped.join('、')}`)
+      message.success(parts.join('，'))
+      setBatchMode('')
+      setBatchRows([])
       await load()
     } finally {
       setSavingApprovers(false)
@@ -528,6 +539,16 @@ export default function AccessDomains() {
             一键同步{activeType && activeType !== OTHER ? `（${typeKey(activeType)}）` : ''}
           </Button>
         </Auth>
+        {redisTab && canEdit ? (
+          <Auth urn={Perm.domains.edit}>
+            <Button disabled={!selectedKeys.length} onClick={() => openApproverBatch('set')}>
+              批量设置审核人{selectedKeys.length ? `（${selectedKeys.length}）` : ''}
+            </Button>
+            <Button disabled={!selectedKeys.length} onClick={() => openApproverBatch('revoke')}>
+              批量撤销审核人{selectedKeys.length ? `（${selectedKeys.length}）` : ''}
+            </Button>
+          </Auth>
+        ) : null}
         {impersonating ? (
           <Auth urn={Perm.tenants.impersonate}>
             <Button
@@ -563,7 +584,7 @@ export default function AccessDomains() {
           pagination={false}
           scroll={{ x: 900 }}
           rowSelection={
-            impersonating || canDelete
+            impersonating || canDelete || (redisTab && canEdit)
               ? {
                   selectedRowKeys: selectedKeys,
                   onChange: (keys) => setSelectedKeys(keys),
@@ -614,20 +635,6 @@ export default function AccessDomains() {
                     ellipsis: true,
                     render: (_: unknown, row: DomainRow) => (row.approvers || []).join(',') || '—',
                   },
-                  ...(canEdit
-                    ? [
-                        {
-                          title: '操作',
-                          key: 'op',
-                          width: 80,
-                          render: (_: unknown, row: DomainRow) => (
-                            <Button type="link" size="small" onClick={() => openApprovers(row)}>
-                              编辑
-                            </Button>
-                          ),
-                        },
-                      ]
-                    : []),
                 ]
               : []),
           ]}
@@ -682,17 +689,23 @@ export default function AccessDomains() {
         />
       </Modal>
       <Modal
-        open={!!approverRow}
-        title="设置 Redis 域名审核人"
+        open={!!batchMode}
+        title={batchMode === 'revoke' ? `批量撤销审核人（${batchRows.length}）` : `批量设置审核人（${batchRows.length}）`}
         okText="保存"
         confirmLoading={savingApprovers}
-        onCancel={() => !savingApprovers && setApproverRow(null)}
-        onOk={() => void saveApprovers()}
+        onCancel={() => !savingApprovers && setBatchMode('')}
+        onOk={() => void saveApproverBatch()}
       >
         <p style={{ marginBottom: 12 }}>
-          域名「{approverRow?.domain}」的审核人只用于 Redis 工单，从所属租户
-          {approverRow?.tenant_name ? `「${approverRow.tenant_name}」` : ''}的成员中选择。一键同步不会覆盖这里填写的内容。
+          {batchMode === 'revoke'
+            ? '从各域名现有名单中去掉所选审核人。某个域名上没有这个人则跳过该域名，名单可以撤空。一键同步不会覆盖这里填写的内容。'
+            : '把所选审核人追加到各域名现有名单。不是该租户成员的名字会被忽略。一键同步不会覆盖这里填写的内容。'}
         </p>
+        <ul style={{ margin: '0 0 12px', paddingLeft: 18, maxHeight: 160, overflow: 'auto' }}>
+          {batchRows.map((r) => (
+            <li key={r.id}>{r.domain}</li>
+          ))}
+        </ul>
         {memberError ? (
           <Alert type="error" showIcon style={{ marginBottom: 12 }} message={memberError} />
         ) : null}
@@ -702,12 +715,18 @@ export default function AccessDomains() {
           allowClear
           optionFilterProp="label"
           style={{ width: '100%' }}
-          placeholder={memberLoading ? '正在加载租户成员' : '选择该租户的成员'}
+          placeholder={
+            batchMode === 'revoke'
+              ? '选择要撤销的审核人'
+              : memberLoading
+                ? '正在加载租户成员'
+                : '选择要追加的审核人'
+          }
           loading={memberLoading}
-          value={approverNames}
-          onChange={(v) => setApproverNames(v)}
+          value={batchNames}
+          onChange={(v) => setBatchNames(v)}
           options={memberOptions}
-          notFoundContent={memberLoading ? '正在加载' : '该租户暂无活跃成员'}
+          notFoundContent={memberLoading ? '正在加载' : batchMode === 'revoke' ? '所选域名还没有审核人' : '该租户暂无活跃成员'}
         />
       </Modal>
     </div>

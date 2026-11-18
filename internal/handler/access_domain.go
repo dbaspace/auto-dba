@@ -157,6 +157,99 @@ func (h *AccessDomainHandler) UpdateApprovers(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
+type domainApproverBatchReq struct {
+	IDs       []string `json:"ids"`
+	Approvers []string `json:"approvers"`
+}
+
+// BatchApprovers POST /access-domains/batch-approvers — 向所选 Redis 域名追加审核人。
+func (h *AccessDomainHandler) BatchApprovers(c *gin.Context) {
+	var req domainApproverBatchReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "参数无效"})
+		return
+	}
+	add := uniqueTrimmedNames(req.Approvers)
+	if len(add) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "请选择要设置的审核人"})
+		return
+	}
+	list, tid, ok := h.loadRedisApproverBatch(c, req.IDs)
+	if !ok {
+		return
+	}
+	members, err := loadTenantMemberUsernameSet(h.Store, tid)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	res, err := h.Store.BatchAppendAccessDomainApprovers(domainIDs(list), add, members)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	writeDomainApproverBatch(c, res)
+}
+
+// BatchRemoveApprovers POST /access-domains/batch-remove-approvers — 从所选 Redis 域名撤销审核人。
+func (h *AccessDomainHandler) BatchRemoveApprovers(c *gin.Context) {
+	var req domainApproverBatchReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "参数无效"})
+		return
+	}
+	remove := uniqueTrimmedNames(req.Approvers)
+	if len(remove) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "请选择要撤销的审核人"})
+		return
+	}
+	list, _, ok := h.loadRedisApproverBatch(c, req.IDs)
+	if !ok {
+		return
+	}
+	res, err := h.Store.BatchRemoveAccessDomainApprovers(domainIDs(list), remove)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	writeDomainApproverBatch(c, res)
+}
+
+func (h *AccessDomainHandler) loadRedisApproverBatch(c *gin.Context, ids []string) ([]store.AccessDomain, string, bool) {
+	list, tid, err := h.Store.LoadRedisDomainsSameTenant(ids)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return nil, "", false
+	}
+	if strings.TrimSpace(tid) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "请选择同一租户下的域名"})
+		return nil, "", false
+	}
+	if !platformAdminAuditing(h.Store, c) && strings.TrimSpace(tid) != strings.TrimSpace(middleware.TenantID(c)) {
+		c.JSON(http.StatusForbidden, gin.H{"message": "只能编辑本租户的 Redis 域名审核人"})
+		return nil, "", false
+	}
+	return list, tid, true
+}
+
+func domainIDs(list []store.AccessDomain) []string {
+	ids := make([]string, 0, len(list))
+	for _, row := range list {
+		ids = append(ids, row.ID)
+	}
+	return ids
+}
+
+func writeDomainApproverBatch(c *gin.Context, res store.DomainApproverBatchResult) {
+	c.JSON(http.StatusOK, gin.H{
+		"ok":         true,
+		"ok_count":   res.OKCount,
+		"skip_count": len(res.Skipped),
+		"skipped":    res.Skipped,
+		"dropped":    res.Dropped,
+	})
+}
+
 // AssignTenant POST /access-domains/:id/assign-tenant
 func (h *AccessDomainHandler) AssignTenant(c *gin.Context) {
 	to, ok := parseAssignTenantID(h.Store, c)

@@ -471,6 +471,182 @@ func (d *DB) UpdateAccessDomainApprovers(id string, approvers []string) error {
 	return nil
 }
 
+// DomainApproverBatchResult 批量追加或撤销 Redis 域名审核人的结果。
+type DomainApproverBatchResult struct {
+	OKCount int      `json:"ok_count"`
+	Skipped []string `json:"skipped"`
+	Dropped []string `json:"dropped"`
+}
+
+// LoadRedisDomainsSameTenant 读取勾选的 Redis 域名。类型不是 Redis、或跨租户时整批拒绝。
+func (d *DB) LoadRedisDomainsSameTenant(ids []string) ([]AccessDomain, string, error) {
+	seen := map[string]struct{}{}
+	out := make([]AccessDomain, 0, len(ids))
+	tenant := ""
+	for _, raw := range ids {
+		id := strings.TrimSpace(raw)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		row, err := d.GetAccessDomain(id)
+		if err != nil {
+			return nil, "", err
+		}
+		if row == nil {
+			return nil, "", fmt.Errorf("域名不存在")
+		}
+		if NormalizeEngineType(row.DBType) != "redis" {
+			return nil, "", fmt.Errorf("仅 Redis 域名可设置审核人")
+		}
+		tid := strings.TrimSpace(row.TenantID)
+		if tenant == "" {
+			tenant = tid
+		} else if tid != tenant {
+			return nil, "", fmt.Errorf("请选择同一租户下的域名")
+		}
+		out = append(out, *row)
+	}
+	if len(out) == 0 {
+		return nil, "", fmt.Errorf("请先勾选域名")
+	}
+	return out, tenant, nil
+}
+
+// BatchAppendAccessDomainApprovers 把审核人追加到各域名现有名单。members 是小写用户名到规范用户名；不在集合里的名字记入 dropped，不让整批失败。
+func (d *DB) BatchAppendAccessDomainApprovers(ids, add []string, members map[string]string) (DomainApproverBatchResult, error) {
+	list, _, err := d.LoadRedisDomainsSameTenant(ids)
+	if err != nil {
+		return DomainApproverBatchResult{}, err
+	}
+	var res DomainApproverBatchResult
+	droppedSeen := map[string]struct{}{}
+	for _, row := range list {
+		merged, dropped, changed := mergeDomainApprovers(row.Approvers, add, members)
+		for _, name := range dropped {
+			if _, ok := droppedSeen[strings.ToLower(name)]; ok {
+				continue
+			}
+			droppedSeen[strings.ToLower(name)] = struct{}{}
+			res.Dropped = append(res.Dropped, name)
+		}
+		if !changed {
+			res.Skipped = append(res.Skipped, domainBatchLabel(row))
+			continue
+		}
+		if err := d.UpdateAccessDomainApprovers(row.ID, merged); err != nil {
+			return res, err
+		}
+		res.OKCount++
+	}
+	return res, nil
+}
+
+// BatchRemoveAccessDomainApprovers 从各域名名单去掉指定审核人。该域名上没有这些人则跳过；名单可以撤空。
+func (d *DB) BatchRemoveAccessDomainApprovers(ids, remove []string) (DomainApproverBatchResult, error) {
+	list, _, err := d.LoadRedisDomainsSameTenant(ids)
+	if err != nil {
+		return DomainApproverBatchResult{}, err
+	}
+	var res DomainApproverBatchResult
+	for _, row := range list {
+		merged, removed := subtractDomainApprovers(row.Approvers, remove)
+		if len(removed) == 0 {
+			res.Skipped = append(res.Skipped, domainBatchLabel(row))
+			continue
+		}
+		if err := d.UpdateAccessDomainApprovers(row.ID, merged); err != nil {
+			return res, err
+		}
+		res.OKCount++
+	}
+	return res, nil
+}
+
+func domainBatchLabel(row AccessDomain) string {
+	if name := strings.TrimSpace(row.Domain); name != "" {
+		return name
+	}
+	return row.ID
+}
+
+func mergeDomainApprovers(existing, add []string, members map[string]string) (merged, dropped []string, changed bool) {
+	seen := map[string]struct{}{}
+	existKeys := map[string]struct{}{}
+	for _, raw := range existing {
+		name := strings.TrimSpace(raw)
+		if name == "" {
+			continue
+		}
+		canon, ok := members[strings.ToLower(name)]
+		if !ok || canon == "" {
+			dropped = append(dropped, name)
+			changed = true
+			continue
+		}
+		key := strings.ToLower(canon)
+		existKeys[key] = struct{}{}
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+		merged = append(merged, canon)
+	}
+	for _, raw := range add {
+		name := strings.TrimSpace(raw)
+		if name == "" {
+			continue
+		}
+		canon, ok := members[strings.ToLower(name)]
+		if !ok || canon == "" {
+			dropped = append(dropped, name)
+			continue
+		}
+		key := strings.ToLower(canon)
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+		merged = append(merged, canon)
+		if _, had := existKeys[key]; !had {
+			changed = true
+		}
+	}
+	if merged == nil {
+		merged = []string{}
+	}
+	return merged, dropped, changed
+}
+
+func subtractDomainApprovers(existing, remove []string) (merged, removed []string) {
+	drop := map[string]struct{}{}
+	for _, raw := range remove {
+		name := strings.TrimSpace(raw)
+		if name == "" {
+			continue
+		}
+		drop[strings.ToLower(name)] = struct{}{}
+	}
+	for _, raw := range existing {
+		name := strings.TrimSpace(raw)
+		if name == "" {
+			continue
+		}
+		if _, ok := drop[strings.ToLower(name)]; ok {
+			removed = append(removed, name)
+			continue
+		}
+		merged = append(merged, name)
+	}
+	if merged == nil {
+		merged = []string{}
+	}
+	return merged, removed
+}
+
 // SyncAccessDomainsFromInstance 按实例 domains 同步；新行归属默认租户；禁止跨 db_type 覆盖。
 // 不写入、不覆盖 approvers，也不把实例审核人抄到域名上。
 func (d *DB) SyncAccessDomainsFromInstance(it *Instance) (SyncAccessDomainsResult, error) {

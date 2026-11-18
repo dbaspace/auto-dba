@@ -233,6 +233,100 @@ func TestSyncRedisDomainKeepsApprovers(t *testing.T) {
 	}
 }
 
+func TestBatchRedisDomainApprovers(t *testing.T) {
+	dsn := os.Getenv("AUTO_DBA_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set AUTO_DBA_TEST_DSN to run")
+	}
+	d, err := Open("postgres", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Close() })
+	if err := d.ensureAccessDomainsTable(); err != nil {
+		t.Fatal(err)
+	}
+	suf := uuid.NewString()[:8]
+	members := map[string]string{"alice": "alice", "bob": "bob", "carol": "carol"}
+	mk := func(tenant, engine, host string) *AccessDomain {
+		inst := &Instance{
+			TenantID: tenant, Name: engine + "-" + host, DomainName: host, Port: 6379,
+			DBType: engine, IDC: "test", Host: "127.0.0.1", Domains: []string{host},
+		}
+		if err := d.CreateInstance(inst); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			_ = d.DeleteAccessDomainsByInstance(inst.ID)
+			_, _ = d.Exec(`DELETE FROM tbl_instances WHERE id=?`, inst.ID)
+		})
+		if _, err := d.SyncAccessDomainsFromInstance(inst); err != nil {
+			t.Fatal(err)
+		}
+		row, err := d.GetAccessDomainByDomainType(host, engine)
+		if err != nil || row == nil {
+			t.Fatalf("domain %s: %v", host, err)
+		}
+		return row
+	}
+	a := mk(DefaultTenantID, "redis", "a-"+suf+".example.com")
+	b := mk(DefaultTenantID, "redis", "b-"+suf+".example.com")
+	if err := d.UpdateAccessDomainApprovers(a.ID, []string{"alice"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.UpdateAccessDomainApprovers(b.ID, []string{"bob"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := d.BatchAppendAccessDomainApprovers([]string{a.ID, b.ID}, []string{"bob", "carol", "outsider"}, members)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.OKCount != 2 || len(got.Dropped) != 1 || got.Dropped[0] != "outsider" {
+		t.Fatalf("append result: %+v", got)
+	}
+	againA, _ := d.GetAccessDomain(a.ID)
+	againB, _ := d.GetAccessDomain(b.ID)
+	if strings.Join(againA.Approvers, ",") != "alice,bob,carol" {
+		t.Fatalf("a approvers = %v", againA.Approvers)
+	}
+	if strings.Join(againB.Approvers, ",") != "bob,carol" {
+		t.Fatalf("b approvers = %v", againB.Approvers)
+	}
+	removed, err := d.BatchRemoveAccessDomainApprovers([]string{a.ID, b.ID}, []string{"alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed.OKCount != 1 || len(removed.Skipped) != 1 {
+		t.Fatalf("remove alice: %+v", removed)
+	}
+	cleared, err := d.BatchRemoveAccessDomainApprovers([]string{a.ID, b.ID}, []string{"bob", "carol"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleared.OKCount != 2 {
+		t.Fatalf("clear: %+v", cleared)
+	}
+	emptyA, _ := d.GetAccessDomain(a.ID)
+	emptyB, _ := d.GetAccessDomain(b.ID)
+	if len(emptyA.Approvers) != 0 || len(emptyB.Approvers) != 0 {
+		t.Fatalf("not empty: %v %v", emptyA.Approvers, emptyB.Approvers)
+	}
+
+	other := &Tenant{Code: "t-" + suf, Name: "t-" + suf}
+	if err := d.CreateTenant(other); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = d.Exec(`DELETE FROM tbl_tenants WHERE id=?`, other.ID) })
+	c := mk(other.ID, "redis", "c-"+suf+".example.com")
+	if _, err := d.BatchAppendAccessDomainApprovers([]string{a.ID, c.ID}, []string{"alice"}, members); err == nil || !strings.Contains(err.Error(), "同一租户") {
+		t.Fatalf("cross tenant: %v", err)
+	}
+	mysql := mk(DefaultTenantID, "mysql", "m-"+suf+".example.com")
+	if _, err := d.BatchAppendAccessDomainApprovers([]string{a.ID, mysql.ID}, []string{"alice"}, members); err == nil || !strings.Contains(err.Error(), "仅 Redis") {
+		t.Fatalf("mysql: %v", err)
+	}
+}
+
 func TestNormalizeEngineType(t *testing.T) {
 	if NormalizeEngineType("PostgreSQL") != "postgres" {
 		t.Fatal(NormalizeEngineType("PostgreSQL"))

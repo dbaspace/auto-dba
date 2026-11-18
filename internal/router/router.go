@@ -280,6 +280,8 @@ func Init(e *gin.Engine, d Deps) {
 		secured.GET("/access-domains", d.AccessDomain.List)
 		secured.POST("/access-domains/sync", requireURN(store.URNDomainsSync), d.AccessDomain.Sync)
 		secured.POST("/access-domains/batch-delete", requireURN(store.URNDomainsDelete), d.AccessDomain.DeleteBatch)
+		secured.POST("/access-domains/batch-approvers", requireURN(store.URNDomainsEdit), d.AccessDomain.BatchApprovers)
+		secured.POST("/access-domains/batch-remove-approvers", requireURN(store.URNDomainsEdit), d.AccessDomain.BatchRemoveApprovers)
 		secured.DELETE("/access-domains/:id", requireURN(store.URNDomainsDelete), d.AccessDomain.Delete)
 		secured.POST("/access-domains/assign-tenant", requireURN(store.URNTenantsImpersonate), d.AccessDomain.AssignTenantBatch)
 		secured.POST("/access-domains/:id/assign-tenant", requireURN(store.URNTenantsImpersonate), d.AccessDomain.AssignTenant)
