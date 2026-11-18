@@ -1464,13 +1464,17 @@ func (h *ArchiveHandler) Create(c *gin.Context) {
 	t.AssignedTo = approver
 	t.ApprovalStatus = store.StatusPending
 	t.Status = store.StatusPending
+	sqlLine := "archive [" + strategy + "] " + t.Name + " " + strings.TrimSpace(t.SourceDB+"."+t.TableName)
+	if store.ArchiveRunMode(&t) == "scheduled" {
+		sqlLine += " scheduled"
+	}
 	issue := &store.Issue{
 		IssueType:   store.IssueTypeArchive,
 		Type:        store.IssueTypeArchive,
 		InstanceID:  t.SourceID,
 		DBName:      t.SourceDB,
-		SQLContent:  "archive [" + strategy + "] " + t.Name + " " + strings.TrimSpace(t.SourceDB+"."+t.TableName),
-		Description: t.Condition,
+		SQLContent:  sqlLine,
+		Description: "",
 		Submitter:   middleware.Username(c),
 		AssignedTo:  approver,
 	}
@@ -1505,6 +1509,7 @@ func (h *ArchiveHandler) Stats(c *gin.Context) {
 				"id": r.ID, "task_id": r.TaskID, "task_name": r.TaskName, "name": r.TaskName,
 				"status": r.Status, "volume": r.Volume, "duration": r.Duration,
 				"deleted_rows": r.DeletedRows, "rounds": r.Rounds, "message": r.Message,
+				"condition":  r.Condition,
 				"created_at": r.CreatedAt, "started_at": r.StartedAt, "finished_at": r.FinishedAt,
 			})
 		}

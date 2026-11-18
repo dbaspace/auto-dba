@@ -15,7 +15,6 @@ import {
   AgentManage,
   ArchiveDashboard,
   ArchiveMonitor,
-  ArchiveOrder,
   ArchiveSettings,
   AuthConfig,
   BackupPolicies,
@@ -191,7 +190,6 @@ const router = createHashRouter([
 
       { path: 'ops/archive', element: <Navigate to="/ops/archive/dashboard" replace /> },
       { path: 'ops/archive/dashboard', element: <ArchiveDashboard /> },
-      { path: 'ops/archive/apply', element: <ArchiveOrder /> },
       { path: 'ops/archive/tasks', element: <TaskList /> },
       { path: 'ops/archive/runs', element: <RunHistory /> },
       { path: 'ops/archive/monitor', element: <ArchiveMonitor /> },
@@ -201,7 +199,6 @@ const router = createHashRouter([
       { path: 'metadata/database/search/archiverManager', element: <Navigate to="/ops/archive/dashboard" replace /> },
       { path: 'metadata/database/search/archiverManager/archiveDashboard', element: <Navigate to="/ops/archive/dashboard" replace /> },
       { path: 'metadata/database/search/serviceOperations/archiverManager/archiveDashboard', element: <Navigate to="/ops/archive/dashboard" replace /> },
-      { path: 'metadata/database/search/serviceOperations/archiverManager/archiveTask', element: <Navigate to="/ops/archive/apply" replace /> },
       { path: 'metadata/database/search/serviceOperations/archiverManager/archiverList', element: <Navigate to="/ops/archive/tasks" replace /> },
       { path: 'metadata/database/search/serviceOperations/archiverManager/archivetaskMonitor', element: <Navigate to="/ops/archive/monitor" replace /> },
       { path: 'metadata/database/search/serviceOperations/archiverManager/archivetaskSetting', element: <Navigate to="/ops/archive/settings" replace /> },

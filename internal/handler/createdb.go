@@ -65,9 +65,9 @@ func (h *CreateDBHandler) ListApprovers(c *gin.Context) {
 	}
 	var names []string
 	var err error
-	// scope=tenant 只给数据导出的 DBA/安全审批人沿用旧的本租户候选人，不参与建库审批。
+	// scope=tenant 只给数据导出的 DBA/安全审批人。带了实例时用库所属租户，不用登录租户。
 	if strings.EqualFold(strings.TrimSpace(c.Query("scope")), "tenant") {
-		names, err = listTenantScopedApproverNames(h.Store, tid)
+		names, err = h.listDQLExtraApproverNames(tid, c.Query("instance_id"), c.Query("db_name"))
 	} else {
 		names, err = listCreateDBApproverNames(h.Store)
 	}
@@ -149,6 +149,48 @@ func listCreateDBApproverNames(db *store.DB) ([]string, error) {
 		out = append(out, name)
 	}
 	return store.ExpandApproverNames(out), nil
+}
+
+// resourceTenantID 库优先，否则实例。与导出审批人使用的资源租户一致。
+func resourceTenantID(db *store.DB, instanceID, dbName string) string {
+	if db == nil {
+		return ""
+	}
+	instanceID = strings.TrimSpace(instanceID)
+	dbName = strings.TrimSpace(dbName)
+	if instanceID != "" && dbName != "" {
+		if dbEnt, err := db.FindDatabase(instanceID, dbName); err == nil && dbEnt != nil {
+			if tid := strings.TrimSpace(dbEnt.TenantID); tid != "" {
+				return tid
+			}
+		}
+	}
+	if instanceID != "" {
+		if inst, err := db.GetInstance(instanceID); err == nil && inst != nil {
+			return strings.TrimSpace(inst.TenantID)
+		}
+	}
+	return ""
+}
+
+// listDQLExtraApproverNames 数据导出的 DBA/安全审批人。
+// 选定实例时用库或实例所属租户的活跃成员；该租户没有人时回退建库审批人池。
+// 未选实例时仍用当前登录租户，不回退。
+func (h *CreateDBHandler) listDQLExtraApproverNames(sessionTenant, instanceID, dbName string) ([]string, error) {
+	tid := strings.TrimSpace(sessionTenant)
+	if h != nil && h.Store != nil {
+		if resource := resourceTenantID(h.Store, instanceID, dbName); resource != "" {
+			tid = resource
+		}
+	}
+	names, err := listTenantScopedApproverNames(h.Store, tid)
+	if err != nil {
+		return nil, err
+	}
+	if len(names) > 0 || strings.TrimSpace(instanceID) == "" {
+		return names, nil
+	}
+	return listCreateDBApproverNames(h.Store)
 }
 
 // listTenantScopedApproverNames 本租户活跃成员，并在默认审批人同属该租户时放在前面。

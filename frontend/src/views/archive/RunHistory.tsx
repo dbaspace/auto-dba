@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Button, Tag } from 'antd'
+import { Button, Tag, Tooltip } from 'antd'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import type { ColumnsType } from 'antd/es/table'
 import api from '../../api/request'
@@ -65,6 +65,17 @@ export default function RunHistory() {
     { title: '表', dataIndex: 'table_name', width: 140 },
     { title: '归档量', dataIndex: 'volume', width: 90 },
     { title: '耗时', dataIndex: 'duration', width: 90 },
+    {
+      title: '失败原因',
+      dataIndex: 'message',
+      ellipsis: { showTitle: false },
+      render: (_, row) =>
+        row.status === 'failed' && row.message ? (
+          <Tooltip title={row.message}>
+            <span>{row.message}</span>
+          </Tooltip>
+        ) : null,
+    },
     { title: '创建时间', dataIndex: 'created_at', minWidth: 170 },
     { title: '执行时间', dataIndex: 'started_at', minWidth: 170 },
   ]

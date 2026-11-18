@@ -19,7 +19,6 @@ export const WORK_ORDER_CREATE_OPTIONS: WorkOrderCreateOption[] = [
   { type: 'resource_apply', label: '平台资源申请', path: '/ops/resource-apply' },
   { type: 'createdb', label: '新增数据库', path: '/ops/createdb' },
   { type: 'dql', label: '数据导出', path: '/ops/dql' },
-  { type: 'archive', label: '归档工单', path: '/ops/archive/apply' },
   { type: 'multi', label: '多语模板', path: '/ops/multilang' },
   { type: 'cdc', label: 'CDC同步任务', path: '/ops/cdc/create' },
   { type: 'migration', label: '数据迁移', path: '/ops/migration/create' },
@@ -247,11 +246,13 @@ export function loadWorkOrderDraft(type: string, userId = currentDraftOwnerId())
 
 export function loadAllWorkOrderDrafts(userId = currentDraftOwnerId()): WorkOrderDraft[] {
   if (!String(userId || '').trim()) return []
-  return Object.values(readMap(userId)).sort((a, b) => {
-    const ta = a.updatedAt || ''
-    const tb = b.updatedAt || ''
-    return ta < tb ? 1 : ta > tb ? -1 : 0
-  })
+  return Object.values(readMap(userId))
+    .filter((d) => WORK_ORDER_CREATE_OPTIONS.some((o) => o.type === d.type))
+    .sort((a, b) => {
+      const ta = a.updatedAt || ''
+      const tb = b.updatedAt || ''
+      return ta < tb ? 1 : ta > tb ? -1 : 0
+    })
 }
 
 export function hasWorkOrderDraft(type: string, userId = currentDraftOwnerId()): boolean {

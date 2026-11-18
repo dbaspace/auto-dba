@@ -46,15 +46,15 @@ func (h *ArchiveHandler) Update(c *gin.Context) {
 	}
 	if req.Condition != "" {
 		t.Condition = req.Condition
+		t.ScheduleExpr = strings.TrimSpace(req.ScheduleExpr)
+	} else if req.ScheduleExpr != "" {
+		t.ScheduleExpr = req.ScheduleExpr
 	}
 	if req.TableName != "" {
 		t.TableName = req.TableName
 	}
 	if req.SourceDB != "" {
 		t.SourceDB = req.SourceDB
-	}
-	if req.ScheduleExpr != "" {
-		t.ScheduleExpr = req.ScheduleExpr
 	}
 	if req.AssignedTo != "" {
 		t.AssignedTo = req.AssignedTo
@@ -77,6 +77,27 @@ func (h *ArchiveHandler) Run(c *gin.Context) {
 func (h *ArchiveHandler) Pause(c *gin.Context) {
 	if err := h.engine().Pause(c.Param("id")); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func (h *ArchiveHandler) Resume(c *gin.Context) {
+	t, err := h.Store.GetArchiveInTenant(c.Param("id"), effectiveListTenantID(h.Store, c))
+	if err != nil || t == nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "任务不存在"})
+		return
+	}
+	if t.Status != store.StatusPaused {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "仅已停用任务可启用"})
+		return
+	}
+	next := store.StatusApproved
+	if store.ArchiveRunMode(t) == "scheduled" {
+		next = "scheduled"
+	}
+	if err := h.Store.UpdateArchiveState(t.ID, next, t.ApprovalStatus); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})

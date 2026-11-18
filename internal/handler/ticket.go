@@ -338,21 +338,10 @@ func (h *TicketHandler) ListInstanceDatabases(c *gin.Context) {
 
 // resourceTenantIDForTarget 工单目标资源所属租户（库优先，否则实例）；用于审批人作用域。
 func (h *TicketHandler) resourceTenantIDForTarget(instanceID, dbName string) string {
-	instanceID = strings.TrimSpace(instanceID)
-	dbName = strings.TrimSpace(dbName)
-	if instanceID != "" && dbName != "" {
-		if dbEnt, err := h.Store.FindDatabase(instanceID, dbName); err == nil && dbEnt != nil {
-			if tid := strings.TrimSpace(dbEnt.TenantID); tid != "" {
-				return tid
-			}
-		}
+	if h == nil {
+		return ""
 	}
-	if instanceID != "" {
-		if inst, err := h.Store.GetInstance(instanceID); err == nil && inst != nil {
-			return strings.TrimSpace(inst.TenantID)
-		}
-	}
-	return ""
+	return resourceTenantID(h.Store, instanceID, dbName)
 }
 
 func (h *TicketHandler) GetTargetApprovers(c *gin.Context) {
@@ -1460,6 +1449,23 @@ func (h *TicketHandler) Execute(c *gin.Context) {
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true, "message": "已触发数据迁移执行"})
+		return
+	}
+	if it.IssueType == store.IssueTypeArchive {
+		t, err := h.Store.GetArchiveByIssueID(it.ID)
+		if err != nil || t == nil {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "未找到归档任务"})
+			return
+		}
+		if h.Archive == nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": "归档引擎未就绪"})
+			return
+		}
+		if err := h.Archive.Start(t.ID); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true, "message": "已触发归档执行"})
 		return
 	}
 	if !ticketexec.ShouldAutoRun(it.IssueType) {

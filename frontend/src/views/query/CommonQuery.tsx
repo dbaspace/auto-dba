@@ -48,7 +48,7 @@ import axios from 'axios'
 import api from '../../api/request'
 import { useAppSelector } from '../../store'
 import { prefetchQueryCatalog, readQueryTreeCache, refreshQueryCatalog } from './queryTreeCache'
-import { queryFavoriteKey, queryHistoryKey, queryWorkspaceKey } from './querySession'
+import { queryFavoriteKey, queryHistoryKey, queryWorkspaceKey, readQueryWorkspace, writeQueryWorkspace } from './querySession'
 import DbTypeIcon from '../../components/DbTypeIcon'
 import SqlEditor from '../../components/SqlEditor'
 import { useQuerySuggest, type SuggestEnv } from './useQuerySuggest'
@@ -454,10 +454,14 @@ function queryTabKeyAt(x: number, y: number): string | null {
   return lab?.dataset.tabKey || null
 }
 
-function loadWorkspace(key: string): Workspace {
-  const empty: Workspace = { tabs: [], activeKey: '', leftWidth: 280, editorHeight: 320, histWidth: 300 }
+function emptyWorkspace(): Workspace {
+  return { tabs: [], activeKey: '', leftWidth: 280, editorHeight: 320, histWidth: 300 }
+}
+
+function loadWorkspace(userId: string, tenantId: string): Workspace {
+  const empty = emptyWorkspace()
   try {
-    const raw = sessionStorage.getItem(key)
+    const raw = readQueryWorkspace(userId, tenantId)
     if (!raw) return empty
     const d = JSON.parse(raw)
     const tabs = Array.isArray(d.tabs) ? d.tabs.map(normalizeSavedTab).filter(Boolean) as TabItem[] : []
@@ -477,10 +481,11 @@ function loadWorkspace(key: string): Workspace {
 export default function CommonQuery() {
   const navigate = useNavigate()
   const location = useLocation()
-  const tenantId = String(
-    (useAppSelector((s) => s.auth.user) as { current_tenant?: { id?: string } })?.current_tenant?.id || '',
-  )
-  const workspaceStoreKey = queryWorkspaceKey(tenantId)
+  const authUser = useAppSelector((s) => s.auth.user) as { id?: string; current_tenant?: { id?: string } }
+  const tenantId = String(authUser?.current_tenant?.id || '')
+  const userId = String(authUser?.id || '')
+  const workspaceReady = Boolean(userId && tenantId)
+  const workspaceStoreKey = workspaceReady ? queryWorkspaceKey(userId, tenantId) : ''
   const favStoreKey = queryFavoriteKey(tenantId)
   const histStoreKey = queryHistoryKey(tenantId)
 
@@ -503,9 +508,10 @@ export default function CommonQuery() {
   const [tablesMap, setTablesMap] = useState<Record<string, string[]>>({})
   const tableLoads = useRef<Record<string, Promise<{ names: string[]; error: string }>>>({})
 
-  const saved = useMemo(() => loadWorkspace(workspaceStoreKey), [workspaceStoreKey])
+  const saved = useMemo(() => loadWorkspace(userId, tenantId), [userId, tenantId])
   const [tabs, setTabs] = useState<TabItem[]>(saved.tabs)
   const [activeKey, setActiveKey] = useState(saved.activeKey)
+  const [appliedWorkspaceKey, setAppliedWorkspaceKey] = useState(workspaceStoreKey)
   const [running, setRunning] = useState(false)
   const queryAbortRef = useRef<AbortController | null>(null)
   const sqlBoxRef = useRef<HTMLTextAreaElement | null>(null)
@@ -589,6 +595,18 @@ export default function CommonQuery() {
     const tab = (location.state as { storeTab?: string } | null)?.storeTab
     if (tab === 'hist' || tab === 'fav') setStoreTab(tab)
   }, [location.state])
+
+  // 用户或租户变化后载入对应页签。未就绪或尚未载入时不把当前页签写进别的键。
+  useEffect(() => {
+    if (!workspaceReady || appliedWorkspaceKey === workspaceStoreKey) return
+    const next = loadWorkspace(userId, tenantId)
+    setTabs(next.tabs)
+    setActiveKey(next.activeKey)
+    setLeftWidth(next.leftWidth)
+    setEditorHeight(next.editorHeight)
+    setHistWidth(next.histWidth)
+    setAppliedWorkspaceKey(workspaceStoreKey)
+  }, [workspaceReady, workspaceStoreKey, appliedWorkspaceKey, userId, tenantId])
 
   const current = useMemo(() => tabs.find((t) => t.key === activeKey) || null, [tabs, activeKey])
   const resultKeyword = current?.resultKeyword || ''
@@ -1198,6 +1216,7 @@ export default function CommonQuery() {
 
   // persist
   useEffect(() => {
+    if (!workspaceReady || appliedWorkspaceKey !== workspaceStoreKey) return
     try {
       const payload = {
         activeKey,
@@ -1223,13 +1242,13 @@ export default function CommonQuery() {
         })),
       }
       try {
-        sessionStorage.setItem(workspaceStoreKey, JSON.stringify(payload))
+        writeQueryWorkspace(userId, tenantId, JSON.stringify(payload))
       } catch {
         payload.tabs = payload.tabs.map((t) => ({ ...t, result: null }))
-        try { sessionStorage.setItem(workspaceStoreKey, JSON.stringify(payload)) } catch { /* ignore */ }
+        try { writeQueryWorkspace(userId, tenantId, JSON.stringify(payload)) } catch { /* ignore */ }
       }
     } catch { /* ignore */ }
-  }, [tabs, activeKey, leftWidth, editorHeight, histWidth, workspaceStoreKey])
+  }, [tabs, activeKey, leftWidth, editorHeight, histWidth, workspaceStoreKey, workspaceReady, appliedWorkspaceKey, userId, tenantId])
 
   function updateCurrent(patch: Partial<TabItem>) {
     setTabs((list) => list.map((t) => (t.key === activeKey ? { ...t, ...patch } : t)))

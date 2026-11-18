@@ -1321,7 +1321,13 @@ func (d *DB) ensureArchiveSchema() error {
 		return err
 	}
 	_, err = d.db.Exec(`CREATE INDEX IF NOT EXISTS idx_archive_runs_task ON tbl_archive_runs(task_id, created_at DESC)`)
-	return err
+	if err != nil {
+		return err
+	}
+	if err := d.ensureColumnIfMissing("tbl_archive_runs", "executor_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	return d.ensureColumnIfMissing("tbl_archive_runs", "executor_job_id", "TEXT NOT NULL DEFAULT ''")
 }
 
 func (d *DB) ensurePGActivitySnapshotsTable() error {

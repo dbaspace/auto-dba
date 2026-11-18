@@ -223,6 +223,10 @@ func (d *DB) seedFast() error {
 			if err := d.ensureSqlInsightActionMenus(now); err != nil {
 				return err
 			}
+			// 归档菜单须在 skip 路径幂等补齐，并删掉已下线的「归档任务」入口。
+			if err := d.ensureArchiveMenuTree(now); err != nil {
+				return err
+			}
 			// Nacos 配置 / Nacos 管理菜单须在 skip 路径幂等补齐，否则已有库看不到侧栏入口。
 			// 先 Ensure 叶子（含 Nacos），再 ensure 配置中心分组把监控运维叶子统一挂到 m-cfg-obs。
 			if err := d.ensureMonitorOpsMenus(now); err != nil {

@@ -18,7 +18,6 @@ import {
   AlertSilences,
   ArchiveDashboard,
   ArchiveMonitor,
-  ArchiveOrder,
   ArchiveSettings,
   AuthConfig,
   BackupPolicies,
@@ -209,7 +208,6 @@ export function TabPagePanel({ pathname, search }: { pathname: string; search?: 
 
       <Route path="/ops/archive" element={<Navigate to="/ops/archive/dashboard" replace />} />
       <Route path="/ops/archive/dashboard" element={<ArchiveDashboard />} />
-      <Route path="/ops/archive/apply" element={<ArchiveOrder />} />
       <Route path="/ops/archive/tasks" element={<TaskList />} />
       <Route path="/ops/archive/runs" element={<RunHistory />} />
       <Route path="/ops/archive/monitor" element={<ArchiveMonitor />} />
@@ -219,7 +217,6 @@ export function TabPagePanel({ pathname, search }: { pathname: string; search?: 
       <Route path="/metadata/database/search/archiverManager" element={<Navigate to="/ops/archive/dashboard" replace />} />
       <Route path="/metadata/database/search/archiverManager/archiveDashboard" element={<Navigate to="/ops/archive/dashboard" replace />} />
       <Route path="/metadata/database/search/serviceOperations/archiverManager/archiveDashboard" element={<Navigate to="/ops/archive/dashboard" replace />} />
-      <Route path="/metadata/database/search/serviceOperations/archiverManager/archiveTask" element={<Navigate to="/ops/archive/apply" replace />} />
       <Route path="/metadata/database/search/serviceOperations/archiverManager/archiverList" element={<Navigate to="/ops/archive/tasks" replace />} />
       <Route path="/metadata/database/search/serviceOperations/archiverManager/archivetaskMonitor" element={<Navigate to="/ops/archive/monitor" replace />} />
       <Route path="/metadata/database/search/serviceOperations/archiverManager/archivetaskSetting" element={<Navigate to="/ops/archive/settings" replace />} />

@@ -34,6 +34,20 @@ function cdcTicketReason(description: any): string {
   return raw.slice(0, i).trim()
 }
 
+function archiveTicketReason(description: any): string {
+  const raw = String(description || '').trim()
+  if (!raw || raw.startsWith('-- auto-dba-archive:')) return ''
+  return raw
+}
+
+function archiveTicketScheduled(it: any): boolean {
+  const sql = String(it?.sql_content || '')
+  if (/\sscheduled\s*$/.test(sql)) return true
+  const desc = String(it?.description || '')
+  const matched = desc.match(/^-- auto-dba-archive:[^,\n]*,\s*([^\s,]+)/)
+  return !!matched && /scheduled|daily/.test(matched[1])
+}
+
 function notifyAuditSummary(rows: any[] | null | undefined): { type: 'success' | 'warning' | 'info'; text: string } {
   const list = Array.isArray(rows) ? rows : []
   if (!list.length) {
@@ -432,7 +446,11 @@ export default function TicketDetail() {
     }
     const isResourceApply = it.issue_type === 'resource_apply'
     const reason =
-      it.issue_type === 'cdc_sync' ? cdcTicketReason(it.description) : it.description || resourceApplyExtra?.reason || '-'
+      it.issue_type === 'cdc_sync'
+        ? cdcTicketReason(it.description)
+        : it.issue_type === 'archive'
+          ? archiveTicketReason(it.description)
+          : it.description || resourceApplyExtra?.reason || '-'
     const fields: ApplyField[] = [
       { key: 'reason', label: '原因', value: reason },
     ]
@@ -584,12 +602,20 @@ export default function TicketDetail() {
       fields.push({
         key: 'schedule',
         label:
-          it.issue_type === 'flashback' || it.issue_type === 'cdc_sync' || it.issue_type === 'migration' || clusterOp
+          it.issue_type === 'flashback' ||
+          it.issue_type === 'cdc_sync' ||
+          it.issue_type === 'migration' ||
+          it.issue_type === 'archive' ||
+          clusterOp
             ? '执行方式'
             : 'SQL执行时间',
         kind: 'schedule',
         value:
-          it.issue_type === 'flashback'
+          it.issue_type === 'archive'
+            ? archiveTicketScheduled(it)
+              ? '等待定时执行'
+              : '审批通过后立即执行归档'
+            : it.issue_type === 'flashback'
             ? '审批通过后自动执行闪回解析'
             : it.issue_type === 'cdc_sync'
               ? '审批通过后自动执行 CDC 同步'
@@ -955,7 +981,11 @@ export default function TicketDetail() {
     if (s === 'approved')
       return isDQL
         ? '点击导出'
-        : isFlashback || isCDC || isMigration || isCreateDB || item?.issue_type === 'redis'
+        : item?.issue_type === 'archive'
+          ? archiveTicketScheduled(item)
+            ? '等待定时执行'
+            : '等待执行'
+          : isFlashback || isCDC || isMigration || isCreateDB || item?.issue_type === 'redis'
           ? item?.scheduled_at
             ? '等待定时执行'
             : '已自动执行'
@@ -965,9 +995,11 @@ export default function TicketDetail() {
 
   const scheduledWaitText = useMemo(
     () =>
-      item?.scheduled_at
-        ? '已预约，等待定时或手动执行'
-        : '审批通过后将自动后台执行；若未触发可手动执行',
+      item?.issue_type === 'archive' && archiveTicketScheduled(item)
+        ? '等待定时执行'
+        : item?.scheduled_at
+          ? '已预约，等待定时或手动执行'
+          : '审批通过后将自动后台执行；若未触发可手动执行',
     [item],
   )
 

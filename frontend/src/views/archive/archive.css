@@ -363,9 +363,17 @@
   margin-top: 6px;
 }
 .archive-create-dialog .ant-modal-body {
-  max-height: 70vh;
+  max-height: 85vh;
   overflow-y: auto;
   padding-top: 8px;
+}
+.archive-create-dialog .ant-form-item {
+  margin-bottom: 12px;
+}
+.archive-create-dialog .ant-form-item-additional,
+.archive-create-dialog .ant-form-item-explain,
+.archive-create-dialog .ant-form-item-explain-connected {
+  min-height: 0;
 }
 .archive-create-dialog .dialog-actions {
   display: flex;

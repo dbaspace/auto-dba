@@ -140,39 +140,61 @@ func (d *DB) CreateArchiveRun(r *ArchiveRun) error {
 
 func (d *DB) UpdateArchiveRun(r *ArchiveRun) error {
 	_, err := d.Exec(
-		`UPDATE tbl_archive_runs SET status=?, deleted_rows=?, rounds=?, message=?, sql_preview=?, started_at=?, finished_at=? WHERE id=?`,
-		r.Status, r.DeletedRows, r.Rounds, r.Message, r.SQLPreview, r.StartedAt, r.FinishedAt, r.ID,
+		`UPDATE tbl_archive_runs SET status=?, deleted_rows=?, rounds=?, message=?, sql_preview=?, started_at=?, finished_at=?, executor_id=?, executor_job_id=? WHERE id=?`,
+		r.Status, r.DeletedRows, r.Rounds, r.Message, r.SQLPreview, r.StartedAt, r.FinishedAt, r.ExecutorID, r.ExecutorJobID, r.ID,
 	)
 	return err
 }
 
+const archiveRunCols = `r.id, r.task_id, r.status, r.strategy, r.deleted_rows, r.rounds, r.message, r.sql_preview, r.started_at, r.finished_at, r.created_at, COALESCE(r.executor_id,''), COALESCE(r.executor_job_id,''), COALESCE(t.name,''), COALESCE(t.condition_sql,'')`
+
+func scanArchiveRun(sc interface{ Scan(...any) error }) (ArchiveRun, error) {
+	var r ArchiveRun
+	err := sc.Scan(&r.ID, &r.TaskID, &r.Status, &r.Strategy, &r.DeletedRows, &r.Rounds, &r.Message, &r.SQLPreview, &r.StartedAt, &r.FinishedAt, &r.CreatedAt, &r.ExecutorID, &r.ExecutorJobID, &r.TaskName, &r.Condition)
+	if err != nil {
+		return ArchiveRun{}, err
+	}
+	decorateArchiveRun(&r, nil)
+	return r, nil
+}
+
 func (d *DB) GetArchiveRun(id string) (*ArchiveRun, error) {
-	r := &ArchiveRun{}
-	err := d.QueryRow(
-		`SELECT id, task_id, status, strategy, deleted_rows, rounds, message, sql_preview, started_at, finished_at, created_at FROM tbl_archive_runs WHERE id=?`, id,
-	).Scan(&r.ID, &r.TaskID, &r.Status, &r.Strategy, &r.DeletedRows, &r.Rounds, &r.Message, &r.SQLPreview, &r.StartedAt, &r.FinishedAt, &r.CreatedAt)
+	row := d.QueryRow(
+		`SELECT `+archiveRunCols+` FROM tbl_archive_runs r LEFT JOIN tbl_archive_tasks t ON t.id=r.task_id WHERE r.id=?`, id,
+	)
+	r, err := scanArchiveRun(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	decorateArchiveRun(r, nil)
-	return r, nil
+	return &r, nil
 }
 
 func (d *DB) ListArchiveRuns(taskID string, limit int) ([]ArchiveRun, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	q := `SELECT r.id, r.task_id, r.status, r.strategy, r.deleted_rows, r.rounds, r.message, r.sql_preview, r.started_at, r.finished_at, r.created_at, COALESCE(t.name,'')
-		FROM tbl_archive_runs r LEFT JOIN tbl_archive_tasks t ON t.id=r.task_id WHERE 1=1`
+	q := `SELECT ` + archiveRunCols + ` FROM tbl_archive_runs r LEFT JOIN tbl_archive_tasks t ON t.id=r.task_id WHERE 1=1`
 	var args []any
 	if strings.TrimSpace(taskID) != "" {
 		q += ` AND r.task_id=?`
 		args = append(args, taskID)
 	}
 	q += ` ORDER BY r.created_at DESC LIMIT ` + strconv.Itoa(limit)
+	return d.queryArchiveRuns(q, args...)
+}
+
+func (d *DB) ListRunningRemoteArchiveRuns(limit int) ([]ArchiveRun, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	q := `SELECT ` + archiveRunCols + ` FROM tbl_archive_runs r LEFT JOIN tbl_archive_tasks t ON t.id=r.task_id WHERE r.status=? AND TRIM(COALESCE(r.executor_job_id,''))<>'' ORDER BY r.created_at ASC LIMIT ` + strconv.Itoa(limit)
+	return d.queryArchiveRuns(q, StatusRunning)
+}
+
+func (d *DB) queryArchiveRuns(q string, args ...any) ([]ArchiveRun, error) {
 	rows, err := d.Query(q, args...)
 	if err != nil {
 		return nil, err
@@ -180,11 +202,10 @@ func (d *DB) ListArchiveRuns(taskID string, limit int) ([]ArchiveRun, error) {
 	defer rows.Close()
 	var out []ArchiveRun
 	for rows.Next() {
-		var r ArchiveRun
-		if err := rows.Scan(&r.ID, &r.TaskID, &r.Status, &r.Strategy, &r.DeletedRows, &r.Rounds, &r.Message, &r.SQLPreview, &r.StartedAt, &r.FinishedAt, &r.CreatedAt, &r.TaskName); err != nil {
+		r, err := scanArchiveRun(rows)
+		if err != nil {
 			return nil, err
 		}
-		decorateArchiveRun(&r, nil)
 		out = append(out, r)
 	}
 	return out, rows.Err()

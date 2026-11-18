@@ -426,8 +426,6 @@ func defaultMenuIcon(id, path string) string {
 		return "folder"
 	case "m-safe-arc-dash":
 		return "histogram"
-	case "m-safe-arc-apply":
-		return "document"
 	case "m-safe-arc-tasks":
 		return "list"
 	case "m-safe-arc-runs":
@@ -649,7 +647,6 @@ func (d *DB) seedMenus(now string) error {
 		{"m-safe-fb-cloud", "m-safe-fb", "多云密钥", "/ops/flashback/cloud", "um.sidebar.ops-flashback-cloud", "查看闪回多云密钥", "key", 34},
 		{"m-safe-arc", "m-safe", "归档管理", "", "um.sidebar.ops-archive", "查看归档管理", "folder", 32},
 		{"m-safe-arc-dash", "m-safe-arc", "控制台", "/ops/archive/dashboard", "um.sidebar.ops-archive-dashboard", "查看归档控制台", "histogram", 33},
-		{"m-safe-arc-apply", "m-safe-arc", "归档任务", "/ops/archive/apply", "um.sidebar.ops-archive-apply", "提交归档工单", "document", 33},
 		{"m-safe-arc-tasks", "m-safe-arc", "任务管理", "/ops/archive/tasks", "um.sidebar.ops-archive-tasks", "查看归档任务", "list", 34},
 		{"m-safe-arc-runs", "m-safe-arc", "执行记录", "/ops/archive/runs", "um.sidebar.ops-archive-runs", "查看归档执行记录", "clock", 35},
 		{"m-safe-arc-mon", "m-safe-arc", "监控告警", "/ops/archive/monitor", "um.sidebar.ops-archive-monitor", "查看归档监控", "warning", 36},
@@ -1035,7 +1032,6 @@ func (d *DB) ensureArchiveMenuTree(now string) error {
 	items := []seedMenu{
 		{"m-safe-arc", "m-safe", "归档管理", "", "um.sidebar.ops-archive", "查看归档管理", "folder", 32},
 		{"m-safe-arc-dash", "m-safe-arc", "控制台", "/ops/archive/dashboard", "um.sidebar.ops-archive-dashboard", "查看归档控制台", "histogram", 33},
-		{"m-safe-arc-apply", "m-safe-arc", "归档任务", "/ops/archive/apply", "um.sidebar.ops-archive-apply", "提交归档工单", "document", 33},
 		{"m-safe-arc-tasks", "m-safe-arc", "任务管理", "/ops/archive/tasks", "um.sidebar.ops-archive-tasks", "查看归档任务", "list", 34},
 		{"m-safe-arc-runs", "m-safe-arc", "执行记录", "/ops/archive/runs", "um.sidebar.ops-archive-runs", "查看归档执行记录", "clock", 35},
 		{"m-safe-arc-mon", "m-safe-arc", "监控告警", "/ops/archive/monitor", "um.sidebar.ops-archive-monitor", "查看归档监控", "warning", 36},
@@ -1063,6 +1059,13 @@ func (d *DB) ensureArchiveMenuTree(now string) error {
 	}
 	if err := d.GrantMenuToAllRoles("m-safe-arc"); err != nil {
 		return err
+	}
+	if exist, err := d.GetMenu("m-safe-arc-apply"); err != nil {
+		return err
+	} else if exist != nil {
+		if err := d.DeleteMenu(exist.ID); err != nil {
+			return err
+		}
 	}
 	log.Printf("seed: archive menu tree ensured")
 	return nil

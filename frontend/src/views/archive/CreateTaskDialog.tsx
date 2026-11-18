@@ -10,6 +10,7 @@ import {
   Radio,
   Row,
   Select,
+  Spin,
   Tooltip,
   message,
 } from 'antd'
@@ -79,6 +80,28 @@ function typeKey(t: any): string {
   return n
 }
 
+function approverTokens(raw: any): string[] {
+  const text = typeof raw === 'string' ? raw : String(raw?.name || raw?.username || '')
+  return text
+    .split(/[,，\s]+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+}
+
+function dedupeApprovers(items: any[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const item of items) {
+    for (const name of approverTokens(item)) {
+      const key = name.toLowerCase()
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push(name)
+    }
+  }
+  return out
+}
+
 function parseTypes(raw: any): { value: string; label: string }[] {
   try {
     const arr = JSON.parse(String(raw || '').trim() || '[]')
@@ -100,6 +123,7 @@ type Props = {
   onSaved?: () => void
   instances?: any[]
   task?: any
+  editing?: boolean
   initialStrategy?: string
   lockStrategy?: boolean
 }
@@ -110,6 +134,7 @@ export default function CreateTaskDialog({
   onSaved,
   instances = [],
   task = null,
+  editing = false,
   initialStrategy = '',
   lockStrategy = false,
 }: Props) {
@@ -354,17 +379,12 @@ export default function CreateTaskDialog({
   }
 
   async function loadApprovers(instanceId: string, dbName: string) {
-    const set = new Set<string>()
+    const rawNames: any[] = []
     try {
       const argRes = await api.get('/global-args')
       const args = argRes.data.data || []
-      String(args.find((a: any) => a.key === 'migration_approver_user_ids')?.value || '')
-        .split(/[,，\s]+/)
-        .map((s: string) => s.trim())
-        .filter(Boolean)
-        .forEach((u: string) => set.add(u))
-      const def = String(args.find((a: any) => a.key === 'sync_default_approver')?.value || '').trim()
-      if (def) set.add(def)
+      rawNames.push(args.find((a: any) => a.key === 'migration_approver_user_ids')?.value || '')
+      rawNames.push(args.find((a: any) => a.key === 'sync_default_approver')?.value || '')
       const raw = args.find((a: any) => a.key === 'ticket_instance_types')?.value || ''
       const parsed = parseTypes(raw)
       if (parsed.length) setDbTypes(parsed)
@@ -376,12 +396,12 @@ export default function CreateTaskDialog({
         const { data } = await api.get('/tickets/target-approvers', {
           params: { instance_id: instanceId, db_name: dbName },
         })
-        for (const u of data.data || []) if (u) set.add(u)
+        for (const u of data.data || []) if (u) rawNames.push(u)
       } catch {
         /* ignore */
       }
     }
-    const list = [...set]
+    const list = dedupeApprovers(rawNames)
     setApprovers(list)
     setForm((prev) => {
       if (!prev.id && !prev.approver && list.length) return { ...prev, approver: list[0] }
@@ -455,18 +475,18 @@ export default function CreateTaskDialog({
   function validate(): boolean {
     const f = formRef.current
     const errs: Record<string, string> = {}
-    if (!String(f.name || '').trim()) errs.name = '请输入任务名'
+    if (!f.id && !String(f.name || '').trim()) errs.name = '请输入任务名'
     if (!lockStrategy && !String(f.strategy || '').trim()) errs.strategy = '请选择任务策略'
     if (!String(f.run_mode || '').trim()) errs.run_mode = '请选择执行方式'
     if (f.run_mode === 'scheduled' && !String(f.schedule_expr || '').trim())
       errs.schedule_expr = '请填写调度配置'
     if (!f.id && !String(f.approver || '').trim()) errs.approver = '请选择审核人'
-    if (!String(f.env || '').trim()) errs.env = '请选择环境'
-    if (!String(f.db_type || '').trim()) errs.db_type = '请选择数据库类型'
-    if (!String(f.source_instance_id || '').trim()) errs.source_instance_id = '请选择源端域名'
+    if (!f.id && !String(f.env || '').trim()) errs.env = '请选择环境'
+    if (!f.id && !String(f.db_type || '').trim()) errs.db_type = '请选择数据库类型'
+    if (!f.id && !String(f.source_instance_id || '').trim()) errs.source_instance_id = '请选择源端域名'
     if (f.strategy !== 'custom_script') {
-      if (!String(f.source_db || '').trim()) errs.source_db = '请选择源端库名'
-      if (!String(f.table_name || '').trim())
+      if (!f.id && !String(f.source_db || '').trim()) errs.source_db = '请选择源端库名'
+      if (!f.id && !String(f.table_name || '').trim())
         errs.table_name = liveTableList ? '请选择源端表名' : '请输入源端表名'
       if (f.strategy === 'backup_target' && !String(f.target_host || '').trim())
         errs.target_host = '请输入目标域名'
@@ -482,54 +502,91 @@ export default function CreateTaskDialog({
     return Object.keys(errs).length === 0
   }
 
+  function taskPayload(f: DialogForm) {
+    const extra: Record<string, any> = {
+      env: f.env,
+      db_type: f.db_type,
+      target_host: f.strategy === 'backup_target' ? f.target_host : '',
+      target_db: f.strategy === 'backup_target' ? f.target_db : '',
+      target_table: f.strategy === 'backup_target' ? f.target_table : '',
+      oss_bucket: f.strategy === 'archive_oss' ? f.oss_bucket : '',
+      pg_delete_mode:
+        f.strategy === 'delete_only' && (f.pg_delete_mode === 'cte' || f.pg_delete_mode === 'shard')
+          ? f.pg_delete_mode
+          : '',
+      script_type: f.strategy === 'custom_script' ? f.script_type : '',
+    }
+    const body = f.strategy === 'custom_script' ? f.script_content : f.sql
+    return {
+      schedule_expr: f.run_mode === 'scheduled' ? f.schedule_expr : '',
+      condition: encodeCondition(body, f.strategy, f.run_mode, f.schedule_expr, extra),
+    }
+  }
+
   async function submit() {
-    if (!validate()) return
+    if (saving || !validate()) return
     const f = formRef.current
     setSaving(true)
     try {
-      const extra: Record<string, any> = {
-        env: f.env,
-        db_type: f.db_type,
-        target_host: isBackup ? f.target_host : '',
-        target_db: isBackup ? f.target_db : '',
-        target_table: isBackup ? f.target_table : '',
-        oss_bucket: isOss ? f.oss_bucket : '',
-        pg_delete_mode:
-          isDelete && (f.pg_delete_mode === 'cte' || f.pg_delete_mode === 'shard')
-            ? f.pg_delete_mode
-            : '',
-        script_type: isCustom ? f.script_type : '',
-      }
-      const body = isCustom ? f.script_content : f.sql
+      const packed = taskPayload(f)
       await api.post('/archive/tasks', {
         name: f.name,
         source_instance_id: f.source_instance_id,
-        source_db: isCustom ? '' : f.source_db,
-        table_name: isCustom ? f.script_type || 'script' : f.table_name,
-        schedule_expr: f.run_mode === 'scheduled' ? f.schedule_expr : '',
+        source_db: f.strategy === 'custom_script' ? '' : f.source_db,
+        table_name: f.strategy === 'custom_script' ? f.script_type || 'script' : f.table_name,
+        schedule_expr: packed.schedule_expr,
         approver: f.approver,
-        condition: encodeCondition(body, f.strategy, f.run_mode, f.schedule_expr, extra),
+        condition: packed.condition,
       })
       message.success('工单已提交，审批通过后按任务执行方式运行')
       onClose()
       onSaved?.()
+    } catch (e: any) {
+      message.error(e?.response?.data?.message || '提交失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function saveEdit() {
+    if (saving || !validate()) return
+    const f = formRef.current
+    setSaving(true)
+    try {
+      const packed = taskPayload(f)
+      await api.patch(`/archive/tasks/${f.id}`, {
+        condition: packed.condition,
+        schedule_expr: packed.schedule_expr,
+      })
+      message.success('已保存')
+      onClose()
+      onSaved?.()
+    } catch (e: any) {
+      message.error(e?.response?.data?.message || '保存失败')
     } finally {
       setSaving(false)
     }
   }
 
   const disabledById = !!form.id
+  const policyLocked = disabledById && !editing
 
   return (
     <Modal
       open={open}
-      title={form.id ? '编辑任务' : '新建任务'}
+      title={!form.id ? '新建任务' : editing ? '编辑任务' : '查看任务'}
       width={800}
-      onCancel={onClose}
+      onCancel={() => {
+        if (saving) return
+        onClose()
+      }}
+      maskClosable={!saving}
+      keyboard={!saving}
       footer={null}
       destroyOnClose
       className="archive-create-dialog"
     >
+      <Spin spinning={saving}>
       <Form layout="vertical">
         <Form.Item
           label="任务名"
@@ -557,7 +614,7 @@ export default function CreateTaskDialog({
             <Radio.Group
               optionType="button"
               value={form.strategy}
-              disabled={disabledById}
+              disabled={policyLocked}
               onChange={(e) => patch({ strategy: e.target.value })}
             >
               {STRATEGY_OPTIONS.map((s) => (
@@ -578,7 +635,7 @@ export default function CreateTaskDialog({
           <Radio.Group
             optionType="button"
             value={form.run_mode}
-            disabled={disabledById}
+            disabled={policyLocked}
             onChange={(e) => patch({ run_mode: e.target.value })}
           >
             {RUN_MODE_OPTIONS.map((m) => (
@@ -604,7 +661,7 @@ export default function CreateTaskDialog({
           >
             <Input
               value={form.schedule_expr}
-              disabled={disabledById}
+              disabled={policyLocked}
               placeholder="如: 0 2 * * * 或 每日 02:00"
               onChange={(e) => patch({ schedule_expr: e.target.value })}
             />
@@ -693,7 +750,7 @@ export default function CreateTaskDialog({
               <Select
                 placeholder="请选择"
                 style={{ width: '100%' }}
-                disabled={disabledById}
+                disabled={policyLocked}
                 value={form.script_type}
                 onChange={(v) => patch({ script_type: v })}
                 options={SCRIPT_TYPE_OPTIONS.map((s) => ({ label: s.label, value: s.value }))}
@@ -730,7 +787,7 @@ export default function CreateTaskDialog({
               <Input.TextArea
                 value={form.script_content}
                 rows={form.script_type === 'go' ? 16 : 10}
-                disabled={disabledById}
+                disabled={policyLocked}
                 className="mono"
                 placeholder={SCRIPT_TEMPLATES[form.script_type] || '请输入脚本内容'}
                 onChange={(e) => patch({ script_content: e.target.value })}
@@ -829,7 +886,7 @@ export default function CreateTaskDialog({
                     >
                       <Input
                         value={form.target_host}
-                        disabled={disabledById}
+                        disabled={policyLocked}
                         placeholder="目标数据库域名"
                         onChange={(e) => patch({ target_host: e.target.value })}
                       />
@@ -839,7 +896,7 @@ export default function CreateTaskDialog({
                     <Form.Item label="目标库名">
                       <Input
                         value={form.target_db}
-                        disabled={disabledById}
+                        disabled={policyLocked}
                         placeholder="目标库名"
                         onChange={(e) => patch({ target_db: e.target.value })}
                       />
@@ -849,7 +906,7 @@ export default function CreateTaskDialog({
                 <Form.Item label="目标表名">
                   <Input
                     value={form.target_table}
-                    disabled={disabledById}
+                    disabled={policyLocked}
                     placeholder="目标表名"
                     onChange={(e) => patch({ target_table: e.target.value })}
                   />
@@ -866,7 +923,7 @@ export default function CreateTaskDialog({
               >
                 <Input
                   value={form.oss_bucket}
-                  disabled={disabledById}
+                  disabled={policyLocked}
                   placeholder="如: archive-bucket 或 bucket/prefix"
                   onChange={(e) => patch({ oss_bucket: e.target.value })}
                 />
@@ -902,7 +959,7 @@ export default function CreateTaskDialog({
                 <Radio.Group
                   optionType="button"
                   value={form.pg_delete_mode}
-                  disabled={disabledById}
+                  disabled={policyLocked}
                   onChange={(e) => patch({ pg_delete_mode: e.target.value })}
                 >
                   {PG_DELETE_MODE_OPTIONS.map((m) => (
@@ -930,7 +987,7 @@ export default function CreateTaskDialog({
               <Input.TextArea
                 value={form.sql}
                 rows={4}
-                disabled={disabledById}
+                disabled={policyLocked}
                 placeholder="如: create_time < '2024-01-01'"
                 onChange={(e) => patch({ sql: e.target.value })}
               />
@@ -940,8 +997,13 @@ export default function CreateTaskDialog({
 
         <div className="dialog-actions">
           {!form.id && (
-            <Button type="primary" loading={saving} onClick={submit}>
+            <Button type="primary" loading={saving} disabled={saving} onClick={submit}>
               提交工单
+            </Button>
+          )}
+          {form.id && editing && (
+            <Button type="primary" loading={saving} disabled={saving} onClick={saveEdit}>
+              保存
             </Button>
           )}
           <Button disabled={saving} onClick={() => (form.id ? onClose() : reset())}>
@@ -949,6 +1011,7 @@ export default function CreateTaskDialog({
           </Button>
         </div>
       </Form>
+      </Spin>
     </Modal>
   )
 }

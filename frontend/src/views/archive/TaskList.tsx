@@ -32,6 +32,7 @@ export default function TaskList() {
   const [instances, setInstances] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
   const [visible, setVisible] = useState(false)
+  const [editing, setEditing] = useState(false)
   const [current, setCurrent] = useState<any>(null)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
@@ -47,21 +48,29 @@ export default function TaskList() {
   }
   function openView(row: any) {
     setCurrent(row)
+    setEditing(false)
+    setVisible(true)
+  }
+  function openEdit(row: any) {
+    setCurrent(row)
+    setEditing(true)
     setVisible(true)
   }
 
   async function load() {
     setLoading(true)
     try {
-      const [taskRes, instRes] = await Promise.all([
-        api.get('/archive/tasks'),
-        api.get('/instances'),
-      ])
+      const taskRes = await api.get('/archive/tasks')
       setRows(taskRes.data.data || [])
-      setInstances(instRes.data.data || [])
+    } catch (e: any) {
+      message.error(e?.response?.data?.message || '加载失败')
     } finally {
       setLoading(false)
     }
+    api
+      .get('/instances')
+      .then((instRes) => setInstances(instRes.data.data || []))
+      .catch(() => {})
   }
 
   async function run(row: any) {
@@ -71,6 +80,12 @@ export default function TaskList() {
     }
     await api.post(`/archive/tasks/${row.id}/run`)
     message.success('已触发执行，可在控制台查看本次记录')
+    await load()
+  }
+
+  async function resume(row: any) {
+    await api.post(`/archive/tasks/${row.id}/resume`)
+    message.success('已启用')
     await load()
   }
 
@@ -145,20 +160,21 @@ export default function TaskList() {
           <Button type="link" onClick={() => openView(row)}>
             查看
           </Button>
-          <Button type="link" disabled={row.status === 'running'} onClick={() => openView(row)}>
+          <Button type="link" disabled={row.status === 'running'} onClick={() => openEdit(row)}>
             编辑
           </Button>
           <Button type="link" disabled={!canRun(row)} onClick={() => run(row)}>
             执行
           </Button>
-          <Button
-            type="link"
-            danger
-            disabled={row.status === 'paused' || !isApproved(row)}
-            onClick={() => pause(row)}
-          >
-            停止
-          </Button>
+          {row.status === 'paused' ? (
+            <Button type="link" onClick={() => resume(row)}>
+              启用
+            </Button>
+          ) : (
+            <Button type="link" danger disabled={!isApproved(row)} onClick={() => pause(row)}>
+              停止
+            </Button>
+          )}
         </div>
       ),
     },
@@ -205,9 +221,13 @@ export default function TaskList() {
 
         <CreateTaskDialog
           open={visible}
-          onClose={() => setVisible(false)}
+          onClose={() => {
+            setVisible(false)
+            setEditing(false)
+          }}
           instances={instances}
           task={current}
+          editing={editing}
           onSaved={load}
         />
       </div>

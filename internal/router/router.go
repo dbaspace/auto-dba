@@ -792,6 +792,7 @@ func Init(e *gin.Engine, d Deps) {
 	arc.POST("/settings/:kind/test", d.Archive.TestSettings)
 	arc.POST("/tasks/:id/run", gArc, d.Archive.Run)
 	arc.POST("/tasks/:id/pause", gArc, d.Archive.Pause)
+	arc.POST("/tasks/:id/resume", gArc, d.Archive.Resume)
 	arc.GET("/tasks/:id/runs", gArc, d.Archive.ListRuns)
 	arc.POST("/tasks/:id/runs/:runId/stop", gArc, d.Archive.StopRun)
 

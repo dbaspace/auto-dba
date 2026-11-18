@@ -223,7 +223,8 @@ func (h *AccountHandler) Create(c *gin.Context) {
 	}
 	plain := strings.TrimSpace(req.Password)
 	if plain == "" {
-		plain = randomAccountPassword(16)
+		c.JSON(http.StatusBadRequest, gin.H{"message": "登记账号必须填写现有密码"})
+		return
 	}
 	enc, err := secret.Encrypt(h.Secret, plain)
 	if err != nil {

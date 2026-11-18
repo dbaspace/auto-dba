@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import {
+  Alert,
   Button,
   Descriptions,
   Drawer,
@@ -174,17 +175,8 @@ export default function Accounts() {
         await api.put('/db-accounts/' + form.id, payload)
         message.success('已保存')
       } else {
-        const { data } = await api.post('/db-accounts', payload)
-        const pwd = data.real_password || ''
-        if (pwd) {
-          message.success(`已创建，初始密码：${pwd}`)
-        } else {
-          message.success('已创建（明文未回传，请在详情中查看密码）')
-          if (data?.data?.id) {
-            setViewing(data.data)
-            setViewVisible(true)
-          }
-        }
+        await api.post('/db-accounts', payload)
+        message.success('已登记')
       }
       setFormVisible(false)
       await load()
@@ -368,7 +360,7 @@ export default function Accounts() {
         <div className="toolbar" style={{ margin: 0, flexShrink: 0 }}>
           <Auth urn={Perm.accounts.create}>
             <Button type="primary" onClick={() => open()}>
-              新建账号
+              登记账号
             </Button>
           </Auth>
         </div>
@@ -456,7 +448,7 @@ export default function Accounts() {
 
       <Modal
         open={formVisible}
-        title={form.id ? '编辑账号' : '新建账号'}
+        title={form.id ? '编辑账号' : '登记账号'}
         width={560}
         destroyOnClose
         onCancel={() => setFormVisible(false)}
@@ -475,6 +467,14 @@ export default function Accounts() {
           initialValues={form}
           onValuesChange={(_, all) => setForm((f) => ({ ...f, ...all }))}
         >
+          {!form.id ? (
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 16 }}
+              message="只把已有账号登记到平台，不在数据库上创建用户，也不提交工单。"
+            />
+          ) : null}
           <Form.Item name="instance_id" label="实例" rules={[{ required: true, message: '请选择实例' }]}>
             <Select
               showSearch
@@ -496,8 +496,12 @@ export default function Accounts() {
           <Form.Item name="username" label="用户名" rules={[{ required: true, message: '请输入用户名' }]}>
             <Input disabled={!!form.id} />
           </Form.Item>
-          <Form.Item name="password" label={form.id ? '新密码' : '密码'}>
-            <Input.Password placeholder={form.id ? '留空则不修改' : '留空则自动生成'} />
+          <Form.Item
+            name="password"
+            label={form.id ? '新密码' : '密码'}
+            rules={form.id ? [] : [{ required: true, whitespace: true, message: '请填写该账号在数据库里的现有密码' }]}
+          >
+            <Input.Password placeholder={form.id ? '留空则不修改' : '填写该账号在数据库里的现有密码'} />
           </Form.Item>
           <Form.Item
             name="permissions"

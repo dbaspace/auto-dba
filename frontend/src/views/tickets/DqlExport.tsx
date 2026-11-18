@@ -294,6 +294,26 @@ export default function DqlExport() {
     setApprovers([])
   }
 
+  async function loadExtraApprovers(instanceId: string, dbName: string) {
+    const seq = ++extraReqRef.current
+    try {
+      const { data } = await api.get('/create-db/approvers', {
+        params: {
+          scope: 'tenant',
+          instance_id: instanceId || undefined,
+          db_name: dbName || undefined,
+        },
+      })
+      if (seq !== extraReqRef.current) return
+      setExtraApprovers([
+        ...new Set<string>((data.data || []).map((a: any) => a.name || a).filter(Boolean)),
+      ])
+    } catch {
+      if (seq !== extraReqRef.current) return
+      setExtraApprovers([])
+    }
+  }
+
   async function loadApprovers(instanceId: string, dbName: string) {
     if (!instanceId) {
       setApprovers([])
@@ -354,12 +374,11 @@ export default function DqlExport() {
       setEnvCatalogReady(true)
       return groups
     })
-    const [instRes, dbRes, domainRes, argRes, apprRes] = await Promise.all([
+    const [instRes, dbRes, domainRes, argRes] = await Promise.all([
       api.get('/instances'),
       api.get('/databases'),
       api.get('/access-domains').catch(() => ({ data: { data: [] } })),
       api.get('/global-args').catch(() => ({ data: { data: [] } })),
-      api.get('/create-db/approvers', { params: { scope: 'tenant' } }).catch(() => ({ data: { data: [] } })),
       groupsPromise,
     ])
     const instList = instRes.data.data || []
@@ -383,9 +402,6 @@ export default function DqlExport() {
     } catch {
       /* keep default */
     }
-    setExtraApprovers([
-      ...new Set<string>((apprRes.data.data || []).map((a: any) => a.name || a).filter(Boolean)),
-    ])
     return { instances: instList, databases: dbList, accessDomains: domainRes.data.data || [] }
   }
 
@@ -507,14 +523,17 @@ export default function DqlExport() {
 
   // 库/实例变化时刷新审批人（手动改选或其它恢复路径）
   const approverKeyRef = useRef('')
+  const extraReqRef = useRef(0)
   useEffect(() => {
     const instanceId = String(form.instance_id || '').trim()
     const dbName = String(form.db_name || '').trim()
     const databaseId = String(form.database_id || '').trim()
     const key = `${databaseId}|${instanceId}|${dbName}`
-    if (!instanceId || key === approverKeyRef.current) return
+    if (key === approverKeyRef.current) return
     approverKeyRef.current = key
-    void loadApprovers(instanceId, dbName)
+    if (instanceId) void loadApprovers(instanceId, dbName)
+    else setApprovers([])
+    void loadExtraApprovers(instanceId, dbName)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.database_id, form.instance_id, form.db_name])
 
@@ -613,6 +632,11 @@ export default function DqlExport() {
                 name="dba_assigned_to"
                 label="DBA审批人"
                 rules={[{ required: true, message: '请选择DBA审批人' }]}
+                extra={
+                  extraApprovers.length ? undefined : (
+                    <div className="form-extra">未找到审批人，请联系运维配置</div>
+                  )
+                }
               >
                 <Select
                   allowClear

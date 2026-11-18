@@ -7,6 +7,12 @@ import (
 	"auto-dba/internal/store"
 )
 
+func TestResourceTenantIDNilStore(t *testing.T) {
+	if got := resourceTenantID(nil, "inst", "db"); got != "" {
+		t.Fatalf("nil store: %q", got)
+	}
+}
+
 func TestMergeCreateDBApproverNames(t *testing.T) {
 	got := mergeCreateDBApproverNames("mayu, admin", "liuqi\nabc", []string{"dba_user", "mayu"})
 	want := []string{"mayu", "admin", "liuqi", "abc", "dba_user"}

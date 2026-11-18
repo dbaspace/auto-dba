@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"auto-dba/internal/archive"
 	"auto-dba/internal/sqlexec"
 )
 
@@ -32,6 +33,7 @@ func main() {
 	}
 	runner := sqlexec.NewRunner()
 	exports := sqlexec.NewExportRunner(*dataDir)
+	archives := archive.NewArchiveAgent()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", withAuth(func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "proto": sqlexec.Proto})
@@ -175,6 +177,62 @@ func main() {
 			return
 		}
 		view, ok := exports.Get(id)
+		if !ok {
+			writeMissingJob(w, id)
+			return
+		}
+		writeJSON(w, http.StatusOK, view)
+	}))
+
+	mux.HandleFunc("/v1/archive/jobs", withAuth(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req sqlexec.ArchiveRequest
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+			http.Error(w, "请求无法解析", http.StatusBadRequest)
+			return
+		}
+		if strings.TrimSpace(req.Source.Host) == "" || (req.Strategy != "custom_script" && strings.TrimSpace(req.Table) == "") {
+			http.Error(w, "源库和表名必填", http.StatusBadRequest)
+			return
+		}
+		id := uuid.NewString()
+		writeJSON(w, http.StatusOK, archives.Submit(id, req))
+	}))
+	mux.HandleFunc("/v1/archive/jobs/", withAuth(func(w http.ResponseWriter, r *http.Request) {
+		path := strings.TrimPrefix(r.URL.Path, "/v1/archive/jobs/")
+		id := path
+		stop := false
+		if strings.HasSuffix(path, "/stop") {
+			stop = true
+			id = strings.TrimSuffix(path, "/stop")
+			id = strings.TrimSuffix(id, "/")
+		}
+		id = strings.Trim(id, "/")
+		if id == "" || strings.Contains(id, "/") {
+			writeMissingJob(w, id)
+			return
+		}
+		if stop {
+			if r.Method != http.MethodPost {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			view, ok := archives.Stop(id)
+			if !ok {
+				writeMissingJob(w, id)
+				return
+			}
+			writeJSON(w, http.StatusOK, view)
+			return
+		}
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		view, ok := archives.Get(id)
 		if !ok {
 			writeMissingJob(w, id)
 			return

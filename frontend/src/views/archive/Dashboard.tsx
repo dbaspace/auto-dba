@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Button, Card, Col, Progress, Row, Tag } from 'antd'
+import { Button, Card, Col, Progress, Row, Tag, Tooltip, message } from 'antd'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import type { ColumnsType } from 'antd/es/table'
 import api from '../../api/request'
@@ -27,7 +27,6 @@ export default function Dashboard() {
   const navigate = useNavigate()
   const [loading, setLoading] = useState(false)
   const [stats, setStats] = useState<any>({})
-  const [instances, setInstances] = useState<any[]>([])
   const [createOpen, setCreateOpen] = useState(false)
   const [createStrategy, setCreateStrategy] = useState('')
   const [lockStrategy, setLockStrategy] = useState(false)
@@ -61,9 +60,10 @@ export default function Dashboard() {
   async function load() {
     setLoading(true)
     try {
-      const [st, inst] = await Promise.all([api.get('/archive/stats'), api.get('/instances')])
+      const st = await api.get('/archive/stats')
       setStats(st.data.data || {})
-      setInstances(inst.data.data || [])
+    } catch (e: any) {
+      message.error(e?.response?.data?.message || '加载失败')
     } finally {
       setLoading(false)
     }
@@ -93,6 +93,16 @@ export default function Dashboard() {
       render: (_, row) => (
         <Tag color={tagColor[statusType(row.status)] || 'default'}>{statusText(row.status)}</Tag>
       ),
+    },
+    {
+      title: '失败原因',
+      ellipsis: { showTitle: false },
+      render: (_, row) =>
+        row.status === 'failed' && row.message ? (
+          <Tooltip title={row.message}>
+            <span>{row.message}</span>
+          </Tooltip>
+        ) : null,
     },
     {
       title: '执行方式',
@@ -237,7 +247,6 @@ export default function Dashboard() {
         <CreateTaskDialog
           open={createOpen}
           onClose={() => setCreateOpen(false)}
-          instances={instances}
           initialStrategy={createStrategy}
           lockStrategy={lockStrategy}
           onSaved={load}

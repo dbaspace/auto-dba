@@ -152,7 +152,6 @@ Publication 与 Debezium connector 同名。未改名时为 `rt_{环境}_{库名
 | 页面 | 路径 | 说明 |
 |------|------|------|
 | 控制台 | `/ops/archive/dashboard` | 任务与执行概况 |
-| 归档任务 | `/ops/archive/apply` | 提交归档申请 |
 | 任务管理 | `/ops/archive/tasks` | 启停、编辑已有任务 |
 | 执行记录 | `/ops/archive/runs` | 每次运行的结果 |
 | 监控告警 | `/ops/archive/monitor` | 运行异常与告警 |

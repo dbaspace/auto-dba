@@ -450,20 +450,23 @@ type ArchiveTask struct {
 }
 
 type ArchiveRun struct {
-	ID          string `json:"id"`
-	TaskID      string `json:"task_id"`
-	TaskName    string `json:"task_name,omitempty"`
-	Status      string `json:"status"`
-	Strategy    string `json:"strategy,omitempty"`
-	DeletedRows int64  `json:"deleted_rows"`
-	Rounds      int    `json:"rounds"`
-	Message     string `json:"message,omitempty"`
-	SQLPreview  string `json:"sql_preview,omitempty"`
-	Volume      string `json:"volume,omitempty"`
-	Duration    string `json:"duration,omitempty"`
-	StartedAt   string `json:"started_at,omitempty"`
-	FinishedAt  string `json:"finished_at,omitempty"`
-	CreatedAt   string `json:"created_at"`
+	ID            string `json:"id"`
+	TaskID        string `json:"task_id"`
+	TaskName      string `json:"task_name,omitempty"`
+	Status        string `json:"status"`
+	Strategy      string `json:"strategy,omitempty"`
+	DeletedRows   int64  `json:"deleted_rows"`
+	Rounds        int    `json:"rounds"`
+	Message       string `json:"message,omitempty"`
+	SQLPreview    string `json:"sql_preview,omitempty"`
+	Volume        string `json:"volume,omitempty"`
+	Duration      string `json:"duration,omitempty"`
+	StartedAt     string `json:"started_at,omitempty"`
+	FinishedAt    string `json:"finished_at,omitempty"`
+	CreatedAt     string `json:"created_at"`
+	Condition     string `json:"condition,omitempty"`
+	ExecutorID    string `json:"-"`
+	ExecutorJobID string `json:"-"`
 }
 
 type KafkaOrder struct {

@@ -3,17 +3,15 @@ package archive
 import (
 	"context"
 	"database/sql"
-	"encoding/csv"
 	"errors"
 	"fmt"
 	"log"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"auto-dba/internal/dbmig"
+	"auto-dba/internal/sqlexec"
 	"auto-dba/internal/store"
 )
 
@@ -24,13 +22,19 @@ type Engine struct {
 	Secret string
 	mu     sync.Mutex
 	cancel map[string]context.CancelFunc
+	// watching 是本进程正在轮询的执行记录，避免扫描再挂上一份。
+	watching map[string]struct{}
 }
 
 func New(st *store.DB, secret string) *Engine {
-	return &Engine{Store: st, Secret: secret, cancel: map[string]context.CancelFunc{}}
+	return &Engine{Store: st, Secret: secret, cancel: map[string]context.CancelFunc{}, watching: map[string]struct{}{}}
 }
 
 func (e *Engine) Start(taskID string) error {
+	return e.start(taskID, true)
+}
+
+func (e *Engine) start(taskID string, bindIssue bool) error {
 	t, err := e.Store.GetArchive(taskID)
 	if err != nil || t == nil {
 		return fmt.Errorf("任务不存在")
@@ -44,6 +48,9 @@ func (e *Engine) Start(taskID string) error {
 	if t.Status == store.StatusPaused {
 		return fmt.Errorf("任务已停用，请先恢复")
 	}
+	if _, err := e.stopRemoteForTask(context.Background(), taskID); err != nil {
+		return err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Hour)
 	e.mu.Lock()
 	if old, ok := e.cancel[taskID]; ok {
@@ -51,8 +58,18 @@ func (e *Engine) Start(taskID string) error {
 	}
 	e.cancel[taskID] = cancel
 	e.mu.Unlock()
-	go e.run(ctx, taskID)
+	if bindIssue {
+		e.syncIssueStatus(t.IssueID, store.StatusRunning)
+	}
+	go e.run(ctx, taskID, bindIssue)
 	return nil
+}
+
+func (e *Engine) syncIssueStatus(issueID, status string) {
+	if e == nil || e.Store == nil || strings.TrimSpace(issueID) == "" || strings.TrimSpace(status) == "" {
+		return
+	}
+	_ = e.Store.SetIssueStatus(issueID, status)
 }
 
 func (e *Engine) Stop(taskID string) bool {
@@ -63,7 +80,11 @@ func (e *Engine) Stop(taskID string) bool {
 		delete(e.cancel, taskID)
 	}
 	e.mu.Unlock()
-	return ok
+	stopped, err := e.stopRemoteForTask(context.Background(), taskID)
+	if err != nil {
+		log.Printf("archive stop remote %s: %v", taskID, err)
+	}
+	return ok || stopped
 }
 
 func (e *Engine) Pause(taskID string) error {
@@ -71,10 +92,15 @@ func (e *Engine) Pause(taskID string) error {
 	return e.Store.UpdateArchiveStatus(taskID, store.StatusPaused)
 }
 
-func (e *Engine) run(ctx context.Context, taskID string) {
+func (e *Engine) run(ctx context.Context, taskID string, bindIssue bool) {
 	t, err := e.Store.GetArchive(taskID)
 	if err != nil || t == nil {
 		return
+	}
+	finishIssue := func(status string) {
+		if bindIssue {
+			e.syncIssueStatus(t.IssueID, status)
+		}
 	}
 	extra := store.ParseArchiveExtra(t)
 	strategy := NormalizeStrategy(extra.Strategy)
@@ -84,36 +110,51 @@ func (e *Engine) run(ctx context.Context, taskID string) {
 	}
 	if err := e.Store.CreateArchiveRun(run); err != nil {
 		_ = e.Store.UpdateArchiveState(t.ID, store.StatusFailed, t.ApprovalStatus)
+		finishIssue(store.StatusFailed)
 		return
 	}
 	_ = e.Store.UpdateArchiveState(t.ID, store.StatusRunning, t.ApprovalStatus)
 
 	resErr := e.execute(ctx, t, extra, strategy, run)
+	e.finishArchive(t, run, resErr, bindIssue)
+}
+
+func (e *Engine) finishArchive(t *store.ArchiveTask, run *store.ArchiveRun, resErr error, bindIssue bool) {
+	if run == nil || e == nil || e.Store == nil {
+		return
+	}
 	run.FinishedAt = time.Now().UTC().Format(time.RFC3339)
-	if errors.Is(resErr, errStopped) || errors.Is(resErr, context.Canceled) {
+	issueStatus := ""
+	taskStatus := ""
+	switch {
+	case errors.Is(resErr, errStopped) || errors.Is(resErr, context.Canceled):
 		run.Status = store.StatusCanceled
 		run.Message = errStopped.Error()
-		_ = e.Store.UpdateArchiveRun(run)
-		_ = e.Store.UpdateArchiveState(t.ID, store.StatusCanceled, t.ApprovalStatus)
-		return
-	}
-	if resErr != nil {
+		taskStatus = store.StatusCanceled
+		issueStatus = store.StatusCanceled
+	case resErr != nil:
 		run.Status = store.StatusFailed
 		run.Message = resErr.Error()
-		_ = e.Store.UpdateArchiveRun(run)
-		_ = e.Store.UpdateArchiveState(t.ID, store.StatusFailed, t.ApprovalStatus)
-		return
-	}
-	run.Status = store.StatusExecuted
-	if run.Message == "" {
-		run.Message = fmt.Sprintf("完成，删除 %d 行 / %d 轮", run.DeletedRows, run.Rounds)
+		taskStatus = store.StatusFailed
+		issueStatus = store.StatusFailed
+	default:
+		run.Status = store.StatusExecuted
+		if run.Message == "" || strings.HasPrefix(run.Message, "执行中：") {
+			run.Message = fmt.Sprintf("完成，删除 %d 行 / %d 轮", run.DeletedRows, run.Rounds)
+		}
+		taskStatus = store.StatusExecuted
+		if t != nil && store.ArchiveRunMode(t) == "scheduled" {
+			taskStatus = "scheduled"
+		}
+		issueStatus = store.StatusExecuted
 	}
 	_ = e.Store.UpdateArchiveRun(run)
-	next := store.StatusExecuted
-	if store.ArchiveRunMode(t) == "scheduled" {
-		next = "scheduled"
+	if t != nil {
+		_ = e.Store.UpdateArchiveState(t.ID, taskStatus, t.ApprovalStatus)
+		if bindIssue {
+			e.syncIssueStatus(t.IssueID, issueStatus)
+		}
 	}
-	_ = e.Store.UpdateArchiveState(t.ID, next, t.ApprovalStatus)
 }
 
 func (e *Engine) execute(ctx context.Context, t *store.ArchiveTask, extra store.ArchiveExtra, strategy string, run *store.ArchiveRun) error {
@@ -125,16 +166,25 @@ func (e *Engine) execute(ctx context.Context, t *store.ArchiveTask, extra store.
 	if extra.DBType != "" {
 		dbType = store.NormalizeDBType(extra.DBType)
 	}
+	dec, err := e.decide(inst)
+	if err != nil {
+		return err
+	}
+	if dec.Mode == sqlexec.ModeMissing {
+		return fmt.Errorf("环境 %s 未绑定执行器，不从本机直连", strings.TrimSpace(inst.IDC))
+	}
+	if dec.Mode == sqlexec.ModeRemote {
+		return e.runRemote(ctx, inst, t, extra, strategy, dbType, run, dec.Executor)
+	}
 	src, err := dbmig.OpenInstance(ctx, inst, e.Secret, t.SourceDB)
 	if err != nil {
 		return fmt.Errorf("连接源端失败: %w", err)
 	}
 	defer src.Close()
 
-	switch strategy {
-	case "custom_script":
-		return e.runScript(ctx, src, t, extra, run)
-	case "backup_target":
+	var dst *sql.DB
+	dstTable := extra.TargetTable
+	if strategy == "backup_target" {
 		if extra.TargetInstID == "" {
 			return fmt.Errorf("备份到目标实例须指定 target_instance_id")
 		}
@@ -146,214 +196,41 @@ func (e *Engine) execute(ctx context.Context, t *store.ArchiveTask, extra store.
 		if dstDB == "" {
 			dstDB = t.SourceDB
 		}
-		dst, err := dbmig.OpenInstance(ctx, dstInst, e.Secret, dstDB)
+		dst, err = dbmig.OpenInstance(ctx, dstInst, e.Secret, dstDB)
 		if err != nil {
 			return fmt.Errorf("连接目标端失败: %w", err)
 		}
 		defer dst.Close()
-		dstTable := extra.TargetTable
 		if dstTable == "" {
 			dstTable = t.TableName
 		}
-		if err := e.copyThenDelete(ctx, src, dst, dbType, t, dstTable, extra, run); err != nil {
-			return err
-		}
-		return nil
-	case "archive_oss":
-		if err := e.exportCSV(ctx, src, dbType, t, extra, run); err != nil {
-			return err
-		}
-		if extra.CleanupAfter {
-			return e.deleteLoop(ctx, src, dbType, t, extra, run)
-		}
-		return nil
-	default:
-		return e.deleteLoop(ctx, src, dbType, t, extra, run)
 	}
+	return e.runLocal(ctx, src, dst, dbType, t, extra, strategy, dstTable, run)
 }
 
-func (e *Engine) deleteLoop(ctx context.Context, db *sql.DB, dbType string, t *store.ArchiveTask, extra store.ArchiveExtra, run *store.ArchiveRun) error {
-	cond := store.ArchiveConditionSQL(t)
-	if err := ValidateDeleteCondition(cond); err != nil {
-		return err
-	}
-	pks, _ := tablePKs(ctx, db, dbType, t.TableName)
-	var lastSQL string
-	for run.Rounds < maxRounds {
-		if err := ctx.Err(); err != nil {
-			return errStopped
-		}
-		var (
-			q   string
-			err error
-			n   int64
-		)
-		if dbType == "postgres" {
-			mode, rerr := ResolvePGMode(extra.PGDeleteMode, hasCreateTime(ctx, db, dbType, t.TableName), 0)
-			if rerr != nil {
-				return rerr
-			}
-			if mode == "shard" && extra.PGDeleteMode == "shard" {
-				q, err = BuildPGCTESQL(t.TableName, cond+" AND create_time < NOW()", pks)
-			} else {
-				q, err = BuildPGCTESQL(t.TableName, cond, pks)
-			}
-		} else {
-			q, err = BuildMySQLDeleteSQL(t.TableName, cond)
-		}
-		if err != nil {
-			return err
-		}
-		lastSQL = q
-		n, err = execAffected(ctx, db, q)
-		if err != nil {
-			run.SQLPreview = lastSQL
-			return err
-		}
-		run.Rounds++
-		run.DeletedRows += n
-		run.SQLPreview = lastSQL
+func (e *Engine) runLocal(ctx context.Context, src, dst *sql.DB, dbType string, t *store.ArchiveTask, extra store.ArchiveExtra, strategy, dstTable string, run *store.ArchiveRun) error {
+	return RunOnDB(ctx, strategy, src, dst, dbType, t.TableName, store.ArchiveConditionSQL(t), extra.PGDeleteMode, extra.ScriptType, extra.OSSBucket, dstTable, extra.CleanupAfter, func(p Progress) {
+		applyProgress(run, p)
 		_ = e.Store.UpdateArchiveRun(run)
-		if n == 0 {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return errStopped
-		case <-time.After(600 * time.Millisecond):
-		}
-	}
-	return fmt.Errorf("超过最大轮次 %d", maxRounds)
+	})
 }
 
-func (e *Engine) copyThenDelete(ctx context.Context, src, dst *sql.DB, dbType string, t *store.ArchiveTask, dstTable string, extra store.ArchiveExtra, run *store.ArchiveRun) error {
-	cond := store.ArchiveConditionSQL(t)
-	if err := ValidateDeleteCondition(cond); err != nil {
-		return err
+func applyProgress(run *store.ArchiveRun, p Progress) {
+	if run == nil {
+		return
 	}
-	sel := fmt.Sprintf("SELECT * FROM %s WHERE %s", qualifyTable(dbType, t.TableName), normalizeCondition(cond))
-	rows, err := src.QueryContext(ctx, sel)
-	if err != nil {
-		return fmt.Errorf("读取源表失败: %w", err)
+	if p.Rounds > 0 {
+		run.Rounds = p.Rounds
 	}
-	cols, err := rows.Columns()
-	if err != nil {
-		rows.Close()
-		return err
+	if p.DeletedRows > 0 || p.Interim {
+		run.DeletedRows = p.DeletedRows
 	}
-	qCols := make([]string, len(cols))
-	ph := make([]string, len(cols))
-	for i, c := range cols {
-		qCols[i] = quoteIdent(dbType, c)
-		ph[i] = "?"
-		if dbType == "postgres" {
-			ph[i] = fmt.Sprintf("$%d", i+1)
-		}
+	if p.SQL != "" {
+		run.SQLPreview = p.SQL
 	}
-	ins := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", qualifyTable(dbType, dstTable), strings.Join(qCols, ","), strings.Join(ph, ","))
-	copied := int64(0)
-	for rows.Next() {
-		if err := ctx.Err(); err != nil {
-			rows.Close()
-			return errStopped
-		}
-		raw := make([]any, len(cols))
-		ptrs := make([]any, len(cols))
-		for i := range raw {
-			ptrs[i] = &raw[i]
-		}
-		if err := rows.Scan(ptrs...); err != nil {
-			rows.Close()
-			return err
-		}
-		if _, err := dst.ExecContext(ctx, ins, raw...); err != nil {
-			rows.Close()
-			return fmt.Errorf("写入目标表失败: %w", err)
-		}
-		copied++
+	if p.Message != "" {
+		run.Message = p.Message
 	}
-	rows.Close()
-	run.Message = fmt.Sprintf("已备份 %d 行到 %s", copied, dstTable)
-	run.SQLPreview = sel
-	return e.deleteLoop(ctx, src, dbType, t, extra, run)
-}
-
-func (e *Engine) exportCSV(ctx context.Context, src *sql.DB, dbType string, t *store.ArchiveTask, extra store.ArchiveExtra, run *store.ArchiveRun) error {
-	cond := store.ArchiveConditionSQL(t)
-	if err := ValidateDeleteCondition(cond); err != nil {
-		return err
-	}
-	sel := fmt.Sprintf("SELECT * FROM %s WHERE %s", qualifyTable(dbType, t.TableName), normalizeCondition(cond))
-	rows, err := src.QueryContext(ctx, sel)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	cols, err := rows.Columns()
-	if err != nil {
-		return err
-	}
-	dir := filepath.Join(os.TempDir(), "auto-dba-archive")
-	_ = os.MkdirAll(dir, 0o755)
-	name := fmt.Sprintf("%s_%s.csv", strings.ReplaceAll(t.TableName, ".", "_"), time.Now().UTC().Format("20060102T150405"))
-	path := filepath.Join(dir, name)
-	f, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	w := csv.NewWriter(f)
-	_ = w.Write(cols)
-	n := int64(0)
-	for rows.Next() {
-		raw := make([]any, len(cols))
-		ptrs := make([]any, len(cols))
-		for i := range raw {
-			ptrs[i] = &raw[i]
-		}
-		if err := rows.Scan(ptrs...); err != nil {
-			f.Close()
-			return err
-		}
-		rec := make([]string, len(cols))
-		for i, v := range raw {
-			rec[i] = fmt.Sprint(v)
-		}
-		_ = w.Write(rec)
-		n++
-	}
-	w.Flush()
-	f.Close()
-	run.DeletedRows = 0
-	run.Message = fmt.Sprintf("已导出 %d 行到 %s", n, path)
-	if extra.OSSBucket != "" {
-		run.Message += "（OSS bucket=" + extra.OSSBucket + "，请在系统设置中配置上传）"
-	}
-	run.SQLPreview = sel
-	return nil
-}
-
-func (e *Engine) runScript(ctx context.Context, db *sql.DB, t *store.ArchiveTask, extra store.ArchiveExtra, run *store.ArchiveRun) error {
-	body := store.ArchiveConditionSQL(t)
-	kind := strings.ToLower(strings.TrimSpace(extra.ScriptType))
-	if kind == "" || kind == "sql" {
-		var total int64
-		for _, stmt := range splitSQL(body) {
-			if err := ctx.Err(); err != nil {
-				return errStopped
-			}
-			n, err := execAffected(ctx, db, stmt)
-			if err != nil {
-				run.SQLPreview = stmt
-				return err
-			}
-			total += n
-			run.Rounds++
-		}
-		run.DeletedRows = total
-		run.SQLPreview = body
-		return nil
-	}
-	return fmt.Errorf("脚本类型 %s 需在执行节点配置解释器，当前仅支持 SQL", extra.ScriptType)
 }
 
 func execAffected(ctx context.Context, db *sql.DB, q string) (int64, error) {
@@ -439,6 +316,7 @@ func (e *Engine) StartScheduler(ctx context.Context) {
 
 // ScanDue 扫描到期归档任务（供 jobreg 调用）。
 func (e *Engine) ScanDue() {
+	e.reattachRemote()
 	e.scanDue()
 }
 
@@ -463,7 +341,7 @@ func (e *Engine) scanDue() {
 		if !scheduleDue(expr, e.Store.LastArchiveRunAt(t.ID), now) {
 			continue
 		}
-		_ = e.Start(t.ID)
+		_ = e.start(t.ID, false)
 	}
 }
 
