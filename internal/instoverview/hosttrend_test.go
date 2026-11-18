@@ -78,10 +78,10 @@ func TestParseTrendWindow(t *testing.T) {
 }
 
 func TestHostDiskReportTitle(t *testing.T) {
-	if got := HostDiskReportTitle("", "", "", 25); got != "主机磁盘 · 全部域名 / 全部地址 / 全部环境 · 25 台" {
+	if got := HostDiskReportTitle("", "", "", 25); got != "主机智能分析 · 全部域名 / 全部地址 / 全部环境 · 25 台" {
 		t.Fatalf("all = %q", got)
 	}
-	if got := HostDiskReportTitle("a.example", "10.0.0.1", "北京", 1); got != "主机磁盘 · a.example / 10.0.0.1 / 北京 · 1 台" {
+	if got := HostDiskReportTitle("a.example", "10.0.0.1", "北京", 1); got != "主机智能分析 · a.example / 10.0.0.1 / 北京 · 1 台" {
 		t.Fatalf("picked = %q", got)
 	}
 }

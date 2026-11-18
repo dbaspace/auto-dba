@@ -19,7 +19,7 @@ func HostDiskReportTitle(domain, host, envName string, n int) string {
 		}
 		return strings.TrimSpace(v)
 	}
-	return fmt.Sprintf("主机磁盘 · %s / %s / %s · %d 台",
+	return fmt.Sprintf("主机智能分析 · %s / %s / %s · %d 台",
 		label(domain, "全部域名"), label(host, "全部地址"), label(envName, "全部环境"), n)
 }
 
@@ -222,14 +222,15 @@ func TrendSortKey(t HostDiskTrend) float64 {
 
 // TrendItem 是报告里的一台主机。
 type TrendItem struct {
-	ID      string     `json:"id"`
-	Name    string     `json:"name"`
-	App     string     `json:"app,omitempty"`
-	Domain  string     `json:"domain,omitempty"`
-	Host    string     `json:"host"`
-	EnvName string     `json:"env_name"`
-	Data    *DiskTrend `json:"data,omitempty"`
-	System  *DiskTrend `json:"system,omitempty"`
+	ID       string        `json:"id"`
+	Name     string        `json:"name"`
+	App      string        `json:"app,omitempty"`
+	Domain   string        `json:"domain,omitempty"`
+	Host     string        `json:"host"`
+	EnvName  string        `json:"env_name"`
+	Data     *DiskTrend    `json:"data,omitempty"`
+	System   *DiskTrend    `json:"system,omitempty"`
+	Pressure *HostPressure `json:"pressure,omitempty"`
 }
 
 // TrendSummary 是报告顶部的汇总结论。

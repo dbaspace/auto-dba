@@ -153,12 +153,23 @@ func HostFSExprs(addrs []string) (size, avail string) {
 	if len(addrs) == 0 {
 		return "", ""
 	}
+	match := hostInstanceMatcher(addrs)
+	if match == "" {
+		return "", ""
+	}
+	sel := `{fstype=~"ext4|xfs",` + match + `}`
+	return "node_filesystem_size_bytes" + sel, "node_filesystem_avail_bytes" + sel
+}
+
+func hostInstanceMatcher(addrs []string) string {
+	if len(addrs) == 0 {
+		return ""
+	}
 	parts := make([]string, 0, len(addrs))
 	for _, a := range addrs {
 		parts = append(parts, strings.ReplaceAll(regexp.QuoteMeta(a), `\`, `\\`))
 	}
-	sel := `{fstype=~"ext4|xfs",instance=~"(` + strings.Join(parts, "|") + `)(:[0-9]+)?"}`
-	return "node_filesystem_size_bytes" + sel, "node_filesystem_avail_bytes" + sel
+	return `instance=~"(` + strings.Join(parts, "|") + `)(:[0-9]+)?"`
 }
 
 // FSSample 是一条 node_filesystem 即时样本。

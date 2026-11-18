@@ -976,7 +976,7 @@ export default function InstanceOverview() {
             </div>
             <button type="button" className="ov-card ov-card-action" onClick={() => setAnalysisOpen(true)}>
               <span className="ov-card-action-title">智能分析</span>
-              <span className="label">近 7 天数据盘与系统盘增长</span>
+              <span className="label">磁盘增长，以及网络、连接数、CPU、IO</span>
             </button>
           </>
         ) : showStarRocks ? (

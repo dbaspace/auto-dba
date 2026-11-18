@@ -133,6 +133,7 @@ func (h *OverviewHandler) runHostDiskTrend(job *trendJob, req trendRequest) {
 		hosts = append(hosts, row)
 	}
 	items := make([]instoverview.TrendItem, 0, len(hosts))
+	var loadNotes []string
 	if len(hosts) > 0 {
 		cli, err := h.promClient()
 		if err != nil || cli == nil {
@@ -144,7 +145,7 @@ func (h *OverviewHandler) runHostDiskTrend(job *trendJob, req trendRequest) {
 			raw = append(raw, row.Host)
 		}
 		addrs := instoverview.HostAddrs(raw)
-		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
 		cur, err := queryHostFS(ctx, cli, addrs, req.End)
 		if err != nil {
@@ -157,16 +158,22 @@ func (h *OverviewHandler) runHostDiskTrend(job *trendJob, req trendRequest) {
 			return
 		}
 		trends := instoverview.HostDiskTrends(cur, prev, float64(req.Days))
+		pressures, notes := instoverview.QueryHostPressure(ctx, cli, addrs, req.Start, req.End)
+		loadNotes = notes
 		for _, row := range hosts {
-			t := trends[store.HostAddrKey(row.Host)]
+			key := store.HostAddrKey(row.Host)
+			t := trends[key]
 			items = append(items, instoverview.TrendItem{
 				ID: row.ID, Name: row.Name, App: row.App, Domain: row.Domain, Host: row.Host, EnvName: row.EnvName,
-				Data: t.Data, System: t.System,
+				Data: t.Data, System: t.System, Pressure: pressures[key],
 			})
 		}
 		instoverview.SortTrendItems(items)
 	}
 	summary := instoverview.SummarizeTrends(items, req.Days)
+	if len(loadNotes) > 0 {
+		summary.Conclusions = append(summary.Conclusions, loadNotes...)
+	}
 	envName := h.reportEnvName(req.Env)
 	scope := map[string]any{
 		"domain": req.Domain, "host": req.Host, "env": req.Env, "env_name": envName,

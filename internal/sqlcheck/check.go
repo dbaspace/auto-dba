@@ -41,26 +41,27 @@ var (
 	reWhere    = regexp.MustCompile(`(?is)\bWHERE\b`)
 )
 
-// stripSQLComments 去掉 -- / # 行注释与 /* */ 块注释（单引号、$$ 块内不处理）。
+// stripSQLComments 去掉 -- / # 行注释与 /* */ 块注释（单引号、美元引号块内不处理）。
 func stripSQLComments(sql string) string {
 	var b strings.Builder
 	inSingle := false
-	inDollar := false
+	dollarDelim := ""
 	for i := 0; i < len(sql); i++ {
 		c := sql[i]
-		if !inDollar && c == '\'' && (i == 0 || sql[i-1] != '\\') {
+		if dollarDelim == "" && c == '\'' && (i == 0 || sql[i-1] != '\\') {
 			inSingle = !inSingle
 			b.WriteByte(c)
 			continue
 		}
-		if !inSingle && i+1 < len(sql) && c == '$' && sql[i+1] == '$' {
-			inDollar = !inDollar
-			b.WriteByte(c)
-			b.WriteByte(sql[i+1])
-			i++
-			continue
+		if !inSingle {
+			if next, open, ok := takeDollarQuote(sql, i, dollarDelim); ok {
+				b.WriteString(sql[i:next])
+				dollarDelim = open
+				i = next - 1
+				continue
+			}
 		}
-		if !inSingle && !inDollar {
+		if !inSingle && dollarDelim == "" {
 			if c == '-' && i+1 < len(sql) && sql[i+1] == '-' {
 				i += 2
 				for i < len(sql) && sql[i] != '\n' && sql[i] != '\r' {
@@ -107,6 +108,60 @@ var ddlStatementStartKeywords = map[string]bool{
 
 func isWordByte(b byte) bool {
 	return b == '_' || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
+}
+
+func isDollarTagStart(c byte) bool {
+	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+}
+
+func isDollarTagCont(c byte) bool {
+	return isDollarTagStart(c) || (c >= '0' && c <= '9')
+}
+
+// dollarQuoteAt 识别 PostgreSQL 美元引号。空标签是 $$，带标签时标签是标识符，例如 $repair$。
+func dollarQuoteAt(s string, i int) (delim string, next int, ok bool) {
+	if i >= len(s) || s[i] != '$' {
+		return "", i, false
+	}
+	j := i + 1
+	if j < len(s) && isDollarTagStart(s[j]) {
+		j++
+		for j < len(s) && isDollarTagCont(s[j]) {
+			j++
+		}
+	}
+	if j >= len(s) || s[j] != '$' {
+		return "", i, false
+	}
+	return s[i : j+1], j + 1, true
+}
+
+// takeDollarQuote 进入或结束美元引号。open 为空表示当前不在块内。
+func takeDollarQuote(s string, i int, open string) (next int, openOut string, consumed bool) {
+	if open != "" {
+		if strings.HasPrefix(s[i:], open) {
+			return i + len(open), "", true
+		}
+		return i, open, false
+	}
+	delim, next, ok := dollarQuoteAt(s, i)
+	if !ok {
+		return i, "", false
+	}
+	return next, delim, true
+}
+
+// skipDollarQuote 跳过从 i 开始的一整段美元引号，返回结束定界符之后的位置。
+func skipDollarQuote(s string, i int) (int, bool) {
+	delim, next, ok := dollarQuoteAt(s, i)
+	if !ok {
+		return i, false
+	}
+	k := strings.Index(s[next:], delim)
+	if k < 0 {
+		return i, false
+	}
+	return next + k + len(delim), true
 }
 
 func bufferAtLineStart(b string) bool {
@@ -324,15 +379,8 @@ func skipBalancedParens(s string, i int) (int, bool) {
 			i = j - 1
 			continue
 		}
-		if c == '$' && i+1 < len(s) && s[i+1] == '$' {
-			j := i + 2
-			for j+1 < len(s) && !(s[j] == '$' && s[j+1] == '$') {
-				j++
-			}
-			if j+1 >= len(s) {
-				return i, false
-			}
-			i = j + 1
+		if next, ok := skipDollarQuote(s, i); ok {
+			i = next - 1
 			continue
 		}
 		if c == '(' {
@@ -362,15 +410,8 @@ func scanTopLevel(s string, fn func(i int) bool) {
 			i = j - 1
 			continue
 		}
-		if c == '$' && i+1 < len(s) && s[i+1] == '$' {
-			j := i + 2
-			for j+1 < len(s) && !(s[j] == '$' && s[j+1] == '$') {
-				j++
-			}
-			if j+1 >= len(s) {
-				return
-			}
-			i = j + 1
+		if next, ok := skipDollarQuote(s, i); ok {
+			i = next - 1
 			continue
 		}
 		if c == '(' {
@@ -703,7 +744,7 @@ func SplitSQL(s string) []string {
 	var out []string
 	var cur strings.Builder
 	inSingle := false
-	inDollar := false
+	dollarDelim := ""
 	parenDepth := 0
 
 	flush := func() {
@@ -717,19 +758,20 @@ func SplitSQL(s string) []string {
 
 	for i := 0; i < len(s); i++ {
 		c := s[i]
-		if !inDollar && c == '\'' && (i == 0 || s[i-1] != '\\') {
+		if dollarDelim == "" && c == '\'' && (i == 0 || s[i-1] != '\\') {
 			inSingle = !inSingle
 			cur.WriteByte(c)
 			continue
 		}
-		if !inSingle && i+1 < len(s) && c == '$' && s[i+1] == '$' {
-			inDollar = !inDollar
-			cur.WriteByte(c)
-			cur.WriteByte(s[i+1])
-			i++
-			continue
+		if !inSingle {
+			if next, open, ok := takeDollarQuote(s, i, dollarDelim); ok {
+				cur.WriteString(s[i:next])
+				dollarDelim = open
+				i = next - 1
+				continue
+			}
 		}
-		if !inSingle && !inDollar {
+		if !inSingle && dollarDelim == "" {
 			if c == '-' && i+1 < len(s) && s[i+1] == '-' {
 				i += 2
 				for i < len(s) && s[i] != '\n' && s[i] != '\r' {
@@ -794,26 +836,27 @@ func findMissingSemicolonSplits(s string) []string {
 	var snippets []string
 	var cur strings.Builder
 	inSingle := false
-	inDollar := false
+	dollarDelim := ""
 	parenDepth := 0
 
 	resetBuf := func() { cur.Reset() }
 
 	for i := 0; i < len(s); i++ {
 		c := s[i]
-		if !inDollar && c == '\'' && (i == 0 || s[i-1] != '\\') {
+		if dollarDelim == "" && c == '\'' && (i == 0 || s[i-1] != '\\') {
 			inSingle = !inSingle
 			cur.WriteByte(c)
 			continue
 		}
-		if !inSingle && i+1 < len(s) && c == '$' && s[i+1] == '$' {
-			inDollar = !inDollar
-			cur.WriteByte(c)
-			cur.WriteByte(s[i+1])
-			i++
-			continue
+		if !inSingle {
+			if next, open, ok := takeDollarQuote(s, i, dollarDelim); ok {
+				cur.WriteString(s[i:next])
+				dollarDelim = open
+				i = next - 1
+				continue
+			}
 		}
-		if !inSingle && !inDollar {
+		if !inSingle && dollarDelim == "" {
 			if c == '-' && i+1 < len(s) && s[i+1] == '-' {
 				i += 2
 				for i < len(s) && s[i] != '\n' && s[i] != '\r' {

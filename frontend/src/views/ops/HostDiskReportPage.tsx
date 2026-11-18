@@ -67,13 +67,12 @@ export default function HostDiskReportPage() {
 
   const pg = report?.kind === 'pg_storage'
   useEffect(() => {
-    if (!pg) return
     dispatch(updateTabMeta({ key: tabKey(location.pathname, location.search), title: '智能分析报告' }))
-  }, [pg, dispatch, location.pathname, location.search])
+  }, [dispatch, location.pathname, location.search])
   return (
     <div className="ops-page host-disk-report">
       <div className="ops-title">
-        <h1>{pg ? '智能分析报告' : '磁盘分析报告'}</h1>
+        <h1>智能分析报告</h1>
       </div>
       {loading ? <Spin /> : null}
       {error ? <Alert type="error" showIcon message={error} /> : null}

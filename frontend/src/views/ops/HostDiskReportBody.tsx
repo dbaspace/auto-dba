@@ -15,6 +15,19 @@ export type DiskTrend = {
   advice: string
 }
 
+export type HostPressure = {
+  cpu_avg?: number
+  cpu_peak?: number
+  io_avg?: number
+  io_peak?: number
+  net_in_avg?: number
+  net_in_peak?: number
+  net_out_avg?: number
+  net_out_peak?: number
+  conn_avg?: number
+  conn_peak?: number
+}
+
 export type TrendItem = {
   id: string
   name: string
@@ -24,6 +37,7 @@ export type TrendItem = {
   env_name: string
   data?: DiskTrend
   system?: DiskTrend
+  pressure?: HostPressure
 }
 
 export type TrendResp = {
@@ -104,6 +118,30 @@ function fullText(d?: DiskTrend) {
   return <span className={`ov-trend-${cls}`}>{text}</span>
 }
 
+function numText(n: number | undefined, fmt: (n: number) => string) {
+  if (n == null || Number.isNaN(n)) return '—'
+  return fmt(n)
+}
+
+function pctText(n?: number) {
+  return numText(n, (v) => `${Math.round(v)}%`)
+}
+
+function connText(n?: number) {
+  return numText(n, (v) => String(Math.round(v)))
+}
+
+function byteRateText(n?: number) {
+  return numText(n, (v) => {
+    const abs = Math.abs(v)
+    const sign = v < 0 ? '-' : ''
+    if (abs >= 1024 ** 3) return `${sign}${(abs / 1024 ** 3).toFixed(1)} GB/s`
+    if (abs >= 1024 ** 2) return `${sign}${(abs / 1024 ** 2).toFixed(1)} MB/s`
+    if (abs >= 1024) return `${sign}${(abs / 1024).toFixed(1)} KB/s`
+    return `${sign}${abs.toFixed(0)} B/s`
+  })
+}
+
 function rateText(d?: DiskTrend) {
   if (!d) return <span className="ov-muted">无样本</span>
   const cls = d.rate >= 80 ? 'danger' : d.rate >= 60 ? 'warn' : 'ok'
@@ -121,8 +159,13 @@ function adviceCell(row: TrendItem) {
     row.data ? { label: '数据盘', d: row.data } : null,
     row.system ? { label: '系统盘', d: row.system } : null,
   ].filter(Boolean) as { label: string; d: DiskTrend }[]
-  if (!parts.length) return <span className="ov-muted">没有 node_exporter 样本</span>
+  if (!parts.length && !row.pressure) return <span className="ov-muted">没有 node_exporter 样本</span>
   parts.sort((a, b) => LEVEL_ORDER[a.d.level] - LEVEL_ORDER[b.d.level])
+  const extra: string[] = []
+  const cpu = row.pressure?.cpu_peak
+  const io = row.pressure?.io_peak
+  if (cpu != null && cpu >= 85) extra.push(`CPU 峰值 ${Math.round(cpu)}%，不低于 85%`)
+  if (io != null && io >= 80) extra.push(`IO util 峰值 ${Math.round(io)}%，不低于 80%`)
   return (
     <div className="ov-trend-advice">
       {parts.map((p) => (
@@ -130,6 +173,9 @@ function adviceCell(row: TrendItem) {
           {p.label}：{p.d.advice}
           {p.d.new_devices ? `（${p.d.new_devices} 块盘为新挂载，未计入增长）` : ''}
         </div>
+      ))}
+      {extra.map((line) => (
+        <div key={line} className="ov-trend-warn">{line}</div>
       ))}
     </div>
   )
@@ -153,6 +199,36 @@ export default function HostDiskReportBody({ resp, scrollY, showNote = true }: {
     { title: '环境', dataIndex: 'env_name', width: 90, ellipsis: true },
     diskCols('data', '数据盘'),
     diskCols('system', '系统盘（/）'),
+    {
+      title: 'CPU',
+      children: [
+        { title: '均值', width: 72, render: (_: unknown, row: TrendItem) => pctText(row.pressure?.cpu_avg) },
+        { title: '峰值', width: 72, render: (_: unknown, row: TrendItem) => pctText(row.pressure?.cpu_peak) },
+      ],
+    },
+    {
+      title: 'IO util',
+      children: [
+        { title: '均值', width: 72, render: (_: unknown, row: TrendItem) => pctText(row.pressure?.io_avg) },
+        { title: '峰值', width: 72, render: (_: unknown, row: TrendItem) => pctText(row.pressure?.io_peak) },
+      ],
+    },
+    {
+      title: '网络',
+      children: [
+        { title: '入站均值', width: 100, render: (_: unknown, row: TrendItem) => byteRateText(row.pressure?.net_in_avg) },
+        { title: '入站峰值', width: 100, render: (_: unknown, row: TrendItem) => byteRateText(row.pressure?.net_in_peak) },
+        { title: '出站均值', width: 100, render: (_: unknown, row: TrendItem) => byteRateText(row.pressure?.net_out_avg) },
+        { title: '出站峰值', width: 100, render: (_: unknown, row: TrendItem) => byteRateText(row.pressure?.net_out_peak) },
+      ],
+    },
+    {
+      title: '连接数',
+      children: [
+        { title: '均值', width: 72, render: (_: unknown, row: TrendItem) => connText(row.pressure?.conn_avg) },
+        { title: '峰值', width: 72, render: (_: unknown, row: TrendItem) => connText(row.pressure?.conn_peak) },
+      ],
+    },
     { title: '建议', width: 320, render: (_, row) => adviceCell(row) },
   ]
   const danger = (resp.items || []).some((it) => it.data?.level === 'danger' || it.system?.level === 'danger')
@@ -182,7 +258,7 @@ export default function HostDiskReportBody({ resp, scrollY, showNote = true }: {
         bordered
         dataSource={resp.items || []}
         columns={columns}
-        scroll={{ x: 1650, y: scrollY }}
+        scroll={{ x: 2480, y: scrollY }}
         pagination={{ defaultPageSize: 20, showSizeChanger: { getPopupContainer: () => document.body }, showTotal: (n) => `共 ${n} 台` }}
       />
     </>

@@ -130,7 +130,7 @@ export default function HostDiskAnalysis({
 
   return (
     <Modal
-      title="智能分析：主机磁盘增长"
+      title="智能分析：磁盘、网络、连接数、CPU、IO"
       open={open}
       onCancel={onClose}
       footer={null}

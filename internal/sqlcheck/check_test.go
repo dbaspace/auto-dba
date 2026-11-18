@@ -96,6 +96,67 @@ commit;`
 	}
 }
 
+func TestPostgresDDLRepairScript(t *testing.T) {
+	sql := `
+BEGIN;
+SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '20s';
+SET LOCAL search_path = pg_catalog, public;
+DO $repair$
+DECLARE
+    parser_oid oid;
+    config_oid oid;
+    expected_aliases text[] := ARRAY['a', 'e', 'f', 'i', 'j', 'l', 'n', 's', 't', 'v', 'x', 'z'];
+    actual_aliases text[];
+    validation_text text := '普通菜品 销售汇总表';
+BEGIN
+    IF current_database() <> 'db_boh_agent' OR pg_is_in_recovery() THEN
+        RAISE EXCEPTION 'Run this repair on the legacy BO TEST db_boh_agent primary';
+    END IF;
+    SELECT p.oid INTO parser_oid FROM pg_ts_parser AS p WHERE p.prsname = 'zhparser';
+    IF parser_oid IS NULL THEN
+        RAISE EXCEPTION 'The zhparser extension must already provide public.zhparser';
+    END IF;
+    SELECT c.oid INTO config_oid FROM pg_ts_config AS c WHERE c.cfgname = 'zh';
+    IF config_oid IS NULL THEN
+        CREATE TEXT SEARCH CONFIGURATION public.zh (PARSER = public.zhparser);
+        ALTER TEXT SEARCH CONFIGURATION public.zh
+            ADD MAPPING FOR n, v, a, i, e, l, j, f, s, t, z, x WITH pg_catalog.simple;
+        COMMENT ON TEXT SEARCH CONFIGURATION public.zh
+            IS 'Chinese full-text search configuration for BOH Agent knowledge chunks.';
+    END IF;
+    IF NOT (to_tsvector(config_oid::regconfig, validation_text)
+            @@ plainto_tsquery(config_oid::regconfig, validation_text)) THEN
+        RAISE EXCEPTION 'Existing public.zh uses another parser; review it before making changes';
+    END IF;
+END
+$repair$;
+COMMIT;`
+	parts := SplitSQL(sql)
+	if len(parts) != 6 {
+		t.Fatalf("split = %d, want BEGIN, 3 SET, DO, COMMIT: %#v", len(parts), parts)
+	}
+	if !strings.HasPrefix(strings.ToUpper(strings.TrimSpace(parts[4])), "DO ") {
+		t.Fatalf("do statement = %s", parts[4])
+	}
+	res := CheckTicketWithRules(sql, "ddl", "postgres", nil)
+	if !res.OK || hasMsg(res, "语句必须是 DDL") {
+		t.Fatalf("repair script rejected: ok=%v %+v", res.OK, res.Statements)
+	}
+	bare := CheckTicketWithRules("set local search_path = public; create text search configuration public.zh (parser = public.zhparser);", "ddl", "postgres", nil)
+	if bare.OK || !hasMsg(bare, "SET LOCAL 必须写在 BEGIN 和 COMMIT 之间") {
+		t.Fatalf("search_path outside txn: %+v", bare)
+	}
+	ins := CheckTicketWithRules("begin; DO $$ BEGIN INSERT INTO t VALUES (1); END $$; commit;", "ddl", "postgres", nil)
+	if ins.OK || !hasMsg(ins, "语句必须是 DDL") {
+		t.Fatalf("insert inside do should stay rejected: %+v", ins)
+	}
+	mysqlDo := CheckTicketWithRules("DO $$ BEGIN CREATE TABLE t(a int); END $$;", "ddl", "mysql", nil)
+	if mysqlDo.OK || !hasMsg(mysqlDo, "语句必须是 DDL") {
+		t.Fatalf("mysql do should stay rejected: %+v", mysqlDo)
+	}
+}
+
 func hasMsg(res Result, msg string) bool {
 	for _, row := range res.Statements {
 		if strings.Contains(row.Message, msg) {

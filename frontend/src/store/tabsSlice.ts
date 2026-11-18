@@ -39,7 +39,7 @@ function pageRouteTitle(path: string): string {
 }
 
 function diskReportTitle(path: string): string {
-  return /^\/ops\/instance-overview\/reports\/[^/]+$/.test(normPath(path)) ? '磁盘分析报告' : ''
+  return /^\/ops\/instance-overview\/reports\/[^/]+$/.test(normPath(path)) ? '智能分析报告' : ''
 }
 
 /** /ops/tickets/:id → 工单详情（勿沿用「工单列表」） */

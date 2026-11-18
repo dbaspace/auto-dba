@@ -176,7 +176,7 @@ func ruleOf(byName map[string]Rule, names ...string) (Rule, bool) {
 	return Rule{}, false
 }
 
-var rePGTimeoutSet = regexp.MustCompile(`(?i)^SET\s+(LOCAL\s+)?(lock_timeout|statement_timeout)\s*(?:=|TO)\s+\S+`)
+var rePGTimeoutSet = regexp.MustCompile(`(?i)^SET\s+(LOCAL\s+)?(lock_timeout|statement_timeout|search_path)\s*(?:=|TO)\s+\S+`)
 
 // pgDDLTxnKind 识别 PostgreSQL DDL 脚本里允许的事务和超时设置。
 func pgDDLTxnKind(stmt string) string {
@@ -224,6 +224,9 @@ func checkStatement(stmt, issueType, dbType string, byName map[string]Rule, inTx
 				}
 				return nil
 			}
+			if kw == "DO" {
+				return checkPostgresDDLDo(stmt, dbType, byName, inTxn)
+			}
 		}
 		if !isDDL(kw) && kw != "GRANT" && kw != "REVOKE" && kw != "LOCK" && kw != "VACUUM" && kw != "CLUSTER" && kw != "COMMENT" && kw != "REINDEX" && kw != "REFRESH" {
 			return []*ruleHit{errID("TicketType", "语句必须是 DDL（CREATE/ALTER/DROP/TRUNCATE/RENAME/COMMENT）")}
@@ -264,6 +267,127 @@ func checkStatement(stmt, issueType, dbType string, byName map[string]Rule, inTx
 		return nil
 	}
 	return applyCatalogRules(stmt, upper, kw, issueType, dbType, byName)
+}
+
+func checkPostgresDDLDo(stmt, dbType string, byName map[string]Rule, inTxn bool) []*ruleHit {
+	body, ok := doBlockBody(stmt)
+	if !ok {
+		return []*ruleHit{errID("TicketType", "语句必须是 DDL（CREATE/ALTER/DROP/TRUNCATE/RENAME/COMMENT）")}
+	}
+	var hits []*ruleHit
+	saw := false
+	for _, inner := range SplitSQL(body) {
+		saw = true
+		if containsPLForbidden(inner) {
+			return []*ruleHit{errID("TicketType", "语句必须是 DDL（CREATE/ALTER/DROP/TRUNCATE/RENAME/COMMENT）")}
+		}
+		switch firstKeyword(inner) {
+		case "DECLARE", "BEGIN", "END", "IF", "ELSIF", "ELSE", "SELECT", "RAISE":
+			continue
+		}
+		if isPlpgsqlDecl(inner) {
+			continue
+		}
+		hits = append(hits, checkStatement(inner, "ddl", dbType, byName, inTxn)...)
+	}
+	if !saw {
+		return []*ruleHit{errID("TicketType", "语句必须是 DDL（CREATE/ALTER/DROP/TRUNCATE/RENAME/COMMENT）")}
+	}
+	return hits
+}
+
+func doBlockBody(stmt string) (string, bool) {
+	s := strings.TrimSpace(stripSQLComments(stmt))
+	if len(s) < 2 || !strings.EqualFold(s[:2], "DO") || (len(s) > 2 && isWordByte(s[2])) {
+		return "", false
+	}
+	rest := strings.TrimSpace(s[2:])
+	i := strings.IndexByte(rest, '$')
+	if i < 0 {
+		return "", false
+	}
+	delim, next, ok := dollarQuoteAt(rest, i)
+	if !ok {
+		return "", false
+	}
+	k := strings.Index(rest[next:], delim)
+	if k < 0 {
+		return "", false
+	}
+	return rest[next : next+k], true
+}
+
+func containsPLForbidden(stmt string) bool {
+	s := stripSQLComments(stmt)
+	var word strings.Builder
+	inSingle := false
+	flush := func() bool {
+		if word.Len() == 0 {
+			return false
+		}
+		switch strings.ToUpper(word.String()) {
+		case "INSERT", "UPDATE", "DELETE", "MERGE", "EXECUTE", "CALL":
+			word.Reset()
+			return true
+		}
+		word.Reset()
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if inSingle {
+			if c == '\'' {
+				if i+1 < len(s) && s[i+1] == '\'' {
+					i++
+					continue
+				}
+				inSingle = false
+			}
+			continue
+		}
+		if c == '\'' {
+			if flush() {
+				return true
+			}
+			inSingle = true
+			continue
+		}
+		if isWordByte(c) {
+			word.WriteByte(c)
+			continue
+		}
+		if flush() {
+			return true
+		}
+	}
+	return flush()
+}
+
+func isPlpgsqlDecl(stmt string) bool {
+	s := strings.TrimSpace(stripSQLComments(stmt))
+	s = strings.TrimRight(s, "; \t\r\n")
+	fields := strings.Fields(s)
+	if len(fields) < 2 || !plainIdent(fields[0]) {
+		return false
+	}
+	second := strings.TrimRight(fields[1], ";")
+	if second == ":=" {
+		return true
+	}
+	second = strings.TrimSuffix(second, "[]")
+	return plainIdent(second)
+}
+
+func plainIdent(s string) bool {
+	if s == "" || !isDollarTagStart(s[0]) {
+		return false
+	}
+	for i := 1; i < len(s); i++ {
+		if !isDollarTagCont(s[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 func hasRule(byName map[string]Rule, name string) bool {
@@ -620,15 +744,8 @@ func splitTopLevelBool(s string) []string {
 			i = j
 			continue
 		}
-		if c == '$' && i+1 < len(s) && s[i+1] == '$' {
-			j := i + 2
-			for j+1 < len(s) && !(s[j] == '$' && s[j+1] == '$') {
-				j++
-			}
-			if j+1 >= len(s) {
-				break
-			}
-			i = j + 2
+		if next, ok := skipDollarQuote(s, i); ok {
+			i = next
 			continue
 		}
 		if c == '(' {

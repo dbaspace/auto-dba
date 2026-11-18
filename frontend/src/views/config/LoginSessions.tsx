@@ -22,6 +22,10 @@ interface SessRow {
 
 const PAGE_SIZE = 10
 
+function presenceRank(v?: string) {
+  return v === 'active' ? 0 : 1
+}
+
 function fmtTime(v?: string) {
   if (!v) return '-'
   const d = new Date(v)
@@ -142,7 +146,8 @@ export default function LoginSessions() {
           {
             title: '使用状态',
             dataIndex: 'presence',
-            width: 100,
+            width: 110,
+            sorter: (a: SessRow, b: SessRow) => presenceRank(a.presence) - presenceRank(b.presence),
             render: (v: string) => (v === 'active' ? <Tag color="green">使用中</Tag> : <Tag>离开</Tag>),
           },
           {
