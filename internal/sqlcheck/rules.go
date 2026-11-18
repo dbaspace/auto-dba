@@ -228,7 +228,7 @@ func checkStatement(stmt, issueType, dbType string, byName map[string]Rule, inTx
 				return checkPostgresDDLDo(stmt, dbType, byName, inTxn)
 			}
 		}
-		if !isDDL(kw) && kw != "GRANT" && kw != "REVOKE" && kw != "LOCK" && kw != "VACUUM" && kw != "CLUSTER" && kw != "COMMENT" && kw != "REINDEX" && kw != "REFRESH" {
+		if !isDDL(kw) && kw != "GRANT" && kw != "REVOKE" && kw != "LOCK" && kw != "VACUUM" && kw != "CLUSTER" && kw != "COMMENT" && kw != "REINDEX" && kw != "REFRESH" && !(dbType == "postgres" && isPGSecurityLabel(stmt)) {
 			return []*ruleHit{errID("TicketType", "语句必须是 DDL（CREATE/ALTER/DROP/TRUNCATE/RENAME/COMMENT）")}
 		}
 		if kw == "REVOKE" || reRevoke.MatchString(upper) {
@@ -478,7 +478,7 @@ func applyDDLRules(stmt, upper, kw, dbType string, byName map[string]Rule) []*ru
 		}
 	}
 
-	isCreate := reCreateTable.MatchString(upper)
+	isCreate := statementIsCreateTable(stmt)
 	isCTAS := isCreate && reCreateTableAS.MatchString(upper)
 	isAddCol := isAlterAddColumn(upper)
 	if isCreate {
@@ -1165,7 +1165,6 @@ var (
 	reDropSchema       = regexp.MustCompile(`DROP\s+SCHEMA`)
 	reTruncate         = regexp.MustCompile(`TRUNCATE\b`)
 	reDropColumn       = regexp.MustCompile(`DROP\s+COLUMN`)
-	reCreateTable      = regexp.MustCompile(`CREATE\s+TABLE`)
 	reAlterAdd         = regexp.MustCompile(`(?is)ALTER\s+TABLE\s+.+\s+ADD\s+`)
 	reAddNonColumn     = regexp.MustCompile(`(?i)ADD\s+(?:CONSTRAINT|INDEX|UNIQUE|PRIMARY|FULLTEXT|SPATIAL|KEY)\b`)
 	reCreateTableAS    = regexp.MustCompile(`(?i)CREATE\s+TABLE[\s\S]+\bAS\s+SELECT\b`)

@@ -1004,6 +1004,47 @@ func isDDL(kw string) bool {
 	}
 }
 
+// isPGSecurityLabel 识别 PostgreSQL 的 SECURITY LABEL 语句。
+func isPGSecurityLabel(stmt string) bool {
+	s := strings.TrimSpace(stripSQLComments(stmt))
+	i, ok := matchWordAt(s, 0, "SECURITY")
+	if !ok {
+		return false
+	}
+	_, ok = matchWordAt(s, i, "LABEL")
+	return ok
+}
+
+// statementIsCreateTable 只认语句开头的 CREATE TABLE。
+// TEMP、TEMPORARY、UNLOGGED、GLOBAL、LOCAL 可以出现在 TABLE 前面。
+func statementIsCreateTable(stmt string) bool {
+	s := strings.TrimSpace(stripSQLComments(stmt))
+	i, ok := matchWordAt(s, 0, "CREATE")
+	if !ok {
+		return false
+	}
+	if ni, yes := matchWordAt(s, i, "OR"); yes {
+		if ni2, yes2 := matchWordAt(s, ni, "REPLACE"); yes2 {
+			i = ni2
+		}
+	}
+	for {
+		advanced := false
+		for _, word := range []string{"GLOBAL", "LOCAL", "TEMP", "TEMPORARY", "UNLOGGED"} {
+			if ni, yes := matchWordAt(s, i, word); yes {
+				i = ni
+				advanced = true
+				break
+			}
+		}
+		if !advanced {
+			break
+		}
+	}
+	_, ok = matchWordAt(s, i, "TABLE")
+	return ok
+}
+
 func isDML(kw string) bool {
 	switch kw {
 	case "INSERT", "UPDATE", "DELETE", "REPLACE":

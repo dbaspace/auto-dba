@@ -25,7 +25,7 @@ func applyExtraDDLRules(stmt, upper, kw string, dbType string, byName map[string
 			hits = append(hits, hit)
 		}
 	}
-	isCreate := reCreateTable.MatchString(upper)
+	isCreate := statementIsCreateTable(stmt)
 	isCTAS := isCreate && reCreateTableAS.MatchString(upper)
 	isAddCol := isAlterAddColumn(upper)
 

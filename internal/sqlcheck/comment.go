@@ -54,7 +54,7 @@ func applyPostgresCommentRules(stmts []string, needCol, needTbl bool, res *Resul
 				}
 			}
 		}
-		if !reCreateTable.MatchString(upper) {
+		if !statementIsCreateTable(stmt) {
 			if needTbl && reCreateView.MatchString(upper) {
 				name, materialized := createViewName(stmt)
 				if name != "" && !commentedViews[normalizeTableRef(name)] && !commentedTables[normalizeTableRef(name)] {
@@ -103,7 +103,7 @@ func applyInlineCommentRules(stmts []string, dbType string, needCol, needTbl boo
 				}
 			}
 		}
-		if !reCreateTable.MatchString(upper) {
+		if !statementIsCreateTable(stmt) {
 			continue
 		}
 		isCTAS := reCreateTableAS.MatchString(upper)

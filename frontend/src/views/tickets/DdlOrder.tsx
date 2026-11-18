@@ -52,6 +52,7 @@ import {
   lineVsStatementHint,
   shouldHintLineVsStatement,
 } from './sqlStatementCount'
+import SqlSnippetCell from './SqlSnippetCell'
 import './DdlOrder.css'
 
 interface DbType {
@@ -787,7 +788,7 @@ export default function DdlOrder() {
       render: (_, row) => <span className={levelClass(row.error_level)}>{levelLabel(row.error_level)}</span>,
     },
     { title: '错误信息', dataIndex: 'message', ellipsis: true },
-    { title: 'SQL语句', dataIndex: 'sql', ellipsis: true },
+    { title: 'SQL语句', dataIndex: 'sql', width: 360, render: (v: string) => <SqlSnippetCell sql={v} /> },
     { title: '影响行数', dataIndex: 'affected_rows', width: 90 },
     { title: '操作', width: 70, render: () => '—' },
   ]

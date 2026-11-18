@@ -14,9 +14,12 @@ func TestFoldDeviceRangeTakesBusiestDisk(t *testing.T) {
 		{Metric: map[string]string{"instance": "10.0.0.1:9100", "device": "sda"}, Values: [][]interface{}{{float64(1), "10"}, {float64(2), "30"}}},
 		{Metric: map[string]string{"instance": "10.0.0.1:9100", "device": "sdb"}, Values: [][]interface{}{{float64(1), "80"}, {float64(2), "100"}}},
 	}
-	avg, peak := foldDeviceRange(samples)
+	avg, peak, peakAt := foldDeviceRange(samples)
 	if avg["10.0.0.1"] != 90 || peak["10.0.0.1"] != 100 {
 		t.Fatalf("avg=%v peak=%v", avg["10.0.0.1"], peak["10.0.0.1"])
+	}
+	if !peakAt["10.0.0.1"].Equal(time.Unix(2, 0).UTC()) {
+		t.Fatalf("peak at=%v", peakAt["10.0.0.1"])
 	}
 }
 
@@ -125,6 +128,10 @@ func TestQueryHostPressureSubqueryFallsBackToSockstat(t *testing.T) {
 	if p.NetInAvg == nil || *p.NetInAvg != 1048576 || p.ConnAvg == nil || *p.ConnAvg != 12 || p.ConnPeak == nil || *p.ConnPeak != 20 {
 		t.Fatalf("net/conn = %+v", p)
 	}
+	wantAt := time.Unix(2, 0).UTC()
+	if p.CPUPeakAt == nil || !p.CPUPeakAt.Equal(wantAt) || p.IOPeakAt == nil || !p.IOPeakAt.Equal(wantAt) || p.NetInPeakAt == nil || !p.NetInPeakAt.Equal(wantAt) {
+		t.Fatalf("peak at = cpu %v io %v net %v", p.CPUPeakAt, p.IOPeakAt, p.NetInPeakAt)
+	}
 }
 
 func TestQueryHostPressureRangeFallback(t *testing.T) {
@@ -144,6 +151,10 @@ func TestQueryHostPressureRangeFallback(t *testing.T) {
 	if p.ConnAvg == nil || *p.ConnAvg != 20 {
 		t.Fatalf("conn = %+v", p)
 	}
+	wantAt := time.Unix(2, 0).UTC()
+	if p.CPUPeakAt == nil || !p.CPUPeakAt.Equal(wantAt) || p.IOPeakAt == nil || !p.IOPeakAt.Equal(wantAt) {
+		t.Fatalf("peak at = cpu %v io %v", p.CPUPeakAt, p.IOPeakAt)
+	}
 	joined := strings.Join(api.calls, "\n")
 	if !strings.Contains(joined, "range:") {
 		t.Fatalf("calls = %s", joined)
@@ -159,8 +170,8 @@ func (failCPU) Query(_ context.Context, expr string, _ time.Time) ([]promclient.
 	return instantFor(expr), nil
 }
 
-func (failCPU) QueryRange(context.Context, string, time.Time, time.Time, time.Duration) ([]promclient.Sample, error) {
-	return nil, errParse("unused")
+func (failCPU) QueryRange(_ context.Context, expr string, _, _ time.Time, _ time.Duration) ([]promclient.Sample, error) {
+	return rangeFor(expr), nil
 }
 
 func TestQueryHostPressureKeepsOtherMetrics(t *testing.T) {
@@ -172,5 +183,27 @@ func TestQueryHostPressureKeepsOtherMetrics(t *testing.T) {
 	p := got["10.0.0.1"]
 	if p == nil || p.CPUAvg != nil || p.IOAvg == nil || *p.IOAvg != 15 {
 		t.Fatalf("pressure = %+v", p)
+	}
+}
+
+type rangeDown struct{}
+
+func (rangeDown) Query(_ context.Context, expr string, _ time.Time) ([]promclient.Sample, error) {
+	return instantFor(expr), nil
+}
+
+func (rangeDown) QueryRange(context.Context, string, time.Time, time.Time, time.Duration) ([]promclient.Sample, error) {
+	return nil, errParse("range down")
+}
+
+func TestQueryHostPressurePeakTimeFailureKeepsValue(t *testing.T) {
+	now := time.Date(2026, 11, 18, 0, 0, 0, 0, time.UTC)
+	got, notes := QueryHostPressure(context.Background(), rangeDown{}, []string{"10.0.0.1"}, now.Add(-24*time.Hour), now)
+	p := got["10.0.0.1"]
+	if p == nil || p.CPUPeak == nil || *p.CPUPeak != 90 || p.IOPeak == nil || *p.IOPeak != 80 || p.CPUPeakAt != nil || p.IOPeakAt != nil {
+		t.Fatalf("pressure = %+v", p)
+	}
+	if len(notes) == 0 || !strings.Contains(strings.Join(notes, "\n"), "峰值时间查询失败") {
+		t.Fatalf("notes = %v", notes)
 	}
 }

@@ -52,7 +52,7 @@ func applyRequireUpdateTimeRules(stmts []string, byName map[string]Rule, res *Re
 	candLabel := strings.Join(candidates, " / ")
 	for i, stmt := range stmts {
 		upper := strings.ToUpper(stripSQLComments(stmt))
-		if !reCreateTable.MatchString(upper) || reCreateTableAS.MatchString(upper) {
+		if !statementIsCreateTable(stmt) || reCreateTableAS.MatchString(upper) {
 			continue
 		}
 		table := createTableRef(stmt)

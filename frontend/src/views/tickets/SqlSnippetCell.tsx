@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import { Alert, Button, Modal } from 'antd'
+import './SqlSnippetCell.css'
 
 const PREVIEW_LEN = 80
 
@@ -24,7 +25,12 @@ export default function SqlSnippetCell(props: { sql?: string | null }) {
   return (
     <>
       <div className="sql-snippet-cell">
-        <span className="sql-snippet-preview">{preview}</span>
+        <span
+          className={needView ? 'sql-snippet-preview is-clickable' : 'sql-snippet-preview'}
+          onClick={needView ? () => setOpen(true) : undefined}
+        >
+          {preview}
+        </span>
         {needView ? (
           <Button type="link" size="small" className="sql-snippet-view" onClick={() => setOpen(true)}>
             查看

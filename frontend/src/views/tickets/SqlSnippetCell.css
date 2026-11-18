@@ -1,0 +1,35 @@
+.sql-snippet-cell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+}
+.sql-snippet-preview {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+}
+.sql-snippet-preview.is-clickable {
+  cursor: pointer;
+}
+.sql-snippet-view {
+  flex-shrink: 0;
+  padding: 0 4px;
+  height: auto;
+  line-height: 1.4;
+}
+.sql-snippet-full {
+  margin: 0;
+  max-height: min(60vh, 480px);
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+}

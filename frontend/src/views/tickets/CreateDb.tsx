@@ -28,6 +28,7 @@ import { useTicketSubmitFreeze } from '../../hooks/useTicketSubmitFreeze'
 import { useWorkOrderDraft } from '../../hooks/useWorkOrderDraft'
 import { useAppDispatch, useAppSelector } from '../../store'
 import { goTicketListAndClose } from './goTicketList'
+import SqlSnippetCell from './SqlSnippetCell'
 import './CreateDb.css'
 
 function unionApproverNames(raws: string[]) {
@@ -599,7 +600,7 @@ export default function CreateDb() {
                 ),
               },
               { title: '错误信息', dataIndex: 'message', ellipsis: true },
-              { title: 'SQL语句', dataIndex: 'sql', ellipsis: true },
+              { title: 'SQL语句', dataIndex: 'sql', width: 360, render: (v: string) => <SqlSnippetCell sql={v} /> },
               { title: '影响行数', dataIndex: 'affected_rows', width: 90 },
               { title: '操作', width: 70, render: () => '—' },
             ]}

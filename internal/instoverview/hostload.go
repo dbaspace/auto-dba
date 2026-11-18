@@ -13,16 +13,19 @@ import (
 
 // HostPressure 是一台主机在分析窗口内的 CPU、IO util、网络和 TCP 连接。指针为空表示没有样本。
 type HostPressure struct {
-	CPUAvg     *float64 `json:"cpu_avg,omitempty"`
-	CPUPeak    *float64 `json:"cpu_peak,omitempty"`
-	IOAvg      *float64 `json:"io_avg,omitempty"`
-	IOPeak     *float64 `json:"io_peak,omitempty"`
-	NetInAvg   *float64 `json:"net_in_avg,omitempty"`
-	NetInPeak  *float64 `json:"net_in_peak,omitempty"`
-	NetOutAvg  *float64 `json:"net_out_avg,omitempty"`
-	NetOutPeak *float64 `json:"net_out_peak,omitempty"`
-	ConnAvg    *float64 `json:"conn_avg,omitempty"`
-	ConnPeak   *float64 `json:"conn_peak,omitempty"`
+	CPUAvg      *float64   `json:"cpu_avg,omitempty"`
+	CPUPeak     *float64   `json:"cpu_peak,omitempty"`
+	CPUPeakAt   *time.Time `json:"cpu_peak_at,omitempty"`
+	IOAvg       *float64   `json:"io_avg,omitempty"`
+	IOPeak      *float64   `json:"io_peak,omitempty"`
+	IOPeakAt    *time.Time `json:"io_peak_at,omitempty"`
+	NetInAvg    *float64   `json:"net_in_avg,omitempty"`
+	NetInPeak   *float64   `json:"net_in_peak,omitempty"`
+	NetInPeakAt *time.Time `json:"net_in_peak_at,omitempty"`
+	NetOutAvg   *float64   `json:"net_out_avg,omitempty"`
+	NetOutPeak  *float64   `json:"net_out_peak,omitempty"`
+	ConnAvg     *float64   `json:"conn_avg,omitempty"`
+	ConnPeak    *float64   `json:"conn_peak,omitempty"`
 }
 
 // PromAPI 是主机压力查询用到的 Prometheus 接口。
@@ -34,13 +37,14 @@ type PromAPI interface {
 const hostLoadStep = 5 * time.Minute
 
 type loadMetric struct {
-	label    string
-	avgExpr  string
-	peakExpr string
-	inner    string
-	byDevice bool
-	setAvg   func(*HostPressure, float64)
-	setPeak  func(*HostPressure, float64)
+	label     string
+	avgExpr   string
+	peakExpr  string
+	inner     string
+	byDevice  bool
+	setAvg    func(*HostPressure, float64)
+	setPeak   func(*HostPressure, float64)
+	setPeakAt func(*HostPressure, time.Time)
 }
 
 // QueryHostPressure 查窗口内的均值和峰值。子查询不可用时改用范围查询。单项失败只记入结论。
@@ -64,14 +68,10 @@ func QueryHostPressure(ctx context.Context, api PromAPI, addrs []string, start, 
 				notes = append(notes, m.label+" 查询失败："+shortPromErr(err))
 				continue
 			}
-			var avg, peak map[string]float64
-			if m.byDevice {
-				avg, peak = foldDeviceRange(samples)
-			} else {
-				avg, peak = foldInstanceRange(samples)
-			}
+			avg, peak, peakAt := foldRange(samples, m.byDevice)
 			applyPressure(out, avg, m.setAvg)
 			applyPressure(out, peak, m.setPeak)
+			applyPeakAt(out, peakAt, m.setPeakAt)
 		}
 		fillConnections(ctx, api, out, &notes, addrs, start, end, true)
 		return out, notes
@@ -89,6 +89,16 @@ func QueryHostPressure(ctx context.Context, api PromAPI, addrs []string, start, 
 		}
 		applyPressure(out, foldInstant(avgSamples), m.setAvg)
 		applyPressure(out, foldInstant(peakSamples), m.setPeak)
+		if m.setPeakAt == nil {
+			continue
+		}
+		samples, err := api.QueryRange(ctx, m.inner, start, end, hostLoadStep)
+		if err != nil {
+			notes = append(notes, m.label+" 峰值时间查询失败："+shortPromErr(err))
+			continue
+		}
+		_, _, peakAt := foldRange(samples, m.byDevice)
+		applyPeakAt(out, peakAt, m.setPeakAt)
 	}
 	fillConnections(ctx, api, out, &notes, addrs, start, end, false)
 	return out, notes
@@ -132,7 +142,7 @@ func queryConn(ctx context.Context, api PromAPI, q connQuery, start, end time.Ti
 		if err != nil {
 			return nil, nil, err
 		}
-		avg, peak := foldInstanceRange(samples)
+		avg, peak, _ := foldInstanceRange(samples)
 		return avg, peak, nil
 	}
 	avgSamples, err := api.Query(ctx, q.avg, end)
@@ -161,9 +171,9 @@ func hostLoadMetrics(addrs []string, window time.Duration) []loadMetric {
 		return fmt.Sprintf("max by (instance) (%s((%s)[%s:5m]))", fn, io, span)
 	}
 	return []loadMetric{
-		{label: "CPU", avgExpr: over(cpu, "avg_over_time"), peakExpr: over(cpu, "max_over_time"), inner: cpu, setAvg: func(p *HostPressure, v float64) { p.CPUAvg = floatPtr(v) }, setPeak: func(p *HostPressure, v float64) { p.CPUPeak = floatPtr(v) }},
-		{label: "IO util", avgExpr: ioOver("avg_over_time"), peakExpr: ioOver("max_over_time"), inner: io, byDevice: true, setAvg: func(p *HostPressure, v float64) { p.IOAvg = floatPtr(v) }, setPeak: func(p *HostPressure, v float64) { p.IOPeak = floatPtr(v) }},
-		{label: "网络入站", avgExpr: over(netIn, "avg_over_time"), peakExpr: over(netIn, "max_over_time"), inner: netIn, setAvg: func(p *HostPressure, v float64) { p.NetInAvg = floatPtr(v) }, setPeak: func(p *HostPressure, v float64) { p.NetInPeak = floatPtr(v) }},
+		{label: "CPU", avgExpr: over(cpu, "avg_over_time"), peakExpr: over(cpu, "max_over_time"), inner: cpu, setAvg: func(p *HostPressure, v float64) { p.CPUAvg = floatPtr(v) }, setPeak: func(p *HostPressure, v float64) { p.CPUPeak = floatPtr(v) }, setPeakAt: func(p *HostPressure, t time.Time) { p.CPUPeakAt = timePtr(t) }},
+		{label: "IO util", avgExpr: ioOver("avg_over_time"), peakExpr: ioOver("max_over_time"), inner: io, byDevice: true, setAvg: func(p *HostPressure, v float64) { p.IOAvg = floatPtr(v) }, setPeak: func(p *HostPressure, v float64) { p.IOPeak = floatPtr(v) }, setPeakAt: func(p *HostPressure, t time.Time) { p.IOPeakAt = timePtr(t) }},
+		{label: "网络入站", avgExpr: over(netIn, "avg_over_time"), peakExpr: over(netIn, "max_over_time"), inner: netIn, setAvg: func(p *HostPressure, v float64) { p.NetInAvg = floatPtr(v) }, setPeak: func(p *HostPressure, v float64) { p.NetInPeak = floatPtr(v) }, setPeakAt: func(p *HostPressure, t time.Time) { p.NetInPeakAt = timePtr(t) }},
 		{label: "网络出站", avgExpr: over(netOut, "avg_over_time"), peakExpr: over(netOut, "max_over_time"), inner: netOut, setAvg: func(p *HostPressure, v float64) { p.NetOutAvg = floatPtr(v) }, setPeak: func(p *HostPressure, v float64) { p.NetOutPeak = floatPtr(v) }},
 	}
 }
@@ -210,6 +220,8 @@ func finite(v float64) bool {
 
 func floatPtr(v float64) *float64 { return &v }
 
+func timePtr(t time.Time) *time.Time { return &t }
+
 func ensurePressure(m map[string]*HostPressure, host string) *HostPressure {
 	p := m[host]
 	if p == nil {
@@ -217,6 +229,18 @@ func ensurePressure(m map[string]*HostPressure, host string) *HostPressure {
 		m[host] = p
 	}
 	return p
+}
+
+func applyPeakAt(m map[string]*HostPressure, times map[string]time.Time, set func(*HostPressure, time.Time)) {
+	if set == nil {
+		return
+	}
+	for host, t := range times {
+		if host == "" || t.IsZero() {
+			continue
+		}
+		set(ensurePressure(m, host), t)
+	}
 }
 
 func applyPressure(m map[string]*HostPressure, vals map[string]float64, set func(*HostPressure, float64)) {
@@ -248,38 +272,54 @@ func foldInstant(samples []promclient.Sample) map[string]float64 {
 	return out
 }
 
-func seriesValues(s promclient.Sample) []float64 {
+func seriesPoints(s promclient.Sample) []promclient.Point {
 	pts := promclient.SampleToPoints(s)
 	if len(pts) == 0 {
 		if v, ok := promclient.InstantValue(s); ok && finite(v) {
-			return []float64{v}
+			return []promclient.Point{{V: v}}
 		}
 		return nil
 	}
-	out := make([]float64, 0, len(pts))
+	out := make([]promclient.Point, 0, len(pts))
 	for _, p := range pts {
 		if finite(p.V) {
-			out = append(out, p.V)
+			out = append(out, p)
 		}
 	}
 	return out
 }
 
-func foldInstanceRange(samples []promclient.Sample) (avg, peak map[string]float64) {
+func pointTime(t int64) time.Time {
+	if t <= 0 {
+		return time.Time{}
+	}
+	return time.Unix(t, 0).UTC()
+}
+
+func foldRange(samples []promclient.Sample, byDevice bool) (avg, peak map[string]float64, peakAt map[string]time.Time) {
+	if byDevice {
+		return foldDeviceRange(samples)
+	}
+	return foldInstanceRange(samples)
+}
+
+func foldInstanceRange(samples []promclient.Sample) (avg, peak map[string]float64, peakAt map[string]time.Time) {
 	sum := map[string]float64{}
 	n := map[string]int{}
 	peak = map[string]float64{}
+	peakAt = map[string]time.Time{}
 	seen := map[string]bool{}
 	for _, s := range samples {
 		host := store.HostAddrKey(s.Metric["instance"])
 		if host == "" {
 			continue
 		}
-		for _, v := range seriesValues(s) {
-			sum[host] += v
+		for _, p := range seriesPoints(s) {
+			sum[host] += p.V
 			n[host]++
-			if !seen[host] || v > peak[host] {
-				peak[host] = v
+			if !seen[host] || p.V > peak[host] {
+				peak[host] = p.V
+				peakAt[host] = pointTime(p.T)
 				seen[host] = true
 			}
 		}
@@ -290,16 +330,17 @@ func foldInstanceRange(samples []promclient.Sample) (avg, peak map[string]float6
 			avg[host] = sum[host] / float64(c)
 		}
 	}
-	return avg, peak
+	return avg, peak, peakAt
 }
 
 // foldDeviceRange 把每块盘的窗口均值取最大的一块作为主机均值，峰值取全部采样点的最大。
-func foldDeviceRange(samples []promclient.Sample) (avg, peak map[string]float64) {
+func foldDeviceRange(samples []promclient.Sample) (avg, peak map[string]float64, peakAt map[string]time.Time) {
 	type acc struct {
-		sum  float64
-		n    int
-		peak float64
-		has  bool
+		sum    float64
+		n      int
+		peak   float64
+		peakAt int64
+		has    bool
 	}
 	byDev := map[string]map[string]*acc{}
 	for _, s := range samples {
@@ -311,8 +352,8 @@ func foldDeviceRange(samples []promclient.Sample) (avg, peak map[string]float64)
 		if dev == "" {
 			dev = "-"
 		}
-		vals := seriesValues(s)
-		if len(vals) == 0 {
+		pts := seriesPoints(s)
+		if len(pts) == 0 {
 			continue
 		}
 		if byDev[host] == nil {
@@ -323,19 +364,22 @@ func foldDeviceRange(samples []promclient.Sample) (avg, peak map[string]float64)
 			a = &acc{}
 			byDev[host][dev] = a
 		}
-		for _, v := range vals {
-			a.sum += v
+		for _, p := range pts {
+			a.sum += p.V
 			a.n++
-			if !a.has || v > a.peak {
-				a.peak = v
+			if !a.has || p.V > a.peak {
+				a.peak = p.V
+				a.peakAt = p.T
 				a.has = true
 			}
 		}
 	}
 	avg = map[string]float64{}
 	peak = map[string]float64{}
+	peakAt = map[string]time.Time{}
 	for host, devs := range byDev {
 		var bestAvg, bestPeak float64
+		var bestAt int64
 		ok := false
 		for _, a := range devs {
 			if a.n == 0 {
@@ -347,13 +391,15 @@ func foldDeviceRange(samples []promclient.Sample) (avg, peak map[string]float64)
 			}
 			if !ok || a.peak > bestPeak {
 				bestPeak = a.peak
+				bestAt = a.peakAt
 			}
 			ok = true
 		}
 		if ok {
 			avg[host] = bestAvg
 			peak[host] = bestPeak
+			peakAt[host] = pointTime(bestAt)
 		}
 	}
-	return avg, peak
+	return avg, peak, peakAt
 }

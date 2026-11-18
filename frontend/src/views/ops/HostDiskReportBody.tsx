@@ -18,10 +18,13 @@ export type DiskTrend = {
 export type HostPressure = {
   cpu_avg?: number
   cpu_peak?: number
+  cpu_peak_at?: string
   io_avg?: number
   io_peak?: number
+  io_peak_at?: string
   net_in_avg?: number
   net_in_peak?: number
+  net_in_peak_at?: string
   net_out_avg?: number
   net_out_peak?: number
   conn_avg?: number
@@ -131,6 +134,24 @@ function connText(n?: number) {
   return numText(n, (v) => String(Math.round(v)))
 }
 
+function peakClock(raw?: string) {
+  if (!raw) return ''
+  const d = new Date(raw)
+  if (Number.isNaN(d.getTime())) return ''
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
+function peakCell(text: string, at?: string) {
+  const tip = peakClock(at)
+  if (!tip || text === '—') return text
+  return (
+    <Tooltip title={tip}>
+      <span>{text}</span>
+    </Tooltip>
+  )
+}
+
 function byteRateText(n?: number) {
   return numText(n, (v) => {
     const abs = Math.abs(v)
@@ -195,7 +216,6 @@ export default function HostDiskReportBody({ resp, scrollY, showNote = true }: {
   const columns: ColumnsType<TrendItem> = [
     { title: '实例名', dataIndex: 'name', width: 140, fixed: 'left', ellipsis: true },
     { title: '应用', dataIndex: 'app', width: 120, ellipsis: true, render: (v?: string) => v || '—' },
-    { title: '地址', dataIndex: 'host', width: 120 },
     { title: '环境', dataIndex: 'env_name', width: 90, ellipsis: true },
     diskCols('data', '数据盘'),
     diskCols('system', '系统盘（/）'),
@@ -203,21 +223,21 @@ export default function HostDiskReportBody({ resp, scrollY, showNote = true }: {
       title: 'CPU',
       children: [
         { title: '均值', width: 72, render: (_: unknown, row: TrendItem) => pctText(row.pressure?.cpu_avg) },
-        { title: '峰值', width: 72, render: (_: unknown, row: TrendItem) => pctText(row.pressure?.cpu_peak) },
+        { title: '峰值', width: 72, render: (_: unknown, row: TrendItem) => peakCell(pctText(row.pressure?.cpu_peak), row.pressure?.cpu_peak_at) },
       ],
     },
     {
       title: 'IO util',
       children: [
         { title: '均值', width: 72, render: (_: unknown, row: TrendItem) => pctText(row.pressure?.io_avg) },
-        { title: '峰值', width: 72, render: (_: unknown, row: TrendItem) => pctText(row.pressure?.io_peak) },
+        { title: '峰值', width: 72, render: (_: unknown, row: TrendItem) => peakCell(pctText(row.pressure?.io_peak), row.pressure?.io_peak_at) },
       ],
     },
     {
       title: '网络',
       children: [
         { title: '入站均值', width: 100, render: (_: unknown, row: TrendItem) => byteRateText(row.pressure?.net_in_avg) },
-        { title: '入站峰值', width: 100, render: (_: unknown, row: TrendItem) => byteRateText(row.pressure?.net_in_peak) },
+        { title: '入站峰值', width: 100, render: (_: unknown, row: TrendItem) => peakCell(byteRateText(row.pressure?.net_in_peak), row.pressure?.net_in_peak_at) },
         { title: '出站均值', width: 100, render: (_: unknown, row: TrendItem) => byteRateText(row.pressure?.net_out_avg) },
         { title: '出站峰值', width: 100, render: (_: unknown, row: TrendItem) => byteRateText(row.pressure?.net_out_peak) },
       ],
@@ -258,7 +278,7 @@ export default function HostDiskReportBody({ resp, scrollY, showNote = true }: {
         bordered
         dataSource={resp.items || []}
         columns={columns}
-        scroll={{ x: 2480, y: scrollY }}
+        scroll={{ x: 2360, y: scrollY }}
         pagination={{ defaultPageSize: 20, showSizeChanger: { getPopupContainer: () => document.body }, showTotal: (n) => `共 ${n} 台` }}
       />
     </>
