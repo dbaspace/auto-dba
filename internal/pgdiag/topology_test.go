@@ -119,10 +119,28 @@ func TestMapPodsStripsCIDRMask(t *testing.T) {
 }
 
 type scriptProm struct {
-	mu      sync.Mutex
-	queries []string
-	samples map[string][]promclient.Sample
-	failHas string
+	mu           sync.Mutex
+	queries      []string
+	samples      map[string][]promclient.Sample
+	failHas      string
+	rangeSamples []promclient.Sample
+	rangeErr     error
+	rangeStep    time.Duration
+	rangeSpan    time.Duration
+}
+
+func (s *scriptProm) QueryRange(_ context.Context, promql string, start, end time.Time, step time.Duration) ([]promclient.Sample, error) {
+	s.mu.Lock()
+	s.queries = append(s.queries, promql)
+	s.rangeStep = step
+	s.rangeSpan = end.Sub(start)
+	samples := s.rangeSamples
+	err := s.rangeErr
+	s.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return samples, nil
 }
 
 func (s *scriptProm) Query(_ context.Context, promql string, _ time.Time) ([]promclient.Sample, error) {

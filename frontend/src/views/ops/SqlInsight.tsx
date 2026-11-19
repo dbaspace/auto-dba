@@ -189,8 +189,12 @@ export default function SqlInsight() {
       message.warning('请先查询')
       return
     }
-    const header = ['客户端地址', '数据库', '连接数', 'Pod', '命名空间', '节点']
-    const body = topoRows.map((row) => [row.host, row.database, row.connections, row.pod, row.namespace, row.node])
+    const header = ['客户端地址', '数据库', '连接数', 'Pod', '当前', '活跃', '空闲', '等待', '最大', '最小', '7日活跃峰值', '7日等待峰值', '分析']
+    const body = topoRows.map((row) => [
+      row.host, row.database, row.connections, row.pod,
+      row.pool_current, row.pool_active, row.pool_idle, row.pool_pending, row.pool_max, row.pool_min,
+      row.pool_active_max_7d, row.pool_pending_max_7d, row.pool_advice,
+    ])
     const csv = `\uFEFF${[header, ...body].map((cols) => cols.map(csvCell).join(',')).join('\n')}`
     const stamp = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15)
     downloadTextFile(`topology_${stamp}.csv`, csv)

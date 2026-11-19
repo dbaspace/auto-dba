@@ -35,7 +35,10 @@ func (h *InsightHandler) Topology(c *gin.Context) {
 	for i, row := range rows {
 		addrs[i] = row.Host
 	}
-	hits, note := pgdiag.MapPods(c.Request.Context(), h.topologyProm(), addrs)
+	prom := h.topologyProm()
+	hits, note := pgdiag.MapPods(c.Request.Context(), prom, addrs)
+	pools, poolNote := pgdiag.MapPools(c.Request.Context(), prom, pgdiag.PodNamesFromHits(hits))
+	note = pgdiag.JoinPromNotes(note, poolNote)
 	out := make([]gin.H, 0, len(rows))
 	for _, row := range rows {
 		host := strings.TrimSpace(row.Host)
@@ -52,12 +55,25 @@ func (h *InsightHandler) Topology(c *gin.Context) {
 			"node":        "",
 			"local":       host == "",
 			"lookup":      lookup,
+			"pool":        false,
 		}
 		if lookup {
 			if hit, ok := hits[ip]; ok {
 				item["pod"] = hit.Pod
 				item["namespace"] = hit.Namespace
 				item["node"] = hit.Node
+				if usage := pgdiag.CombinePoolUsage(hit.Pod, pools); usage.HasData {
+					item["pool"] = true
+					item["pool_current"] = usage.Current
+					item["pool_active"] = usage.Active
+					item["pool_idle"] = usage.Idle
+					item["pool_pending"] = usage.Pending
+					item["pool_max"] = usage.Max
+					item["pool_min"] = usage.Min
+					item["pool_active_max_7d"] = usage.ActiveMax7d
+					item["pool_pending_max_7d"] = usage.PendingMax7d
+					item["pool_advice"] = usage.Advice
+				}
 			}
 		}
 		out = append(out, item)

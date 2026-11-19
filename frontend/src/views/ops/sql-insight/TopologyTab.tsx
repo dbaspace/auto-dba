@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Alert, Button, Checkbox, Empty, Input, Table } from 'antd'
+import { Alert, Button, Checkbox, Empty, Input, Popover, Table } from 'antd'
 import { SearchOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import api from '../../../api/request'
@@ -13,6 +13,16 @@ export interface TopologyRow {
   node: string
   local?: boolean
   lookup?: boolean
+  pool?: boolean
+  pool_current?: number
+  pool_active?: number
+  pool_idle?: number
+  pool_pending?: number
+  pool_max?: number
+  pool_min?: number
+  pool_active_max_7d?: number
+  pool_pending_max_7d?: number
+  pool_advice?: string
 }
 
 export type TopologyExportRow = {
@@ -20,8 +30,78 @@ export type TopologyExportRow = {
   database: string
   connections: number
   pod: string
-  namespace: string
-  node: string
+  pool_current: string
+  pool_active: string
+  pool_idle: string
+  pool_pending: string
+  pool_max: string
+  pool_min: string
+  pool_active_max_7d: string
+  pool_pending_max_7d: string
+  pool_advice: string
+}
+
+function FoldedName(props: { text: string; title: string }) {
+  const folded = props.text.length > 24
+  const label = (
+    <span style={{ display: 'inline-block', maxWidth: folded ? 156 : 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', verticalAlign: 'bottom' }}>
+      {props.text}
+    </span>
+  )
+  if (!folded) return label
+  return (
+    <Popover
+      trigger="click"
+      title={props.title}
+      content={<div style={{ maxWidth: 480, wordBreak: 'break-all' }}>{props.text}</div>}
+    >
+      <span style={{ display: 'inline-flex', alignItems: 'center', maxWidth: 210, gap: 4 }}>
+        {label}
+        <Button type="link" size="small" style={{ padding: 0, flex: 'none' }}>查看</Button>
+      </span>
+    </Popover>
+  )
+}
+
+function poolNum(row: TopologyRow, value?: number) {
+  if (!row.pool) return ''
+  return value ?? 0
+}
+
+function poolColumns(): ColumnsType<TopologyRow> {
+  const num = (title: string, dataIndex: keyof TopologyRow, width = 72): ColumnsType<TopologyRow>[number] => ({
+    title,
+    dataIndex,
+    width,
+    render: (value: number, row) => poolNum(row, value),
+  })
+  return [
+    num('当前', 'pool_current'),
+    num('活跃', 'pool_active'),
+    num('空闲', 'pool_idle'),
+    num('等待', 'pool_pending'),
+    num('最大', 'pool_max'),
+    num('最小', 'pool_min'),
+    num('7日活跃峰值', 'pool_active_max_7d', 110),
+    num('7日等待峰值', 'pool_pending_max_7d', 110),
+    {
+      title: '分析',
+      dataIndex: 'pool_advice',
+      width: 96,
+      render: (value: string, row) => {
+        if (!row.pool || !value) return ''
+        return (
+          <Popover
+            trigger="click"
+            title="分析"
+            content={<div style={{ maxWidth: 360 }}>{value}</div>}
+          >
+            <Button type="link" size="small" style={{ padding: 0 }}>查看分析</Button>
+          </Popover>
+        )
+      },
+    },
+  ]
 }
 
 function DatabaseFilter(props: {
@@ -110,7 +190,7 @@ export default function TopologyTab(props: {
     let cancelled = false
     setLoading(true)
     setError('')
-    api.get('/sql-insight/topology', { params: { instance_id: instanceId }, timeout: 60000 })
+    api.get('/sql-insight/topology', { params: { instance_id: instanceId }, timeout: 90000 })
       .then(({ data }) => {
         if (cancelled) return
         setRows(Array.isArray(data?.data) ? data.data : [])
@@ -165,14 +245,23 @@ export default function TopologyTab(props: {
     return promNote || ''
   }
 
+  const poolText = (row: TopologyRow, value?: number) => (row.pool ? String(value ?? 0) : '')
+
   useEffect(() => {
     props.onRows?.(shown.map((row) => ({
       host: row.local || !row.host ? '本地套接字' : row.host,
       database: row.database || '',
       connections: row.connections || 0,
       pod: podText(row),
-      namespace: row.namespace || '',
-      node: row.node || '',
+      pool_current: poolText(row, row.pool_current),
+      pool_active: poolText(row, row.pool_active),
+      pool_idle: poolText(row, row.pool_idle),
+      pool_pending: poolText(row, row.pool_pending),
+      pool_max: poolText(row, row.pool_max),
+      pool_min: poolText(row, row.pool_min),
+      pool_active_max_7d: poolText(row, row.pool_active_max_7d),
+      pool_pending_max_7d: poolText(row, row.pool_pending_max_7d),
+      pool_advice: row.pool ? (row.pool_advice || '') : '',
     })))
   }, [shown, promNote, props.onRows])
 
@@ -215,14 +304,14 @@ export default function TopologyTab(props: {
     {
       title: 'Pod',
       dataIndex: 'pod',
+      width: 220,
       render: (pod: string, row) => {
-        if (pod) return pod
-        if (row.local || !row.lookup) return ''
-        return promNote || ''
+        const text = pod || (row.local || !row.lookup ? '' : promNote || '')
+        if (!text) return ''
+        return <FoldedName text={text} title="Pod" />
       },
     },
-    { title: '命名空间', dataIndex: 'namespace', width: 160, render: (v: string) => v || '' },
-    { title: '节点', dataIndex: 'node', width: 220, render: (v: string) => v || '' },
+    ...poolColumns(),
   ]
 
   return (
@@ -255,7 +344,7 @@ export default function TopologyTab(props: {
               : <Empty description="没有客户端连接" />)
             : <Empty description="选择环境与实例后查询" />,
         }}
-        scroll={{ x: 980 }}
+        scroll={{ x: 1440 }}
       />
     </div>
   )

@@ -45,9 +45,10 @@ type PodHit struct {
 	Node      string
 }
 
-// PromQuerier 只使用瞬时查询。目标环境不支持 last_over_time。
+// PromQuerier 地址映射使用瞬时查询，连接池使用区间查询。目标环境不支持 last_over_time。
 type PromQuerier interface {
 	Query(ctx context.Context, promql string, ts time.Time) ([]promclient.Sample, error)
+	QueryRange(ctx context.Context, promql string, start, end time.Time, step time.Duration) ([]promclient.Sample, error)
 }
 
 // QueryActivity 连到实例的 postgres 库，执行固定的连接统计。
