@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Alert, Empty, Select, Table } from 'antd'
+import { Alert, Button, Checkbox, Empty, Input, Table } from 'antd'
 import { SearchOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import api from '../../../api/request'
@@ -22,6 +22,47 @@ export type TopologyExportRow = {
   pod: string
   namespace: string
   node: string
+}
+
+function DatabaseFilter(props: {
+  names: string[]
+  options: { label: string; value: string }[]
+  onChange: (names: string[]) => void
+}) {
+  const [keyword, setKeyword] = useState('')
+  const text = keyword.trim().toLowerCase()
+  const matched = text
+    ? props.options.filter((item) => item.label.toLowerCase().includes(text))
+    : props.options
+  const toggle = (name: string, checked: boolean) => {
+    props.onChange(checked ? [...props.names, name] : props.names.filter((item) => item !== name))
+  }
+  return (
+    <div style={{ padding: 8, width: 260 }} onKeyDown={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()}>
+      <Input
+        allowClear
+        autoFocus
+        placeholder="搜索数据库"
+        value={keyword}
+        prefix={<SearchOutlined />}
+        onChange={(e) => setKeyword(e.target.value)}
+      />
+      {props.names.length ? (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
+          <span style={{ color: '#8c8c8c' }}>已选 {props.names.length}</span>
+          <Button type="link" size="small" onClick={() => props.onChange([])}>清空</Button>
+        </div>
+      ) : null}
+      <div style={{ maxHeight: 260, overflow: 'auto', marginTop: 4 }}>
+        {matched.length ? matched.map((item) => (
+          <label key={item.value} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '4px 0', cursor: 'pointer' }}>
+            <Checkbox checked={props.names.includes(item.value)} onChange={(e) => toggle(item.value, e.target.checked)} />
+            <span>{item.label}</span>
+          </label>
+        )) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有匹配的数据库" />}
+      </div>
+    </div>
+  )
 }
 
 export default function TopologyTab(props: {
@@ -138,25 +179,14 @@ export default function TopologyTab(props: {
       filteredValue: dbNames,
       filterIcon: (filtered) => <SearchOutlined style={{ color: filtered ? '#1677ff' : undefined }} />,
       filterDropdown: () => (
-        <div style={{ padding: 8 }} onKeyDown={(e) => e.stopPropagation()}>
-          <Select
-            mode="multiple"
-            allowClear
-            showSearch
-            autoFocus
-            placeholder="搜索数据库"
-            style={{ width: 240 }}
-            value={dbNames}
-            options={dbOptions}
-            optionFilterProp="label"
-            popupMatchSelectWidth={false}
-            getPopupContainer={(node) => node.parentElement || document.body}
-            onChange={(value) => {
-              setDbNames(value)
-              setPage(1)
-            }}
-          />
-        </div>
+        <DatabaseFilter
+          names={dbNames}
+          options={dbOptions}
+          onChange={(value) => {
+            setDbNames(value)
+            setPage(1)
+          }}
+        />
       ),
       render: (v: string) => v || '—',
     },
