@@ -84,9 +84,10 @@ func CheckTicketWithRules(sqlContent, issueType, dbType string, rules []Rule) Re
 	var extras []StatementRow
 	inTxn := false
 	pendingSetLocal := ""
+	allowExplicitTxn := pgDDLScriptAllowsExplicitTxn(stmts)
 	for _, stmt := range stmts {
 		row := StatementRow{Stage: "static", ErrorLevel: "INFO", Message: "通过", SQL: stmt}
-		hits := checkStatement(stmt, issueType, dbType, byName, inTxn)
+		hits := checkStatement(stmt, issueType, dbType, byName, inTxn, allowExplicitTxn)
 		if strings.EqualFold(issueType, "ddl") && dbType == "postgres" {
 			switch pgDDLTxnKind(stmt) {
 			case "begin":
@@ -204,7 +205,19 @@ func pgDDLTxnKind(stmt string) string {
 	return "set"
 }
 
-func checkStatement(stmt, issueType, dbType string, byName map[string]Rule, inTxn bool) []*ruleHit {
+const pgDDLExplicitTxnMessage = "DDL 工单不能显式开启事务，请去掉 BEGIN / COMMIT"
+
+// pgDDLScriptAllowsExplicitTxn 只有为 SET LOCAL 准备超时或 search_path 时，才允许配套的 BEGIN/COMMIT。
+func pgDDLScriptAllowsExplicitTxn(stmts []string) bool {
+	for _, stmt := range stmts {
+		if pgDDLTxnKind(stmt) == "set_local" {
+			return true
+		}
+	}
+	return false
+}
+
+func checkStatement(stmt, issueType, dbType string, byName map[string]Rule, inTxn, allowExplicitTxn bool) []*ruleHit {
 	kw := firstKeyword(stmt)
 	if strings.EqualFold(issueType, "dml") {
 		if mk := mainKeyword(stmt); mk != "" {
@@ -216,7 +229,12 @@ func checkStatement(stmt, issueType, dbType string, byName map[string]Rule, inTx
 	case "ddl":
 		if dbType == "postgres" {
 			switch pgDDLTxnKind(stmt) {
-			case "begin", "commit", "rollback", "set":
+			case "begin", "commit", "rollback":
+				if !allowExplicitTxn {
+					return []*ruleHit{errID("TicketType", pgDDLExplicitTxnMessage)}
+				}
+				return nil
+			case "set":
 				return nil
 			case "set_local":
 				if !inTxn {
@@ -225,7 +243,7 @@ func checkStatement(stmt, issueType, dbType string, byName map[string]Rule, inTx
 				return nil
 			}
 			if kw == "DO" {
-				return checkPostgresDDLDo(stmt, dbType, byName, inTxn)
+				return checkPostgresDDLDo(stmt, dbType, byName, inTxn, allowExplicitTxn)
 			}
 		}
 		if !isDDL(kw) && kw != "GRANT" && kw != "REVOKE" && kw != "LOCK" && kw != "VACUUM" && kw != "CLUSTER" && kw != "COMMENT" && kw != "REINDEX" && kw != "REFRESH" && !(dbType == "postgres" && isPGSecurityLabel(stmt)) {
@@ -269,7 +287,7 @@ func checkStatement(stmt, issueType, dbType string, byName map[string]Rule, inTx
 	return applyCatalogRules(stmt, upper, kw, issueType, dbType, byName)
 }
 
-func checkPostgresDDLDo(stmt, dbType string, byName map[string]Rule, inTxn bool) []*ruleHit {
+func checkPostgresDDLDo(stmt, dbType string, byName map[string]Rule, inTxn, allowExplicitTxn bool) []*ruleHit {
 	body, ok := doBlockBody(stmt)
 	if !ok {
 		return []*ruleHit{errID("TicketType", "语句必须是 DDL（CREATE/ALTER/DROP/TRUNCATE/RENAME/COMMENT）")}
@@ -288,7 +306,7 @@ func checkPostgresDDLDo(stmt, dbType string, byName map[string]Rule, inTxn bool)
 		if isPlpgsqlDecl(inner) {
 			continue
 		}
-		hits = append(hits, checkStatement(inner, "ddl", dbType, byName, inTxn)...)
+		hits = append(hits, checkStatement(inner, "ddl", dbType, byName, inTxn, allowExplicitTxn)...)
 	}
 	if !saw {
 		return []*ruleHit{errID("TicketType", "语句必须是 DDL（CREATE/ALTER/DROP/TRUNCATE/RENAME/COMMENT）")}

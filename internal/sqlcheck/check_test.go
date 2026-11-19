@@ -94,6 +94,44 @@ commit;`
 	if mysql.OK || !hasMsg(mysql, "语句必须是 DDL") {
 		t.Fatalf("mysql begin should stay rejected: %+v", mysql)
 	}
+	if hasMsg(res, pgDDLExplicitTxnMessage) {
+		t.Fatal("SET LOCAL transaction should stay allowed")
+	}
+}
+
+func TestPostgresDDLRejectsExplicitTxn(t *testing.T) {
+	sql := `
+BEGIN;
+
+ALTER TABLE public.tbl_order_save_fail_0
+    ADD COLUMN IF NOT EXISTS insert_time timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP;
+
+COMMENT ON COLUMN public.tbl_order_save_fail_0.insert_time IS '记录插入时间';
+
+CREATE OR REPLACE TRIGGER trg_tbl_order_save_fail_0_update_time
+BEFORE UPDATE ON public.tbl_order_save_fail_0
+FOR EACH ROW
+EXECUTE FUNCTION public.auto_update_time();
+
+CREATE INDEX ON public.tbl_order_save_fail_0 (insert_time);
+
+COMMIT;`
+	res := CheckTicketWithRules(sql, "ddl", "postgres", nil)
+	if res.OK || !hasMsg(res, pgDDLExplicitTxnMessage) {
+		t.Fatalf("explicit txn should be rejected: ok=%v %+v", res.OK, res.Statements)
+	}
+	plain := CheckTicketWithRules(strings.ReplaceAll(strings.ReplaceAll(sql, "BEGIN;", ""), "COMMIT;", ""), "ddl", "postgres", nil)
+	if !plain.OK || hasMsg(plain, pgDDLExplicitTxnMessage) {
+		t.Fatalf("same ddl without txn wrapper should pass: ok=%v %+v", plain.OK, plain.Statements)
+	}
+	fn := CheckTicketWithRules(`CREATE OR REPLACE FUNCTION public.f() RETURNS integer LANGUAGE plpgsql AS $$
+BEGIN
+  RETURN 1;
+END;
+$$;`, "ddl", "postgres", nil)
+	if !fn.OK || hasMsg(fn, pgDDLExplicitTxnMessage) {
+		t.Fatalf("function body BEGIN should stay allowed: ok=%v %+v", fn.OK, fn.Statements)
+	}
 }
 
 func TestPostgresDDLRepairScript(t *testing.T) {
