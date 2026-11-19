@@ -133,7 +133,7 @@ func (h *JobsHandler) Trigger(c *gin.Context) {
 	if res != nil && res.Conflict {
 		h.appendAudit(key, "trigger_conflict", who, jobAuditDetail(nil, res, c.ClientIP()))
 		c.JSON(http.StatusConflict, gin.H{
-			"error": "lease held by another replica",
+			"error":  "lease held by another replica",
 			"holder": res.Holder, "expires_at": res.Expires, "result": res,
 		})
 		return
@@ -144,12 +144,13 @@ func (h *JobsHandler) Trigger(c *gin.Context) {
 
 func (h *JobsHandler) Runs(c *gin.Context) {
 	limit, _ := strconv.Atoi(c.Query("limit"))
-	list, err := h.Store.ListJobRuns(c.Param("key"), limit)
+	offset, _ := strconv.Atoi(c.Query("offset"))
+	list, total, err := h.Store.ListJobRunsPage(c.Param("key"), limit, offset)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"items": list})
+	c.JSON(http.StatusOK, gin.H{"items": list, "total": total})
 }
 
 func (h *JobsHandler) Audits(c *gin.Context) {

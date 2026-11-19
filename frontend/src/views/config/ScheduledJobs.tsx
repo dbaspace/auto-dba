@@ -6,8 +6,10 @@ import {
   Form,
   Input,
   Modal,
+  Radio,
   Space,
   Switch,
+  Table,
   Tabs,
   Tag,
   message,
@@ -79,13 +81,28 @@ type BizSchedule = {
   extra?: string
 }
 
+const GROUP_ORDER = ['scanner', 'ticket', 'collect', 'alert', 'cloud', 'cdc', 'dns', 'session', 'security']
+
 const GROUP_LABEL: Record<string, string> = {
-  collect: '采集',
   scanner: '调度扫描',
   ticket: '工单',
+  collect: '采集',
   alert: '告警',
+  cloud: '云资源',
   cdc: 'CDC',
+  dns: 'DNS',
   session: '会话',
+  security: '安全',
+}
+
+function groupLabel(g?: string) {
+  if (!g) return '未分组'
+  return GROUP_LABEL[g] || g
+}
+
+function groupRank(g?: string) {
+  const i = GROUP_ORDER.indexOf(g || '')
+  return i < 0 ? GROUP_ORDER.length : i
 }
 
 function statusTag(s?: string) {
@@ -109,6 +126,11 @@ export default function ScheduledJobs() {
   const [runsOpen, setRunsOpen] = useState(false)
   const [runs, setRuns] = useState<JobRun[]>([])
   const [runsKey, setRunsKey] = useState('')
+  const [runsLoading, setRunsLoading] = useState(false)
+  const [runsTotal, setRunsTotal] = useState(0)
+  const [runsPage, setRunsPage] = useState(1)
+  const [runsPageSize, setRunsPageSize] = useState(10)
+  const [groupFilter, setGroupFilter] = useState('all')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -130,6 +152,21 @@ export default function ScheduledJobs() {
   useEffect(() => {
     load()
   }, [load])
+
+  const grouped = useMemo(() => {
+    const map = new Map<string, JobView[]>()
+    for (const job of jobs) {
+      const g = job.group || ''
+      const list = map.get(g) || []
+      list.push(job)
+      map.set(g, list)
+    }
+    return [...map.entries()].sort((a, b) => groupRank(a[0]) - groupRank(b[0]) || a[0].localeCompare(b[0]))
+  }, [jobs])
+
+  const groupAlive = groupFilter === 'all' || grouped.some(([g]) => g === groupFilter)
+  const effectiveFilter = groupAlive ? groupFilter : 'all'
+  const visibleGroups = effectiveFilter === 'all' ? grouped : grouped.filter(([g]) => g === effectiveFilter)
 
   const onToggle = async (row: JobView, enabled: boolean) => {
     if (row.group === 'scanner' && !enabled) {
@@ -190,11 +227,27 @@ export default function ScheduledJobs() {
     load()
   }
 
-  const openRuns = async (row: JobView) => {
+  const loadRuns = async (key: string, page: number, pageSize: number) => {
+    setRunsLoading(true)
+    try {
+      const res = await api.get(`/jobs/${key}/runs`, {
+        params: { limit: pageSize, offset: (page - 1) * pageSize },
+      })
+      setRuns(res.data?.items || [])
+      setRunsTotal(Number(res.data?.total) || 0)
+    } catch (e: any) {
+      message.error(e?.response?.data?.error || '加载历史失败')
+    } finally {
+      setRunsLoading(false)
+    }
+  }
+
+  const openRuns = (row: JobView) => {
     setRunsKey(row.key)
+    setRunsPage(1)
+    setRunsPageSize(10)
     setRunsOpen(true)
-    const res = await api.get(`/jobs/${row.key}/runs`, { params: { limit: 50 } })
-    setRuns(res.data?.items || [])
+    loadRuns(row.key, 1, 10)
   }
 
   const columns = useMemo(
@@ -204,7 +257,7 @@ export default function ScheduledJobs() {
         title: '分组',
         dataIndex: 'group',
         width: 100,
-        render: (g: string) => GROUP_LABEL[g] || g,
+        render: (g: string) => groupLabel(g),
       },
       {
         title: '调度',
@@ -359,14 +412,37 @@ export default function ScheduledJobs() {
             key: 'platform',
             label: '平台任务',
             children: (
-              <ResponsiveTable
-                rowKey="key"
-                loading={loading}
-                dataSource={jobs}
-                columns={columns}
-                scroll={{ x: 1200 }}
-                pagination={{ pageSize: 20 }}
-              />
+              <>
+                <Radio.Group
+                  value={effectiveFilter}
+                  onChange={(e) => setGroupFilter(e.target.value)}
+                  style={{ marginBottom: 12, display: 'flex', flexWrap: 'wrap', rowGap: 8 }}
+                >
+                  <Radio.Button value="all">全部 {jobs.length}</Radio.Button>
+                  {grouped.map(([g, list]) => (
+                    <Radio.Button key={g || 'none'} value={g}>
+                      {groupLabel(g)} {list.length}
+                    </Radio.Button>
+                  ))}
+                </Radio.Group>
+                {visibleGroups.map(([g, list]) => (
+                  <div key={g || 'none'} style={{ marginBottom: 16 }}>
+                    {effectiveFilter === 'all' ? (
+                      <div style={{ marginBottom: 8, fontWeight: 600 }}>
+                        {groupLabel(g)} <Tag>{list.length}</Tag>
+                      </div>
+                    ) : null}
+                    <ResponsiveTable
+                      rowKey="key"
+                      loading={loading}
+                      dataSource={list}
+                      columns={columns}
+                      scroll={{ x: 1200 }}
+                      pagination={list.length > 20 ? { pageSize: 20 } : false}
+                    />
+                  </div>
+                ))}
+              </>
             ),
           },
           {
@@ -410,19 +486,35 @@ export default function ScheduledJobs() {
         </Form>
       </Modal>
 
-      <Drawer title={`执行历史 · ${runsKey}`} open={runsOpen} onClose={() => setRunsOpen(false)} width={640}>
-        <ResponsiveTable
+      <Drawer title={`执行历史 · ${runsKey}`} open={runsOpen} onClose={() => setRunsOpen(false)} width={960}>
+        <Table
           rowKey="id"
+          loading={runsLoading}
           dataSource={runs}
-          pagination={false}
+          tableLayout="fixed"
+          pagination={{
+            current: runsPage,
+            pageSize: runsPageSize,
+            total: runsTotal,
+            showSizeChanger: true,
+            pageSizeOptions: ['10', '20', '30', '50', '100'],
+            showTotal: (t) => `共 ${t} 条`,
+            onChange: (page, pageSize) => {
+              const size = pageSize || runsPageSize
+              const nextPage = size !== runsPageSize ? 1 : page
+              setRunsPage(nextPage)
+              setRunsPageSize(size)
+              if (runsKey) loadRuns(runsKey, nextPage, size)
+            },
+          }}
           columns={[
-            { title: '触发', dataIndex: 'trigger', width: 80 },
-            { title: '状态', dataIndex: 'status', width: 100, render: (s: string) => statusTag(s) },
-            { title: '开始', dataIndex: 'started_at', width: 180, render: (v: string) => formatJobTime(v) },
-            { title: '结束', dataIndex: 'ended_at', width: 180, render: (v: string) => formatJobTime(v) },
-            { title: '耗时ms', dataIndex: 'duration_ms', width: 80 },
-            { title: '节点', dataIndex: 'owner_host', width: 120 },
-            { title: '错误', dataIndex: 'error' },
+            { title: '触发', dataIndex: 'trigger', width: 72 },
+            { title: '状态', dataIndex: 'status', width: 96, render: (s: string) => statusTag(s) },
+            { title: '开始', dataIndex: 'started_at', width: 188, render: (v: string) => formatJobTime(v) },
+            { title: '结束', dataIndex: 'ended_at', width: 188, render: (v: string) => formatJobTime(v) },
+            { title: '耗时ms', dataIndex: 'duration_ms', width: 88 },
+            { title: '节点', dataIndex: 'owner_host', width: 110, ellipsis: true },
+            { title: '错误', dataIndex: 'error', ellipsis: true },
           ]}
         />
       </Drawer>

@@ -20,18 +20,18 @@ type JobSetting struct {
 }
 
 type JobRun struct {
-	ID            string `json:"id"`
-	JobKey        string `json:"job_key"`
-	Trigger       string `json:"trigger"`
-	Status        string `json:"status"`
-	FireKey       string `json:"fire_key,omitempty"`
-	OwnerID       string `json:"owner_id,omitempty"`
-	OwnerHost     string `json:"owner_host,omitempty"`
-	FencingToken  int64  `json:"fencing_token,omitempty"`
-	Error         string `json:"error,omitempty"`
-	StartedAt     string `json:"started_at"`
-	EndedAt       string `json:"ended_at,omitempty"`
-	DurationMs    int64  `json:"duration_ms,omitempty"`
+	ID           string `json:"id"`
+	JobKey       string `json:"job_key"`
+	Trigger      string `json:"trigger"`
+	Status       string `json:"status"`
+	FireKey      string `json:"fire_key,omitempty"`
+	OwnerID      string `json:"owner_id,omitempty"`
+	OwnerHost    string `json:"owner_host,omitempty"`
+	FencingToken int64  `json:"fencing_token,omitempty"`
+	Error        string `json:"error,omitempty"`
+	StartedAt    string `json:"started_at"`
+	EndedAt      string `json:"ended_at,omitempty"`
+	DurationMs   int64  `json:"duration_ms,omitempty"`
 }
 
 type JobLease struct {
@@ -208,12 +208,31 @@ func (d *DB) FinishJobRun(id, status, errMsg string, durationMs int64) error {
 }
 
 func (d *DB) ListJobRuns(jobKey string, limit int) ([]JobRun, error) {
+	return d.listJobRuns(jobKey, limit, 0)
+}
+
+func (d *DB) ListJobRunsPage(jobKey string, limit, offset int) ([]JobRun, int, error) {
+	if offset < 0 {
+		offset = 0
+	}
+	var total int
+	if err := d.QueryRow(`SELECT COUNT(1) FROM tbl_job_runs WHERE job_key=?`, jobKey).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	list, err := d.listJobRuns(jobKey, limit, offset)
+	return list, total, err
+}
+
+func (d *DB) listJobRuns(jobKey string, limit, offset int) ([]JobRun, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
+	if offset < 0 {
+		offset = 0
+	}
 	rows, err := d.Query(`
 		SELECT id, job_key, trigger, status, fire_key, owner_id, owner_host, fencing_token, error, started_at, ended_at, duration_ms
-		FROM tbl_job_runs WHERE job_key=? ORDER BY started_at DESC LIMIT ?`, jobKey, limit)
+		FROM tbl_job_runs WHERE job_key=? ORDER BY started_at DESC LIMIT ? OFFSET ?`, jobKey, limit, offset)
 	if err != nil {
 		return nil, err
 	}
