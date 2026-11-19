@@ -37,8 +37,22 @@ function DatabaseFilter(props: {
   const toggle = (name: string, checked: boolean) => {
     props.onChange(checked ? [...props.names, name] : props.names.filter((item) => item !== name))
   }
+  const selectMatched = () => {
+    const selected = new Set(props.names)
+    for (const item of matched) selected.add(item.value)
+    props.onChange([...selected])
+  }
+  const invertMatched = () => {
+    const matchedSet = new Set(matched.map((item) => item.value))
+    const selected = new Set(props.names)
+    const next = props.names.filter((name) => !matchedSet.has(name))
+    for (const item of matched) {
+      if (!selected.has(item.value)) next.push(item.value)
+    }
+    props.onChange(next)
+  }
   return (
-    <div style={{ padding: 8, width: 260 }} onKeyDown={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()}>
+    <div style={{ padding: 8, width: 280 }} onKeyDown={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()}>
       <Input
         allowClear
         autoFocus
@@ -47,12 +61,12 @@ function DatabaseFilter(props: {
         prefix={<SearchOutlined />}
         onChange={(e) => setKeyword(e.target.value)}
       />
-      {props.names.length ? (
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
-          <span style={{ color: '#8c8c8c' }}>已选 {props.names.length}</span>
-          <Button type="link" size="small" onClick={() => props.onChange([])}>清空</Button>
-        </div>
-      ) : null}
+      <div style={{ display: 'flex', alignItems: 'center', marginTop: 4 }}>
+        <span style={{ color: '#8c8c8c', marginRight: 'auto' }}>已选 {props.names.length}</span>
+        <Button type="link" size="small" disabled={!matched.length} onClick={selectMatched}>全选</Button>
+        <Button type="link" size="small" disabled={!matched.length} onClick={invertMatched}>反选</Button>
+        <Button type="link" size="small" disabled={!props.names.length} onClick={() => props.onChange([])}>清空</Button>
+      </div>
       <div style={{ maxHeight: 260, overflow: 'auto', marginTop: 4 }}>
         {matched.length ? matched.map((item) => (
           <label key={item.value} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '4px 0', cursor: 'pointer' }}>
