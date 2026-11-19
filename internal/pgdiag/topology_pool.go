@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -12,11 +14,17 @@ import (
 )
 
 const (
-	poolBatchSize   = 20
-	poolRangeStep   = 15 * time.Minute
-	poolRangeWindow = 7 * 24 * time.Hour
-	poolQueryBudget = 45 * time.Second
+	poolBatchSize     = 20
+	poolFallbackStep  = time.Hour
+	poolRangeWindow   = 7 * 24 * time.Hour
+	poolQueryBudget   = 45 * time.Second
+	poolCacheTTL      = 3 * time.Minute
+	maxPoolPodNames   = 200
+	poolSubqueryRange = "7d:15m"
 )
+
+// poolPodNameRe 只接受 Kubernetes Pod 名，避免把请求里的字符串拼进别的 PromQL。
+var poolPodNameRe = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`)
 
 const poolMetricNames = "hikaricp_connections|hikaricp_connections_active|hikaricp_connections_idle|hikaricp_connections_pending|hikaricp_connections_max|hikaricp_connections_min"
 
@@ -37,7 +45,22 @@ type PoolUsage struct {
 	Advice       string
 }
 
+// ValidPoolPodNames 去重并校验 Pod 名。超过 200 个或含非法名字时返回错误。
+func ValidPoolPodNames(raw []string) ([]string, error) {
+	names := uniqueNames(raw)
+	if len(names) > maxPoolPodNames {
+		return nil, fmt.Errorf("Pod 名过多")
+	}
+	for _, name := range names {
+		if len(name) > 253 || !poolPodNameRe.MatchString(name) {
+			return nil, fmt.Errorf("Pod 名不合法")
+		}
+	}
+	return names, nil
+}
+
 // MapPools 按 Pod 名查询最近 7 天的 HikariCP 指标。q 为空表示未配置 Prometheus。
+// 先做瞬时聚合；聚合失败时退回步长 1 小时的区间查询。相同 Pod 组缓存 3 分钟。
 // 查询失败时仍返回已经汇总的结果。
 func MapPools(ctx context.Context, q PromQuerier, pods []string) (map[string]PoolUsage, string) {
 	names := uniqueNames(pods)
@@ -49,6 +72,82 @@ func MapPools(ctx context.Context, q PromQuerier, pods []string) (map[string]Poo
 	}
 	ctx, cancel := context.WithTimeout(ctx, poolQueryBudget)
 	defer cancel()
+	if ctx.Err() != nil {
+		return map[string]PoolUsage{}, poolQueryNote(ctx, ctx.Err())
+	}
+	if cached, ok := poolCacheGet(names); ok {
+		return cached, ""
+	}
+	out, err := mapPoolsInstant(ctx, q, names)
+	if err != nil && ctx.Err() == nil {
+		out, err = mapPoolsRange(ctx, q, names, poolFallbackStep)
+	}
+	if err == nil {
+		poolCachePut(names, out)
+		return out, ""
+	}
+	if out == nil {
+		out = map[string]PoolUsage{}
+	}
+	return out, poolQueryNote(ctx, err)
+}
+
+func mapPoolsInstant(ctx context.Context, q PromQuerier, names []string) (map[string]PoolUsage, error) {
+	batches := splitNameBatches(names, poolBatchSize, maxPodPromQL, buildPoolIdleExpr)
+	out := map[string]PoolUsage{}
+	for _, batch := range batches {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		part, err := queryPoolBatchInstant(ctx, q, batch)
+		if err != nil {
+			return nil, err
+		}
+		for pod, usage := range part {
+			out[pod] = usage
+		}
+	}
+	return out, nil
+}
+
+func queryPoolBatchInstant(ctx context.Context, q PromQuerier, pods []string) (map[string]PoolUsage, error) {
+	type job struct {
+		kind string
+		expr string
+	}
+	jobs := []job{
+		{kind: "latest", expr: buildPoolExpr(pods)},
+		{kind: "active", expr: buildPoolPeakExpr("hikaricp_connections_active", pods)},
+		{kind: "pending", expr: buildPoolPeakExpr("hikaricp_connections_pending", pods)},
+		{kind: "limit", expr: buildPoolPeakExpr("hikaricp_connections_max", pods)},
+		{kind: "total", expr: buildPoolSampleCountExpr(pods)},
+		{kind: "idle", expr: buildPoolIdleExpr(pods)},
+	}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	var first error
+	got := map[string][]promclient.Sample{}
+	for _, item := range jobs {
+		wg.Add(1)
+		go func(item job) {
+			defer wg.Done()
+			samples, err := q.Query(ctx, item.expr, time.Now())
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil && first == nil {
+				first = err
+			}
+			got[item.kind] = samples
+		}(item)
+	}
+	wg.Wait()
+	if first != nil {
+		return nil, first
+	}
+	return usageFromInstant(got["latest"], got["active"], got["pending"], got["limit"], got["total"], got["idle"]), nil
+}
+
+func mapPoolsRange(ctx context.Context, q PromQuerier, names []string, step time.Duration) (map[string]PoolUsage, error) {
 	end := time.Now()
 	start := end.Add(-poolRangeWindow)
 	batches := splitNameBatches(names, poolBatchSize, maxPodPromQL, buildPoolExpr)
@@ -80,7 +179,7 @@ func MapPools(ctx context.Context, q PromQuerier, pods []string) (map[string]Poo
 				return
 			}
 			defer func() { <-sem }()
-			samples, err := q.QueryRange(ctx, buildPoolExpr(batch), start, end, poolRangeStep)
+			samples, err := q.QueryRange(ctx, buildPoolExpr(batch), start, end, step)
 			folded := foldPoolSamples(samples)
 			mu.Lock()
 			defer mu.Unlock()
@@ -93,10 +192,7 @@ func MapPools(ctx context.Context, q PromQuerier, pods []string) (map[string]Poo
 		}(batch)
 	}
 	wg.Wait()
-	if out == nil {
-		out = map[string]PoolUsage{}
-	}
-	return out, poolQueryNote(ctx, first)
+	return out, first
 }
 
 // CombinePoolUsage 把一行里逗号拼接的多个 Pod 用量相加，并按合计生成分析。
@@ -171,6 +267,140 @@ func PoolAdvice(u PoolUsage) string {
 	default:
 		return fmt.Sprintf("最近 7 天活跃峰值 %d、等待峰值 %d，未接近上限。", u.ActiveMax7d, u.PendingMax7d)
 	}
+}
+
+func usageFromInstant(latest, activeMax, pendingMax, limitMax, total, idle []promclient.Sample) map[string]PoolUsage {
+	current := map[string]map[string]float64{}
+	for _, sm := range latest {
+		name := strings.TrimSpace(sm.Metric["__name__"])
+		pod := strings.TrimSpace(sm.Metric["pod"])
+		if pod == "" || !poolMetricAllowed(name) {
+			continue
+		}
+		value, ok := promclient.InstantValue(sm)
+		if !ok {
+			continue
+		}
+		metrics := current[pod]
+		if metrics == nil {
+			metrics = map[string]float64{}
+			current[pod] = metrics
+		}
+		metrics[name] += value
+	}
+	peaksActive := oneValueByPod(activeMax)
+	peaksPending := oneValueByPod(pendingMax)
+	peaksLimit := oneValueByPod(limitMax)
+	samples := oneValueByPod(total)
+	idleSamples := oneValueByPod(idle)
+	seen := map[string]struct{}{}
+	for pod := range current {
+		seen[pod] = struct{}{}
+	}
+	for _, set := range []map[string]float64{peaksActive, peaksPending, peaksLimit, samples, idleSamples} {
+		for pod := range set {
+			seen[pod] = struct{}{}
+		}
+	}
+	out := make(map[string]PoolUsage, len(seen))
+	for pod := range seen {
+		metrics := current[pod]
+		out[pod] = PoolUsage{
+			HasData:      true,
+			Current:      roundConn(metrics["hikaricp_connections"]),
+			Active:       roundConn(metrics["hikaricp_connections_active"]),
+			Idle:         roundConn(metrics["hikaricp_connections_idle"]),
+			Pending:      roundConn(metrics["hikaricp_connections_pending"]),
+			Max:          roundConn(metrics["hikaricp_connections_max"]),
+			Min:          roundConn(metrics["hikaricp_connections_min"]),
+			ActiveMax7d:  roundConn(peaksActive[pod]),
+			PendingMax7d: roundConn(peaksPending[pod]),
+			MaxLimit:     roundConn(peaksLimit[pod]),
+			IdleSamples:  int(roundConn(idleSamples[pod])),
+			Samples:      int(roundConn(samples[pod])),
+		}
+	}
+	return out
+}
+
+func oneValueByPod(samples []promclient.Sample) map[string]float64 {
+	out := map[string]float64{}
+	for _, sm := range samples {
+		pod := strings.TrimSpace(sm.Metric["pod"])
+		value, ok := promclient.InstantValue(sm)
+		if pod == "" || !ok {
+			continue
+		}
+		if cur, exists := out[pod]; !exists || value > cur {
+			out[pod] = value
+		}
+	}
+	return out
+}
+
+func podMatcher(pods []string) string {
+	parts := make([]string, len(pods))
+	for i, pod := range pods {
+		parts[i] = promRegex(pod)
+	}
+	return fmt.Sprintf(`pod=~"%s"`, strings.Join(parts, "|"))
+}
+
+func buildPoolPeakExpr(metric string, pods []string) string {
+	return fmt.Sprintf(`max_over_time((sum by (pod) (%s{%s}))[%s])`, metric, podMatcher(pods), poolSubqueryRange)
+}
+
+func buildPoolSampleCountExpr(pods []string) string {
+	return fmt.Sprintf(`count_over_time((sum by (pod) (hikaricp_connections{%s}))[%s])`, podMatcher(pods), poolSubqueryRange)
+}
+
+func buildPoolIdleExpr(pods []string) string {
+	sel := podMatcher(pods)
+	return fmt.Sprintf(`count_over_time((sum by (pod) (hikaricp_connections_active{%s}) == 0 and sum by (pod) (hikaricp_connections_idle{%s}) > 0 and sum by (pod) (hikaricp_connections{%s}) == sum by (pod) (hikaricp_connections_idle{%s}))[%s])`, sel, sel, sel, sel, poolSubqueryRange)
+}
+
+type poolCacheEntry struct {
+	at    time.Time
+	usage map[string]PoolUsage
+}
+
+var (
+	poolCacheMu sync.Mutex
+	poolCache   = map[string]poolCacheEntry{}
+)
+
+func poolCacheKey(names []string) string {
+	cp := append([]string(nil), names...)
+	sort.Strings(cp)
+	return strings.Join(cp, "\n")
+}
+
+func poolCacheGet(names []string) (map[string]PoolUsage, bool) {
+	poolCacheMu.Lock()
+	defer poolCacheMu.Unlock()
+	ent, ok := poolCache[poolCacheKey(names)]
+	if !ok || time.Since(ent.at) > poolCacheTTL {
+		delete(poolCache, poolCacheKey(names))
+		return nil, false
+	}
+	return clonePoolUsage(ent.usage), true
+}
+
+func poolCachePut(names []string, usage map[string]PoolUsage) {
+	if usage == nil {
+		usage = map[string]PoolUsage{}
+	}
+	poolCacheMu.Lock()
+	defer poolCacheMu.Unlock()
+	poolCache[poolCacheKey(names)] = poolCacheEntry{at: time.Now(), usage: clonePoolUsage(usage)}
+}
+
+func clonePoolUsage(in map[string]PoolUsage) map[string]PoolUsage {
+	out := make(map[string]PoolUsage, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
 }
 
 func buildPoolExpr(pods []string) string {

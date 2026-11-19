@@ -123,6 +123,7 @@ type scriptProm struct {
 	queries      []string
 	samples      map[string][]promclient.Sample
 	failHas      string
+	onQuery      func(string) ([]promclient.Sample, error)
 	rangeSamples []promclient.Sample
 	rangeErr     error
 	rangeStep    time.Duration
@@ -146,9 +147,13 @@ func (s *scriptProm) QueryRange(_ context.Context, promql string, start, end tim
 func (s *scriptProm) Query(_ context.Context, promql string, _ time.Time) ([]promclient.Sample, error) {
 	s.mu.Lock()
 	s.queries = append(s.queries, promql)
+	hook := s.onQuery
 	s.mu.Unlock()
 	if s.failHas != "" && strings.Contains(promql, s.failHas) {
 		return nil, errors.New("boom")
+	}
+	if hook != nil {
+		return hook(promql)
 	}
 	var out []promclient.Sample
 	for ip, samples := range s.samples {

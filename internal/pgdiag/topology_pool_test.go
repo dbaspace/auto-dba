@@ -6,21 +6,38 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"auto-dba/internal/promclient"
 )
 
+func resetPoolCache() {
+	poolCacheMu.Lock()
+	poolCache = map[string]poolCacheEntry{}
+	poolCacheMu.Unlock()
+}
+
 func TestMapPoolsSumsPoolsAndIgnoresOtherMetrics(t *testing.T) {
-	prom := &scriptProm{rangeSamples: []promclient.Sample{
-		poolSeries("web-a", "hikaricp_connections_active", 1, 2),
-		poolSeries("web-a", "hikaricp_connections_active", 3, 4),
-		poolSeries("web-a", "hikaricp_connections", 10, 10),
-		poolSeries("web-a", "hikaricp_connections_idle", 9, 8),
-		poolSeries("web-a", "hikaricp_connections_pending", 0, 0),
-		poolSeries("web-a", "hikaricp_connections_max", 10, 10),
-		poolSeries("web-a", "hikaricp_connections_min", 10, 10),
-		poolSeries("web-a", "hikaricp_connections_timeout_total", 99, 99),
-		poolSeries("web-b", "hikaricp_connections_active", 1),
+	resetPoolCache()
+	prom := &scriptProm{onQuery: func(q string) ([]promclient.Sample, error) {
+		switch {
+		case strings.Contains(q, "max_over_time") && strings.Contains(q, "hikaricp_connections_active"):
+			return []promclient.Sample{instantSample("web-a", "", 6), instantSample("web-b", "", 1)}, nil
+		case strings.Contains(q, "max_over_time") && strings.Contains(q, "hikaricp_connections_pending"):
+			return []promclient.Sample{instantSample("web-a", "", 0)}, nil
+		case strings.Contains(q, "max_over_time") && strings.Contains(q, "hikaricp_connections_max"):
+			return []promclient.Sample{instantSample("web-a", "", 10)}, nil
+		case strings.Contains(q, "count_over_time"):
+			return nil, nil
+		default:
+			return []promclient.Sample{
+				instantSample("web-a", "hikaricp_connections_active", 2),
+				instantSample("web-a", "hikaricp_connections_active", 4),
+				instantSample("web-a", "hikaricp_connections", 10),
+				instantSample("web-a", "hikaricp_connections_timeout_total", 99),
+				instantSample("web-b", "hikaricp_connections_active", 1),
+			}, nil
+		}
 	}}
 	got, note := MapPools(context.Background(), prom, []string{"web-a", "web-a"})
 	if note != "" {
@@ -30,20 +47,84 @@ func TestMapPoolsSumsPoolsAndIgnoresOtherMetrics(t *testing.T) {
 	if !usage.HasData || usage.Active != 6 || usage.ActiveMax7d != 6 || usage.Current != 10 {
 		t.Fatalf("usage = %+v", usage)
 	}
-	if usage.PendingMax7d != 0 || got["web-b"].Active != 1 {
+	if usage.PendingMax7d != 0 || got["web-b"].Active != 1 || got["web-b"].ActiveMax7d != 1 {
 		t.Fatalf("pending=%d web-b=%+v", usage.PendingMax7d, got["web-b"])
 	}
 	prom.mu.Lock()
 	defer prom.mu.Unlock()
-	if len(prom.queries) != 1 || strings.Contains(prom.queries[0], "timeout_total") || strings.Contains(prom.queries[0], "last_over_time") {
+	if len(prom.queries) != 6 || prom.rangeStep != 0 {
+		t.Fatalf("queries=%d step=%s", len(prom.queries), prom.rangeStep)
+	}
+	joined := strings.Join(prom.queries, "\n")
+	if strings.Contains(joined, "timeout_total") || strings.Contains(joined, "last_over_time") || !strings.Contains(joined, "max_over_time") || !strings.Contains(joined, "[7d:15m]") {
 		t.Fatalf("query = %v", prom.queries)
 	}
-	if !strings.Contains(prom.queries[0], "web-a") || prom.rangeStep != poolRangeStep || prom.rangeSpan != poolRangeWindow {
-		t.Fatalf("step=%s span=%s query=%s", prom.rangeStep, prom.rangeSpan, prom.queries[0])
+}
+
+func TestMapPoolsFallsBackToHourlyRange(t *testing.T) {
+	resetPoolCache()
+	prom := &scriptProm{
+		failHas:      "max_over_time",
+		rangeSamples: []promclient.Sample{poolSeries("fallback-pod", "hikaricp_connections_active", 1, 3)},
+	}
+	got, note := MapPools(context.Background(), prom, []string{"fallback-pod"})
+	if note != "" {
+		t.Fatal(note)
+	}
+	usage := got["fallback-pod"]
+	if !usage.HasData || usage.Active != 3 || usage.ActiveMax7d != 3 {
+		t.Fatalf("usage = %+v", usage)
+	}
+	prom.mu.Lock()
+	defer prom.mu.Unlock()
+	if prom.rangeStep != time.Hour || prom.rangeSpan != poolRangeWindow {
+		t.Fatalf("step=%s span=%s", prom.rangeStep, prom.rangeSpan)
+	}
+	for _, q := range prom.queries {
+		if strings.Contains(q, "last_over_time") {
+			t.Fatalf("query = %s", q)
+		}
+	}
+}
+
+func TestMapPoolsCachesRepeatQuery(t *testing.T) {
+	resetPoolCache()
+	prom := &scriptProm{}
+	if _, note := MapPools(context.Background(), prom, []string{"cache-b", "cache-a"}); note != "" {
+		t.Fatal(note)
+	}
+	prom.mu.Lock()
+	first := len(prom.queries)
+	prom.mu.Unlock()
+	if _, note := MapPools(context.Background(), prom, []string{"cache-a", "cache-b"}); note != "" {
+		t.Fatal(note)
+	}
+	prom.mu.Lock()
+	defer prom.mu.Unlock()
+	if first == 0 || len(prom.queries) != first {
+		t.Fatalf("queries first=%d second=%d", first, len(prom.queries))
+	}
+}
+
+func TestValidPoolPodNames(t *testing.T) {
+	got, err := ValidPoolPodNames([]string{" web-a ", "web-a", "web-a"})
+	if err != nil || len(got) != 1 || got[0] != "web-a" {
+		t.Fatalf("got=%v err=%v", got, err)
+	}
+	if _, err := ValidPoolPodNames([]string{"bad name"}); err == nil || !strings.Contains(err.Error(), "不合法") {
+		t.Fatal(err)
+	}
+	many := make([]string, maxPoolPodNames+1)
+	for i := range many {
+		many[i] = "pod-" + strconv.Itoa(i)
+	}
+	if _, err := ValidPoolPodNames(many); err == nil || !strings.Contains(err.Error(), "过多") {
+		t.Fatal(err)
 	}
 }
 
 func TestMapPoolsBatchesPodNames(t *testing.T) {
+	resetPoolCache()
 	prom := &scriptProm{}
 	names := make([]string, 25)
 	for i := range names {
@@ -55,16 +136,17 @@ func TestMapPoolsBatchesPodNames(t *testing.T) {
 	}
 	prom.mu.Lock()
 	defer prom.mu.Unlock()
-	if len(prom.queries) != 2 {
-		t.Fatalf("queries = %d", len(prom.queries))
+	if len(prom.queries) != 12 || prom.rangeStep != 0 {
+		t.Fatalf("queries = %d step=%s", len(prom.queries), prom.rangeStep)
 	}
 }
 
 func TestMapPoolsFailureAndNil(t *testing.T) {
+	resetPoolCache()
 	if _, note := MapPools(context.Background(), nil, []string{"web"}); note != "未配置 Prometheus" {
 		t.Fatal(note)
 	}
-	prom := &scriptProm{rangeErr: errors.New("boom")}
+	prom := &scriptProm{failHas: "hikaricp", rangeErr: errors.New("boom")}
 	got, note := MapPools(context.Background(), prom, []string{"web"})
 	if len(got) != 0 || !strings.Contains(note, "Prometheus 连接池查询失败，连接统计已返回") || !strings.Contains(note, "boom") {
 		t.Fatalf("got=%v note=%s", got, note)
@@ -112,6 +194,17 @@ func TestCombinePoolUsageSumsAndAdvises(t *testing.T) {
 	}
 }
 
+func instantSample(pod, name string, v float64) promclient.Sample {
+	metric := map[string]string{"pod": pod}
+	if name != "" {
+		metric["__name__"] = name
+	}
+	return promclient.Sample{
+		Metric: metric,
+		Value:  []interface{}{float64(1), strconv.FormatFloat(v, 'f', -1, 64)},
+	}
+}
+
 func poolSeries(pod, name string, vals ...float64) promclient.Sample {
 	values := make([][]interface{}, len(vals))
 	for i, v := range vals {
@@ -124,6 +217,7 @@ func poolSeries(pod, name string, vals ...float64) promclient.Sample {
 }
 
 func TestMapPoolsTimeout(t *testing.T) {
+	resetPoolCache()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	prom := &scriptProm{}

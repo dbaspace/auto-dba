@@ -1147,6 +1147,7 @@ func Init(e *gin.Engine, d Deps) {
 	secured.GET("/sql-insight", d.Insight.List)
 	secured.POST("/sql-insight", d.Insight.Create)
 	secured.GET("/sql-insight/topology", requireURN(store.URNSqlInsightTabTopology), d.Insight.Topology)
+	secured.POST("/sql-insight/topology/pools", requireURN(store.URNSqlInsightTabTopology), d.Insight.TopologyPools)
 	secured.GET("/pg-activity-snapshots", requireURN(store.URNSqlInsightTabSQL), d.Insight.ListSnapshots)
 	secured.GET("/pg-activity-snapshots/stats", requireURN(store.URNSqlInsightTabAnalysis), d.Insight.SnapshotStats)
 	secured.GET("/pg-activity-snapshots/summary", requireURN(store.URNSqlInsightTabVisual), d.Insight.SnapshotSummary)

@@ -37,8 +37,6 @@ func (h *InsightHandler) Topology(c *gin.Context) {
 	}
 	prom := h.topologyProm()
 	hits, note := pgdiag.MapPods(c.Request.Context(), prom, addrs)
-	pools, poolNote := pgdiag.MapPools(c.Request.Context(), prom, pgdiag.PodNamesFromHits(hits))
-	note = pgdiag.JoinPromNotes(note, poolNote)
 	out := make([]gin.H, 0, len(rows))
 	for _, row := range rows {
 		host := strings.TrimSpace(row.Host)
@@ -62,18 +60,6 @@ func (h *InsightHandler) Topology(c *gin.Context) {
 				item["pod"] = hit.Pod
 				item["namespace"] = hit.Namespace
 				item["node"] = hit.Node
-				if usage := pgdiag.CombinePoolUsage(hit.Pod, pools); usage.HasData {
-					item["pool"] = true
-					item["pool_current"] = usage.Current
-					item["pool_active"] = usage.Active
-					item["pool_idle"] = usage.Idle
-					item["pool_pending"] = usage.Pending
-					item["pool_max"] = usage.Max
-					item["pool_min"] = usage.Min
-					item["pool_active_max_7d"] = usage.ActiveMax7d
-					item["pool_pending_max_7d"] = usage.PendingMax7d
-					item["pool_advice"] = usage.Advice
-				}
 			}
 		}
 		out = append(out, item)
@@ -82,6 +68,54 @@ func (h *InsightHandler) Topology(c *gin.Context) {
 		"data":      out,
 		"prom_note": note,
 	})
+}
+
+func (h *InsightHandler) TopologyPools(c *gin.Context) {
+	var req struct {
+		Pods []string `json:"pods"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "请提供 Pod 名"})
+		return
+	}
+	names, err := pgdiag.ValidPoolPodNames(req.Pods)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	pools, note := pgdiag.MapPools(c.Request.Context(), h.topologyProm(), names)
+	data := gin.H{}
+	for _, name := range names {
+		usage := pools[name]
+		if usage.HasData {
+			usage.Advice = pgdiag.PoolAdvice(usage)
+		}
+		data[name] = poolUsageJSON(usage)
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"data":      data,
+		"prom_note": note,
+	})
+}
+
+func poolUsageJSON(usage pgdiag.PoolUsage) gin.H {
+	item := gin.H{"pool": usage.HasData}
+	if !usage.HasData {
+		return item
+	}
+	item["pool_current"] = usage.Current
+	item["pool_active"] = usage.Active
+	item["pool_idle"] = usage.Idle
+	item["pool_pending"] = usage.Pending
+	item["pool_max"] = usage.Max
+	item["pool_min"] = usage.Min
+	item["pool_active_max_7d"] = usage.ActiveMax7d
+	item["pool_pending_max_7d"] = usage.PendingMax7d
+	item["pool_advice"] = usage.Advice
+	item["pool_max_limit"] = usage.MaxLimit
+	item["idle_samples"] = usage.IdleSamples
+	item["samples"] = usage.Samples
+	return item
 }
 
 func (h *InsightHandler) topologyProm() *promclient.Client {

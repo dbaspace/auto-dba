@@ -68,12 +68,135 @@ function poolNum(row: TopologyRow, value?: number) {
   return value ?? 0
 }
 
-function poolColumns(): ColumnsType<TopologyRow> {
+type PoolPayload = {
+  pool?: boolean
+  pool_current?: number
+  pool_active?: number
+  pool_idle?: number
+  pool_pending?: number
+  pool_max?: number
+  pool_min?: number
+  pool_active_max_7d?: number
+  pool_pending_max_7d?: number
+  pool_advice?: string
+  pool_max_limit?: number
+  idle_samples?: number
+  samples?: number
+}
+
+function uniquePodNames(rows: TopologyRow[]) {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const row of rows) {
+    for (const part of (row.pod || '').split(',')) {
+      const name = part.trim()
+      if (!name || seen.has(name)) continue
+      seen.add(name)
+      out.push(name)
+    }
+  }
+  return out
+}
+
+function joinNote(a: string, b: string) {
+  const left = a.trim()
+  const right = b.trim()
+  if (!left) return right
+  if (!right || left === right) return left
+  return `${left}；${right}`
+}
+
+function poolAdvice(u: {
+  active: number
+  idle: number
+  current: number
+  max: number
+  activeMax: number
+  pendingMax: number
+  maxLimit: number
+  idleSamples: number
+  samples: number
+}) {
+  const limit = u.maxLimit > 0 ? u.maxLimit : u.max
+  if (u.pendingMax > 0 && limit > 0 && u.activeMax >= limit) {
+    return '这 7 天里池曾打满，业务线程等过连接。先查慢 SQL、未归还连接和长事务；确认数据库还能加连接后，再提高 maximumPoolSize。'
+  }
+  if (u.pendingMax > 0) {
+    return '这 7 天有线程等过连接，池却没满。检查建连是否变慢、获取超时，以及数据库是否拒绝新连接。'
+  }
+  if (limit > 0 && u.activeMax * 5 >= limit * 4) {
+    return '这 7 天余量不足。突发流量时容易排队，先看慢 SQL 和事务时长。'
+  }
+  if (u.samples > 0 && u.idleSamples * 10 >= u.samples * 9) {
+    return '最近 7 天连接基本一直空闲，没有请求占用连接。这些空闲连接仍占用 PostgreSQL 连接名额。若该 Pod 应该在处理流量，先确认请求有没有打到它；若业务就是低峰，并且最小空闲等于最大连接，空闲连接不会回收，可把 minimumIdle 调低。'
+  }
+  if (u.active > 0 && u.idle === 0 && u.current < u.max) {
+    return '此刻空闲连接已用完，池还会继续建连。关注是否很快顶到最大。'
+  }
+  return `最近 7 天活跃峰值 ${u.activeMax}、等待峰值 ${u.pendingMax}，未接近上限。`
+}
+
+function mergePoolRow(row: TopologyRow, byPod: Record<string, PoolPayload>): TopologyRow {
+  const names = (row.pod || '').split(',').map((part) => part.trim()).filter(Boolean)
+  if (!names.length) return row
+  const picked = names.map((name) => byPod[name]).filter((item): item is PoolPayload => !!item?.pool)
+  if (!picked.length) return row
+  if (picked.length === 1 && names.length === 1) {
+    const item = picked[0]
+    return {
+      ...row,
+      pool: true,
+      pool_current: item.pool_current,
+      pool_active: item.pool_active,
+      pool_idle: item.pool_idle,
+      pool_pending: item.pool_pending,
+      pool_max: item.pool_max,
+      pool_min: item.pool_min,
+      pool_active_max_7d: item.pool_active_max_7d,
+      pool_pending_max_7d: item.pool_pending_max_7d,
+      pool_advice: item.pool_advice || '',
+    }
+  }
+  const sum = picked.reduce((acc, item) => ({
+    active: acc.active + (item.pool_active || 0),
+    idle: acc.idle + (item.pool_idle || 0),
+    current: acc.current + (item.pool_current || 0),
+    pending: acc.pending + (item.pool_pending || 0),
+    max: acc.max + (item.pool_max || 0),
+    min: acc.min + (item.pool_min || 0),
+    activeMax: acc.activeMax + (item.pool_active_max_7d || 0),
+    pendingMax: acc.pendingMax + (item.pool_pending_max_7d || 0),
+    maxLimit: acc.maxLimit + (item.pool_max_limit || 0),
+    idleSamples: acc.idleSamples + (item.idle_samples || 0),
+    samples: acc.samples + (item.samples || 0),
+  }), {
+    active: 0, idle: 0, current: 0, pending: 0, max: 0, min: 0, activeMax: 0, pendingMax: 0, maxLimit: 0, idleSamples: 0, samples: 0,
+  })
+  return {
+    ...row,
+    pool: true,
+    pool_current: sum.current,
+    pool_active: sum.active,
+    pool_idle: sum.idle,
+    pool_pending: sum.pending,
+    pool_max: sum.max,
+    pool_min: sum.min,
+    pool_active_max_7d: sum.activeMax,
+    pool_pending_max_7d: sum.pendingMax,
+    pool_advice: poolAdvice(sum),
+  }
+}
+
+function poolPending(row: TopologyRow, loading: boolean) {
+  return loading && !!row.pod && !row.pool
+}
+
+function poolColumns(loading: boolean): ColumnsType<TopologyRow> {
   const num = (title: string, dataIndex: keyof TopologyRow, width = 72): ColumnsType<TopologyRow>[number] => ({
     title,
     dataIndex,
     width,
-    render: (value: number, row) => poolNum(row, value),
+    render: (value: number, row) => (poolPending(row, loading) ? '查询中' : poolNum(row, value)),
   })
   return [
     num('当前', 'pool_current'),
@@ -89,6 +212,7 @@ function poolColumns(): ColumnsType<TopologyRow> {
       dataIndex: 'pool_advice',
       width: 96,
       render: (value: string, row) => {
+        if (poolPending(row, loading)) return '查询中'
         if (!row.pool || !value) return ''
         return (
           <Popover
@@ -167,6 +291,7 @@ export default function TopologyTab(props: {
 }) {
   const { instanceId, refreshTick, active } = props
   const [loading, setLoading] = useState(false)
+  const [poolLoading, setPoolLoading] = useState(false)
   const [rows, setRows] = useState<TopologyRow[]>([])
   const [promNote, setPromNote] = useState('')
   const [queried, setQueried] = useState(false)
@@ -184,18 +309,40 @@ export default function TopologyTab(props: {
       setPromNote('')
       setError('')
       setQueried(false)
+      setPoolLoading(false)
       return
     }
     if (refreshTick <= 0) return
     let cancelled = false
     setLoading(true)
+    setPoolLoading(false)
     setError('')
-    api.get('/sql-insight/topology', { params: { instance_id: instanceId }, timeout: 90000 })
+    api.get('/sql-insight/topology', { params: { instance_id: instanceId }, timeout: 30000 })
       .then(({ data }) => {
         if (cancelled) return
-        setRows(Array.isArray(data?.data) ? data.data : [])
-        setPromNote(String(data?.prom_note || ''))
+        const list = Array.isArray(data?.data) ? data.data : []
+        const note = String(data?.prom_note || '')
+        setRows(list)
+        setPromNote(note)
         setQueried(true)
+        const pods = uniquePodNames(list)
+        if (!pods.length || note === '未配置 Prometheus') return
+        setPoolLoading(true)
+        api.post('/sql-insight/topology/pools', { pods }, { timeout: 45000, silent: true })
+          .then(({ data: poolData }) => {
+            if (cancelled) return
+            const byPod = poolData?.data && typeof poolData.data === 'object' ? poolData.data : {}
+            setRows((prev) => prev.map((row) => mergePoolRow(row, byPod)))
+            setPromNote((prev) => joinNote(prev, String(poolData?.prom_note || '')))
+          })
+          .catch((e: any) => {
+            if (cancelled) return
+            const msg = e?.response?.data?.message || e?.message || '连接池查询失败'
+            setPromNote((prev) => joinNote(prev, String(msg)))
+          })
+          .finally(() => {
+            if (!cancelled) setPoolLoading(false)
+          })
       })
       .catch((e: any) => {
         if (cancelled) return
@@ -311,7 +458,7 @@ export default function TopologyTab(props: {
         return <FoldedName text={text} title="Pod" />
       },
     },
-    ...poolColumns(),
+    ...poolColumns(poolLoading),
   ]
 
   return (
