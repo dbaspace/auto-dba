@@ -143,6 +143,15 @@ export default function CreateTaskDialog({
   const [loadingDbs, setLoadingDbs] = useState(false)
   const [loadingTables, setLoadingTables] = useState(false)
   const [approvers, setApprovers] = useState<string[]>([])
+  const [goHost, setGoHost] = useState('')
+  const [goPort, setGoPort] = useState<number>(5432)
+  const [goUser, setGoUser] = useState('')
+  const [goPassword, setGoPassword] = useState('')
+  const [goDB, setGoDB] = useState('')
+  const [goTables, setGoTables] = useState('')
+  const [goRetain, setGoRetain] = useState<number>(180)
+  const [goBatch, setGoBatch] = useState<number>(5000)
+  const [rendering, setRendering] = useState(false)
   const [envOptions, setEnvOptions] = useState<any[]>([
     { value: 'test', label: '测试' },
     { value: 'prod', label: '生产' },
@@ -523,6 +532,36 @@ export default function CreateTaskDialog({
     }
   }
 
+  async function generateGo() {
+    setRendering(true)
+    try {
+      const { data } = await api.post('/archive/scripts/render', {
+        script_type: 'go',
+        script_params: {
+          host: goHost.trim(),
+          port: goPort,
+          user: goUser.trim(),
+          password: goPassword,
+          dbname: goDB.trim(),
+          tables: goTables.trim(),
+          retain_days: goRetain,
+          batch_limit: goBatch,
+        },
+      })
+      const src = data?.data?.script_content || ''
+      if (!src) {
+        message.error('没有生成脚本')
+        return
+      }
+      patch({ script_content: src })
+      message.success('已按参数生成脚本，可再修改后提交')
+    } catch (e: any) {
+      message.error(e?.response?.data?.message || '生成失败')
+    } finally {
+      setRendering(false)
+    }
+  }
+
   async function submit() {
     if (saving || !validate()) return
     const f = formRef.current
@@ -775,8 +814,49 @@ export default function CreateTaskDialog({
                 type="info"
                 showIcon
                 className="mb"
-                message="请按模版填写区修改后提交。host / dbname / tables 为空时用源端；删除条件为 create_time < today - retainDays。"
+                message="可直接改脚本里的填写区，或在下面填参数后生成。删除条件为 create_time < today - retainDays。"
               />
+            )}
+            {form.script_type === 'go' && (
+              <div className="mb">
+                <Row gutter={12}>
+                  <Col span={12}>
+                    <Input placeholder="源库域名" value={goHost} onChange={(e) => setGoHost(e.target.value)} />
+                  </Col>
+                  <Col span={12}>
+                    <InputNumber min={1} style={{ width: '100%' }} value={goPort} onChange={(v) => setGoPort(Number(v || 5432))} />
+                  </Col>
+                </Row>
+                <Row gutter={12} style={{ marginTop: 8 }}>
+                  <Col span={12}>
+                    <Input placeholder="用户名" value={goUser} onChange={(e) => setGoUser(e.target.value)} />
+                  </Col>
+                  <Col span={12}>
+                    <Input.Password placeholder="密码" value={goPassword} onChange={(e) => setGoPassword(e.target.value)} />
+                  </Col>
+                </Row>
+                <Row gutter={12} style={{ marginTop: 8 }}>
+                  <Col span={12}>
+                    <Input placeholder="库名" value={goDB} onChange={(e) => setGoDB(e.target.value)} />
+                  </Col>
+                  <Col span={12}>
+                    <Input placeholder="表名，多张用逗号分隔" value={goTables} onChange={(e) => setGoTables(e.target.value)} />
+                  </Col>
+                </Row>
+                <Row gutter={12} style={{ marginTop: 8 }}>
+                  <Col span={8}>
+                    <InputNumber min={1} style={{ width: '100%' }} value={goRetain} onChange={(v) => setGoRetain(Number(v || 180))} addonBefore="保留天数" />
+                  </Col>
+                  <Col span={8}>
+                    <InputNumber min={1} style={{ width: '100%' }} value={goBatch} onChange={(v) => setGoBatch(Number(v || 5000))} addonBefore="每批" />
+                  </Col>
+                  <Col span={8}>
+                    <Button block loading={rendering} onClick={generateGo}>
+                      按参数生成
+                    </Button>
+                  </Col>
+                </Row>
+              </div>
             )}
             <Form.Item
               label="脚本内容"

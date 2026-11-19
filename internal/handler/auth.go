@@ -1340,6 +1340,27 @@ func (h *AuthHandler) QueryAuditStats(c *gin.Context) {
 // menusForUserInTenant 按租户成员角色出菜单；tenantID 空则空树（不再回退平台全量角色菜单）。
 // 非审计会话：若 JWT tid 已非有效成员（如加入业务租户后被移出 default），自动换票到唯一剩余租户，
 // 或多租户时返回 need_tenant_select，避免空菜单 + 业务 API 403。
+// IdleTimeout 返回当前闲置分钟数。已经超过时限则 401，否则不刷新最近活动时间。
+func (h *AuthHandler) IdleTimeout(c *gin.Context) {
+	if middleware.IsPATAuth(c) {
+		c.JSON(http.StatusOK, gin.H{"login_idle_timeout_min": 0})
+		return
+	}
+	mins := 30
+	if h != nil && h.Store != nil {
+		mins = h.Store.LoginIdleTimeoutMin(30)
+	}
+	uid := strings.TrimSpace(middleware.UserID(c))
+	if middleware.IdleExceeded(uid, mins) {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"message":            "登录已超时，请重新登录",
+			"diagnostic_message": "idle timeout",
+		})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"login_idle_timeout_min": mins})
+}
+
 func (h *AuthHandler) Me(c *gin.Context) {
 	start := time.Now()
 	u, err := h.Store.GetUserByUsername(middleware.Username(c))

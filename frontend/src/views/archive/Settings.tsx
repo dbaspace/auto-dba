@@ -201,7 +201,10 @@ export default function ArchiveSettings() {
     }
     setTesting(true)
     try {
-      const { data } = await api.post('/archive/settings/webhook/test', { url: f.url.trim() })
+      const { data } = await api.post('/archive/settings/webhook/test', {
+        url: f.url.trim(),
+        secret: resolveSecret(f.secret, s.webhook.secret),
+      })
       message.success(data.message || 'Webhook 测试已提交')
     } finally {
       setTesting(false)
@@ -217,7 +220,17 @@ export default function ArchiveSettings() {
     setPromptOpen(false)
     setTesting(true)
     try {
-      const { data } = await api.post('/archive/settings/mail/test', { to })
+      const f = formRef.current
+      const s = settingsRef.current
+      const { data } = await api.post('/archive/settings/mail/test', {
+        to,
+        host: f.host.trim(),
+        port: f.port,
+        account: f.account.trim(),
+        password: resolveSecret(f.password, s.mail.password),
+        sender: f.sender.trim(),
+        timeout: f.timeout,
+      })
       message.success(data.message || `已向 ${to} 发起测试`)
     } finally {
       setTesting(false)

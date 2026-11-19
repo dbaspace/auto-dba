@@ -4,15 +4,18 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"auto-dba/internal/store"
 )
 
 const (
 	mysqlBatchSize = 10000
-	pgCTEBatchSize = 5000
+	pgCTEBatchSize = 10000
+	pgDeleteBatch  = 5000
 	maxRounds      = 200000
 	shardThreshold = 100000
+	scriptMaxBytes = 128 * 1024
 )
 
 var (
@@ -122,8 +125,13 @@ func BuildPGCTESQL(table, condition string, pkCols []string) (string, error) {
 	qt := qualifyTable("postgres", table)
 	if len(pkCols) == 0 {
 		return fmt.Sprintf(
-			`WITH d AS (SELECT ctid FROM %s WHERE %s LIMIT %d)
-DELETE FROM %s WHERE ctid IN (SELECT ctid FROM d)`,
+			`WITH cte1 AS (
+  SELECT ctid FROM %s WHERE %s LIMIT %d
+),
+cte2 AS (
+  DELETE FROM %s WHERE ctid IN (SELECT ctid FROM cte1)
+)
+SELECT ctid FROM cte1`,
 			qt, normalizeCondition(condition), pgCTEBatchSize, qt,
 		), nil
 	}
@@ -179,4 +187,75 @@ func BuildSelectSQL(dbType, table, condition string, limit int) (string, error) 
 		limit = mysqlBatchSize
 	}
 	return fmt.Sprintf("SELECT * FROM %s WHERE %s LIMIT %d", qualifyTable(dbType, table), normalizeCondition(condition), limit), nil
+}
+
+// HourCount 是按小时聚合的一行。
+type HourCount struct {
+	Hour  time.Time
+	Count int64
+}
+
+// SplitShardBounds 按累计行数切出每个时间片的上界（不含）。累计超过阈值就收一片，最后一片总会收进去。
+func SplitShardBounds(hours []HourCount, threshold int64) []time.Time {
+	if threshold <= 0 {
+		threshold = shardThreshold
+	}
+	if len(hours) == 0 {
+		return nil
+	}
+	var bounds []time.Time
+	var page int64
+	for i, h := range hours {
+		page += h.Count
+		if page > threshold || i == len(hours)-1 {
+			bounds = append(bounds, h.Hour.Add(time.Hour))
+			page = 0
+		}
+	}
+	return bounds
+}
+
+// BuildPGDeleteByPKsSQL 按一批主键生成删除语句。
+func BuildPGDeleteByPKsSQL(table string, pkCols []string, rows [][]string) (string, error) {
+	if len(rows) == 0 {
+		return "", fmt.Errorf("主键批次为空")
+	}
+	if err := validateIdent(table, "source_table"); err != nil {
+		return "", err
+	}
+	if len(pkCols) == 0 {
+		return "", fmt.Errorf("分片删除需要主键")
+	}
+	qt := qualifyTable("postgres", table)
+	qPKs := make([]string, 0, len(pkCols))
+	for _, c := range pkCols {
+		if err := validateIdent(c, "primary_key"); err != nil {
+			return "", err
+		}
+		qPKs = append(qPKs, quoteIdent("postgres", c))
+	}
+	pkExpr := strings.Join(qPKs, ", ")
+	if len(pkCols) > 1 {
+		pkExpr = "(" + pkExpr + ")"
+	}
+	vals := make([]string, 0, len(rows))
+	for _, row := range rows {
+		if len(row) != len(pkCols) {
+			return "", fmt.Errorf("主键列数不一致")
+		}
+		parts := make([]string, 0, len(row))
+		for _, v := range row {
+			parts = append(parts, sqlLiteral(v))
+		}
+		if len(pkCols) == 1 {
+			vals = append(vals, parts[0])
+		} else {
+			vals = append(vals, "("+strings.Join(parts, ", ")+")")
+		}
+	}
+	return fmt.Sprintf("DELETE FROM %s WHERE %s IN (%s)", qt, pkExpr, strings.Join(vals, ", ")), nil
+}
+
+func sqlLiteral(v string) string {
+	return "'" + strings.ReplaceAll(v, "'", "''") + "'"
 }

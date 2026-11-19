@@ -22,12 +22,17 @@ type Engine struct {
 	Secret string
 	mu     sync.Mutex
 	cancel map[string]context.CancelFunc
+	// instRun 记录本进程已占住的源库实例，避免两个任务同时删同一台库。
+	instRun map[string]string
 	// watching 是本进程正在轮询的执行记录，避免扫描再挂上一份。
 	watching map[string]struct{}
 }
 
 func New(st *store.DB, secret string) *Engine {
-	return &Engine{Store: st, Secret: secret, cancel: map[string]context.CancelFunc{}, watching: map[string]struct{}{}}
+	return &Engine{
+		Store: st, Secret: secret,
+		cancel: map[string]context.CancelFunc{}, instRun: map[string]string{}, watching: map[string]struct{}{},
+	}
 }
 
 func (e *Engine) Start(taskID string) error {
@@ -51,6 +56,13 @@ func (e *Engine) start(taskID string, bindIssue bool) error {
 	if _, err := e.stopRemoteForTask(context.Background(), taskID); err != nil {
 		return err
 	}
+	if err := e.lockInstance(t.SourceID, t.ID); err != nil {
+		return err
+	}
+	if err := e.Store.UpdateArchiveState(t.ID, store.StatusRunning, t.ApprovalStatus); err != nil {
+		e.unlockInstance(t.SourceID, t.ID)
+		return err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Hour)
 	e.mu.Lock()
 	if old, ok := e.cancel[taskID]; ok {
@@ -61,8 +73,56 @@ func (e *Engine) start(taskID string, bindIssue bool) error {
 	if bindIssue {
 		e.syncIssueStatus(t.IssueID, store.StatusRunning)
 	}
-	go e.run(ctx, taskID, bindIssue)
+	go func() {
+		defer e.unlockInstance(t.SourceID, t.ID)
+		e.run(ctx, taskID, bindIssue)
+	}()
 	return nil
+}
+
+func (e *Engine) lockInstance(instanceID, taskID string) error {
+	instanceID = strings.TrimSpace(instanceID)
+	taskID = strings.TrimSpace(taskID)
+	if e == nil || instanceID == "" || taskID == "" {
+		return nil
+	}
+	e.mu.Lock()
+	if e.instRun == nil {
+		e.instRun = map[string]string{}
+	}
+	if owner, ok := e.instRun[instanceID]; ok && owner != taskID {
+		e.mu.Unlock()
+		return fmt.Errorf("同一实例已有归档在执行")
+	}
+	e.instRun[instanceID] = taskID
+	e.mu.Unlock()
+	if e.Store != nil {
+		if err := e.Store.TryLockArchiveInstance(instanceID, taskID); err != nil {
+			e.mu.Lock()
+			if e.instRun[instanceID] == taskID {
+				delete(e.instRun, instanceID)
+			}
+			e.mu.Unlock()
+			return err
+		}
+	}
+	return nil
+}
+
+func (e *Engine) unlockInstance(instanceID, taskID string) {
+	instanceID = strings.TrimSpace(instanceID)
+	taskID = strings.TrimSpace(taskID)
+	if e == nil || instanceID == "" {
+		return
+	}
+	e.mu.Lock()
+	if e.instRun[instanceID] == taskID {
+		delete(e.instRun, instanceID)
+	}
+	e.mu.Unlock()
+	if e.Store != nil {
+		e.Store.UnlockArchiveInstance(instanceID, taskID)
+	}
 }
 
 func (e *Engine) syncIssueStatus(issueID, status string) {
@@ -318,6 +378,9 @@ func (e *Engine) StartScheduler(ctx context.Context) {
 func (e *Engine) ScanDue() {
 	e.reattachRemote()
 	e.scanDue()
+	if e != nil {
+		EvaluateAlerts(context.Background(), e.Store)
+	}
 }
 
 func (e *Engine) scanDue() {

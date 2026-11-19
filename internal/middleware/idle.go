@@ -83,3 +83,21 @@ func IdleSession(src IdleTimeoutSource) gin.HandlerFunc {
 		c.Next()
 	}
 }
+
+// IdleExceeded 只判断是否已经超过闲置时限，不刷新最近活动时间。
+// 超过时清掉记录并返回 true，调用方按 401 处理。
+func IdleExceeded(userID string, mins int) bool {
+	userID = strings.TrimSpace(userID)
+	if userID == "" || mins <= 0 {
+		return false
+	}
+	limit := time.Duration(mins) * time.Minute
+	idleMu.Lock()
+	defer idleMu.Unlock()
+	last, ok := idleLastSeen[userID]
+	if !ok || time.Since(last) <= limit {
+		return false
+	}
+	delete(idleLastSeen, userID)
+	return true
+}

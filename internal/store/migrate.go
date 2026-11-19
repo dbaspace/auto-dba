@@ -1327,7 +1327,56 @@ func (d *DB) ensureArchiveSchema() error {
 	if err := d.ensureColumnIfMissing("tbl_archive_runs", "executor_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
-	return d.ensureColumnIfMissing("tbl_archive_runs", "executor_job_id", "TEXT NOT NULL DEFAULT ''")
+	if err := d.ensureColumnIfMissing("tbl_archive_runs", "executor_job_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := d.ensureArchiveAlertSchema(); err != nil {
+		return err
+	}
+	return d.ensureArchiveInstanceLockSchema()
+}
+
+func (d *DB) ensureArchiveAlertSchema() error {
+	_, err := d.db.Exec(`CREATE TABLE IF NOT EXISTS tbl_archive_alert_rules (
+		id TEXT PRIMARY KEY,
+		rule_type TEXT NOT NULL,
+		title TEXT NOT NULL DEFAULT '',
+		threshold DOUBLE PRECISION NOT NULL DEFAULT 0,
+		severity TEXT NOT NULL DEFAULT 'warning',
+		enabled INTEGER NOT NULL DEFAULT 1,
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL
+	)`)
+	if err != nil {
+		return err
+	}
+	if _, err = d.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_archive_alert_rule_type ON tbl_archive_alert_rules(rule_type)`); err != nil {
+		return err
+	}
+	_, err = d.db.Exec(`CREATE TABLE IF NOT EXISTS tbl_archive_alert_events (
+		id TEXT PRIMARY KEY,
+		rule_id TEXT NOT NULL DEFAULT '',
+		rule_type TEXT NOT NULL DEFAULT '',
+		fingerprint TEXT NOT NULL DEFAULT '',
+		message TEXT NOT NULL DEFAULT '',
+		severity TEXT NOT NULL DEFAULT 'warning',
+		acked INTEGER NOT NULL DEFAULT 0,
+		created_at TEXT NOT NULL
+	)`)
+	if err != nil {
+		return err
+	}
+	_, err = d.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_archive_alert_fp ON tbl_archive_alert_events(fingerprint)`)
+	return err
+}
+
+func (d *DB) ensureArchiveInstanceLockSchema() error {
+	_, err := d.db.Exec(`CREATE TABLE IF NOT EXISTS tbl_archive_instance_locks (
+		instance_id TEXT PRIMARY KEY,
+		task_id TEXT NOT NULL,
+		acquired_at TEXT NOT NULL
+	)`)
+	return err
 }
 
 func (d *DB) ensurePGActivitySnapshotsTable() error {

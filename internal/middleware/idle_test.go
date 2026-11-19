@@ -66,3 +66,34 @@ func TestIdleSessionDisabled(t *testing.T) {
 		t.Fatalf("want 200 when idle disabled, got %d", w.Code)
 	}
 }
+
+func TestIdleExceededDoesNotRefresh(t *testing.T) {
+	ClearIdle("u3")
+	seen := time.Now().Add(-30 * time.Second)
+	idleMu.Lock()
+	idleLastSeen["u3"] = seen
+	idleMu.Unlock()
+
+	if IdleExceeded("u3", 1) {
+		t.Fatal("30s is inside 1 minute")
+	}
+	idleMu.Lock()
+	got := idleLastSeen["u3"]
+	idleMu.Unlock()
+	if !got.Equal(seen) {
+		t.Fatalf("peek refreshed last seen: %v -> %v", seen, got)
+	}
+
+	idleMu.Lock()
+	idleLastSeen["u3"] = time.Now().Add(-2 * time.Minute)
+	idleMu.Unlock()
+	if !IdleExceeded("u3", 1) {
+		t.Fatal("want exceeded")
+	}
+	idleMu.Lock()
+	_, ok := idleLastSeen["u3"]
+	idleMu.Unlock()
+	if ok {
+		t.Fatal("exceeded record should be cleared")
+	}
+}

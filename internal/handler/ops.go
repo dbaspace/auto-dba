@@ -1445,6 +1445,9 @@ func (h *ArchiveHandler) Create(c *gin.Context) {
 	if strings.TrimSpace(t.TableName) == "" {
 		t.TableName = "script"
 	}
+	if rejectArchiveScript(c, &t) {
+		return
+	}
 	preferred := strings.TrimSpace(req.Approver)
 	if preferred == "" {
 		preferred = strings.TrimSpace(t.AssignedTo)

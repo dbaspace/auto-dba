@@ -125,11 +125,14 @@ func Init(e *gin.Engine, d Deps) {
 		"/api/v1/auth/password/forgot", "/api/v1/auth/password/reset",
 		"/api/v1/k8s/agents/",
 	)
-	// 活动上报只经过鉴权，不进入闲置计时，避免每分钟上报把闲置退出续上。
-	if d.LoginSession != nil {
-		touch := e.Group("/api/v1")
-		touch.Use(auth)
-		touch.POST("/auth/sessions/touch", d.LoginSession.Touch)
+	// 活动上报和闲置分钟读取只经过鉴权，不进入闲置计时，避免把闲置退出续上。
+	if d.Auth != nil {
+		peek := e.Group("/api/v1")
+		peek.Use(auth)
+		peek.GET("/auth/idle-timeout", d.Auth.IdleTimeout)
+		if d.LoginSession != nil {
+			peek.POST("/auth/sessions/touch", d.LoginSession.Touch)
+		}
 	}
 	secured := e.Group("/api/v1")
 	secured.Use(auth)
@@ -801,6 +804,12 @@ func Init(e *gin.Engine, d Deps) {
 	arc.GET("/settings", d.Archive.GetSettings)
 	arc.PATCH("/settings", d.Archive.PutSettings)
 	arc.POST("/settings/:kind/test", d.Archive.TestSettings)
+	arc.GET("/monitor", d.Archive.Monitor)
+	arc.POST("/monitor/rules", d.Archive.CreateAlertRule)
+	arc.PATCH("/monitor/rules/:id", d.Archive.UpdateAlertRule)
+	arc.DELETE("/monitor/rules/:id", d.Archive.DeleteAlertRule)
+	arc.POST("/monitor/alerts/:id/ack", d.Archive.AckAlert)
+	arc.POST("/scripts/render", d.Archive.RenderScript)
 	arc.POST("/tasks/:id/run", gArc, d.Archive.Run)
 	arc.POST("/tasks/:id/pause", gArc, d.Archive.Pause)
 	arc.POST("/tasks/:id/resume", gArc, d.Archive.Resume)

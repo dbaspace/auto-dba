@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { message } from 'antd'
 import { useNavigate } from 'react-router-dom'
 import { useAppDispatch } from '../store'
@@ -34,9 +34,32 @@ function clearLastActivity() {
 export default function useIdleLogout(timeoutMin: number | undefined | null) {
   const dispatch = useAppDispatch()
   const navigate = useNavigate()
-  const mins = Number(timeoutMin)
+  const [liveMin, setLiveMin] = useState<number | null>(null)
+  const fromUser = Number(timeoutMin)
+  const mins = liveMin == null ? fromUser : liveMin
   const enabled = Number.isFinite(mins) && mins > 0
   const loggingOut = useRef(false)
+  const seenEnabled = useRef(false)
+  const wasOff = useRef(false)
+
+  useEffect(() => {
+    let stop = false
+    const pull = async () => {
+      try {
+        const { data } = await api.get('/auth/idle-timeout', { silent: true })
+        const n = Number(data?.login_idle_timeout_min)
+        if (!stop && Number.isFinite(n)) setLiveMin(n)
+      } catch {
+        /* 401 由请求拦截器退出；其它失败沿用当前分钟数 */
+      }
+    }
+    void pull()
+    const timer = window.setInterval(pull, REPORT_MS)
+    return () => {
+      stop = true
+      window.clearInterval(timer)
+    }
+  }, [])
 
   useEffect(() => {
     let lastReport = 0
@@ -59,7 +82,13 @@ export default function useIdleLogout(timeoutMin: number | undefined | null) {
   }, [])
 
   useEffect(() => {
-    if (!enabled) return
+    if (!enabled) {
+      if (seenEnabled.current) wasOff.current = true
+      return
+    }
+    const restarted = wasOff.current
+    wasOff.current = false
+    seenEnabled.current = true
 
     loggingOut.current = false
     const limitMs = mins * 60_000
@@ -102,9 +131,10 @@ export default function useIdleLogout(timeoutMin: number | undefined | null) {
       touchLastActivity()
     }
 
-    // 挂载时若已超时则立即退出，避免刷新续命
+    // 关闭后再打开，从现在重新计时。只是把分钟数改长或改短时，仍用原来的最后活动时间。
+    if (restarted) touchLastActivity()
     const existing = readLastActivity()
-    if (existing && Date.now() - existing > limitMs) {
+    if (!restarted && existing && Date.now() - existing > limitMs) {
       logout()
       return
     }

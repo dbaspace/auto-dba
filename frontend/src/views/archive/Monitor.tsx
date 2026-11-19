@@ -1,9 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Button, Card, Col, InputNumber, Input, Modal, Row, Spin, Tag, message } from 'antd'
+import { Button, Card, Col, InputNumber, Input, Modal, Row, Select, Spin, Tag, message } from 'antd'
 import api from '../../api/request'
 import './archive.css'
 
-const KEY = 'auto-dba-archive-monitor'
+const RULE_TYPES = [
+  { value: 'run_timeout', label: '任务执行超时', unit: '分钟', threshold: 30 },
+  { value: 'fail_count', label: '归档失败次数', unit: '次数', threshold: 3 },
+  { value: 'storage_usage', label: '存储剩余', unit: 'TB', threshold: 10 },
+  { value: 'db_disconnect', label: '数据库连接断开', unit: '次数', threshold: 1 },
+]
 
 interface Rule {
   id: string
@@ -14,6 +19,7 @@ interface Rule {
 }
 interface AlertItem {
   id: string
+  created_at?: string
   time?: string
   message?: string
   severity?: string
@@ -21,10 +27,10 @@ interface AlertItem {
 }
 
 function severityText(s: any): string {
-  return ({ critical: '严重', warning: '警告', info: '提示' } as Record<string, string>)[s] || '提示'
+  return ({ critical: '严重', warning: '警告', notice: '提示', info: '提示' } as Record<string, string>)[s] || '提示'
 }
 function severityColor(s: any): string {
-  return ({ critical: 'error', warning: 'warning', info: 'default' } as Record<string, string>)[s] || 'default'
+  return ({ critical: 'error', warning: 'warning', notice: 'default', info: 'default' } as Record<string, string>)[s] || 'default'
 }
 
 export default function Monitor() {
@@ -34,8 +40,9 @@ export default function Monitor() {
   const [alerts, setAlerts] = useState<AlertItem[]>([])
   const [ruleOpen, setRuleOpen] = useState(false)
   const [editing, setEditing] = useState<Rule | null>(null)
+  const [ruleType, setRuleType] = useState('run_timeout')
   const [title, setTitle] = useState('')
-  const [threshold, setThreshold] = useState<number>(3)
+  const [threshold, setThreshold] = useState<number>(30)
 
   const kpis = useMemo(
     () => [
@@ -51,50 +58,65 @@ export default function Monitor() {
     return rule.title || rule.id
   }
 
-  function persist(nextRules: Rule[], nextAlerts: AlertItem[]) {
-    localStorage.setItem(KEY, JSON.stringify({ rules: nextRules, alerts: nextAlerts }))
+  async function load() {
+    setLoading(true)
+    try {
+      const st = (await api.get('/archive/stats')).data.data || {}
+      setOv({
+        running: st.running,
+        completed_today: st.completed_today,
+        failed_today: st.failed_today,
+      })
+      const mon = (await api.get('/archive/monitor')).data.data || {}
+      setRules(mon.rules || [])
+      setAlerts(mon.alerts || [])
+    } catch (e: any) {
+      message.error(e?.response?.data?.message || '加载告警失败')
+    } finally {
+      setLoading(false)
+    }
   }
 
   function openCreate() {
     setEditing(null)
+    setRuleType('run_timeout')
     setTitle('')
-    setThreshold(3)
+    setThreshold(30)
     setRuleOpen(true)
   }
   function openEdit(rule: Rule) {
     setEditing(rule)
+    setRuleType(rule.rule_type || 'run_timeout')
     setTitle(rule.title)
     setThreshold(Number(rule.threshold) || 0)
     setRuleOpen(true)
   }
 
-  function saveRule() {
-    if (!title.trim()) {
-      message.warning('请输入规则名称')
-      return
-    }
-    let nextRules: Rule[]
-    if (editing) {
-      nextRules = rules.map((r) =>
-        r.id === editing.id ? { ...r, title: title.trim(), threshold } : r,
-      )
-      message.success('规则已更新')
-    } else {
-      nextRules = [
-        ...rules,
-        {
-          id: String(Date.now()),
+  async function saveRule() {
+    try {
+      if (editing) {
+        await api.patch(`/archive/monitor/rules/${editing.id}`, {
           title: title.trim(),
-          rule_type: title.trim(),
           threshold,
-          status: 'normal',
-        },
-      ]
-      message.success('规则已创建')
+        })
+        message.success('规则已更新')
+      } else {
+        if (!ruleType) {
+          message.warning('请选择规则类型')
+          return
+        }
+        await api.post('/archive/monitor/rules', {
+          rule_type: ruleType,
+          title: title.trim(),
+          threshold,
+        })
+        message.success('规则已创建')
+      }
+      setRuleOpen(false)
+      await load()
+    } catch (e: any) {
+      message.error(e?.response?.data?.message || '保存规则失败')
     }
-    setRules(nextRules)
-    persist(nextRules, alerts)
-    setRuleOpen(false)
   }
 
   function removeRule(rule: Rule) {
@@ -105,63 +127,26 @@ export default function Monitor() {
       okText: '确定',
       cancelText: '取消',
       okButtonProps: { danger: true },
-      onOk() {
-        const nextRules = rules.filter((r) => r.id !== rule.id)
-        setRules(nextRules)
-        persist(nextRules, alerts)
+      onOk: async () => {
+        await api.delete(`/archive/monitor/rules/${rule.id}`)
         message.success('规则已删除')
+        await load()
       },
     })
   }
 
-  function ack(alert: AlertItem) {
-    const nextAlerts = alerts.map((a) => (a.id === alert.id ? { ...a, acked: true } : a))
-    setAlerts(nextAlerts)
-    persist(rules, nextAlerts)
-    message.success('告警已确认')
+  async function ack(alert: AlertItem) {
+    try {
+      await api.post(`/archive/monitor/alerts/${alert.id}/ack`)
+      message.success('告警已确认')
+      await load()
+    } catch (e: any) {
+      message.error(e?.response?.data?.message || '确认失败')
+    }
   }
 
   useEffect(() => {
-    ;(async () => {
-      setLoading(true)
-      try {
-        const st = (await api.get('/archive/stats')).data.data || {}
-        setOv({
-          running: st.running,
-          completed_today: st.completed_today,
-          failed_today: st.failed_today,
-        })
-        let savedRules: Rule[] = []
-        let savedAlerts: AlertItem[] = []
-        try {
-          const saved = JSON.parse(localStorage.getItem(KEY) || '{}')
-          savedRules = saved.rules || []
-          savedAlerts = saved.alerts || []
-        } catch {
-          /* ignore */
-        }
-        if (
-          (st.failed_today || 0) > 0 &&
-          !savedAlerts.some((a) => a.message?.includes('今日失败'))
-        ) {
-          savedAlerts = [
-            {
-              id: String(Date.now()),
-              time: new Date().toLocaleString(),
-              message: `今日失败任务 ${st.failed_today} 个`,
-              severity: 'warning',
-              acked: false,
-            },
-            ...savedAlerts,
-          ].slice(0, 20)
-          persist(savedRules, savedAlerts)
-        }
-        setRules(savedRules)
-        setAlerts(savedAlerts)
-      } finally {
-        setLoading(false)
-      }
-    })()
+    load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -239,7 +224,7 @@ export default function Monitor() {
                 {alerts.map((alert) => (
                   <li key={alert.id}>
                     <span className="alert-text">
-                      {[alert.time, alert.message].filter(Boolean).join(' ')}
+                      {[alert.created_at || alert.time, alert.message].filter(Boolean).join(' ')}
                     </span>
                     <span className="rule-ops">
                       {!alert.acked && (
@@ -272,20 +257,36 @@ export default function Monitor() {
               </Button>,
             ]}
           >
-            <div style={{ marginBottom: 16 }}>
-              <div style={{ marginBottom: 6 }}>
-                <span style={{ color: '#ff4d4f', marginRight: 4 }}>*</span>规则名称
+            {!editing && (
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ marginBottom: 6 }}>
+                  <span style={{ color: '#ff4d4f', marginRight: 4 }}>*</span>规则类型
+                </div>
+                <Select
+                  value={ruleType}
+                  style={{ width: '100%' }}
+                  onChange={(next) => {
+                    setRuleType(next)
+                    const found = RULE_TYPES.find((it) => it.value === next)
+                    if (found) setThreshold(found.threshold)
+                  }}
+                  options={RULE_TYPES.map((it) => ({ value: it.value, label: it.label }))}
+                />
               </div>
+            )}
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ marginBottom: 6 }}>规则名称</div>
               <Input
                 value={title}
                 maxLength={64}
-                placeholder="如：任务执行超时"
+                placeholder="留空则按类型生成"
                 onChange={(e) => setTitle(e.target.value)}
               />
             </div>
             <div>
               <div style={{ marginBottom: 6 }}>
-                <span style={{ color: '#ff4d4f', marginRight: 4 }}>*</span>阈值
+                <span style={{ color: '#ff4d4f', marginRight: 4 }}>*</span>阈值（
+                {RULE_TYPES.find((it) => it.value === ruleType)?.unit || ''}）
               </div>
               <InputNumber
                 min={0}

@@ -67,14 +67,16 @@ func deleteLoop(ctx context.Context, db *sql.DB, dbType, table, cond, pgMode str
 	if err != nil {
 		return fmt.Errorf("读取主键失败: %w", err)
 	}
-	hasCT := false
 	mode := "cte"
 	if dbType == "postgres" {
-		hasCT = hasCreateTime(ctx, db, dbType, table)
+		hasCT := hasCreateTime(ctx, db, dbType, table)
 		var rerr error
-		mode, rerr = ResolvePGMode(pgMode, hasCT, 0)
+		mode, rerr = ResolvePGMode(pgMode, hasCT, estimatePGRows(ctx, db, table))
 		if rerr != nil {
 			return rerr
+		}
+		if mode == "shard" {
+			return deleteShard(ctx, db, table, cond, pks, on)
 		}
 	}
 	var rounds int
@@ -85,20 +87,22 @@ func deleteLoop(ctx context.Context, db *sql.DB, dbType, table, cond, pgMode str
 			return errStopped
 		}
 		var q string
+		var n int64
 		if dbType == "postgres" {
-			if mode == "shard" && strings.EqualFold(strings.TrimSpace(pgMode), "shard") {
-				q, err = BuildPGCTESQL(table, cond+" AND create_time < NOW()", pks)
-			} else {
-				q, err = BuildPGCTESQL(table, cond, pks)
+			q, err = BuildPGCTESQL(table, cond, pks)
+			if err != nil {
+				return err
 			}
+			lastSQL = q
+			n, err = execPGCTEBatch(ctx, db, q)
 		} else {
 			q, err = BuildMySQLDeleteSQL(table, cond)
+			if err != nil {
+				return err
+			}
+			lastSQL = q
+			n, err = execAffected(ctx, db, q)
 		}
-		if err != nil {
-			return err
-		}
-		lastSQL = q
-		n, err := execAffected(ctx, db, q)
 		if err != nil {
 			report(on, Progress{Rounds: rounds, DeletedRows: deleted, SQL: lastSQL})
 			return err
@@ -109,13 +113,85 @@ func deleteLoop(ctx context.Context, db *sql.DB, dbType, table, cond, pgMode str
 		if n == 0 {
 			return nil
 		}
-		select {
-		case <-ctx.Done():
-			return errStopped
-		case <-time.After(600 * time.Millisecond):
+		if err := pauseBatch(ctx); err != nil {
+			return err
 		}
 	}
 	return fmt.Errorf("超过最大轮次 %d", maxRounds)
+}
+
+func execPGCTEBatch(ctx context.Context, db *sql.DB, q string) (int64, error) {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, q)
+	if err != nil {
+		return 0, err
+	}
+	cols, err := rows.Columns()
+	if err != nil {
+		rows.Close()
+		return 0, err
+	}
+	var n int64
+	for rows.Next() {
+		holders := make([]any, len(cols))
+		ptrs := make([]any, len(cols))
+		for i := range holders {
+			ptrs[i] = &holders[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		n++
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, err
+	}
+	rows.Close()
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+func pauseBatch(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return errStopped
+	case <-time.After(600 * time.Millisecond):
+		return nil
+	}
+}
+
+func estimatePGRows(ctx context.Context, db *sql.DB, table string) int64 {
+	schema, name := splitTable(table)
+	if schema == "" {
+		schema = "public"
+	}
+	var n sql.NullFloat64
+	err := db.QueryRowContext(ctx, `
+SELECT c.reltuples
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE c.relname = $1 AND n.nspname = $2
+LIMIT 1`, name, schema).Scan(&n)
+	if err != nil || !n.Valid || n.Float64 < 0 {
+		return 0
+	}
+	return int64(n.Float64)
+}
+
+func splitTable(table string) (schema, name string) {
+	table = strings.TrimSpace(table)
+	if i := strings.LastIndex(table, "."); i >= 0 {
+		return strings.TrimSpace(table[:i]), strings.TrimSpace(table[i+1:])
+	}
+	return "", table
 }
 
 func copyThenDelete(ctx context.Context, src, dst *sql.DB, dbType, table, cond, pgMode, dstTable string, on func(Progress)) error {
@@ -223,29 +299,5 @@ func exportCSV(ctx context.Context, src *sql.DB, dbType, table, cond, ossBucket 
 		msg += "（OSS bucket=" + ossBucket + "，请在系统设置中配置上传）"
 	}
 	report(on, Progress{SQL: sel, Message: msg})
-	return nil
-}
-
-func runScript(ctx context.Context, db *sql.DB, scriptType, body string, on func(Progress)) error {
-	kind := strings.ToLower(strings.TrimSpace(scriptType))
-	if kind != "" && kind != "sql" {
-		return fmt.Errorf("脚本类型 %s 需在执行节点配置解释器，当前仅支持 SQL", scriptType)
-	}
-	var total int64
-	var rounds int
-	for _, stmt := range splitSQL(body) {
-		if err := ctx.Err(); err != nil {
-			return errStopped
-		}
-		n, err := execAffected(ctx, db, stmt)
-		if err != nil {
-			report(on, Progress{Rounds: rounds, DeletedRows: total, SQL: stmt})
-			return err
-		}
-		total += n
-		rounds++
-		report(on, interim(rounds, total, stmt))
-	}
-	report(on, Progress{Rounds: rounds, DeletedRows: total, SQL: body})
 	return nil
 }

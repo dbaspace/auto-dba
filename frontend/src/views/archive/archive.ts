@@ -25,10 +25,10 @@ export const PG_DELETE_MODE_OPTIONS = [
 
 export const SCRIPT_TEMPLATES: Record<string, string> = {
   sql: '-- 在此编写 SQL\nDELETE FROM t WHERE create_time < ...',
-  python: 'def archive_delete():\n    # 删除逻辑\n    return deleted  # 整数行数；失败请 raise\n',
+  python: 'def archive_delete():\n    deleted = 0\n    # 在这里写删除逻辑，返回删除行数；失败请 raise\n    return deleted\n',
   go: `package main
 
-// 填写区：host/dbname/tables 为空时用源端；删除条件 create_time < today-retainDays
+// 填写区：host / dbname / tables 为空时请改成源端；删除条件 create_time < today - retainDays
 var (
 	host       = ""
 	port       = 5432
@@ -40,7 +40,17 @@ var (
 	limit      = 1000
 )
 
-func main() {
+func archiveDelete() (int64, error) {
+	_ = host
+	_ = port
+	_ = user
+	_ = password
+	_ = dbname
+	_ = tables
+	_ = retainDays
+	_ = limit
+	var deleted int64
+	return deleted, nil
 }
 `,
   shell: '# 在此编写 Shell 脚本\necho "archive"',

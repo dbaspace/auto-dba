@@ -1,6 +1,9 @@
 package archive
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestValidateDeleteCondition(t *testing.T) {
 	if err := ValidateDeleteCondition("create_time < now()"); err != nil {
@@ -26,12 +29,31 @@ func TestBuildDeleteSQL(t *testing.T) {
 		t.Fatalf("%v %s", err, q)
 	}
 	q, err = BuildPGCTESQL("t", "id>0", []string{"id"})
-	if err != nil || !containsAll(q, "WITH cte1", "DELETE FROM", `"t"`) {
+	if err != nil || !containsAll(q, "WITH cte1", "DELETE FROM", `"t"`, "LIMIT 10000") {
 		t.Fatalf("%v %s", err, q)
 	}
 	q, err = BuildPGCTESQL("t", "id>0", nil)
-	if err != nil || !containsAll(q, "ctid", "DELETE FROM") {
+	if err != nil || !containsAll(q, "ctid", "DELETE FROM", "SELECT ctid FROM cte1", "LIMIT 10000") {
 		t.Fatalf("ctid fallback: %v %s", err, q)
+	}
+	q, err = BuildPGDeleteByPKsSQL("t", []string{"id"}, [][]string{{"1"}, {"2"}})
+	if err != nil || q != `DELETE FROM "t" WHERE "id" IN ('1', '2')` {
+		t.Fatalf("%v %s", err, q)
+	}
+}
+
+func TestSplitShardBounds(t *testing.T) {
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	bounds := SplitShardBounds([]HourCount{
+		{Hour: base, Count: 60000},
+		{Hour: base.Add(time.Hour), Count: 60000},
+		{Hour: base.Add(2 * time.Hour), Count: 10000},
+	}, 100000)
+	if len(bounds) != 2 {
+		t.Fatalf("bounds=%v", bounds)
+	}
+	if !bounds[0].Equal(base.Add(2*time.Hour)) || !bounds[1].Equal(base.Add(3*time.Hour)) {
+		t.Fatalf("bounds=%v", bounds)
 	}
 }
 
@@ -45,6 +67,10 @@ func TestNormalizeStrategyAndPGMode(t *testing.T) {
 	}
 	if _, err := ResolvePGMode("shard", false, 1); err == nil {
 		t.Fatal("shard without create_time")
+	}
+	mode, err = ResolvePGMode("auto", true, shardThreshold)
+	if err != nil || mode != "shard" {
+		t.Fatalf("auto shard: %v %s", err, mode)
 	}
 }
 
