@@ -15,14 +15,21 @@ import (
 func TestActivityTopologySQLWindow(t *testing.T) {
 	sqlText := ActivityTopologySQL
 	for _, part := range []string{
+		`datname AS "库"`,
+		`client_addr::text AS "host"`,
 		"usename <> 'repl'",
-		"state_change >= now() - interval '5 minutes'",
-		"query_start >= now() - interval '5 minutes'",
-		"GROUP BY client_addr, datname",
+		"GROUP BY datname, client_addr",
+		"ORDER BY count(*) DESC",
 	} {
 		if !strings.Contains(sqlText, part) {
 			t.Fatalf("SQL 缺少 %s", part)
 		}
+	}
+	if strings.Contains(sqlText, "5 minutes") || strings.Contains(sqlText, "state_change") || strings.Contains(sqlText, "query_start") {
+		t.Fatalf("SQL 仍限制时间窗口: %s", sqlText)
+	}
+	if strings.Index(sqlText, "datname") > strings.Index(sqlText, "client_addr") {
+		t.Fatalf("列顺序应为库、地址、连接数: %s", sqlText)
 	}
 }
 

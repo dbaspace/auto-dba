@@ -65,7 +65,6 @@ func (h *InsightHandler) Topology(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"data":      out,
 		"prom_note": note,
-		"window":    "5m",
 	})
 }
 

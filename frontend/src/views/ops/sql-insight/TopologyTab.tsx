@@ -238,7 +238,7 @@ export default function TopologyTab(props: {
           emptyText: queried
             ? (rows.length && !shown.length
               ? <Empty description="没有匹配的数据库" />
-              : <Empty description="最近 5 分钟没有客户端连接" />)
+              : <Empty description="没有客户端连接" />)
             : <Empty description="选择环境与实例后查询" />,
         }}
         scroll={{ x: 980 }}

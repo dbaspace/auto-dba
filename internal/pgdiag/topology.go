@@ -14,15 +14,14 @@ import (
 	"auto-dba/internal/store"
 )
 
-// ActivityTopologySQL 统计最近 5 分钟内有活动的客户端连接。语句固定，不接受外部拼接。
-const ActivityTopologySQL = `SELECT client_addr::text, datname, count(*)::bigint
+// ActivityTopologySQL 按库和客户端地址统计当前连接，排除复制账号。语句固定，不接受外部拼接。
+// client_addr、count 保留类型转换，便于扫描；筛选、分组和排序与下面这条一致：
+// select datname as "库", client_addr as "host", count(*) as "连接数"
+// from pg_stat_activity where usename <> 'repl' group by datname, client_addr order by count(*) desc
+const ActivityTopologySQL = `SELECT datname AS "库", client_addr::text AS "host", count(*)::bigint AS "连接数"
 FROM pg_stat_activity
 WHERE usename <> 'repl'
-  AND (
-    state_change >= now() - interval '5 minutes'
-    OR query_start >= now() - interval '5 minutes'
-  )
-GROUP BY client_addr, datname
+GROUP BY datname, client_addr
 ORDER BY count(*) DESC`
 
 const (
@@ -80,9 +79,9 @@ func scanActivity(ctx context.Context, db *sql.DB) ([]ActivityRow, error) {
 	defer rows.Close()
 	var out []ActivityRow
 	for rows.Next() {
-		var host, database sql.NullString
+		var database, host sql.NullString
 		var n int64
-		if err := rows.Scan(&host, &database, &n); err != nil {
+		if err := rows.Scan(&database, &host, &n); err != nil {
 			return nil, err
 		}
 		out = append(out, ActivityRow{

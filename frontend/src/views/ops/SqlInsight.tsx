@@ -366,7 +366,6 @@ export default function SqlInsight() {
               options={topoInstances.map((i) => ({ label: instLabel(i), value: i.id }))}
             />
           </div>
-          <span className="label">最近 5 分钟</span>
           <Button type="primary" icon={<SearchOutlined />} onClick={queryTopology}>
             查询
           </Button>
