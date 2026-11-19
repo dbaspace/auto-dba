@@ -1,7 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Button, Checkbox, Input, Modal, Pagination, Select, Spin, message } from 'antd'
+import { AutoComplete, Button, Checkbox, Input, Modal, Pagination, Select, Spin, message } from 'antd'
 import ResponsiveTable from '../../components/ResponsiveTable'
+import Auth from '../../components/Auth'
 import api from '../../api/request'
+import { Perm } from '../../hooks/usePermission'
 import KafkaTopicQueryModal from './KafkaTopicQueryModal'
 import './KafkaQuery.css'
 
@@ -60,6 +62,12 @@ export default function KafkaQuery() {
   const [modalOpen, setModalOpen] = useState(false)
   const [modalTopic, setModalTopic] = useState('')
   const [modalTab, setModalTab] = useState('data')
+  const [approversByInst, setApproversByInst] = useState<Record<string, string[]>>({})
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  const [deleteTopic, setDeleteTopic] = useState('')
+  const [deleteAssignee, setDeleteAssignee] = useState('')
+  const [deleteDesc, setDeleteDesc] = useState('')
+  const [deleteSubmitting, setDeleteSubmitting] = useState(false)
 
   const selected = useMemo(
     () =>
@@ -177,17 +185,39 @@ export default function KafkaQuery() {
     setModalOpen(true)
   }
 
-  function confirmDelete(row: Topic) {
-    Modal.confirm({
-      title: '删除 Topic',
-      content: `确定删除 Topic「${row.name}」？此操作不可恢复。`,
-      okType: 'danger',
-      onOk: async () => {
-        await api.delete(`/instances/${selectedId}/kafka/topics/${encodeURIComponent(row.name || '')}`)
-        message.success('已删除')
-        loadTopics(selectedId, true)
-      },
-    })
+  function openDelete(row: Topic) {
+    const name = row.name || ''
+    if (!selectedId || !name) return
+    const known = approversByInst[selectedId] || []
+    setDeleteTopic(name)
+    setDeleteAssignee(known[0] || '')
+    setDeleteDesc('')
+    setDeleteOpen(true)
+  }
+
+  async function submitDeleteTicket() {
+    const description = deleteDesc.trim()
+    if (!description) {
+      message.warning('请填写工单说明')
+      return
+    }
+    if (!selectedId || !selectedDomain || !deleteTopic) return
+    setDeleteSubmitting(true)
+    try {
+      await api.post('/kafka/orders', {
+        instance_id: selectedId,
+        domain: selectedDomain,
+        cluster: selectedDomain,
+        topic: deleteTopic,
+        action: 'delete_topic',
+        assigned_to: deleteAssignee.trim(),
+        description,
+      })
+      message.success('工单创建成功')
+      setDeleteOpen(false)
+    } finally {
+      setDeleteSubmitting(false)
+    }
   }
 
   async function loadTopics(id: string = selectedId, refresh = false) {
@@ -273,9 +303,12 @@ export default function KafkaQuery() {
         api.get('/instances', { params: { db_type: 'kafka' } }).catch(() => ({ data: { data: [] } })),
       ])
       const instMap = new Map<string, any>()
+      const approverMap: Record<string, string[]> = {}
       for (const i of instRes.data.data || []) {
         instMap.set(i.id, i)
+        approverMap[i.id] = Array.isArray(i.approvers) ? i.approvers.filter(Boolean) : []
       }
+      setApproversByInst(approverMap)
       const fromDomains: DomainEntry[] = (domRes.data.data || [])
         .map((r: any) => {
           const inst = instMap.get(r.instance_id)
@@ -414,9 +447,15 @@ export default function KafkaQuery() {
                       fixed: 'right',
                       render: (_, row) => (
                         <>
-                          <Button type="link" size="small" onClick={() => openTopic(row.name || '', 'data')}>查看</Button>
-                          <Button type="link" size="small" onClick={() => openTopic(row.name || '', 'configs')}>配置</Button>
-                          <Button type="link" size="small" danger onClick={() => confirmDelete(row)}>删除</Button>
+                          <Auth urn={Perm.kafkaQuery.view}>
+                            <Button type="link" size="small" onClick={() => openTopic(row.name || '', 'data')}>查看</Button>
+                          </Auth>
+                          <Auth urn={Perm.kafkaQuery.config}>
+                            <Button type="link" size="small" onClick={() => openTopic(row.name || '', 'configs')}>配置</Button>
+                          </Auth>
+                          <Auth urn={Perm.kafkaQuery.delete}>
+                            <Button type="link" size="small" danger onClick={() => openDelete(row)}>删除</Button>
+                          </Auth>
                         </>
                       ),
                     },
@@ -446,6 +485,43 @@ export default function KafkaQuery() {
         initialTab={modalTab}
         onClose={() => setModalOpen(false)}
       />
+      <Modal
+        open={deleteOpen}
+        title="删除 Topic 工单"
+        okText="提交工单"
+        okButtonProps={{ danger: true, loading: deleteSubmitting }}
+        cancelButtonProps={{ disabled: deleteSubmitting }}
+        onCancel={() => { if (!deleteSubmitting) setDeleteOpen(false) }}
+        onOk={() => { void submitDeleteTicket() }}
+        destroyOnClose
+      >
+        <p>Topic「{deleteTopic}」将提交删除工单，审批通过前不会删除。</p>
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ marginBottom: 6 }}>审核人</div>
+          <AutoComplete
+            allowClear
+            style={{ width: '100%' }}
+            value={deleteAssignee}
+            placeholder={(approversByInst[selectedId] || []).length
+              ? '选填，来自实例中配置的审批人员'
+              : '该 Kafka 未配置审批人员，可手动填写或到实例管理维护'}
+            options={(approversByInst[selectedId] || []).map((a) => ({ value: a, label: a }))}
+            filterOption={(input, option) =>
+              String(option?.value || '').toLowerCase().includes(String(input || '').toLowerCase())
+            }
+            onChange={(v) => setDeleteAssignee(v || '')}
+          />
+        </div>
+        <div>
+          <div style={{ marginBottom: 6 }}>工单说明</div>
+          <Input.TextArea
+            rows={3}
+            value={deleteDesc}
+            placeholder="请输入业务背景及申请原因"
+            onChange={(e) => setDeleteDesc(e.target.value)}
+          />
+        </div>
+      </Modal>
     </div>
   )
 }

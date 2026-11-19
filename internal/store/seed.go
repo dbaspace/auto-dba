@@ -302,6 +302,9 @@ func (d *DB) seedRBAC(now string) error {
 	if err := d.ensureSyncSlotsActionMenus(now); err != nil {
 		return err
 	}
+	if err := d.ensureKafkaQueryActionMenus(now); err != nil {
+		return err
+	}
 	if err := d.ensureMigrationSettingsMenu(now); err != nil {
 		return err
 	}
@@ -1613,6 +1616,37 @@ func (d *DB) ensureSyncSlotsActionMenus(now string) error {
 	return nil
 }
 
+func (d *DB) ensureKafkaQueryActionMenus(now string) error {
+	items := []seedMenu{
+		{"m-act-kafka-query-view", "m-query-kafka", "查看 Topic", "", URNKafkaQueryView, "查看 Kafka Topic 的消息、分区和日志", "eye", 90},
+		{"m-act-kafka-query-config", "m-query-kafka", "查看配置", "", URNKafkaQueryConfig, "查看 Kafka Topic 配置", "setting", 91},
+		{"m-act-kafka-query-delete", "m-query-kafka", "删除 Topic", "", URNKafkaQueryDelete, "提交删除 Kafka Topic 的工单", "delete", 92},
+	}
+	for _, it := range items {
+		id := it.ID
+		exist, err := d.GetMenuByURN(it.URN)
+		if err != nil {
+			return err
+		}
+		if exist != nil && strings.TrimSpace(exist.ID) != "" {
+			id = exist.ID
+		}
+		m := &Menu{
+			ID: id, ParentID: it.Parent, Title: it.Title, Path: it.Path,
+			URN: it.URN, PermissionDesc: it.Perm, Icon: it.Icon, SortOrder: it.Sort, Enabled: true,
+			CreatedAt: now, UpdatedAt: now,
+		}
+		if err := d.EnsureMenu(m); err != nil {
+			return err
+		}
+		if err := d.GrantMenuFollowingParent(id, it.Parent); err != nil {
+			return err
+		}
+	}
+	log.Printf("seed: kafka-query action menus ensured")
+	return nil
+}
+
 func (d *DB) ensureMigrationSettingsMenu(now string) error {
 	const idDefault = "m-act-migration-settings"
 	id := idDefault
@@ -1898,6 +1932,7 @@ func (d *DB) ensureSqlInsightTabMenus(now string) error {
 		{"m-act-si-tab-smart", "m-diag-sql", "智能分析", "", URNSqlInsightTabSmart, "查看智能分析页签", "eye", 85},
 		{"m-act-si-tab-cloud", "m-diag-sql", "云慢日志", "", URNSqlInsightTabCloud, "查看云慢日志页签", "eye", 86},
 		{"m-act-si-tab-pipeline", "m-diag-sql", "同步监控", "", URNSqlInsightTabPipeline, "查看同步监控页签", "eye", 87},
+		{"m-act-si-tab-topology", "m-diag-sql", "拓扑视图", "", URNSqlInsightTabTopology, "查看拓扑视图页签", "eye", 88},
 	}
 	for _, it := range items {
 		exist, err := d.GetMenu(it.ID)

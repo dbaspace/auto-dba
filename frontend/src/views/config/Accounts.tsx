@@ -7,6 +7,7 @@ import {
   Form,
   Input,
   Modal,
+  Pagination,
   Select,
   Space,
   Tabs,
@@ -80,6 +81,8 @@ export default function Accounts() {
   const [idc, setIdc] = useState('')
   const [dbName, setDbName] = useState('')
   const [q, setQ] = useState('')
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(10)
   const [formVisible, setFormVisible] = useState(false)
   const [viewVisible, setViewVisible] = useState(false)
   const [viewing, setViewing] = useState<any>(null)
@@ -104,6 +107,20 @@ export default function Accounts() {
       return true
     })
   }, [rows, activeType, idc, dbName, q])
+
+  const pagedRows = useMemo(() => {
+    const start = (page - 1) * pageSize
+    return filteredRows.slice(start, start + pageSize)
+  }, [filteredRows, page, pageSize])
+
+  useEffect(() => {
+    setPage(1)
+  }, [activeType, idc, dbName, q])
+
+  useEffect(() => {
+    const maxPage = Math.max(1, Math.ceil(filteredRows.length / pageSize) || 1)
+    setPage((current) => (current > maxPage ? maxPage : current))
+  }, [filteredRows.length, pageSize])
 
   const dbNameOptions = useMemo(() => {
     const set = new Set<string>()
@@ -368,7 +385,7 @@ export default function Accounts() {
       <div className="ops-table">
         <ResponsiveTable
           rowKey={(r) => r.id || `${r.username}-${r.db_name}`}
-          dataSource={filteredRows}
+          dataSource={pagedRows}
           loading={loading}
           bordered
           pagination={false}
@@ -443,6 +460,20 @@ export default function Accounts() {
               ),
             },
           ]}
+        />
+      </div>
+      <div className="pager" style={{ gap: 12, alignItems: 'center' }}>
+        <span className="pager-total">共 {filteredRows.length} 条</span>
+        <Pagination
+          current={page}
+          pageSize={pageSize}
+          total={filteredRows.length}
+          showSizeChanger
+          pageSizeOptions={['10', '20', '30', '50', '100']}
+          onChange={(p, ps) => {
+            setPage(p)
+            if (ps && ps !== pageSize) setPageSize(ps)
+          }}
         />
       </div>
 

@@ -207,6 +207,9 @@ func (d *DB) seedFast() error {
 			if err := d.ensureSyncSlotsActionMenus(now); err != nil {
 				return err
 			}
+			if err := d.ensureKafkaQueryActionMenus(now); err != nil {
+				return err
+			}
 			if err := d.ensureMigrationSettingsMenu(now); err != nil {
 				return err
 			}

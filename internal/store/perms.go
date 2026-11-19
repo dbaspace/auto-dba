@@ -76,6 +76,10 @@ const (
 	URNSyncSlotsLogs    = "um.action.sync-slots.logs"
 	URNSyncSlotsDelete  = "um.action.sync-slots.delete"
 
+	URNKafkaQueryView   = "um.action.kafka-query.view"
+	URNKafkaQueryConfig = "um.action.kafka-query.config"
+	URNKafkaQueryDelete = "um.action.kafka-query.delete"
+
 	URNMigrationCreate   = "um.action.migration.create"
 	URNMigrationEdit     = "um.action.migration.edit"
 	URNMigrationDelete   = "um.action.migration.delete"
@@ -116,6 +120,7 @@ const (
 	URNSqlInsightTabSmart    = "um.sidebar.sql-insight.smart"
 	URNSqlInsightTabCloud    = "um.sidebar.sql-insight.cloud"
 	URNSqlInsightTabPipeline = "um.sidebar.sql-insight.pipeline"
+	URNSqlInsightTabTopology = "um.sidebar.sql-insight.topology"
 
 	URNSidebarCloud         = "um.sidebar.cloud"
 	URNSidebarCloudPostgres = "um.sidebar.cloud-postgres"

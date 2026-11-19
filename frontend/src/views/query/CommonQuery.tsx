@@ -511,10 +511,13 @@ export default function CommonQuery() {
   const saved = useMemo(() => loadWorkspace(userId, tenantId), [userId, tenantId])
   const [tabs, setTabs] = useState<TabItem[]>(saved.tabs)
   const [activeKey, setActiveKey] = useState(saved.activeKey)
+  const [sqlEpoch, setSqlEpoch] = useState(0)
   const [appliedWorkspaceKey, setAppliedWorkspaceKey] = useState(workspaceStoreKey)
   const [running, setRunning] = useState(false)
   const queryAbortRef = useRef<AbortController | null>(null)
   const sqlBoxRef = useRef<HTMLTextAreaElement | null>(null)
+  const flushSqlRef = useRef<(() => void) | null>(null)
+  const sqlLiveRef = useRef<{ key: string; sql: string } | null>(null)
   const sqlUndoRef = useRef<Record<string, { undo: SqlSnap[]; redo: SqlSnap[] }>>({})
   const suggestEnv = useRef<SuggestEnv>({
     sql: '',
@@ -599,6 +602,8 @@ export default function CommonQuery() {
   // 用户或租户变化后载入对应页签。未就绪或尚未载入时不把当前页签写进别的键。
   useEffect(() => {
     if (!workspaceReady || appliedWorkspaceKey === workspaceStoreKey) return
+    flushSqlRef.current?.()
+    setSqlEpoch((n) => n + 1)
     const next = loadWorkspace(userId, tenantId)
     setTabs(next.tabs)
     setActiveKey(next.activeKey)
@@ -1248,10 +1253,72 @@ export default function CommonQuery() {
         try { writeQueryWorkspace(userId, tenantId, JSON.stringify(payload)) } catch { /* ignore */ }
       }
     } catch { /* ignore */ }
+    return () => {
+      const live = sqlLiveRef.current
+      if (!live) return
+      const list = tabs.map((t) => (t.key === live.key && t.sql !== live.sql ? { ...t, sql: live.sql } : t))
+      if (list.every((t, i) => t.sql === tabs[i]?.sql)) return
+      try {
+        const payload = {
+          activeKey,
+          leftWidth,
+          editorHeight,
+          histWidth,
+          tabs: list.map((t) => ({
+            key: t.key,
+            dbId: t.dbId,
+            dbName: t.dbName,
+            dbType: t.dbType,
+            env: t.env,
+            instanceId: t.instanceId,
+            tag: t.tag,
+            table: t.table,
+            sql: t.sql,
+            ts: t.ts,
+            favId: t.favId || '',
+            alias: t.alias || '',
+            executedSql: t.executedSql || '',
+            error: t.error || '',
+            result: t.result && (t.result.rows?.length || 0) <= 200 ? t.result : null,
+          })),
+        }
+        try {
+          writeQueryWorkspace(userId, tenantId, JSON.stringify(payload))
+        } catch {
+          payload.tabs = payload.tabs.map((t) => ({ ...t, result: null }))
+          try { writeQueryWorkspace(userId, tenantId, JSON.stringify(payload)) } catch { /* ignore */ }
+        }
+      } catch { /* ignore */ }
+    }
   }, [tabs, activeKey, leftWidth, editorHeight, histWidth, workspaceStoreKey, workspaceReady, appliedWorkspaceKey, userId, tenantId])
 
   function updateCurrent(patch: Partial<TabItem>) {
+    if (Object.prototype.hasOwnProperty.call(patch, 'sql')) setSqlEpoch((n) => n + 1)
     setTabs((list) => list.map((t) => (t.key === activeKey ? { ...t, ...patch } : t)))
+  }
+
+  function editorSql(fallback = ''): string {
+    return sqlBoxRef.current?.value ?? fallback
+  }
+
+  function commitEditorSql(sql: string) {
+    const key = activeKey
+    if (!key) return
+    sqlLiveRef.current = { key, sql }
+    setTabs((list) => {
+      let changed = false
+      const next = list.map((t) => {
+        if (t.key !== key || t.sql === sql) return t
+        changed = true
+        return { ...t, sql }
+      })
+      return changed ? next : list
+    })
+  }
+
+  function selectTab(key: string) {
+    if (key !== activeKey) flushSqlRef.current?.()
+    setActiveKey(key)
   }
 
   function quoteTable(name: string, dbType: any): string {
@@ -1290,7 +1357,7 @@ export default function CommonQuery() {
   function openDB(db: any, opt: { sql?: string; table?: string; run?: boolean; favId?: string } = {}): TabItem {
     const exist = tabs.find((t) => t.dbId === db.id && !t.table)
     if (exist && !opt.table && opt.sql === undefined) {
-      setActiveKey(exist.key)
+      selectTab(exist.key)
       return exist
     }
     const sql = opt.sql ?? (opt.table
@@ -1298,7 +1365,7 @@ export default function CommonQuery() {
       : '')
     const tab = newTab(db, { sql, table: opt.table, favId: opt.favId })
     setTabs((list) => [...list, tab])
-    setActiveKey(tab.key)
+    selectTab(tab.key)
     if (opt.run) runSQL(tab)
     return tab
   }
@@ -1309,17 +1376,20 @@ export default function CommonQuery() {
     const db = databases.find((d) => d.id === data.dbId || d.id === data.id)
     if (!db) return
     if (data.type === 'table') {
+      flushSqlRef.current?.()
       const existTab = tabs.find((t) => t.key === activeKey && t.dbId === db.id)
       const targetKey = existTab ? existTab.key : openDB(db).key
       const sql = `SELECT * FROM ${quoteTable(data.table, data.dbType)} LIMIT 50;`
+      setSqlEpoch((n) => n + 1)
       setTabs((list) => list.map((t) => (t.key === targetKey ? { ...t, sql, table: data.table } : t)))
-      setActiveKey(targetKey)
+      selectTab(targetKey)
       return
     }
     openDB(db)
   }
 
   function closeTab(key: string) {
+    if (key === activeKey) flushSqlRef.current?.()
     setTabs((list) => {
       const idx = list.findIndex((t) => t.key === key)
       if (idx < 0) return list
@@ -1337,14 +1407,14 @@ export default function CommonQuery() {
     if (!db) return
     const tab = newTab(db, { sql: '' })
     setTabs((list) => [...list, tab])
-    setActiveKey(tab.key)
+    selectTab(tab.key)
   }
 
   function switchEnv(db: any) {
     if (!db || !current || db.id === current.dbId) return
     const exist = tabs.find((t) => t.dbId === db.id && !t.table && t.key !== current.key)
     if (exist) {
-      setActiveKey(exist.key)
+      selectTab(exist.key)
       return
     }
     const inst = instMap[db.instance_id] || {}
@@ -1408,13 +1478,15 @@ export default function CommonQuery() {
 
   function undoSql() {
     if (!current) return
+    flushSqlRef.current?.()
+    const live = editorSql(current.sql || '')
     const bucket = sqlUndoBucket(current.key)
     const prev = bucket.undo.pop()
     if (!prev) return
     const el = sqlBoxRef.current
     bucket.redo.push({
-      sql: current.sql || '',
-      cursor: el ? el.selectionStart ?? (current.sql || '').length : (current.sql || '').length,
+      sql: live,
+      cursor: el ? el.selectionStart ?? live.length : live.length,
     })
     if (bucket.redo.length > 100) bucket.redo.shift()
     suggest.close()
@@ -1424,13 +1496,15 @@ export default function CommonQuery() {
 
   function redoSql() {
     if (!current) return
+    flushSqlRef.current?.()
+    const live = editorSql(current.sql || '')
     const bucket = sqlUndoBucket(current.key)
     const next = bucket.redo.pop()
     if (!next) return
     const el = sqlBoxRef.current
     bucket.undo.push({
-      sql: current.sql || '',
-      cursor: el ? el.selectionStart ?? (current.sql || '').length : (current.sql || '').length,
+      sql: live,
+      cursor: el ? el.selectionStart ?? live.length : live.length,
     })
     if (bucket.undo.length > 100) bucket.undo.shift()
     suggest.close()
@@ -1440,7 +1514,9 @@ export default function CommonQuery() {
 
   function formatSQL() {
     if (!current) return
-    const result = formatSqlContent(String(current.sql || ''))
+    flushSqlRef.current?.()
+    const source = editorSql(current.sql || '')
+    const result = formatSqlContent(source)
     if (!result.ok) {
       message.warning(result.error || 'SQL 美化失败')
       return
@@ -1449,7 +1525,7 @@ export default function CommonQuery() {
       message.info('SQL 已是规范格式')
       return
     }
-    noteSqlEdit(current.key, { sql: current.sql || '', cursor: sqlBoxRef.current?.selectionStart ?? 0 })
+    noteSqlEdit(current.key, { sql: source, cursor: sqlBoxRef.current?.selectionStart ?? 0 })
     updateCurrent({ sql: result.text })
   }
 
@@ -1488,6 +1564,7 @@ export default function CommonQuery() {
 
   function applyLineComment(mode: SqlCommentMode) {
     if (!current) return
+    flushSqlRef.current?.()
     const el = sqlBoxRef.current
     const sql = el?.value ?? current.sql ?? ''
     const start = el?.selectionStart ?? sql.length
@@ -1539,6 +1616,11 @@ export default function CommonQuery() {
   }
 
   async function runSQL(tab: TabItem | null = current, opt: { onlySelection?: boolean; fromClick?: boolean } = {}) {
+    if (tab && tab.key === activeKey) {
+      flushSqlRef.current?.()
+      const live = sqlBoxRef.current?.value
+      if (live != null && live !== tab.sql) tab = { ...tab, sql: live }
+    }
     const fromClick = !!opt.fromClick
     const clicked = fromClick ? clickSelectionRef.current : null
     if (fromClick) clickSelectionRef.current = null
@@ -1663,7 +1745,9 @@ export default function CommonQuery() {
 
   async function exportDQL() {
     const tab = current
-    if (!tab?.dbId || !tab.sql?.trim()) {
+    flushSqlRef.current?.()
+    const liveSql = editorSql(tab?.sql || '')
+    if (!tab?.dbId || !liveSql.trim()) {
       message.warning('请先选择数据库并填写 SQL')
       return
     }
@@ -1679,7 +1763,7 @@ export default function CommonQuery() {
     } catch {
       /* 判断失败时走导出工单 */
     }
-    const exportSql = tab.result && tab.executedSql?.trim() ? tab.executedSql : tab.sql
+    const exportSql = tab.result && tab.executedSql?.trim() ? tab.executedSql : liveSql
     Modal.confirm({
       title: '数据导出',
       content: '导出表数据需发起导出数据工单，是否继续？',
@@ -1711,24 +1795,28 @@ export default function CommonQuery() {
   }
 
   function openFavorite() {
-    if (!current?.sql?.trim()) {
+    const sql = editorSql(current?.sql || '')
+    if (!sql.trim()) {
       message.warning('请先输入 SQL')
       return
     }
+    flushSqlRef.current?.()
     setFavMode('create')
     setFavName('')
-    setFavSql(current.sql)
+    setFavSql(sql)
     setFavVisible(true)
   }
 
   function openSaveAs() {
-    if (!current?.sql?.trim()) {
+    const sql = editorSql(current?.sql || '')
+    if (!sql.trim()) {
       message.warning('请先输入 SQL')
       return
     }
+    flushSqlRef.current?.()
     setFavMode('saveas')
     setFavName('')
-    setFavSql(current.sql)
+    setFavSql(sql)
     setFavVisible(true)
   }
 
@@ -1806,7 +1894,8 @@ export default function CommonQuery() {
       updateCurrent({ favId: '' })
       return
     }
-    const sqlText = String(tab.sql || '').trim()
+    flushSqlRef.current?.()
+    const sqlText = editorSql(tab.sql || '').trim()
     if (!sqlText) {
       message.warning('请先输入 SQL')
       return
@@ -1876,6 +1965,7 @@ export default function CommonQuery() {
 
   function openOrSwitchDB(db: any, sql: string, favId = '') {
     armCollapseSelection()
+    flushSqlRef.current?.()
     const exist = tabs.find((t) => t.dbId === db.id && !t.table)
     const cleared = {
       sql,
@@ -1887,8 +1977,9 @@ export default function CommonQuery() {
       executedSql: '',
     }
     if (exist) {
+      setSqlEpoch((n) => n + 1)
       setTabs((list) => list.map((t) => (t.key === exist.key ? { ...t, ...cleared } : t)))
-      setActiveKey(exist.key)
+      selectTab(exist.key)
       return
     }
     openDB(db, { sql, favId })
@@ -2111,7 +2202,7 @@ export default function CommonQuery() {
   }
 
   suggestEnv.current = {
-    sql: current?.sql || '',
+    sql: (sqlLiveRef.current?.key === activeKey ? sqlLiveRef.current.sql : current?.sql) || '',
     dbId: current?.dbId || '',
     dbType: current?.dbType || '',
     tableNames: current?.dbId ? tablesMap[current.dbId] || [] : [],
@@ -2119,10 +2210,11 @@ export default function CommonQuery() {
       if (current?.dbId) void fetchTables(current.dbId)
     },
     apply: (sql, cursor) => {
+      const el = sqlBoxRef.current
       if (current) {
-        const el = sqlBoxRef.current
         noteSqlEdit(current.key, { sql: el?.value ?? current.sql ?? '', cursor: el?.selectionStart ?? 0 })
       }
+      flushSqlRef.current?.()
       updateCurrent({ sql })
       setTimeout(() => {
         const el = sqlBoxRef.current
@@ -2213,7 +2305,7 @@ export default function CommonQuery() {
                   type="editable-card"
                   hideAdd
                   activeKey={activeKey}
-                  onChange={setActiveKey}
+                  onChange={selectTab}
                   onEdit={(targetKey, action) => { if (action === 'remove') closeTab(String(targetKey)) }}
                   items={tabs.map((t) => {
                     const label = tabLabelOf(t)
@@ -2300,9 +2392,10 @@ export default function CommonQuery() {
                           onPointerDown={(e) => {
                             runPointerDownRef.current = true
                             const tab = current
-                            const sel = tab ? liveSelection(tab.sql || '') : null
+                            const sqlNow = tab ? editorSql(tab.sql || '') : ''
+                            const sel = tab ? liveSelection(sqlNow) : null
                             clickSelectionRef.current = tab && sel
-                              ? { ...sel, sql: tab.sql || '', key: tab.key }
+                              ? { ...sel, sql: sqlNow, key: tab.key }
                               : null
                             const span = e.currentTarget
                             const up = (ev: PointerEvent) => {
@@ -2402,16 +2495,20 @@ export default function CommonQuery() {
                   </div>
                   <SqlEditor
                     ref={sqlBoxRef}
+                    flushRef={flushSqlRef}
+                    deferCommit
+                    syncKey={`${activeKey}:${sqlEpoch}`}
                     value={current?.sql || ''}
                     className="sql-box-hl"
                     spellCheck={false}
                     minRows={8}
                     placeholder="输入 SQL，Ctrl / ⌘ + Enter 运行；有多条且选中一段时只执行选中。Ctrl+A 全选，Esc 取消选中。Ctrl / ⌘ + / 注释，Ctrl / ⌘ + Shift + / 取消注释"
-                    onChange={(v) => {
+                    onDraft={(v) => {
+                      sqlLiveRef.current = { key: activeKey, sql: v }
                       suggestEnv.current.sql = v
-                      updateCurrent({ sql: v })
                       suggest.onInput()
                     }}
+                    onChange={commitEditorSql}
                     onKeyDown={onSqlKey}
                     onBeforeInput={noteSqlBeforeInput}
                     onKeyUp={(e) => {

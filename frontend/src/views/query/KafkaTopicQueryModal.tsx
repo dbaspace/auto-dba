@@ -4,6 +4,7 @@ import ResponsiveTable from '../../components/ResponsiveTable'
 import { StopOutlined } from '@ant-design/icons'
 import axios from 'axios'
 import api from '../../api/request'
+import { Perm, usePermission } from '../../hooks/usePermission'
 import './KafkaTopicQueryModal.css'
 
 interface CellDetail {
@@ -75,6 +76,22 @@ export default function KafkaTopicQueryModal({
   initialPartition,
   onClose,
 }: Props) {
+  const { hasUrn } = usePermission()
+  const canView = hasUrn(Perm.kafkaQuery.view)
+  const canConfig = hasUrn(Perm.kafkaQuery.config)
+  const tabItems = useMemo(() => {
+    const items: { key: string; label: string }[] = []
+    if (canView) {
+      items.push(
+        { key: 'data', label: 'Data' },
+        { key: 'partitions', label: 'Partitions' },
+        { key: 'consumerGroups', label: 'Consumer Groups' },
+      )
+    }
+    if (canConfig) items.push({ key: 'configs', label: 'Configs' })
+    if (canView) items.push({ key: 'logs', label: 'Logs' })
+    return items
+  }, [canView, canConfig])
   const [activeTab, setActiveTab] = useState('data')
   const [sortOrder, setSortOrder] = useState('newest')
   const [partition, setPartition] = useState('0')
@@ -311,7 +328,9 @@ export default function KafkaTopicQueryModal({
     setPartitionOptions([])
     setConfigRows([])
     setLogRows([])
-    const tab = initialTab || 'data'
+    const allowed = new Set(tabItems.map((it) => it.key))
+    const tab = allowed.has(initialTab || 'data') ? (initialTab || 'data') : (tabItems[0]?.key || '')
+    if (!tab) return
     setActiveTab(tab)
     const preferred =
       initialPartition != null && Number(initialPartition) >= 0
@@ -320,11 +339,13 @@ export default function KafkaTopicQueryModal({
     if (preferred !== undefined) setPartition(preferred)
     loadTabData(tab, preferred)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, instanceId, topicName])
+  }, [visible, instanceId, topicName, initialTab, canView, canConfig])
 
   useEffect(() => () => {
     queryAbortRef.current?.abort()
   }, [])
+
+  const visibleTab = tabItems.some((it) => it.key === activeTab) ? activeTab : (tabItems[0]?.key || '')
 
   function renderBadgeList(ids?: number[], color = 'blue') {
     if (!ids?.length) return '-'
@@ -338,7 +359,7 @@ export default function KafkaTopicQueryModal({
   }
 
   function renderMetaTable() {
-    if (activeTab === 'partitions') {
+    if (visibleTab === 'partitions') {
       return (
         <ResponsiveTable
           dataSource={partitionRows}
@@ -368,7 +389,7 @@ export default function KafkaTopicQueryModal({
         />
       )
     }
-    if (activeTab === 'configs') {
+    if (visibleTab === 'configs') {
       return (
         <ResponsiveTable
           dataSource={configRows}
@@ -402,7 +423,7 @@ export default function KafkaTopicQueryModal({
         />
       )
     }
-    if (activeTab === 'logs') {
+    if (visibleTab === 'logs') {
       return (
         <ResponsiveTable
           dataSource={logRows}
@@ -436,21 +457,15 @@ export default function KafkaTopicQueryModal({
       onCancel={onClose}
     >
       <Tabs
-        activeKey={activeTab}
+        activeKey={visibleTab || undefined}
         onChange={(key) => {
           setActiveTab(key)
           loadTabData(key)
         }}
-        items={[
-          { key: 'data', label: 'Data' },
-          { key: 'partitions', label: 'Partitions' },
-          { key: 'consumerGroups', label: 'Consumer Groups' },
-          { key: 'configs', label: 'Configs' },
-          { key: 'logs', label: 'Logs' },
-        ]}
+        items={tabItems}
       />
 
-      {activeTab === 'data' ? (
+      {visibleTab === 'data' ? (
         <>
           <div className="toolbar">
             <span className="lab">Sort</span>

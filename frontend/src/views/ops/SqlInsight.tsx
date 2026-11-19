@@ -14,6 +14,7 @@ import PgSpaceTab from './sql-insight/PgSpaceTab'
 import SmartAnalysisTab from './sql-insight/SmartAnalysisTab'
 import CloudSlowLogTab from './sql-insight/CloudSlowLogTab'
 import CloudSlowPipelineTab from './sql-insight/CloudSlowPipelineTab'
+import TopologyTab from './sql-insight/TopologyTab'
 import './SqlInsight.css'
 
 const { RangePicker } = DatePicker
@@ -69,6 +70,7 @@ function buildFilter(instanceId: string, range: [Dayjs, Dayjs], instances: any[]
 export default function SqlInsight() {
   const { hasUrn } = usePermission()
   const [instances, setInstances] = useState<any[]>([])
+  const [instancesLoading, setInstancesLoading] = useState(false)
   const [draftInstance, setDraftInstance] = useState('')
   const [draftRange, setDraftRange] = useState<[Dayjs, Dayjs]>(defaultRange())
   const [filter, setFilter] = useState<SnapshotFilter>(() => buildFilter('', defaultRange(), []))
@@ -78,13 +80,22 @@ export default function SqlInsight() {
   const [intervalSec, setIntervalSec] = useState(15)
   const [refreshTick, setRefreshTick] = useState(0)
   const [collecting, setCollecting] = useState(false)
+  const [environments, setEnvironments] = useState<any[]>([])
+  const [topoEnv, setTopoEnv] = useState('')
+  const [topoInstDraft, setTopoInstDraft] = useState('')
+  const [topoQueryId, setTopoQueryId] = useState('')
+  const [topoTick, setTopoTick] = useState(0)
 
   const loadInstances = useCallback(async () => {
+    setInstancesLoading(true)
     try {
-      const { data } = await api.get('/instances')
-      setInstances((data.data || []).filter(isPG))
+      const { data } = await api.get('/instances', { params: { db_type: 'postgres' } })
+      const list = (data.data || []).filter(isPG)
+      setInstances(list)
     } catch (e: any) {
       message.error(e?.response?.data?.message || e?.message || '加载实例失败')
+    } finally {
+      setInstancesLoading(false)
     }
   }, [])
 
@@ -132,8 +143,40 @@ export default function SqlInsight() {
     })
   }
 
+  const topoInstances = useMemo(() => {
+    if (!topoEnv) return []
+    const env = environments.find((e) => e.id === topoEnv)
+    const wanted = new Set(
+      [topoEnv, env?.code, env?.name]
+        .map((v) => String(v || '').trim().toLowerCase())
+        .filter(Boolean),
+    )
+    return instances.filter((i) => {
+      const keys = [i.env_id, i.idc, i.env, i.env_code]
+        .map((v) => String(v || '').trim().toLowerCase())
+        .filter(Boolean)
+      return keys.some((k) => wanted.has(k))
+    })
+  }, [environments, instances, topoEnv])
+
+  const queryTopology = () => {
+    if (!topoInstDraft) {
+      message.warning('请选择实例')
+      return
+    }
+    setTopoQueryId(topoInstDraft)
+    setTopoTick((n) => n + 1)
+  }
+
+  const resetTopology = () => {
+    setTopoEnv('')
+    setTopoInstDraft('')
+    setTopoQueryId('')
+    setTopoTick((n) => n + 1)
+  }
+
   const allowedTabs = useMemo(() => {
-    const order: InsightTabKey[] = ['sql', 'analysis', 'visual', 'awr', 'space', 'smart', 'cloud', 'pipeline']
+    const order: InsightTabKey[] = ['sql', 'analysis', 'visual', 'awr', 'space', 'smart', 'cloud', 'pipeline', 'topology']
     const urnOf: Record<InsightTabKey, string> = {
       sql: Perm.sqlInsight.tab.sql,
       analysis: Perm.sqlInsight.tab.analysis,
@@ -143,9 +186,25 @@ export default function SqlInsight() {
       smart: Perm.sqlInsight.tab.smart,
       cloud: Perm.sqlInsight.tab.cloud,
       pipeline: Perm.sqlInsight.tab.pipeline,
+      topology: Perm.sqlInsight.tab.topology,
     }
     return order.filter((key) => hasUrn(urnOf[key]))
   }, [hasUrn])
+
+  const loadEnvironments = useCallback(async () => {
+    try {
+      const { data } = await api.get('/environments')
+      setEnvironments(data.data || [])
+    } catch (e: any) {
+      message.error(e?.response?.data?.message || e?.message || '加载环境失败')
+    }
+  }, [])
+
+  const canTopology = hasUrn(Perm.sqlInsight.tab.topology)
+  useEffect(() => {
+    if (!canTopology) return
+    void loadEnvironments()
+  }, [canTopology, loadEnvironments])
 
   const visibleTab = allowedTabs.includes(tab) ? tab : allowedTabs[0]
 
@@ -202,9 +261,20 @@ export default function SqlInsight() {
         label: '同步监控',
         children: <CloudSlowPipelineTab active={visibleTab === 'pipeline'} />,
       },
+      {
+        key: 'topology',
+        label: '拓扑视图',
+        children: (
+          <TopologyTab
+            instanceId={topoQueryId}
+            refreshTick={topoTick}
+            active={visibleTab === 'topology'}
+          />
+        ),
+      },
     ]
     return all.filter((item) => allowedTabs.includes(item.key))
-  }, [allowedTabs, autoRefresh, draftInstance, draftRange, filter, instances, intervalSec, refreshTick, showSql, visibleTab])
+  }, [allowedTabs, autoRefresh, draftInstance, draftRange, filter, instances, intervalSec, refreshTick, showSql, topoQueryId, topoTick, visibleTab])
 
   const tabExtra = (
     <Space wrap size="small">
@@ -237,38 +307,82 @@ export default function SqlInsight() {
 
   return (
     <div className="ops-page">
-      <div className="ops-filters">
-        <div className="filter-item" style={{ flex: 'none' }}>
-          <Select
-            value={draftInstance || undefined}
-            showSearch
-            allowClear
-            placeholder="选择 PostgreSQL 实例"
-            style={{ width: 360 }}
-            popupMatchSelectWidth={false}
-            optionFilterProp="label"
-            onChange={(v) => setDraftInstance(v || '')}
-            options={instances.map((i) => ({ label: instLabel(i), value: i.id }))}
-          />
+      {visibleTab === 'topology' ? (
+        <div className="ops-filters">
+          <div className="filter-item" style={{ flex: 'none' }}>
+            <Select
+              value={topoEnv || undefined}
+              showSearch
+              allowClear
+              placeholder="选择环境"
+              style={{ width: 200 }}
+              optionFilterProp="label"
+              onChange={(v) => {
+                setTopoEnv(v || '')
+                setTopoInstDraft('')
+              }}
+              options={environments.map((e) => ({
+                label: e.name || e.code || e.id,
+                value: e.id,
+              }))}
+            />
+          </div>
+          <div className="filter-item" style={{ flex: 'none' }}>
+            <Select
+              value={topoInstDraft || undefined}
+              showSearch
+              allowClear
+              placeholder="选择实例地址"
+              style={{ width: 360 }}
+              popupMatchSelectWidth={false}
+              optionFilterProp="label"
+              disabled={!topoEnv}
+              loading={instancesLoading}
+              notFoundContent={instancesLoading ? '正在加载实例' : '该环境没有 PostgreSQL 实例'}
+              onChange={(v) => setTopoInstDraft(v || '')}
+              options={topoInstances.map((i) => ({ label: instLabel(i), value: i.id }))}
+            />
+          </div>
+          <span className="label">最近 5 分钟</span>
+          <Button type="primary" icon={<SearchOutlined />} onClick={queryTopology}>
+            查询
+          </Button>
+          <Button onClick={resetTopology}>重置</Button>
         </div>
-        <div className="filter-item" style={{ flex: 'none' }}>
-          <span className="label">时间范围</span>
-          <RangePicker
-            value={draftRange}
-            showTime
-            format="YYYY-MM-DD HH:mm:ss"
-            placeholder={['开始', '结束']}
-            style={{ width: 380 }}
-            onChange={(v) => {
-              if (v && v[0] && v[1]) setDraftRange([v[0], v[1]])
-            }}
-          />
+      ) : (
+        <div className="ops-filters">
+          <div className="filter-item" style={{ flex: 'none' }}>
+            <Select
+              value={draftInstance || undefined}
+              showSearch
+              allowClear
+              placeholder="选择 PostgreSQL 实例"
+              style={{ width: 360 }}
+              popupMatchSelectWidth={false}
+              optionFilterProp="label"
+              onChange={(v) => setDraftInstance(v || '')}
+              options={instances.map((i) => ({ label: instLabel(i), value: i.id }))}
+            />
+          </div>
+          <div className="filter-item" style={{ flex: 'none' }}>
+            <span className="label">时间范围</span>
+            <RangePicker
+              value={draftRange}
+              showTime
+              format="YYYY-MM-DD HH:mm:ss"
+              placeholder={['开始', '结束']}
+              style={{ width: 380 }}
+              onChange={(v) => {
+                if (v && v[0] && v[1]) setDraftRange([v[0], v[1]])
+              }}
+            />
+          </div>
+          <Button type="primary" icon={<SearchOutlined />} onClick={applyQuery}>
+            查询
+          </Button>
+          <Button onClick={resetQuery}>重置</Button>
         </div>
-        <Button type="primary" icon={<SearchOutlined />} onClick={applyQuery}>
-          查询
-        </Button>
-        <Button onClick={resetQuery}>重置</Button>
-      </div>
+      )}
 
       {tabItems.length === 0 || !visibleTab ? (
         <Empty description="当前角色没有可查看的页签" />

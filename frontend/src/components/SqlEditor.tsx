@@ -1,10 +1,20 @@
-import React, { forwardRef, useCallback, useMemo, useRef } from 'react'
+import React, { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { highlightSql } from '../utils/highlightSql'
 import './SqlEditor.css'
+
+const COMMIT_MS = 300
 
 export type SqlEditorProps = {
   value: string
   onChange: (value: string) => void
+  /** 每个按键立刻通知，不要求父组件改状态。补全走这里。 */
+  onDraft?: (value: string) => void
+  /** 为真时约 300ms 后再交给 onChange。运行、失焦、卸载会立刻刷出。 */
+  deferCommit?: boolean
+  /** 页签或外部替换 SQL 时变化，用来采用父组件的文本。 */
+  syncKey?: string
+  /** 父组件在运行、切页签前调用，把未提交的文本立刻交出去。 */
+  flushRef?: React.MutableRefObject<(() => void) | null>
   placeholder?: string
   className?: string
   minRows?: number
@@ -22,6 +32,10 @@ const SqlEditor = forwardRef<HTMLTextAreaElement, SqlEditorProps>(function SqlEd
   {
     value,
     onChange,
+    onDraft,
+    deferCommit = false,
+    syncKey = '',
+    flushRef,
     placeholder,
     className,
     minRows = 16,
@@ -37,6 +51,72 @@ const SqlEditor = forwardRef<HTMLTextAreaElement, SqlEditorProps>(function SqlEd
 ) {
   const localRef = useRef<HTMLTextAreaElement | null>(null)
   const preRef = useRef<HTMLPreElement | null>(null)
+  const [text, setText] = useState(value)
+  const [seen, setSeen] = useState({ value, syncKey })
+  const textRef = useRef(value)
+  const lastEmitted = useRef(value)
+  const commitTimer = useRef<number | null>(null)
+  const onChangeRef = useRef(onChange)
+  const onDraftRef = useRef(onDraft)
+  onChangeRef.current = onChange
+  onDraftRef.current = onDraft
+
+  const clearCommit = () => {
+    if (commitTimer.current != null) {
+      window.clearTimeout(commitTimer.current)
+      commitTimer.current = null
+    }
+  }
+
+  const emit = (next: string) => {
+    lastEmitted.current = next
+    onChangeRef.current(next)
+  }
+
+  const flush = () => {
+    if (commitTimer.current == null) return
+    clearCommit()
+    emit(textRef.current)
+  }
+
+  if (flushRef) flushRef.current = flush
+
+  if (syncKey !== seen.syncKey || value !== seen.value) {
+    const keyChanged = syncKey !== seen.syncKey
+    setSeen({ value, syncKey })
+    const external = keyChanged || value !== lastEmitted.current
+    if (external && value !== text) {
+      clearCommit()
+      textRef.current = value
+      setText(value)
+    } else if (keyChanged) {
+      clearCommit()
+      textRef.current = value
+    }
+  }
+
+  useEffect(() => () => {
+    if (flushRef) flushRef.current = null
+    if (commitTimer.current == null) return
+    window.clearTimeout(commitTimer.current)
+    commitTimer.current = null
+    onChangeRef.current(textRef.current)
+  }, [flushRef])
+
+  const publish = (next: string) => {
+    textRef.current = next
+    setText(next)
+    onDraftRef.current?.(next)
+    clearCommit()
+    if (!deferCommit) {
+      emit(next)
+      return
+    }
+    commitTimer.current = window.setTimeout(() => {
+      commitTimer.current = null
+      emit(textRef.current)
+    }, COMMIT_MS)
+  }
 
   const setRefs = useCallback(
     (el: HTMLTextAreaElement | null) => {
@@ -47,7 +127,7 @@ const SqlEditor = forwardRef<HTMLTextAreaElement, SqlEditorProps>(function SqlEd
     [ref],
   )
 
-  const html = useMemo(() => highlightSql(value || ''), [value])
+  const html = useMemo(() => highlightSql(text || ''), [text])
   const fill = Boolean(className?.includes('sql-box-hl'))
 
   const placeCursor = (pos: number) => {
@@ -74,7 +154,7 @@ const SqlEditor = forwardRef<HTMLTextAreaElement, SqlEditorProps>(function SqlEd
     e.preventDefault()
     e.clipboardData.setData('text/plain', ta.value.slice(s, t))
     onBeforeInput?.(e as unknown as React.FormEvent<HTMLTextAreaElement>)
-    onChange(ta.value.slice(0, s) + ta.value.slice(t))
+    publish(ta.value.slice(0, s) + ta.value.slice(t))
     placeCursor(s)
   }
 
@@ -86,7 +166,7 @@ const SqlEditor = forwardRef<HTMLTextAreaElement, SqlEditorProps>(function SqlEd
     const { selectionStart: s, selectionEnd: t } = ta
     e.preventDefault()
     onBeforeInput?.(e as unknown as React.FormEvent<HTMLTextAreaElement>)
-    onChange(ta.value.slice(0, s) + text + ta.value.slice(t))
+    publish(ta.value.slice(0, s) + text + ta.value.slice(t))
     placeCursor(s + text.length)
   }
 
@@ -112,11 +192,12 @@ const SqlEditor = forwardRef<HTMLTextAreaElement, SqlEditorProps>(function SqlEd
       <textarea
         ref={setRefs}
         className="sql-hl-input"
-        value={value}
+        value={text}
         disabled={disabled}
         spellCheck={spellCheck}
         placeholder={placeholder}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={(e) => publish(e.target.value)}
+        onBlur={flush}
         onScroll={(e) => {
           syncScroll()
           onScroll?.(e)

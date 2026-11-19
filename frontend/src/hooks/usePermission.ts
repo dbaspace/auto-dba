@@ -88,6 +88,11 @@ export const Perm = {
     logs: 'um.action.sync-slots.logs',
     delete: 'um.action.sync-slots.delete',
   },
+  kafkaQuery: {
+    view: 'um.action.kafka-query.view',
+    config: 'um.action.kafka-query.config',
+    delete: 'um.action.kafka-query.delete',
+  },
   migration: {
     create: 'um.action.migration.create',
     edit: 'um.action.migration.edit',
@@ -131,6 +136,7 @@ export const Perm = {
       smart: 'um.sidebar.sql-insight.smart',
       cloud: 'um.sidebar.sql-insight.cloud',
       pipeline: 'um.sidebar.sql-insight.pipeline',
+      topology: 'um.sidebar.sql-insight.topology',
     },
   },
   cloud: {

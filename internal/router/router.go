@@ -164,6 +164,17 @@ func Init(e *gin.Engine, d Deps) {
 	requireURN := func(urn string) gin.HandlerFunc {
 		return middleware.RequireURN(d.RBAC.Store, urn)
 	}
+	// PAT 拉消息仍走只读白名单，不要求页面上的查看权限。
+	requireURNUnlessPAT := func(urn string) gin.HandlerFunc {
+		check := requireURN(urn)
+		return func(c *gin.Context) {
+			if middleware.IsPATAuth(c) {
+				c.Next()
+				return
+			}
+			check(c)
+		}
+	}
 
 	secured.GET("/auth/me", d.Auth.Me)
 	secured.POST("/auth/select-tenant", d.Auth.SelectTenant)
@@ -308,10 +319,10 @@ func Init(e *gin.Engine, d Deps) {
 	secured.GET("/instances/:id/kafka/topics", d.Inst.ListKafkaTopics)
 	secured.POST("/instances/:id/kafka/topics/stats", d.Inst.KafkaTopicStats)
 	secured.DELETE("/instances/:id/kafka/topics/:topic", d.Inst.DeleteKafkaTopic)
-	secured.GET("/instances/:id/kafka/topics/:topic/partitions", d.Inst.GetKafkaTopicPartitions)
-	secured.GET("/instances/:id/kafka/topics/:topic/configs", d.Inst.GetKafkaTopicConfigs)
-	secured.GET("/instances/:id/kafka/topics/:topic/logs", d.Inst.GetKafkaTopicLogs)
-	secured.GET("/instances/:id/kafka/topics/:topic/messages", d.Inst.QueryKafkaTopicMessages)
+	secured.GET("/instances/:id/kafka/topics/:topic/partitions", requireURN(store.URNKafkaQueryView), d.Inst.GetKafkaTopicPartitions)
+	secured.GET("/instances/:id/kafka/topics/:topic/configs", requireURN(store.URNKafkaQueryConfig), d.Inst.GetKafkaTopicConfigs)
+	secured.GET("/instances/:id/kafka/topics/:topic/logs", requireURN(store.URNKafkaQueryView), d.Inst.GetKafkaTopicLogs)
+	secured.GET("/instances/:id/kafka/topics/:topic/messages", requireURNUnlessPAT(store.URNKafkaQueryView), d.Inst.QueryKafkaTopicMessages)
 	secured.GET("/instances/:id/redis/databases", d.Inst.ListRedisDatabases)
 	secured.POST("/instances/:id/redis/execute", d.Inst.ExecuteRedis)
 
@@ -1135,6 +1146,7 @@ func Init(e *gin.Engine, d Deps) {
 
 	secured.GET("/sql-insight", d.Insight.List)
 	secured.POST("/sql-insight", d.Insight.Create)
+	secured.GET("/sql-insight/topology", requireURN(store.URNSqlInsightTabTopology), d.Insight.Topology)
 	secured.GET("/pg-activity-snapshots", requireURN(store.URNSqlInsightTabSQL), d.Insight.ListSnapshots)
 	secured.GET("/pg-activity-snapshots/stats", requireURN(store.URNSqlInsightTabAnalysis), d.Insight.SnapshotStats)
 	secured.GET("/pg-activity-snapshots/summary", requireURN(store.URNSqlInsightTabVisual), d.Insight.SnapshotSummary)

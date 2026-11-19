@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import api from '../../api/request'
 import {
   applySuggestion,
@@ -33,6 +33,10 @@ export function useQuerySuggest(envRef: { current: SuggestEnv }, getBox: () => H
   const cacheRef = useRef(new Map<string, HintCol[]>())
   const pendingRef = useRef(new Set<string>())
   const forcedRef = useRef(false)
+  const openRef = useRef(false)
+  const itemsLenRef = useRef(0)
+  const typeTimer = useRef<number | null>(null)
+  const refreshRef = useRef<(reason: 'type' | 'force' | 'cache') => void>(() => {})
 
   function columnsRecord(): Record<string, HintCol[]> {
     const out: Record<string, HintCol[]> = {}
@@ -46,9 +50,15 @@ export function useQuerySuggest(envRef: { current: SuggestEnv }, getBox: () => H
     return out
   }
 
+  function clearTypeTimer() {
+    if (typeTimer.current == null) return
+    window.clearTimeout(typeTimer.current)
+    typeTimer.current = null
+  }
+
   function place() {
     const el = getBox()
-    if (!el) return
+    if (!el || !openRef.current) return
     const caret = caretViewport(el)
     const boxWidth = 280
     const boxHeight = 240
@@ -57,14 +67,18 @@ export function useQuerySuggest(envRef: { current: SuggestEnv }, getBox: () => H
     let top = caret.top + 18
     if (left + boxWidth > window.innerWidth - margin) left = Math.max(margin, window.innerWidth - boxWidth - margin)
     if (top + boxHeight > window.innerHeight - margin) top = Math.max(margin, window.innerHeight - boxHeight - margin)
-    setPos({ top, left })
+    setPos((prev) => (prev.top === top && prev.left === left ? prev : { top, left }))
   }
 
   function close() {
-    setOpen(false)
-    setItems([])
+    clearTypeTimer()
     forcedRef.current = false
     ctxRef.current = null
+    if (!openRef.current && itemsLenRef.current === 0) return
+    openRef.current = false
+    itemsLenRef.current = 0
+    setOpen(false)
+    setItems([])
   }
 
   function loadColumns(dbId: string, table: string) {
@@ -128,11 +142,15 @@ export function useQuerySuggest(envRef: { current: SuggestEnv }, getBox: () => H
       return
     }
     ctxRef.current = useCtx
+    openRef.current = true
+    itemsLenRef.current = next.length
     setItems(next)
     if (reason !== 'cache') setActive(0)
     setOpen(true)
     place()
   }
+
+  refreshRef.current = refresh
 
   function accept(index = active) {
     const env = envRef.current
@@ -148,6 +166,7 @@ export function useQuerySuggest(envRef: { current: SuggestEnv }, getBox: () => H
   function onKeyDown(e: React.KeyboardEvent) {
     if ((e.ctrlKey || e.metaKey) && e.key === ' ' && !e.shiftKey) {
       e.preventDefault()
+      clearTypeTimer()
       forcedRef.current = true
       refresh('force')
       return true
@@ -185,12 +204,18 @@ export function useQuerySuggest(envRef: { current: SuggestEnv }, getBox: () => H
   }
 
   function onInput() {
-    refresh('type')
+    clearTypeTimer()
+    typeTimer.current = window.setTimeout(() => {
+      typeTimer.current = null
+      refreshRef.current('type')
+    }, 120)
   }
 
   function onScroll() {
-    if (open) place()
+    if (openRef.current) place()
   }
+
+  useEffect(() => () => clearTypeTimer(), [])
 
   return { open, items, active, loading, pos, onKeyDown, onInput, onScroll, close, accept, setActive }
 }
