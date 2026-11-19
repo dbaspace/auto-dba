@@ -196,7 +196,12 @@
 }
 .archive-shell .ops .ant-btn {
   margin: 0;
-  padding: 0 4px;
+  padding: 0 6px;
+  color: rgba(0, 0, 0, 0.88);
+}
+.archive-shell .ops .ant-btn:disabled,
+.archive-shell .ops .ant-btn-disabled {
+  color: rgba(0, 0, 0, 0.25);
 }
 .archive-shell .pager {
   display: flex;

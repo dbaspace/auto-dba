@@ -18,17 +18,7 @@ import Auth from '../../components/Auth'
 import { Perm } from '../../hooks/usePermission'
 import './SqlInsightSettings.css'
 
-/** 与后端 store.JobManagedGlobalArgKeys 对齐：调度只读，改到定时任务页 */
-const JOB_MANAGED_KEYS = new Set([
-  'awr_enabled',
-  'awr_daily_cron',
-  'pg_space_enabled',
-  'pg_space_daily_cron',
-  'sql_insight_analysis_cron_enabled',
-  'sql_insight_analysis_cron',
-])
-
-type FieldType = 'bool' | 'number' | 'cron' | 'text' | 'url' | 'password'
+type FieldType = 'bool' | 'number' | 'text' | 'url' | 'password'
 type AwrGroup = 'prometheus' | 'report' | 'push'
 type SettingTab = 'awr' | 'space' | 'smart' | 'cloud'
 
@@ -80,23 +70,6 @@ const AWR_DEFS: FieldDef[] = [
     placeholder: 'instance',
   },
   {
-    key: 'awr_enabled',
-    label: '总开关',
-    type: 'bool',
-    default: 'true',
-    description: '总开关',
-    group: 'report',
-  },
-  {
-    key: 'awr_daily_cron',
-    label: '每日生成 Cron',
-    type: 'cron',
-    default: '0 30 1 * * *',
-    description: '每日生成 cron（6 段含秒）',
-    group: 'report',
-    placeholder: '0 30 1 * * *',
-  },
-  {
     key: 'awr_host_metrics_enabled',
     label: '主机(node_exporter)指标开关',
     type: 'bool',
@@ -133,46 +106,11 @@ const AWR_DEFS: FieldDef[] = [
 
 const SPACE_DEFS: FieldDef[] = [
   {
-    key: 'pg_space_enabled',
-    label: '定时采集开关',
-    type: 'bool',
-    default: 'true',
-    description: '关闭后不再按 Cron 自动采集；手动采集不受影响',
-  },
-  {
-    key: 'pg_space_daily_cron',
-    label: '表空间每日采集 Cron',
-    type: 'cron',
-    default: '0 0 3 * * *',
-    description:
-      '6 段（秒 分 时 日 月 周）。例：0 0 3 * * * = 每天 03:00:00。每天定点须写成「0 分 时 * * *」，勿写成每小时表达式。改后约 30 秒生效',
-    placeholder: '0 0 3 * * *',
-  },
-  {
     key: 'pg_space_retention_days',
     label: '快照保留天数',
     type: 'number',
     default: '90',
     description: '超过天数的快照将被清理',
-  },
-]
-
-const SMART_DEFS: FieldDef[] = [
-  {
-    key: 'sql_insight_analysis_cron_enabled',
-    label: '定时分析开关',
-    type: 'bool',
-    default: 'false',
-    description: '关闭后不再按 Cron 自动触发智能分析；手动触发不受影响',
-  },
-  {
-    key: 'sql_insight_analysis_cron',
-    label: '每日分析 Cron',
-    type: 'cron',
-    default: '0 0 3 * * *',
-    description:
-      '6 段（秒 分 时 日 月 周）。建议晚于 AWR 日任务。例：0 0 3 * * * = 每天 03:00:00',
-    placeholder: '0 0 3 * * *',
   },
 ]
 
@@ -212,17 +150,7 @@ function toStringValues(form: FormValues, defs: FieldDef[]): Record<string, stri
   return out
 }
 
-function scheduleManagedExtra(desc: string) {
-  return (
-    <span>
-      {desc}。调度请到{' '}
-      <Link to="/config/scheduled-jobs">配置中心 → 监控运维 → 定时任务</Link> 修改（只读展示当前值）。
-    </span>
-  )
-}
-
 function renderField(def: FieldDef) {
-  const managed = JOB_MANAGED_KEYS.has(def.key)
   switch (def.type) {
     case 'bool':
       return (
@@ -231,9 +159,9 @@ function renderField(def: FieldDef) {
           name={def.key}
           label={def.label}
           valuePropName="checked"
-          extra={managed ? scheduleManagedExtra(def.description) : def.description}
+          extra={def.description}
         >
-          <Switch disabled={managed} />
+          <Switch />
         </Form.Item>
       )
     case 'number':
@@ -266,30 +194,6 @@ function renderField(def: FieldDef) {
           <Input placeholder={def.placeholder} allowClear />
         </Form.Item>
       )
-    case 'cron':
-      return (
-        <Form.Item
-          key={def.key}
-          name={def.key}
-          label={def.label}
-          extra={managed ? scheduleManagedExtra(def.description) : def.description}
-          rules={
-            managed
-              ? undefined
-              : [
-                  { required: true, message: '请输入 Cron 表达式' },
-                  {
-                    validator: (_, value: string) =>
-                      !value || value.trim().split(/\s+/).length === 6
-                        ? Promise.resolve()
-                        : Promise.reject(new Error('Cron 需为 6 段（含秒）')),
-                  },
-                ]
-          }
-        >
-          <Input placeholder={def.placeholder} allowClear disabled={managed} />
-        </Form.Item>
-      )
     default:
       return (
         <Form.Item key={def.key} name={def.key} label={def.label} extra={def.description}>
@@ -307,12 +211,11 @@ export default function SqlInsightSettings() {
 
   const [awrForm] = Form.useForm<FormValues>()
   const [spaceForm] = Form.useForm<FormValues>()
-  const [smartForm] = Form.useForm<FormValues>()
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [knownKeys, setKnownKeys] = useState<Set<string>>(new Set())
 
-  const allDefs = useMemo(() => [...AWR_DEFS, ...SPACE_DEFS, ...SMART_DEFS], [])
+  const allDefs = useMemo(() => [...AWR_DEFS, ...SPACE_DEFS], [])
 
   async function load() {
     setLoading(true)
@@ -329,27 +232,23 @@ export default function SqlInsightSettings() {
       setKnownKeys(keys)
       awrForm.setFieldsValue(toFormValues(map, AWR_DEFS))
       spaceForm.setFieldsValue(toFormValues(map, SPACE_DEFS))
-      smartForm.setFieldsValue(toFormValues(map, SMART_DEFS))
     } finally {
       setLoading(false)
     }
   }
 
   async function save() {
-    const [awrValues, spaceValues, smartValues] = await Promise.all([
+    const [awrValues, spaceValues] = await Promise.all([
       awrForm.validateFields(),
       spaceForm.validateFields(),
-      smartForm.validateFields(),
     ])
     const payload = {
       ...toStringValues(awrValues, AWR_DEFS),
       ...toStringValues(spaceValues, SPACE_DEFS),
-      ...toStringValues(smartValues, SMART_DEFS),
     }
     setSaving(true)
     try {
       for (const def of allDefs) {
-        if (JOB_MANAGED_KEYS.has(def.key)) continue
         const body = {
           key: def.key,
           value: payload[def.key] ?? def.default,
@@ -361,7 +260,7 @@ export default function SqlInsightSettings() {
           await api.post('/global-args', body)
         }
       }
-      message.success('已保存（非调度项；Cron/开关请到定时任务页修改）')
+      message.success('已保存')
       await load()
     } finally {
       setSaving(false)
@@ -402,8 +301,7 @@ export default function SqlInsightSettings() {
         style={{ marginBottom: 12 }}
         message={
           <span>
-            定时开关与 Cron（awr / pg_space / sql_insight）请到{' '}
-            <Link to="/config/scheduled-jobs">定时任务</Link> 修改；本页对应字段只读。
+            调度开关和 Cron 只在 <Link to="/config/scheduled-jobs">定时任务</Link> 修改。
           </span>
         }
       />
@@ -434,7 +332,8 @@ export default function SqlInsightSettings() {
             children: (
               <Form form={spaceForm} layout="vertical" className="settings-form" disabled={loading}>
                 <Typography.Paragraph type="secondary">
-                  快照保留等在此配置；定时采集开关与 Cron 请到定时任务页。手动采集不受影响。
+                  快照保留天数在此配置。定时采集开关和 Cron 在{' '}
+                  <Link to="/config/scheduled-jobs">定时任务</Link>。手动采集不受影响。
                 </Typography.Paragraph>
                 {SPACE_DEFS.map(renderField)}
               </Form>
@@ -457,12 +356,11 @@ export default function SqlInsightSettings() {
             key: 'smart',
             label: '智能分析',
             children: (
-              <Form form={smartForm} layout="vertical" className="settings-form" disabled={loading}>
+              <div>
                 <Typography.Paragraph type="secondary">
-                  定时分析开关与 Cron 请到定时任务页；手动触发不受影响。
+                  定时分析的开关和 Cron 在 <Link to="/config/scheduled-jobs">定时任务</Link>。手动触发不受影响。
                 </Typography.Paragraph>
-                {SMART_DEFS.map(renderField)}
-              </Form>
+              </div>
             ),
           },
         ]}

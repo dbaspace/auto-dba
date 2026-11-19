@@ -2386,11 +2386,20 @@ func (h *GlobalArgHandler) List(c *gin.Context) {
 	if list == nil {
 		list = []store.GlobalArg{}
 	}
+	filtered := list[:0]
 	for i := range list {
-		if store.IsFlashbackSecretArg(list[i].Key) && strings.TrimSpace(list[i].Value) != "" {
-			list[i].Value = "********"
+		if list[i].Key == ArgQueryDataMaskColumns || store.IsJobManagedGlobalArg(list[i].Key) {
+			continue
 		}
+		if store.IsFlashbackSecretArg(list[i].Key) || store.IsFlashbackRetiredRegionArg(list[i].Key) {
+			continue
+		}
+		if store.IsMigrationOSSGlobalArg(list[i].Key) || list[i].Key == store.ArgUserWatermarkEnabled {
+			continue
+		}
+		filtered = append(filtered, list[i])
 	}
+	list = filtered
 	c.JSON(http.StatusOK, gin.H{"data": list})
 }
 
@@ -2405,6 +2414,26 @@ func bindGlobalArg(c *gin.Context) (key, value, desc string, ok bool) {
 		return "", "", "", false
 	}
 	return strings.TrimSpace(req.Key), req.Value, req.Description, true
+}
+
+func rejectRetiredFlashbackArg(c *gin.Context, key string) bool {
+	if store.IsFlashbackSecretArg(key) {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "云厂商 AK/SK 请到「配置中心 → 基础设置 → 云账号」登记，并在实例上选择云账号"})
+		return true
+	}
+	if store.IsFlashbackRetiredRegionArg(key) {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "腾讯云地域请填写实例的云地域，或在云账号的地域列表中配置"})
+		return true
+	}
+	if store.IsMigrationOSSGlobalArg(key) {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "迁移 OSS 请到「配置中心 → 标签与连接 → 对象存储」按环境配置"})
+		return true
+	}
+	if key == store.ArgUserWatermarkEnabled {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "用户水印请到「配置中心 → 基础设置 → 系统通知」开启"})
+		return true
+	}
+	return false
 }
 
 func keepFlashbackSecret(db *store.DB, key, value string) string {
@@ -2430,6 +2459,17 @@ func (h *GlobalArgHandler) Create(c *gin.Context) {
 		})
 		return
 	}
+	if key == ArgQueryDataMaskColumns {
+		c.JSON(http.StatusBadRequest, gin.H{"message": queryMaskArgMessage})
+		return
+	}
+	if rejectRetiredFlashbackArg(c, key) {
+		return
+	}
+	if err := store.ValidateFlashbackDownloadArg(key, value); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
 	value = keepFlashbackSecret(h.Store, key, value)
 	if err := h.Store.CreateGlobalArg(key, value, desc); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
@@ -2447,6 +2487,17 @@ func (h *GlobalArgHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"message": "调度相关参数请到「配置中心 → 监控运维 → 定时任务」修改（job=" + store.JobKeyForGlobalArg(key) + "）",
 		})
+		return
+	}
+	if key == ArgQueryDataMaskColumns {
+		c.JSON(http.StatusBadRequest, gin.H{"message": queryMaskArgMessage})
+		return
+	}
+	if rejectRetiredFlashbackArg(c, key) {
+		return
+	}
+	if err := store.ValidateFlashbackDownloadArg(key, value); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
 	value = keepFlashbackSecret(h.Store, key, value)
@@ -2467,6 +2518,13 @@ func (h *GlobalArgHandler) Delete(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"message": "调度相关参数请到「配置中心 → 监控运维 → 定时任务」修改（job=" + store.JobKeyForGlobalArg(key) + "）",
 		})
+		return
+	}
+	if key == ArgQueryDataMaskColumns {
+		c.JSON(http.StatusBadRequest, gin.H{"message": queryMaskArgMessage})
+		return
+	}
+	if rejectRetiredFlashbackArg(c, key) {
 		return
 	}
 	if err := h.Store.DeleteGlobalArg(key); err != nil {

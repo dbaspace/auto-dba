@@ -620,16 +620,14 @@ func (d *DB) ArchiveStatsInTenant(tenantID string) (map[string]any, error) {
 		return nil, err
 	}
 	total := len(list)
-	running, failed, done := 0, 0, 0
+	running, taskFailed := 0, 0
 	var recent []map[string]any
 	for _, t := range list {
 		switch t.Status {
 		case StatusRunning:
 			running++
 		case StatusFailed:
-			failed++
-		case StatusExecuted, "success":
-			done++
+			taskFailed++
 		}
 		recent = append(recent, map[string]any{
 			"id": t.ID, "task_id": t.ID, "task_name": t.Name, "name": t.Name,
@@ -641,10 +639,11 @@ func (d *DB) ArchiveStatsInTenant(tenantID string) (map[string]any, error) {
 			break
 		}
 	}
-	rate := "-"
-	if total > 0 {
-		rate = fmt.Sprintf("%.0f%%", float64(done)/float64(total)*100)
+	outcomes, err := d.listArchiveRunOutcomes(tenantID)
+	if err != nil {
+		return nil, err
 	}
+	rate, doneToday, failedToday := summarizeArchiveRuns(outcomes, time.Now())
 	waitApproval, scheduleQueue := 0, 0
 	for _, t := range list {
 		if t.ApprovalStatus == StatusPending || t.Status == StatusPending {
@@ -656,12 +655,95 @@ func (d *DB) ArchiveStatsInTenant(tenantID string) (map[string]any, error) {
 	}
 	return map[string]any{
 		"total_tasks": total, "archived_volume": "-", "success_rate": rate,
-		"pending_alerts": failed, "abnormal_count": failed,
+		"pending_alerts": taskFailed, "abnormal_count": taskFailed,
 		"storage_usage": 0, "db_connection": "ok",
 		"pending_approval": waitApproval, "schedule_queue": scheduleQueue,
 		"recent_runs": recent,
-		"running":     running, "completed_today": done, "failed_today": failed,
+		"running":     running, "completed_today": doneToday, "failed_today": failedToday,
 	}, nil
+}
+
+type archiveRunOutcome struct {
+	Status string
+	At     string
+}
+
+func (d *DB) listArchiveRunOutcomes(tenantID string) ([]archiveRunOutcome, error) {
+	q := `SELECT r.status, COALESCE(NULLIF(r.finished_at,''), NULLIF(r.started_at,''), r.created_at)
+		FROM tbl_archive_runs r
+		JOIN tbl_archive_tasks t ON t.id = r.task_id
+		WHERE 1=1`
+	var args []any
+	if tid := strings.TrimSpace(tenantID); tid != "" {
+		q += ` AND COALESCE(t.tenant_id,'')=?`
+		args = append(args, tid)
+	}
+	rows, err := d.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []archiveRunOutcome
+	for rows.Next() {
+		var item archiveRunOutcome
+		if err := rows.Scan(&item.Status, &item.At); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func archiveShanghaiDayStart(now time.Time) time.Time {
+	loc := time.FixedZone("CST", 8*3600)
+	if loaded, err := time.LoadLocation("Asia/Shanghai"); err == nil {
+		loc = loaded
+	}
+	t := now.In(loc)
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, loc)
+}
+
+func archiveRunKind(status string) string {
+	switch strings.TrimSpace(status) {
+	case StatusExecuted, "success":
+		return "success"
+	case StatusFailed:
+		return "failed"
+	default:
+		return ""
+	}
+}
+
+// summarizeArchiveRuns 用执行记录算成功率。删除 0 行的成功也计入。取消和仍在运行的不进分母。
+// 今日完成、今日失败按结束时间（没有则用开始时间）落在 Asia/Shanghai 当天。
+func summarizeArchiveRuns(rows []archiveRunOutcome, now time.Time) (rate string, completedToday, failedToday int) {
+	success, failed := 0, 0
+	start := archiveShanghaiDayStart(now)
+	for _, row := range rows {
+		kind := archiveRunKind(row.Status)
+		if kind == "" {
+			continue
+		}
+		if kind == "success" {
+			success++
+		} else {
+			failed++
+		}
+		at, err := time.Parse(time.RFC3339, strings.TrimSpace(row.At))
+		if err != nil || at.Before(start) {
+			continue
+		}
+		if kind == "success" {
+			completedToday++
+		} else {
+			failedToday++
+		}
+	}
+	rate = "-"
+	if success+failed > 0 {
+		rate = fmt.Sprintf("%.0f%%", float64(success)/float64(success+failed)*100)
+	}
+	return rate, completedToday, failedToday
 }
 
 func (d *DB) UpdateArchiveStatus(id, status string) error {

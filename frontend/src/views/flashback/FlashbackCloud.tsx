@@ -10,10 +10,10 @@ export default function FlashbackCloud() {
         type="info"
         showIcon
         message="全局 AK/SK 已停用"
-        description="闪回下载 WAL 改为使用实例上绑定的云账号只读密钥。同一云厂商可以有多套账号，并且只对已绑定的平台用户生效。变更密钥不能用于闪回。"
+        description="闪回下载 WAL 使用实例上绑定的云账号只读密钥。同一云厂商可以有多套账号，并且只对已绑定的平台用户生效。变更密钥不能用于闪回。"
       />
       <p style={{ marginTop: 16 }}>
-        地域、下载限速等非密钥参数仍保留在全局参数中。密钥请到云账号页登记并绑定用户，再在实例管理里选择云账号。
+        密钥请到云账号页登记并绑定用户，再在实例管理里选择云账号。腾讯云地域填写实例的云地域；云账号只配置一个地域时，实例未填地域会使用该地域。下载限速、回溯小时和重试次数仍在全局参数中修改。
       </p>
       <Link to="/config/cloud-accounts"><Button type="primary">前往云账号</Button></Link>
     </div>

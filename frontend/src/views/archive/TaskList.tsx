@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Button, Card, Modal, Pagination, Tag, message } from 'antd'
+import { Button, Card, Modal, Pagination, Tag, Tooltip, message } from 'antd'
+import { EditOutlined, EyeOutlined, PauseOutlined, PlayCircleOutlined } from '@ant-design/icons'
 import ResponsiveTable from '../../components/ResponsiveTable'
 import type { ColumnsType } from 'antd/es/table'
 import api from '../../api/request'
@@ -153,27 +154,42 @@ export default function TaskList() {
     },
     {
       title: '操作',
-      width: 200,
+      width: 140,
       fixed: 'right',
       render: (_, row) => (
         <div className="ops">
-          <Button type="link" onClick={() => openView(row)}>
-            查看
-          </Button>
-          <Button type="link" disabled={row.status === 'running'} onClick={() => openEdit(row)}>
-            编辑
-          </Button>
-          <Button type="link" disabled={!canRun(row)} onClick={() => run(row)}>
-            执行
-          </Button>
+          <Tooltip title="查看">
+            <span>
+              <Button type="text" icon={<EyeOutlined />} onClick={() => openView(row)} />
+            </span>
+          </Tooltip>
+          <Tooltip title="编辑">
+            <span>
+              <Button
+                type="text"
+                icon={<EditOutlined />}
+                disabled={row.status === 'running'}
+                onClick={() => openEdit(row)}
+              />
+            </span>
+          </Tooltip>
+          <Tooltip title="执行">
+            <span>
+              <Button type="text" icon={<PlayCircleOutlined />} disabled={!canRun(row)} onClick={() => run(row)} />
+            </span>
+          </Tooltip>
           {row.status === 'paused' ? (
-            <Button type="link" onClick={() => resume(row)}>
-              启用
-            </Button>
+            <Tooltip title="启用">
+              <span>
+                <Button type="text" icon={<PlayCircleOutlined />} onClick={() => resume(row)} />
+              </span>
+            </Tooltip>
           ) : (
-            <Button type="link" danger disabled={!isApproved(row)} onClick={() => pause(row)}>
-              停止
-            </Button>
+            <Tooltip title="停止">
+              <span>
+                <Button type="text" icon={<PauseOutlined />} disabled={!isApproved(row)} onClick={() => pause(row)} />
+              </span>
+            </Tooltip>
           )}
         </div>
       ),

@@ -24,6 +24,7 @@ type systemNoticeSaveReq struct {
 	TicketSubmitFreeze        bool   `json:"ticket_submit_freeze"`
 	TicketSubmitFreezeMessage string `json:"ticket_submit_freeze_message"`
 	UserRegisterEnabled       bool   `json:"user_register_enabled"`
+	UserWatermarkEnabled      bool   `json:"user_watermark_enabled"`
 }
 
 type systemNoticeAckReq struct {
@@ -43,7 +44,7 @@ func (h *SystemNoticeHandler) GetSettings(c *gin.Context) {
 			"id": "", "title": "", "body": "", "enabled": false,
 			"show_mode": store.SystemNoticeModeOnVersionChange, "version": 1,
 			"ticket_submit_freeze": false, "ticket_submit_freeze_message": "",
-			"user_register_enabled": false,
+			"user_register_enabled": false, "user_watermark_enabled": false,
 		}})
 		return
 	}
@@ -70,6 +71,7 @@ func (h *SystemNoticeHandler) UpdateSettings(c *gin.Context) {
 		TicketSubmitFreeze:        req.TicketSubmitFreeze,
 		TicketSubmitFreezeMessage: req.TicketSubmitFreezeMessage,
 		UserRegisterEnabled:       req.UserRegisterEnabled,
+		UserWatermarkEnabled:      req.UserWatermarkEnabled,
 	}
 	if err := h.Store.UpsertSystemNotice(it, req.BumpVersion, middleware.Username(c)); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})

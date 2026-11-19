@@ -164,8 +164,12 @@ func (h *FlashbackHandler) PutCloudSettings(c *gin.Context) {
 	}
 	kept := make([]store.FlashbackCloudArgItem, 0, len(req.Args))
 	for _, item := range req.Args {
-		if store.IsFlashbackSecretArg(item.Key) {
+		if store.IsFlashbackSecretArg(item.Key) || store.IsFlashbackRetiredRegionArg(item.Key) {
 			continue
+		}
+		if err := store.ValidateFlashbackDownloadArg(item.Key, item.Value); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+			return
 		}
 		kept = append(kept, item)
 	}

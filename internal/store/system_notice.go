@@ -29,6 +29,7 @@ type SystemNotice struct {
 	TicketSubmitFreeze        bool   `json:"ticket_submit_freeze"`
 	TicketSubmitFreezeMessage string `json:"ticket_submit_freeze_message"`
 	UserRegisterEnabled       bool   `json:"user_register_enabled"`
+	UserWatermarkEnabled      bool   `json:"user_watermark_enabled"`
 	UpdatedBy                 string `json:"updated_by,omitempty"`
 	UpdatedAt                 string `json:"updated_at"`
 	CreatedAt                 string `json:"created_at"`
@@ -48,7 +49,7 @@ func NormalizeSystemNoticeShowMode(mode string) string {
 }
 
 const systemNoticeSelectCols = `id, title, body, enabled, show_mode, version, updated_by, updated_at, created_at,
-		COALESCE(ticket_submit_freeze,0), COALESCE(ticket_submit_freeze_message,''), COALESCE(user_register_enabled,0)`
+		COALESCE(ticket_submit_freeze,0), COALESCE(ticket_submit_freeze_message,''), COALESCE(user_register_enabled,0), COALESCE(user_watermark_enabled,0)`
 
 func (d *DB) GetEnabledSystemNotice() (*SystemNotice, error) {
 	it, err := scanSystemNotice(d.QueryRow(`
@@ -162,10 +163,10 @@ func (d *DB) UpsertSystemNotice(it *SystemNotice, bumpVersion bool, actor string
 		if bumpVersion && it.Version < 1 {
 			it.Version = 1
 		}
-		_, err := d.Exec(`INSERT INTO tbl_system_notices(id, title, body, enabled, show_mode, version, updated_by, updated_at, created_at, ticket_submit_freeze, ticket_submit_freeze_message, user_register_enabled)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+		_, err := d.Exec(`INSERT INTO tbl_system_notices(id, title, body, enabled, show_mode, version, updated_by, updated_at, created_at, ticket_submit_freeze, ticket_submit_freeze_message, user_register_enabled, user_watermark_enabled)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			it.ID, it.Title, it.Body, boolToInt(it.Enabled), it.ShowMode, it.Version, it.UpdatedBy, it.UpdatedAt, it.CreatedAt,
-			boolToInt(it.TicketSubmitFreeze), it.TicketSubmitFreezeMessage, boolToInt(it.UserRegisterEnabled))
+			boolToInt(it.TicketSubmitFreeze), it.TicketSubmitFreezeMessage, boolToInt(it.UserRegisterEnabled), boolToInt(it.UserWatermarkEnabled))
 		if err != nil {
 			return err
 		}
@@ -185,9 +186,9 @@ func (d *DB) UpsertSystemNotice(it *SystemNotice, bumpVersion bool, actor string
 				it.Version = 1
 			}
 		}
-		_, err = d.Exec(`UPDATE tbl_system_notices SET title=?, body=?, enabled=?, show_mode=?, version=?, updated_by=?, updated_at=?, ticket_submit_freeze=?, ticket_submit_freeze_message=?, user_register_enabled=? WHERE id=?`,
+		_, err = d.Exec(`UPDATE tbl_system_notices SET title=?, body=?, enabled=?, show_mode=?, version=?, updated_by=?, updated_at=?, ticket_submit_freeze=?, ticket_submit_freeze_message=?, user_register_enabled=?, user_watermark_enabled=? WHERE id=?`,
 			it.Title, it.Body, boolToInt(it.Enabled), it.ShowMode, it.Version, it.UpdatedBy, it.UpdatedAt,
-			boolToInt(it.TicketSubmitFreeze), it.TicketSubmitFreezeMessage, boolToInt(it.UserRegisterEnabled), it.ID)
+			boolToInt(it.TicketSubmitFreeze), it.TicketSubmitFreezeMessage, boolToInt(it.UserRegisterEnabled), boolToInt(it.UserWatermarkEnabled), it.ID)
 		if err != nil {
 			return err
 		}
@@ -204,12 +205,14 @@ func scanSystemNotice(row interface{ Scan(dest ...any) error }) (*SystemNotice, 
 	var enabled int
 	var freeze int
 	var register int
-	if err := row.Scan(&it.ID, &it.Title, &it.Body, &enabled, &it.ShowMode, &it.Version, &it.UpdatedBy, &it.UpdatedAt, &it.CreatedAt, &freeze, &it.TicketSubmitFreezeMessage, &register); err != nil {
+	var watermark int
+	if err := row.Scan(&it.ID, &it.Title, &it.Body, &enabled, &it.ShowMode, &it.Version, &it.UpdatedBy, &it.UpdatedAt, &it.CreatedAt, &freeze, &it.TicketSubmitFreezeMessage, &register, &watermark); err != nil {
 		return nil, err
 	}
 	it.Enabled = enabled != 0
 	it.TicketSubmitFreeze = freeze != 0
 	it.UserRegisterEnabled = register != 0
+	it.UserWatermarkEnabled = watermark != 0
 	it.ShowMode = NormalizeSystemNoticeShowMode(it.ShowMode)
 	return &it, nil
 }

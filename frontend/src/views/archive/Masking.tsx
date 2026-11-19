@@ -1,117 +1,89 @@
-import React, { useState } from 'react'
-import { Alert, Button, Checkbox, Select, Steps, Tag, message } from 'antd'
-import ResponsiveTable from '../../components/ResponsiveTable'
-import type { ColumnsType } from 'antd/es/table'
+import React, { useEffect, useState } from 'react'
+import { Alert, Button, Input, Switch, message } from 'antd'
+import api from '../../api/request'
 import './archive.css'
 
-type Rule = {
-  field: string
-  type: string
-  sensitive: boolean
-  algo: string
-}
-
 export default function Masking() {
-  const [step, setStep] = useState(1)
-  const [parallel, setParallel] = useState(true)
-  const [compress, setCompress] = useState(false)
-  const [rows, setRows] = useState<Rule[]>([
-    { field: 'phone', type: 'varchar', sensitive: true, algo: 'mask' },
-    { field: 'email', type: 'varchar', sensitive: true, algo: 'hash' },
-    { field: 'id_card', type: 'varchar', sensitive: true, algo: 'mask' },
-    { field: 'created_at', type: 'timestamp', sensitive: false, algo: 'none' },
-  ])
+  const [enabled, setEnabled] = useState(false)
+  const [columns, setColumns] = useState<string[]>([''])
+  const [loading, setLoading] = useState(false)
+  const [saving, setSaving] = useState(false)
 
-  function setAlgo(field: string, algo: string) {
-    setRows((prev) => prev.map((r) => (r.field === field ? { ...r, algo } : r)))
+  async function load() {
+    setLoading(true)
+    try {
+      const { data } = await api.get('/config/query-mask')
+      const cfg = data.data || {}
+      const cols = Array.isArray(cfg.columns) ? cfg.columns.map((c: unknown) => String(c)) : []
+      setEnabled(!!cfg.enabled)
+      setColumns(cols.length ? cols : [''])
+    } catch (e: any) {
+      message.error(e?.response?.data?.message || '加载失败')
+    } finally {
+      setLoading(false)
+    }
   }
 
-  function submit() {
-    message.success('脱敏规则已保存到本地，可在任务管理中关联执行')
+  useEffect(() => {
+    load()
+  }, [])
+
+  function setColumn(i: number, value: string) {
+    setColumns((prev) => prev.map((c, idx) => (idx === i ? value : c)))
   }
 
-  const columns: ColumnsType<Rule> = [
-    {
-      title: '源字段',
-      width: 180,
-      render: (_, row) => (
-        <span>
-          <span>{row.field}</span>
-          {row.sensitive && (
-            <Tag color="error" style={{ marginLeft: 8 }}>
-              敏感
-            </Tag>
-          )}
-        </span>
-      ),
-    },
-    { title: '类型', dataIndex: 'type', width: 120 },
-    {
-      title: '脱敏算法',
-      render: (_, row) => (
-        <Select
-          style={{ width: 180 }}
-          value={row.algo}
-          onChange={(v) => setAlgo(row.field, v)}
-          options={[
-            { label: '哈希', value: 'hash' },
-            { label: '掩码', value: 'mask' },
-            { label: '替换', value: 'replace' },
-            { label: '不处理', value: 'none' },
-          ]}
-        />
-      ),
-    },
-  ]
+  async function save() {
+    setSaving(true)
+    try {
+      const { data } = await api.put('/config/query-mask', { enabled, columns })
+      const cfg = data.data || {}
+      const cols = Array.isArray(cfg.columns) ? cfg.columns : []
+      setEnabled(!!cfg.enabled)
+      setColumns(cols.length ? cols : [''])
+      message.success(cfg.enabled ? '已启用，下次查询按这些列名脱敏' : '已关闭，列名已保留')
+    } catch (e: any) {
+      message.error(e?.response?.data?.message || '保存失败')
+    } finally {
+      setSaving(false)
+    }
+  }
 
   return (
     <div className="archive-shell">
       <div className="gray-page">
-        <Steps
-          current={step}
-          className="mb"
-          items={[
-            { title: '选择数据' },
-            { title: '脱敏规则' },
-            { title: '调度策略' },
-            { title: '提交' },
-          ]}
-        />
+        <h1>敏感数据脱敏</h1>
         <Alert
           type="info"
+          showIcon
           className="mb"
-          message="按字段配置脱敏算法后随归档任务执行。当前为独立工作台配置向导。"
+          message="只作用于数据库查询结果。填写表字段名，大小写不必一致。mobile AS mob、t.mobile 都会按 mobile 脱敏；配置 card 时 carD、Card 也会脱敏。别名本身不会单独触发脱敏。命中的值显示为 ***。"
         />
-        <ResponsiveTable
-          rowKey={(r) => r.field}
-          className="mb"
-          dataSource={rows}
-          columns={columns}
-          pagination={false}
-        />
-        <Checkbox checked={parallel} onChange={(e) => setParallel(e.target.checked)}>
-          并行执行
-        </Checkbox>
-        <Checkbox
-          checked={compress}
-          onChange={(e) => setCompress(e.target.checked)}
-          style={{ marginLeft: 12 }}
-        >
-          压缩归档
-        </Checkbox>
+        <div className="mb" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <Switch checked={enabled} loading={loading} onChange={setEnabled} />
+          <span>启用脱敏</span>
+        </div>
+        <div style={{ maxWidth: 480 }}>
+          {columns.map((col, i) => (
+            <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+              <Input
+                value={col}
+                placeholder="列名，可用逗号分隔多个"
+                onChange={(e) => setColumn(i, e.target.value)}
+              />
+              <Button
+                disabled={columns.length === 1 && !col}
+                onClick={() => setColumns((prev) => (prev.length === 1 ? [''] : prev.filter((_, idx) => idx !== i)))}
+              >
+                删除
+              </Button>
+            </div>
+          ))}
+          <Button onClick={() => setColumns((prev) => [...prev, ''])}>添加列名</Button>
+        </div>
         <div className="toolbar" style={{ marginTop: 16 }}>
-          <Button disabled={step === 0} onClick={() => setStep((s) => s - 1)}>
-            上一步
+          <Button type="primary" loading={saving} onClick={save}>
+            保存
           </Button>
-          {step < 3 ? (
-            <Button type="primary" onClick={() => setStep((s) => s + 1)}>
-              下一步
-            </Button>
-          ) : (
-            <Button type="primary" onClick={submit}>
-              提交
-            </Button>
-          )}
         </div>
       </div>
     </div>

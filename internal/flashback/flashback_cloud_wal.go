@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -329,44 +330,65 @@ func flashbackResolveWALSourceFromConn(res *ResourceDbsInfo, dom *DomainInstance
 	return flashbackResolveWALSource(res, override, extra...)
 }
 
-func flashbackCloudLookback(ctx context.Context) time.Duration {
-	n := getGlobalArgIntDefault(ctx, gaFlashbackCloudLookbackHours, flashbackDefaultCloudLookbackHours)
-	if n < 0 {
-		n = flashbackDefaultCloudLookbackHours
+func flashbackNonNegOr(raw string, fallback int) int {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fallback
 	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 {
+		return fallback
+	}
+	return n
+}
+
+func flashbackAtLeast1Or(raw string, fallback int) int {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 1 {
+		return fallback
+	}
+	return n
+}
+
+func flashbackRetryCount(raw string) int {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return flashbackDefaultCloudPkgRetries
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return flashbackDefaultCloudPkgRetries
+	}
+	if n < 1 {
+		return 1
+	}
+	return n
+}
+
+func flashbackCloudLookback(ctx context.Context) time.Duration {
+	n := flashbackNonNegOr(getGlobalArgStrDefault(ctx, gaFlashbackCloudLookbackHours, ""), flashbackDefaultCloudLookbackHours)
 	return time.Duration(n) * time.Hour
 }
 
 func flashbackCloudDownloadMbps(ctx context.Context) int {
-	n := getGlobalArgIntDefault(ctx, gaFlashbackCloudDownloadMbps, flashbackDefaultCloudDownloadMbps)
-	if n < 0 {
-		return 0
-	}
-	return n
+	return flashbackNonNegOr(getGlobalArgStrDefault(ctx, gaFlashbackCloudDownloadMbps, ""), flashbackDefaultCloudDownloadMbps)
 }
 
 func flashbackCloudAPIInterval(ctx context.Context) time.Duration {
-	n := getGlobalArgIntDefault(ctx, gaFlashbackCloudAPIIntervalMS, flashbackDefaultCloudAPIIntervalMS)
-	if n < 0 {
-		n = flashbackDefaultCloudAPIIntervalMS
-	}
+	n := flashbackNonNegOr(getGlobalArgStrDefault(ctx, gaFlashbackCloudAPIIntervalMS, ""), flashbackDefaultCloudAPIIntervalMS)
 	return time.Duration(n) * time.Millisecond
 }
 
 func flashbackCloudMaxPackages(ctx context.Context) int {
-	n := getGlobalArgIntDefault(ctx, gaFlashbackCloudMaxPackages, flashbackDefaultCloudMaxPackages)
-	if n <= 0 {
-		return flashbackDefaultCloudMaxPackages
-	}
-	return n
+	return flashbackAtLeast1Or(getGlobalArgStrDefault(ctx, gaFlashbackCloudMaxPackages, ""), flashbackDefaultCloudMaxPackages)
 }
 
 func flashbackCloudPkgRetries(ctx context.Context) int {
-	n := getGlobalArgIntDefault(ctx, gaFlashbackCloudPkgRetries, flashbackDefaultCloudPkgRetries)
-	if n <= 0 {
-		return 1
-	}
-	return n
+	return flashbackRetryCount(getGlobalArgStrDefault(ctx, gaFlashbackCloudPkgRetries, ""))
 }
 
 // flashbackCloudVendorCreds 按厂商码读 global_args 对照表中的两把密钥。
@@ -579,6 +601,35 @@ func flashbackNormalizeAPIRegion(raw string, extra map[string]string) string {
 	return ""
 }
 
+func flashbackOnlyRegion(regions []string) string {
+	only := ""
+	for _, raw := range regions {
+		region := strings.TrimSpace(raw)
+		if region == "" {
+			continue
+		}
+		if only != "" && !strings.EqualFold(only, region) {
+			return ""
+		}
+		if only == "" {
+			only = region
+		}
+	}
+	return only
+}
+
+func flashbackBoundAccountRegion(ctx context.Context) string {
+	st, ok := flashbackCred(ctx)
+	if !ok || strings.TrimSpace(st.account) == "" || runtime == nil || runtime.Store == nil {
+		return ""
+	}
+	acc, err := runtime.Store.GetCloudAccount(strings.TrimSpace(st.account))
+	if err != nil || acc == nil {
+		return ""
+	}
+	return flashbackOnlyRegion(acc.Regions)
+}
+
 func flashbackResolveTencentRegion(ctx context.Context, res *ResourceDbsInfo, override string) (flashbackTencentRegionResolved, error) {
 	extra := flashbackTencentRegionMap(ctx)
 	try := func(raw, why string) (flashbackTencentRegionResolved, bool) {
@@ -627,8 +678,13 @@ func flashbackResolveTencentRegion(ctx context.Context, res *ResourceDbsInfo, ov
 			return got, nil
 		}
 	}
-	if got, ok := try(override, "任务入参 cloud_region="+strings.TrimSpace(override)); ok {
+	if got, ok := try(override, "实例 cloud_region="+strings.TrimSpace(override)); ok {
 		return got, nil
+	}
+	if region := flashbackBoundAccountRegion(ctx); region != "" {
+		if got, ok := try(region, "云账号地域="+region); ok {
+			return got, nil
+		}
 	}
 	if got, ok := try(flashbackTencentRegion(ctx), "全局参数/环境变量 "+gaFlashbackTencentRegion); ok {
 		return got, nil

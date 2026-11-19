@@ -1323,11 +1323,12 @@ func (h *MigrationHandler) GetSettings(c *gin.Context) {
 	if env == "" {
 		env = strings.TrimSpace(c.Query("environment"))
 	}
-	oss := s.OSS
-	ossConfigured := s.OSS.Configured
+	oss := store.MigrationOSSSettings{}
+	ossConfigured := false
+	tenantID := effectiveListTenantID(h.Store, c)
 	if env != "" {
-		ossConfigured = h.Store.ResolveMigrationOSSConfiguredInTenant(effectiveListTenantID(h.Store, c), env)
-		if row, err := h.Store.GetOSSSettingByEnvInTenant(env, effectiveListTenantID(h.Store, c)); err == nil && row != nil {
+		ossConfigured = h.Store.ResolveMigrationOSSConfiguredInTenant(tenantID, env)
+		if row, err := h.Store.GetOSSSettingByEnvInTenant(env, tenantID); err == nil && row != nil {
 			oss = store.MigrationOSSSettings{
 				Endpoint:      row.Endpoint,
 				Bucket:        row.Bucket,
@@ -1338,29 +1339,9 @@ func (h *MigrationHandler) GetSettings(c *gin.Context) {
 				ChunkSizeMB:   row.ChunkSizeMB,
 				Configured:    row.Configured,
 			}
-		} else if !ossConfigured {
-			oss = store.MigrationOSSSettings{Configured: false}
-		} else {
-			// 回退 legacy：脱敏
-			if oss.AccessKey != "" {
-				oss.AccessKey = "********"
-			}
-			if oss.SecretKey != "" {
-				oss.SecretKey = "********"
-			}
-			oss.Configured = true
 		}
-	} else {
-		if oss.AccessKey != "" {
-			oss.AccessKey = "********"
-		}
-		if oss.SecretKey != "" {
-			oss.SecretKey = "********"
-		}
-		// 无 env 时：任一环境或 legacy 已配置即视为可用摘要
-		if envs, err := h.Store.ListConfiguredOSSEnvs(); err == nil && len(envs) > 0 {
-			ossConfigured = true
-		}
+	} else if envs, err := h.Store.ListConfiguredOSSEnvs(); err == nil && len(envs) > 0 {
+		ossConfigured = true
 	}
 	ossEnvs, _ := h.Store.ListConfiguredOSSEnvs()
 	if ossEnvs == nil {
@@ -1387,7 +1368,11 @@ func (h *MigrationHandler) PutSettings(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "参数无效"})
 		return
 	}
-	if req.ApprovalEnabled == nil && req.ApproverUserIDs == nil && req.OSS == nil && req.Performance == nil {
+	if req.OSS != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "迁移 OSS 请到「配置中心 → 标签与连接 → 对象存储」按环境配置"})
+		return
+	}
+	if req.ApprovalEnabled == nil && req.ApproverUserIDs == nil && req.Performance == nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "参数无效"})
 		return
 	}
@@ -1403,12 +1388,6 @@ func (h *MigrationHandler) PutSettings(c *gin.Context) {
 	}
 	if req.ApproverUserIDs != nil {
 		if err := h.Store.SetGlobalArg(store.ArgMigrationApproverUserIDs, strings.TrimSpace(*req.ApproverUserIDs), "数据迁移审核人登录名，逗号分隔"); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
-			return
-		}
-	}
-	if req.OSS != nil {
-		if err := h.Store.SaveMigrationOSS(*req.OSS); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 			return
 		}

@@ -8,7 +8,7 @@ function truthy(v: unknown) {
   return s === '1' || s === 'true' || s === 'yes' || s === 'on'
 }
 
-/** 全局用户水印：由全局参数 user_watermark_enabled 控制 */
+/** 全局用户水印：由系统通知里的「开启用户水印」控制 */
 export default function UserWatermark() {
   const user = useAppSelector((s) => s.auth.user)
   const enabled = truthy(user?.user_watermark_enabled)

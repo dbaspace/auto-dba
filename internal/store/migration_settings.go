@@ -70,8 +70,22 @@ func migrationSettingDefaults() []GlobalArg {
 	}
 }
 
+func IsMigrationOSSGlobalArg(key string) bool {
+	switch strings.TrimSpace(key) {
+	case ArgMigrationOSSEndpoint, ArgMigrationOSSBucket, ArgMigrationOSSPrefix,
+		ArgMigrationOSSAccessKey, ArgMigrationOSSSecretKey,
+		ArgMigrationOSSRetentionDays, ArgMigrationOSSChunkSizeMB:
+		return true
+	default:
+		return false
+	}
+}
+
 func (d *DB) EnsureMigrationSettings() error {
 	for _, a := range migrationSettingDefaults() {
+		if IsMigrationOSSGlobalArg(a.Key) {
+			continue
+		}
 		var exists int
 		_ = d.QueryRow(`SELECT COUNT(1) FROM tbl_global_args WHERE key=?`, a.Key).Scan(&exists)
 		if exists > 0 {

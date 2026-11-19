@@ -286,10 +286,23 @@ func (d *DB) TicketDMLLockTimeout() time.Duration {
 	return time.Duration(n) * time.Second
 }
 
-// UserWatermarkEnabled 是否开启用户水印。未配置时默认关闭。
+// copyUserWatermarkFromArg 列刚加上时，把仍开着的全局参数抄到已有通知行。之后不再回读该参数。
+func (d *DB) copyUserWatermarkFromArg() error {
+	if d == nil || !d.BoolArg(ArgUserWatermarkEnabled, false) {
+		return nil
+	}
+	_, err := d.Exec(`UPDATE tbl_system_notices SET user_watermark_enabled=1`)
+	return err
+}
+
+// UserWatermarkEnabled 是否开启用户水印。读系统通知上的开关，没有设置行时关闭。
 func (d *DB) UserWatermarkEnabled() bool {
 	if d == nil {
 		return false
 	}
-	return d.BoolArg(ArgUserWatermarkEnabled, false)
+	it, err := d.GetSystemNoticeSettings()
+	if err != nil || it == nil {
+		return false
+	}
+	return it.UserWatermarkEnabled
 }

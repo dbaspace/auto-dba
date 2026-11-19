@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Alert, Button, Form, Input, Modal, Pagination, Space, Tag, Tooltip, message } from 'antd'
+import { Alert, Button, Form, Input, Modal, Pagination, Space, Tooltip, message } from 'antd'
 import { EyeOutlined } from '@ant-design/icons'
 import { Link } from 'react-router-dom'
 import ResponsiveTable from '../../components/ResponsiveTable'
@@ -16,19 +16,34 @@ interface ArgRow {
 const PAGE_SIZE = 10
 const VALUE_PREVIEW_LEN = 48
 
-/** 与后端 store.JobManagedGlobalArgKeys 对齐 */
-const JOB_MANAGED_KEYS = new Set([
+const HIDDEN_ARG_KEYS = new Set([
+  'query_data_mask_columns',
   'awr_enabled',
   'awr_daily_cron',
   'pg_space_enabled',
   'pg_space_daily_cron',
   'sql_insight_analysis_cron_enabled',
   'sql_insight_analysis_cron',
+  'slot_monitor_collect_interval_sec',
+  'flashback_tencent_secret_id',
+  'flashback_tencent_secret_key',
+  'flashback_aliyun_access_key_id',
+  'flashback_aliyun_access_key_secret',
+  'flashback_huawei_access_key_id',
+  'flashback_huawei_secret_access_key',
+  'flashback_aws_access_key_id',
+  'flashback_aws_secret_access_key',
+  'flashback_tencent_region',
+  'flashback_tencent_region_map',
+  'migration_oss_endpoint',
+  'migration_oss_bucket',
+  'migration_oss_prefix',
+  'migration_oss_access_key',
+  'migration_oss_secret_key',
+  'migration_oss_retention_days',
+  'migration_oss_chunk_size_mb',
+  'user_watermark_enabled',
 ])
-
-function isJobManagedKey(key?: string) {
-  return !!key && JOB_MANAGED_KEYS.has(key)
-}
 
 function truncateValue(raw?: string): string {
   const v = String(raw ?? '')
@@ -48,9 +63,10 @@ export default function GlobalArgs() {
   const [form] = Form.useForm()
 
   const filtered = useMemo(() => {
+    const visible = rows.filter((r) => !HIDDEN_ARG_KEYS.has(r.key || ''))
     const s = q.trim().toLowerCase()
-    if (!s) return rows
-    return rows.filter((r) => `${r.key} ${r.value} ${r.description}`.toLowerCase().includes(s))
+    if (!s) return visible
+    return visible.filter((r) => `${r.key} ${r.value} ${r.description}`.toLowerCase().includes(s))
   }, [rows, q])
 
   const pageRows = useMemo(
@@ -113,8 +129,10 @@ export default function GlobalArgs() {
         style={{ marginBottom: 12 }}
         message={
           <span>
-            调度类参数（awr / pg_space / sql_insight cron）由{' '}
-            <Link to="/config/scheduled-jobs">定时任务</Link> 独占写入，本页不可改删。
+            调度开关和 Cron 只在 <Link to="/config/scheduled-jobs">定时任务</Link> 修改，本页不再列出。云厂商 AK/SK 在{' '}
+            <Link to="/config/cloud-accounts">云账号</Link> 登记。腾讯云地域填在实例的云地域，或在云账号里配置地域。迁移 OSS 在{' '}
+            <Link to="/config/oss">对象存储</Link> 按环境配置。用户水印在{' '}
+            <Link to="/config/system-notice">系统通知</Link> 开启。云日志下载限速、回溯和重试仍在本页修改。
           </span>
         }
       />
@@ -148,15 +166,7 @@ export default function GlobalArgs() {
               dataIndex: 'key',
               width: 280,
               ellipsis: true,
-              render: (k: string) =>
-                isJobManagedKey(k) ? (
-                  <Space size={4}>
-                    <span>{k}</span>
-                    <Tag color="blue">定时任务</Tag>
-                  </Space>
-                ) : (
-                  k
-                ),
+              render: (k: string) => k,
             },
             {
               title: '值',
@@ -192,19 +202,16 @@ export default function GlobalArgs() {
               title: '操作',
               width: 160,
               fixed: 'right',
-              render: (_, row) =>
-                isJobManagedKey(row.key) ? (
-                  <Link to="/config/scheduled-jobs">去定时任务</Link>
-                ) : (
-                  <Space size={0}>
-                    <Button type="link" onClick={() => open(row)}>
-                      编辑
-                    </Button>
-                    <Button type="link" danger onClick={() => remove(row)}>
-                      删除
-                    </Button>
-                  </Space>
-                ),
+              render: (_, row) => (
+                <Space size={0}>
+                  <Button type="link" onClick={() => open(row)}>
+                    编辑
+                  </Button>
+                  <Button type="link" danger onClick={() => remove(row)}>
+                    删除
+                  </Button>
+                </Space>
+              ),
             },
           ]}
         />

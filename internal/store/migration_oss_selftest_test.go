@@ -11,8 +11,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// TestMigrationOSSRoundtripAffectsConfigured 验证配置中心 OSS 落库后，
-// 迁移预检依赖的 GetMigrationSettings().OSS.Configured 能正确翻转；脱敏写回不覆盖。
+// TestMigrationOSSRoundtripAffectsConfigured 保留旧全局参数的读写和脱敏写回。
+// 迁移预检不再读这些键，只认对象存储。
 func TestMigrationOSSRoundtripAffectsConfigured(t *testing.T) {
 	dsn := os.Getenv("AUTO_DBA_TEST_DSN")
 	if dsn == "" {
@@ -79,6 +79,15 @@ func TestMigrationOSSRoundtripAffectsConfigured(t *testing.T) {
 	}
 }
 
+func TestIsMigrationOSSGlobalArg(t *testing.T) {
+	if !IsMigrationOSSGlobalArg(ArgMigrationOSSEndpoint) || !IsMigrationOSSGlobalArg(ArgMigrationOSSSecretKey) {
+		t.Fatal("oss connection keys should leave global args")
+	}
+	if IsMigrationOSSGlobalArg(ArgMigrationApprovalEnabled) || IsMigrationOSSGlobalArg(ArgMigrationBatchSize) {
+		t.Fatal("approval and performance stay in global args")
+	}
+}
+
 func TestMigrationOSSMenuSeeded(t *testing.T) {
 	dsn := os.Getenv("AUTO_DBA_TEST_DSN")
 	if dsn == "" {
@@ -107,10 +116,10 @@ func TestMigrationOSSMenuSeeded(t *testing.T) {
 func TestPutSettingsPartialJSON(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	type req struct {
-		ApprovalEnabled *bool                   `json:"approval_enabled"`
-		ApproverUserIDs *string                 `json:"approver_user_ids"`
-		OSS             *MigrationOSSSettings   `json:"oss"`
-		Performance     *MigrationPerfSettings  `json:"performance"`
+		ApprovalEnabled *bool                  `json:"approval_enabled"`
+		ApproverUserIDs *string                `json:"approver_user_ids"`
+		OSS             *MigrationOSSSettings  `json:"oss"`
+		Performance     *MigrationPerfSettings `json:"performance"`
 	}
 	cases := []struct {
 		name string

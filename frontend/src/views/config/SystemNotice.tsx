@@ -41,6 +41,7 @@ export default function SystemNotice() {
         ticket_submit_freeze: !!row.ticket_submit_freeze,
         ticket_submit_freeze_message: row.ticket_submit_freeze_message || '',
         user_register_enabled: !!row.user_register_enabled,
+        user_watermark_enabled: !!row.user_watermark_enabled,
       })
     } finally {
       setLoading(false)
@@ -75,6 +76,7 @@ export default function SystemNotice() {
         ticket_submit_freeze: !!values.ticket_submit_freeze,
         ticket_submit_freeze_message: String(values.ticket_submit_freeze_message || '').trim(),
         user_register_enabled: !!values.user_register_enabled,
+        user_watermark_enabled: !!values.user_watermark_enabled,
       })
       const row = data.data || {}
       setNoticeId(String(row.id || noticeId))
@@ -159,6 +161,17 @@ export default function SystemNotice() {
               description="开启后，登录页出现注册入口。注册用户加入默认租户，角色为只读，不能自行选择租户或角色。"
             />
             <Form.Item name="user_register_enabled" label="允许用户注册" valuePropName="checked">
+              <Switch checkedChildren="开" unCheckedChildren="关" />
+            </Form.Item>
+            <h3 style={{ marginTop: 28 }}>用户水印</h3>
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 16 }}
+              message="页面显示当前登录名"
+              description="开启后，主界面平铺当前登录名。关闭登录弹框不影响本开关。"
+            />
+            <Form.Item name="user_watermark_enabled" label="开启用户水印" valuePropName="checked">
               <Switch checkedChildren="开" unCheckedChildren="关" />
             </Form.Item>
           </div>

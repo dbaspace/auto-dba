@@ -568,6 +568,8 @@ func Init(e *gin.Engine, d Deps) {
 	secured.POST("/global-args", requireURN(store.URNArgsCreate), d.Args.Create)
 	secured.PUT("/global-args", requireURN(store.URNArgsEdit), d.Args.Update)
 	secured.DELETE("/global-args/:key", requireURN(store.URNArgsDelete), d.Args.Delete)
+	secured.GET("/config/query-mask", d.Args.GetQueryMask)
+	secured.PUT("/config/query-mask", requireURN(store.URNArgsEdit), d.Args.PutQueryMask)
 
 	if d.Jobs != nil {
 		jg := secured.Group("/jobs")

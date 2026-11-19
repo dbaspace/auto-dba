@@ -343,7 +343,11 @@ func (s *FlashbackImpl) executeTask(ctx context.Context, taskID string) error {
 			}
 			provider = p
 		default:
-			reg, err := flashbackResolveTencentRegion(ctx, res, "")
+			cloudRegion := ""
+			if res != nil && res.Region != nil {
+				cloudRegion = res.Region.Region
+			}
+			reg, err := flashbackResolveTencentRegion(ctx, res, cloudRegion)
 			if err != nil {
 				return err
 			}

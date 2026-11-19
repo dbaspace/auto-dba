@@ -7,7 +7,12 @@ import { store } from './store'
 import router from './router'
 import { AppearanceProvider } from './theme/AppearanceProvider'
 import { applyAppearanceToDom, readAppearance } from './theme/appearance'
+import { reloadOnceForStaleChunk } from './router/chunkReload'
 import './styles/global.css'
+
+window.addEventListener('vite:preloadError', (event) => {
+  if (reloadOnceForStaleChunk()) event.preventDefault()
+})
 
 // 首屏前应用主题，减少闪烁
 applyAppearanceToDom(readAppearance())

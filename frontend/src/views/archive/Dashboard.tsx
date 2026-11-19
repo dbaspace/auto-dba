@@ -234,13 +234,6 @@ export default function Dashboard() {
             >
               全库迁移
             </button>
-            <button
-              type="button"
-              className="quick-btn"
-              onClick={() => navigate('/ops/archive/masking')}
-            >
-              敏感数据脱敏
-            </button>
           </div>
         </Card>
 

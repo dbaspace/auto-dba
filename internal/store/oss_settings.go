@@ -11,11 +11,11 @@ import (
 
 // 配置中心 OSS · 云产品（对象存储）。
 const (
-	OSSProductAliyunOSS  = "aliyun_oss"     // 阿里云 OSS
-	OSSProductTencentCOS = "tencent_cos"    // 腾讯云 COS
-	OSSProductHuaweiOBS  = "huawei_obs"     // 华为云 OBS
-	OSSProductAWSS3      = "aws_s3"         // AWS S3
-	OSSProductS3Compat   = "s3_compatible"  // MinIO 等 S3 兼容
+	OSSProductAliyunOSS  = "aliyun_oss"    // 阿里云 OSS
+	OSSProductTencentCOS = "tencent_cos"   // 腾讯云 COS
+	OSSProductHuaweiOBS  = "huawei_obs"    // 华为云 OBS
+	OSSProductAWSS3      = "aws_s3"        // AWS S3
+	OSSProductS3Compat   = "s3_compatible" // MinIO 等 S3 兼容
 )
 
 // OSSCloudProductLabel 云产品展示名。
@@ -293,38 +293,39 @@ func (d *DB) ListConfiguredOSSEnvs() ([]string, error) {
 	return out, rows.Err()
 }
 
-// ResolveMigrationOSS 按任务环境解析 OSS：优先 tbl_oss_settings，否则回退旧版 global_args。
+// ResolveMigrationOSS 按任务环境解析对象存储。未配置该环境时不使用全局参数。
 func (d *DB) ResolveMigrationOSS(env string) MigrationOSSSettings {
 	return d.ResolveMigrationOSSInTenant("", env)
 }
 
 func (d *DB) ResolveMigrationOSSInTenant(tenantID, env string) MigrationOSSSettings {
 	env = strings.TrimSpace(env)
-	if env != "" {
-		if plain, err := d.GetOSSSettingPlainByEnvInTenant(env, tenantID); err == nil && plain != nil && plain.Configured {
-			return MigrationOSSSettings{
-				Endpoint:      plain.Endpoint,
-				Bucket:        plain.Bucket,
-				Prefix:        plain.Prefix,
-				AccessKey:     plain.AccessKey,
-				SecretKey:     "", // 调用方需自行解密 SecretEnc；Configured 仅表示已录入
-				RetentionDays: plain.RetentionDays,
-				ChunkSizeMB:   plain.ChunkSizeMB,
-				Configured:    true,
-			}
-		}
-		if row, err := d.GetOSSSettingByEnvInTenant(env, tenantID); err == nil && row != nil {
-			return MigrationOSSSettings{
-				Endpoint:      row.Endpoint,
-				Bucket:        row.Bucket,
-				Prefix:        row.Prefix,
-				RetentionDays: row.RetentionDays,
-				ChunkSizeMB:   row.ChunkSizeMB,
-				Configured:    false,
-			}
+	if env == "" {
+		return MigrationOSSSettings{}
+	}
+	if plain, err := d.GetOSSSettingPlainByEnvInTenant(env, tenantID); err == nil && plain != nil && plain.Configured {
+		return MigrationOSSSettings{
+			Endpoint:      plain.Endpoint,
+			Bucket:        plain.Bucket,
+			Prefix:        plain.Prefix,
+			AccessKey:     plain.AccessKey,
+			SecretKey:     "", // 调用方需自行解密 SecretEnc；Configured 仅表示已录入
+			RetentionDays: plain.RetentionDays,
+			ChunkSizeMB:   plain.ChunkSizeMB,
+			Configured:    true,
 		}
 	}
-	return d.GetMigrationSettings().OSS
+	if row, err := d.GetOSSSettingByEnvInTenant(env, tenantID); err == nil && row != nil {
+		return MigrationOSSSettings{
+			Endpoint:      row.Endpoint,
+			Bucket:        row.Bucket,
+			Prefix:        row.Prefix,
+			RetentionDays: row.RetentionDays,
+			ChunkSizeMB:   row.ChunkSizeMB,
+			Configured:    false,
+		}
+	}
+	return MigrationOSSSettings{}
 }
 
 // ResolveMigrationOSSConfigured 仅判断某环境是否已配置（不解密）。
@@ -334,14 +335,9 @@ func (d *DB) ResolveMigrationOSSConfigured(env string) bool {
 
 func (d *DB) ResolveMigrationOSSConfiguredInTenant(tenantID, env string) bool {
 	env = strings.TrimSpace(env)
-	if env != "" {
-		plain, err := d.GetOSSSettingPlainByEnvInTenant(env, tenantID)
-		if err == nil && plain != nil && plain.Configured {
-			return true
-		}
-		if err == nil && plain != nil {
-			return false
-		}
+	if env == "" {
+		return false
 	}
-	return d.GetMigrationSettings().OSS.Configured
+	plain, err := d.GetOSSSettingPlainByEnvInTenant(env, tenantID)
+	return err == nil && plain != nil && plain.Configured
 }

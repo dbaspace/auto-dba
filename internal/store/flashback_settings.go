@@ -1,6 +1,10 @@
 package store
 
 import (
+	"database/sql"
+	"errors"
+	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -60,11 +64,11 @@ func flashbackCloudArgMetas() []flashbackCloudArgMeta {
 		{ArgFlashbackHuaweiSecretAccessKey, "华为云 Secret Access Key", true},
 		{ArgFlashbackAWSAccessKeyID, "AWS AccessKey ID", true},
 		{ArgFlashbackAWSSecretAccessKey, "AWS Secret Access Key", true},
-		{ArgFlashbackCloudLookbackHours, "云日志回溯小时数", false},
-		{ArgFlashbackCloudDownloadMbps, "云日志下载限速 Mbps", false},
-		{ArgFlashbackCloudAPIIntervalMS, "云 API 间隔毫秒", false},
-		{ArgFlashbackCloudMaxPackages, "单次最多增量包数", false},
-		{ArgFlashbackCloudPkgRetries, "增量包下载重试次数", false},
+		{ArgFlashbackCloudLookbackHours, "云日志额外向前回溯的小时数。0 表示不再额外回溯，仍保留云上传前后 3 分钟。默认 2。", false},
+		{ArgFlashbackCloudDownloadMbps, "云日志下载限速，单位 Mbps。0 表示不限速。默认 16。", false},
+		{ArgFlashbackCloudAPIIntervalMS, "两次云 API 之间的等待毫秒数。0 表示不再额外等待。默认 400。", false},
+		{ArgFlashbackCloudMaxPackages, "单次下载最多增量包个数，必须大于等于 1。默认 48。", false},
+		{ArgFlashbackCloudPkgRetries, "每个增量包最多尝试次数，必须大于等于 1。默认 3。", false},
 	}
 }
 
@@ -85,6 +89,51 @@ func IsFlashbackSecretArg(key string) bool {
 		}
 	}
 	return false
+}
+
+func IsFlashbackRetiredRegionArg(key string) bool {
+	switch strings.TrimSpace(key) {
+	case ArgFlashbackTencentRegion, ArgFlashbackTencentRegionMap:
+		return true
+	default:
+		return false
+	}
+}
+
+type flashbackDownloadArgSpec struct {
+	Key     string
+	Min     int
+	Message string
+}
+
+func flashbackDownloadArgSpecs() []flashbackDownloadArgSpec {
+	return []flashbackDownloadArgSpec{
+		{ArgFlashbackCloudLookbackHours, 0, "云日志回溯小时数须为大于等于 0 的整数，0 表示不再额外回溯"},
+		{ArgFlashbackCloudDownloadMbps, 0, "云日志下载限速须为大于等于 0 的整数，单位 Mbps，0 表示不限速"},
+		{ArgFlashbackCloudAPIIntervalMS, 0, "云 API 间隔须为大于等于 0 的整数，单位毫秒，0 表示不再额外等待"},
+		{ArgFlashbackCloudMaxPackages, 1, "单次增量包上限须为大于等于 1 的整数"},
+		{ArgFlashbackCloudPkgRetries, 1, "增量包尝试次数须为大于等于 1 的整数"},
+	}
+}
+
+func ValidateFlashbackDownloadArg(key, value string) error {
+	key = strings.TrimSpace(key)
+	var spec *flashbackDownloadArgSpec
+	specs := flashbackDownloadArgSpecs()
+	for i := range specs {
+		if specs[i].Key == key {
+			spec = &specs[i]
+			break
+		}
+	}
+	if spec == nil {
+		return nil
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || n < spec.Min {
+		return fmt.Errorf("%s", spec.Message)
+	}
+	return nil
 }
 
 func IsFlashbackCloudArg(key string) bool {
@@ -111,22 +160,56 @@ func flashbackCloudSettingDefaults() []GlobalArg {
 		{Key: ArgFlashbackHuaweiSecretAccessKey, Value: "", Description: "华为云 Secret Access Key"},
 		{Key: ArgFlashbackAWSAccessKeyID, Value: "", Description: "AWS AccessKey ID"},
 		{Key: ArgFlashbackAWSSecretAccessKey, Value: "", Description: "AWS Secret Access Key"},
-		{Key: ArgFlashbackCloudLookbackHours, Value: "2", Description: "云日志回溯小时数"},
-		{Key: ArgFlashbackCloudDownloadMbps, Value: "16", Description: "云日志下载限速 Mbps"},
-		{Key: ArgFlashbackCloudAPIIntervalMS, Value: "400", Description: "云 API 间隔毫秒"},
-		{Key: ArgFlashbackCloudMaxPackages, Value: "48", Description: "单次最多增量包数"},
-		{Key: ArgFlashbackCloudPkgRetries, Value: "3", Description: "增量包下载重试次数"},
+		{Key: ArgFlashbackCloudLookbackHours, Value: "2", Description: "云日志额外向前回溯的小时数。0 表示不再额外回溯，仍保留云上传前后 3 分钟。默认 2。"},
+		{Key: ArgFlashbackCloudDownloadMbps, Value: "16", Description: "云日志下载限速，单位 Mbps。0 表示不限速。默认 16。"},
+		{Key: ArgFlashbackCloudAPIIntervalMS, Value: "400", Description: "两次云 API 之间的等待毫秒数。0 表示不再额外等待。默认 400。"},
+		{Key: ArgFlashbackCloudMaxPackages, Value: "48", Description: "单次下载最多增量包个数，必须大于等于 1。默认 48。"},
+		{Key: ArgFlashbackCloudPkgRetries, Value: "3", Description: "每个增量包最多尝试次数，必须大于等于 1。默认 3。"},
+	}
+}
+
+func flashbackDownloadLegacyDescription(key string) string {
+	switch key {
+	case ArgFlashbackCloudLookbackHours:
+		return "云日志回溯小时数"
+	case ArgFlashbackCloudDownloadMbps:
+		return "云日志下载限速 Mbps"
+	case ArgFlashbackCloudAPIIntervalMS:
+		return "云 API 间隔毫秒"
+	case ArgFlashbackCloudMaxPackages:
+		return "单次最多增量包数"
+	case ArgFlashbackCloudPkgRetries:
+		return "增量包下载重试次数"
+	default:
+		return ""
 	}
 }
 
 func (d *DB) EnsureFlashbackCloudSettings() error {
 	for _, a := range flashbackCloudSettingDefaults() {
-		var exists int
-		_ = d.QueryRow(`SELECT COUNT(1) FROM tbl_global_args WHERE key=?`, a.Key).Scan(&exists)
-		if exists > 0 {
+		if IsFlashbackSecretArg(a.Key) || IsFlashbackRetiredRegionArg(a.Key) {
 			continue
 		}
-		if err := d.SetGlobalArg(a.Key, a.Value, a.Description); err != nil {
+		var desc string
+		err := d.QueryRow(`SELECT description FROM tbl_global_args WHERE key=?`, a.Key).Scan(&desc)
+		if errors.Is(err, sql.ErrNoRows) {
+			if err := d.SetGlobalArg(a.Key, a.Value, a.Description); err != nil {
+				return err
+			}
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		legacy := flashbackDownloadLegacyDescription(a.Key)
+		if legacy == "" || strings.TrimSpace(desc) != legacy || strings.TrimSpace(desc) == a.Description {
+			continue
+		}
+		val, err := d.GetGlobalArg(a.Key)
+		if err != nil {
+			return err
+		}
+		if err := d.SetGlobalArg(a.Key, val, a.Description); err != nil {
 			return err
 		}
 	}
@@ -173,12 +256,12 @@ func (d *DB) SaveFlashbackCloudSettings(items []FlashbackCloudArgItem) error {
 	for _, item := range items {
 		key := strings.TrimSpace(item.Key)
 		meta, ok := allowed[key]
-		if !ok {
+		if !ok || meta.Secret || IsFlashbackRetiredRegionArg(key) {
 			continue
 		}
 		val := item.Value
-		if meta.Secret && (strings.TrimSpace(val) == "" || isMaskedSecret(val)) {
-			continue
+		if err := ValidateFlashbackDownloadArg(key, val); err != nil {
+			return err
 		}
 		desc := strings.TrimSpace(item.Description)
 		if desc == "" {

@@ -1769,7 +1769,8 @@ func (d *DB) ensureSystemNoticeTables() error {
 		created_at TEXT NOT NULL,
 		ticket_submit_freeze INTEGER NOT NULL DEFAULT 0,
 		ticket_submit_freeze_message TEXT NOT NULL DEFAULT '',
-		user_register_enabled INTEGER NOT NULL DEFAULT 0
+		user_register_enabled INTEGER NOT NULL DEFAULT 0,
+		user_watermark_enabled INTEGER NOT NULL DEFAULT 0
 	)`); err != nil {
 		return err
 	}
@@ -1781,6 +1782,16 @@ func (d *DB) ensureSystemNoticeTables() error {
 	}
 	if _, err := d.db.Exec(`ALTER TABLE tbl_system_notices ADD COLUMN IF NOT EXISTS user_register_enabled INTEGER NOT NULL DEFAULT 0`); err != nil {
 		return err
+	}
+	var watermarkCol int
+	_ = d.db.QueryRow(`SELECT COUNT(1) FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='tbl_system_notices' AND column_name='user_watermark_enabled'`).Scan(&watermarkCol)
+	if _, err := d.db.Exec(`ALTER TABLE tbl_system_notices ADD COLUMN IF NOT EXISTS user_watermark_enabled INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return err
+	}
+	if watermarkCol == 0 {
+		if err := d.copyUserWatermarkFromArg(); err != nil {
+			return err
+		}
 	}
 	if _, err := d.db.Exec(`CREATE TABLE IF NOT EXISTS tbl_system_notice_acks (
 		user_id TEXT NOT NULL,
