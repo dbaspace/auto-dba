@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { Button, DatePicker, Empty, Modal, Select, Space, Switch, Tabs, message } from 'antd'
-import { ReloadOutlined, SearchOutlined } from '@ant-design/icons'
+import { DownloadOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons'
 import dayjs, { Dayjs } from 'dayjs'
 import api from '../../api/request'
+import { downloadTextFile } from '../query/exportResult'
 import Auth from '../../components/Auth'
 import { Perm, usePermission } from '../../hooks/usePermission'
 import type { InsightTabKey, SnapshotFilter } from './sql-insight/types'
@@ -14,7 +15,7 @@ import PgSpaceTab from './sql-insight/PgSpaceTab'
 import SmartAnalysisTab from './sql-insight/SmartAnalysisTab'
 import CloudSlowLogTab from './sql-insight/CloudSlowLogTab'
 import CloudSlowPipelineTab from './sql-insight/CloudSlowPipelineTab'
-import TopologyTab from './sql-insight/TopologyTab'
+import TopologyTab, { type TopologyExportRow } from './sql-insight/TopologyTab'
 import './SqlInsight.css'
 
 const { RangePicker } = DatePicker
@@ -22,6 +23,12 @@ const { RangePicker } = DatePicker
 function defaultRange(): [Dayjs, Dayjs] {
   const end = dayjs()
   return [end.subtract(1, 'hour'), end]
+}
+
+function csvCell(value: string | number) {
+  const text = String(value ?? '')
+  if (/[",\n]/.test(text)) return `"${text.replace(/"/g, '""')}"`
+  return text
 }
 
 function tagValue(tags: unknown, key: string) {
@@ -85,6 +92,8 @@ export default function SqlInsight() {
   const [topoInstDraft, setTopoInstDraft] = useState('')
   const [topoQueryId, setTopoQueryId] = useState('')
   const [topoTick, setTopoTick] = useState(0)
+  const [topoRows, setTopoRows] = useState<TopologyExportRow[]>([])
+  const onTopoRows = useCallback((list: TopologyExportRow[]) => setTopoRows(list), [])
 
   const loadInstances = useCallback(async () => {
     setInstancesLoading(true)
@@ -173,6 +182,19 @@ export default function SqlInsight() {
     setTopoInstDraft('')
     setTopoQueryId('')
     setTopoTick((n) => n + 1)
+  }
+
+  const exportTopology = () => {
+    if (!topoRows.length) {
+      message.warning('请先查询')
+      return
+    }
+    const header = ['客户端地址', '数据库', '连接数', 'Pod', '命名空间', '节点']
+    const body = topoRows.map((row) => [row.host, row.database, row.connections, row.pod, row.namespace, row.node])
+    const csv = `\uFEFF${[header, ...body].map((cols) => cols.map(csvCell).join(',')).join('\n')}`
+    const stamp = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15)
+    downloadTextFile(`topology_${stamp}.csv`, csv)
+    message.success('已导出')
   }
 
   const allowedTabs = useMemo(() => {
@@ -269,12 +291,13 @@ export default function SqlInsight() {
             instanceId={topoQueryId}
             refreshTick={topoTick}
             active={visibleTab === 'topology'}
+            onRows={onTopoRows}
           />
         ),
       },
     ]
     return all.filter((item) => allowedTabs.includes(item.key))
-  }, [allowedTabs, autoRefresh, draftInstance, draftRange, filter, instances, intervalSec, refreshTick, showSql, topoQueryId, topoTick, visibleTab])
+  }, [allowedTabs, autoRefresh, draftInstance, draftRange, filter, instances, intervalSec, onTopoRows, refreshTick, showSql, topoQueryId, topoTick, visibleTab])
 
   const tabExtra = (
     <Space wrap size="small">
@@ -348,6 +371,7 @@ export default function SqlInsight() {
             查询
           </Button>
           <Button onClick={resetTopology}>重置</Button>
+          <Button icon={<DownloadOutlined />} disabled={!topoRows.length} onClick={exportTopology}>导出</Button>
         </div>
       ) : (
         <div className="ops-filters">
