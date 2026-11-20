@@ -148,6 +148,37 @@ func (d *DB) ensureCloudSchema() error {
 			created_at TEXT NOT NULL
 		)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uq_cloud_event ON tbl_cloud_events(vendor, account_id, cloud_instance_id, event_type, event_at)`,
+		`CREATE TABLE IF NOT EXISTS tbl_cloud_slow_reports (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL DEFAULT '',
+			enabled INTEGER NOT NULL DEFAULT 0,
+			env_ids TEXT NOT NULL DEFAULT '[]',
+			tenant_id TEXT NOT NULL DEFAULT '',
+			instance_ids TEXT NOT NULL DEFAULT '[]',
+			db_names TEXT NOT NULL DEFAULT '[]',
+			cron_expr TEXT NOT NULL DEFAULT '0 9 * * 1',
+			recipients TEXT NOT NULL DEFAULT '',
+			top_n INTEGER NOT NULL DEFAULT 20,
+			last_sent_at TEXT NOT NULL DEFAULT '',
+			last_fire_key TEXT NOT NULL DEFAULT '',
+			last_error TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT '',
+			updated_at TEXT NOT NULL DEFAULT ''
+		)`,
+		`CREATE TABLE IF NOT EXISTS tbl_cloud_slow_report_mails (
+			id TEXT PRIMARY KEY,
+			report_id TEXT NOT NULL DEFAULT '',
+			sent_at TEXT NOT NULL DEFAULT '',
+			trigger_kind TEXT NOT NULL DEFAULT '',
+			env_label TEXT NOT NULL DEFAULT '',
+			tenant_label TEXT NOT NULL DEFAULT '',
+			recipients TEXT NOT NULL DEFAULT '',
+			subject TEXT NOT NULL DEFAULT '',
+			html TEXT NOT NULL DEFAULT '',
+			ok INTEGER NOT NULL DEFAULT 0,
+			error TEXT NOT NULL DEFAULT ''
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_slow_report_mails_sent ON tbl_cloud_slow_report_mails(sent_at)`,
 	}
 	for _, s := range stmts {
 		if _, err := d.Exec(s); err != nil {

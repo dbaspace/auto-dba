@@ -644,6 +644,10 @@ func (d *DB) ArchiveStatsInTenant(tenantID string) (map[string]any, error) {
 		return nil, err
 	}
 	rate, doneToday, failedToday := summarizeArchiveRuns(outcomes, time.Now())
+	archivedRows, err := d.sumArchiveDeletedRows(tenantID)
+	if err != nil {
+		return nil, err
+	}
 	waitApproval, scheduleQueue := 0, 0
 	for _, t := range list {
 		if t.ApprovalStatus == StatusPending || t.Status == StatusPending {
@@ -654,7 +658,7 @@ func (d *DB) ArchiveStatsInTenant(tenantID string) (map[string]any, error) {
 		}
 	}
 	return map[string]any{
-		"total_tasks": total, "archived_volume": "-", "success_rate": rate,
+		"total_tasks": total, "archived_volume": formatArchivedVolume(archivedRows), "success_rate": rate,
 		"pending_alerts": taskFailed, "abnormal_count": taskFailed,
 		"storage_usage": 0, "db_connection": "ok",
 		"pending_approval": waitApproval, "schedule_queue": scheduleQueue,
@@ -666,6 +670,25 @@ func (d *DB) ArchiveStatsInTenant(tenantID string) (map[string]any, error) {
 type archiveRunOutcome struct {
 	Status string
 	At     string
+}
+
+func formatArchivedVolume(rows int64) string {
+	return fmt.Sprintf("%d 行", rows)
+}
+
+func (d *DB) sumArchiveDeletedRows(tenantID string) (int64, error) {
+	q := `SELECT COALESCE(SUM(r.deleted_rows), 0)
+		FROM tbl_archive_runs r
+		JOIN tbl_archive_tasks t ON t.id = r.task_id
+		WHERE 1=1`
+	var args []any
+	if tid := strings.TrimSpace(tenantID); tid != "" {
+		q += ` AND COALESCE(t.tenant_id,'')=?`
+		args = append(args, tid)
+	}
+	var n int64
+	err := d.QueryRow(q, args...).Scan(&n)
+	return n, err
 }
 
 func (d *DB) listArchiveRunOutcomes(tenantID string) ([]archiveRunOutcome, error) {

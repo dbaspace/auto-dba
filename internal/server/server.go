@@ -190,6 +190,7 @@ func Run(cfg *config.Config, configPath string) {
 		Connector:          &handler.ConnectorHandler{Store: db},
 		Args:               &handler.GlobalArgHandler{Store: db},
 		Jobs:               &handler.JobsHandler{Reg: jobReg, Store: db},
+		SlowReport:         &handler.SlowReportHandler{Store: db, Cfg: cfg, AWR: awrSvc},
 		Ticket:             ticketH,
 		CreateDB:           &handler.CreateDBHandler{Store: db, Secret: fieldCrypto},
 		Account:            &handler.AccountHandler{Store: db, Secret: fieldCrypto},

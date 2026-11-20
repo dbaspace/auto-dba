@@ -654,6 +654,7 @@ func (d *DB) seedMenus(now string) error {
 		{"m-diag-sess", "m-diag-perf", "会话管理", "/ops/sessions", "um.sidebar.ops-sessions", "查看会话管理", "cpu", 2},
 		{"m-diag-overview", "m-diag-perf", "实例总览", "/ops/instance-overview", "um.sidebar.ops-instance-overview", "查看实例总览", "databoard", 0},
 		{"m-diag-mysql-slow", "m-diag-perf", "MySQL 慢 SQL", "/ops/mysql-slow", "um.sidebar.ops-mysql-slow", "查看 MySQL Top SQL digest", "histogram", 3},
+		{"m-diag-slow-report", "m-diag-perf", "慢 SQL 周报", "/ops/slow-sql-report", "um.sidebar.ops-slow-sql-report", "查看慢 SQL 周报", "histogram", 4},
 		{"m-diag-rdbms", "m-diag", "关系型数据库", "", "um.sidebar.diag-rdbms", "查看关系型数据库监控", "coin", 20},
 		{"m-diag-dbmon-mysql", "m-diag-rdbms", "MySQL监控", "/ops/db-monitor/mysql", "um.sidebar.ops-db-monitor-mysql", "查看 MySQL 监控", "coin", 1},
 		{"m-diag-dbmon", "m-diag-rdbms", "Postgres监控", "/ops/db-monitor/postgres", "um.sidebar.ops-db-monitor-postgres", "查看 Postgres 监控", "monitor", 2},
@@ -2014,6 +2015,25 @@ func (d *DB) relocateCloudAccountsMenu(now string) error {
 	return d.grantMenuToRoleCode(keys.ID, "admin")
 }
 
+func (d *DB) ensureSlowReportMenu(now string) error {
+	m := &Menu{
+		ID: "m-diag-slow-report", ParentID: "m-diag-perf", Title: "慢 SQL 周报", Path: "/ops/slow-sql-report",
+		URN: URNSidebarSlowSQLReport, PermissionDesc: "查看慢 SQL 周报", Icon: "histogram",
+		SortOrder: 4, Enabled: true, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := d.EnsureMenu(m); err != nil {
+		return err
+	}
+	if err := d.GrantMenuFollowingParent(m.ID, m.ParentID); err != nil {
+		return err
+	}
+	if err := d.grantMenuToRoleCode(m.ID, "admin"); err != nil {
+		return err
+	}
+	log.Printf("seed: slow sql report menu ensured")
+	return nil
+}
+
 func (d *DB) ensureInstanceOverviewMenu(now string) error {
 	m := &Menu{
 		ID: "m-diag-overview", ParentID: "m-diag-perf", Title: "实例总览", Path: "/ops/instance-overview",
@@ -2043,6 +2063,7 @@ func (d *DB) ensureDbMonitorMenu(now string) error {
 		{"m-diag-sess", "m-diag-perf", "会话管理", "/ops/sessions", "um.sidebar.ops-sessions", "查看会话管理", "cpu", 2},
 		{"m-diag-overview", "m-diag-perf", "实例总览", "/ops/instance-overview", "um.sidebar.ops-instance-overview", "查看实例总览", "databoard", 0},
 		{"m-diag-mysql-slow", "m-diag-perf", "MySQL 慢 SQL", "/ops/mysql-slow", "um.sidebar.ops-mysql-slow", "查看 MySQL Top SQL digest", "histogram", 3},
+		{"m-diag-slow-report", "m-diag-perf", "慢 SQL 周报", "/ops/slow-sql-report", "um.sidebar.ops-slow-sql-report", "查看慢 SQL 周报", "histogram", 4},
 		{"m-diag-rdbms", "m-diag", "关系型数据库", "", "um.sidebar.diag-rdbms", "查看关系型数据库监控", "coin", 20},
 		{"m-diag-dbmon-mysql", "m-diag-rdbms", "MySQL监控", "/ops/db-monitor/mysql", "um.sidebar.ops-db-monitor-mysql", "查看 MySQL 监控", "coin", 1},
 		{"m-diag-dbmon", "m-diag-rdbms", "Postgres监控", "/ops/db-monitor/postgres", "um.sidebar.ops-db-monitor-postgres", "查看 Postgres 监控", "monitor", 2},

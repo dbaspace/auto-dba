@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/smtp"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -80,11 +81,61 @@ func Send(cfg Config, to, subject, body, contentType string) error {
 	msg.WriteString("\r\n")
 	msg.WriteString(body)
 
+	return deliverRaw(cfg, host, from, to, []byte(msg.String()))
+}
+
+// SendHTMLAttachment 正文只放说明，周报 HTML 作为附件发送。
+func SendHTMLAttachment(cfg Config, to, subject, note, filename, htmlBody string) error {
+	host := strings.TrimSpace(cfg.Host)
+	if host == "" {
+		return fmt.Errorf("SMTP host 未配置")
+	}
+	to = strings.TrimSpace(to)
+	if to == "" || !strings.Contains(to, "@") {
+		return fmt.Errorf("收件人邮箱无效")
+	}
+	from := cfg.fromAddr()
+	if from == "" || !strings.Contains(from, "@") {
+		return fmt.Errorf("发件人邮箱无效")
+	}
+	if strings.TrimSpace(filename) == "" {
+		filename = "slow-sql-report.html"
+	}
+	if !strings.HasSuffix(strings.ToLower(filename), ".html") {
+		filename += ".html"
+	}
+	if strings.TrimSpace(note) == "" {
+		note = "慢 SQL 周报已作为 HTML 附件发送，请下载后用浏览器打开。"
+	}
+	boundary := fmt.Sprintf("auto-dba-%d", time.Now().UnixNano())
+	var msg strings.Builder
+	msg.WriteString("From: " + from + "\r\n")
+	msg.WriteString("To: " + to + "\r\n")
+	msg.WriteString("Subject: " + encodeSubject(subject) + "\r\n")
+	msg.WriteString("MIME-Version: 1.0\r\n")
+	msg.WriteString("Content-Type: multipart/mixed; boundary=\"" + boundary + "\"\r\n")
+	msg.WriteString("\r\n")
+	msg.WriteString("--" + boundary + "\r\n")
+	msg.WriteString("Content-Type: text/plain; charset=UTF-8\r\n")
+	msg.WriteString("Content-Transfer-Encoding: base64\r\n")
+	msg.WriteString("\r\n")
+	msg.WriteString(base64Lines(note))
+	msg.WriteString("\r\n")
+	msg.WriteString("--" + boundary + "\r\n")
+	msg.WriteString("Content-Type: text/html; charset=UTF-8\r\n")
+	msg.WriteString("Content-Transfer-Encoding: base64\r\n")
+	msg.WriteString("Content-Disposition: attachment; filename=\"slow-sql-report.html\"; filename*=UTF-8''" + url.PathEscape(filename) + "\r\n")
+	msg.WriteString("\r\n")
+	msg.WriteString(base64Lines(htmlBody))
+	msg.WriteString("\r\n")
+	msg.WriteString("--" + boundary + "--\r\n")
+	return deliverRaw(cfg, host, from, to, []byte(msg.String()))
+}
+
+func deliverRaw(cfg Config, host, from, to string, raw []byte) error {
 	waitRate(cfg.Rate)
 	addr := cfg.addr()
 	auth := smtpAuth(cfg, host)
-	raw := []byte(msg.String())
-
 	var err error
 	if cfg.UseTLS && (cfg.Port == 465 || cfg.Port == 0) {
 		err = sendSMTPS(addr, host, auth, from, []string{to}, raw)
@@ -92,6 +143,18 @@ func Send(cfg Config, to, subject, body, contentType string) error {
 		err = sendSMTP(addr, host, auth, from, []string{to}, raw)
 	}
 	return wrapSMTPTimeout(err)
+}
+
+func base64Lines(s string) string {
+	enc := base64.StdEncoding.EncodeToString([]byte(s))
+	var b strings.Builder
+	for len(enc) > 76 {
+		b.WriteString(enc[:76])
+		b.WriteString("\r\n")
+		enc = enc[76:]
+	}
+	b.WriteString(enc)
+	return b.String()
 }
 
 func wrapSMTPTimeout(err error) error {

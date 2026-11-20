@@ -184,9 +184,9 @@ func (r *Registry) Metrics() map[string]int64 {
 		return nil
 	}
 	return map[string]int64{
-		"run_success":       r.runOK.Load(),
-		"run_failed":        r.runFail.Load(),
-		"lease_held_skip":   r.leaseNo.Load(),
+		"run_success":     r.runOK.Load(),
+		"run_failed":      r.runFail.Load(),
+		"lease_held_skip": r.leaseNo.Load(),
 	}
 }
 
@@ -459,6 +459,9 @@ func (r *Registry) UpdateSetting(key string, enabled *bool, scheduleSpec *string
 			if _, _, ok := parseCron6HMS(spec); !ok {
 				return nil, fmt.Errorf("invalid cron6 spec")
 			}
+		}
+		if j.desc.ScheduleKind == ScheduleCron5 && len(strings.Fields(spec)) != 5 {
+			return nil, fmt.Errorf("Cron 需要 5 段：分 时 日 月 周")
 		}
 	}
 	st, err := r.Store.UpsertJobSetting(key, en, spec, updatedBy)

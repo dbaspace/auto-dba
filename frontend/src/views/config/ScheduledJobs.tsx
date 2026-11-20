@@ -476,9 +476,11 @@ export default function ScheduledJobs() {
             extra={
               editJob?.schedule_kind === 'cron6'
                 ? '6 段：秒 分 时 * * *（日定点）'
-                : editJob?.misfire_policy
-                  ? `漏跑策略：${editJob.misfire_policy}`
-                  : undefined
+                : editJob?.schedule_kind === 'cron5'
+                  ? '5 段：分 时 日 月 周。例：0 9 * * 1 为每周一 09:00'
+                  : editJob?.misfire_policy
+                    ? `漏跑策略：${editJob.misfire_policy}`
+                    : undefined
             }
           >
             <Input />

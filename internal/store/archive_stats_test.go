@@ -20,6 +20,15 @@ func TestSummarizeArchiveRunsScheduledZeroRows(t *testing.T) {
 	}
 }
 
+func TestFormatArchivedVolume(t *testing.T) {
+	if got := formatArchivedVolume(0); got != "0 行" {
+		t.Fatalf("zero: %s", got)
+	}
+	if got := formatArchivedVolume(629598); got != "629598 行" {
+		t.Fatalf("rows: %s", got)
+	}
+}
+
 func TestSummarizeArchiveRunsEmpty(t *testing.T) {
 	rate, done, failed := summarizeArchiveRuns(nil, time.Now())
 	if rate != "-" || done != 0 || failed != 0 {

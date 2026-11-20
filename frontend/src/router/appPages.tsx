@@ -110,6 +110,8 @@ import {
   Sessions,
   SlotList,
   SqlInsight,
+  SlowSqlReport,
+  SlowSqlReportView,
   SqlInsightSettings,
   SrNodes,
   SystemNotice,
@@ -239,6 +241,8 @@ export function TabPagePanel({ pathname, search }: { pathname: string; search?: 
       <Route path="/k8s/apps" element={<K8sApps />} />
 
       <Route path="/ops/sql-insight" element={<SqlInsight />} />
+      <Route path="/ops/slow-sql-report" element={<SlowSqlReport />} />
+      <Route path="/ops/slow-sql-report/:id" element={<SlowSqlReportView />} />
       <Route path="/ops/cloud/postgres" element={<CloudPostgres engine="postgres" />} />
       <Route path="/ops/cloud/mysql" element={<CloudPostgres engine="mysql" />} />
       <Route path="/ops/cloud/redis" element={<CloudPostgres engine="redis" />} />

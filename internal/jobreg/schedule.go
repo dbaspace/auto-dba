@@ -163,6 +163,11 @@ func missedFireKey(kind, spec string, now time.Time, grace time.Duration) (fireK
 	}
 }
 
+// Cron5Matches 判断五段 Cron 是否在 now 这一分钟命中。
+func Cron5Matches(expr string, now time.Time) bool {
+	return cron5Match(expr, now)
+}
+
 func cron5Match(expr string, now time.Time) bool {
 	fields := strings.Fields(strings.TrimSpace(expr))
 	if len(fields) != 5 {

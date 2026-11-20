@@ -38,6 +38,8 @@ export const ClusterDeployEngine = lazyPage(() => import('../views/ops/ClusterDe
 export const Sessions = lazyPage(() => import('../views/ops/Sessions'))
 export const MysqlSlow = lazyPage(() => import('../views/ops/MysqlSlow'))
 export const SqlInsight = lazyPage(() => import('../views/ops/SqlInsight'))
+export const SlowSqlReport = lazyPage(() => import('../views/ops/SlowSqlReport'))
+export const SlowSqlReportView = lazyPage(() => import('../views/ops/SlowSqlReportView'))
 export const CloudPostgres = lazyPage(() => import('../views/ops/cloud/CloudPostgres'))
 export const CloudPolicies = lazyPage(() => import('../views/ops/cloud/CloudPolicies'))
 export const CloudAccounts = lazyPage(() => import('../views/ops/cloud/CloudAccounts'))

@@ -92,6 +92,8 @@ import {
   Sessions,
   SlotList,
   SqlInsight,
+  SlowSqlReport,
+  SlowSqlReportView,
   SqlInsightSettings,
   SrNodes,
   SystemNotice,
@@ -209,6 +211,8 @@ const router = createHashRouter([
       { path: 'ops/backup/settings', element: <BackupSettings /> },
 
       { path: 'ops/sql-insight', element: <SqlInsight /> },
+      { path: 'ops/slow-sql-report', element: <SlowSqlReport /> },
+      { path: 'ops/slow-sql-report/:id', element: <SlowSqlReportView /> },
       { path: 'ops/cloud/postgres', element: <CloudPostgres engine="postgres" /> },
       { path: 'ops/cloud/mysql', element: <CloudPostgres engine="mysql" /> },
       { path: 'ops/cloud/redis', element: <CloudPostgres engine="redis" /> },

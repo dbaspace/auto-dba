@@ -16,11 +16,12 @@ import { Link, useSearchParams } from 'react-router-dom'
 import api from '../../api/request'
 import Auth from '../../components/Auth'
 import { Perm } from '../../hooks/usePermission'
+import SlowReportSettings from './SlowReportSettings'
 import './SqlInsightSettings.css'
 
 type FieldType = 'bool' | 'number' | 'text' | 'url' | 'password'
 type AwrGroup = 'prometheus' | 'report' | 'push'
-type SettingTab = 'awr' | 'space' | 'smart' | 'cloud'
+type SettingTab = 'awr' | 'space' | 'smart' | 'cloud' | 'slow'
 
 interface FieldDef {
   key: string
@@ -207,7 +208,7 @@ export default function SqlInsightSettings() {
   const [params, setParams] = useSearchParams()
   const tabParam = params.get('tab')
   const activeTab: SettingTab =
-    tabParam === 'space' || tabParam === 'smart' || tabParam === 'awr' || tabParam === 'cloud' ? tabParam : 'awr'
+    tabParam === 'space' || tabParam === 'smart' || tabParam === 'awr' || tabParam === 'cloud' || tabParam === 'slow' ? tabParam : 'awr'
 
   const [awrForm] = Form.useForm<FormValues>()
   const [spaceForm] = Form.useForm<FormValues>()
@@ -351,6 +352,11 @@ export default function SqlInsightSettings() {
                 <Link to="/config/scheduled-jobs">打开定时任务</Link>
               </div>
             ),
+          },
+          {
+            key: 'slow',
+            label: '慢 SQL 周报',
+            children: <SlowReportSettings />,
           },
           {
             key: 'smart',

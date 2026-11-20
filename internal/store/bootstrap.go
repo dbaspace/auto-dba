@@ -88,6 +88,10 @@ func (d *DB) migrateFast() error {
 			if err := d.ensureCloudSchema(); err != nil {
 				return err
 			}
+			// 归档告警表随功能后加。已有库停在当前 schema 版本时不会重跑全量迁移，定时检查仍会查这张表。
+			if err := d.ensureArchiveSchema(); err != nil {
+				return err
+			}
 			if err := d.ensureSQLExecutorTable(); err != nil {
 				return err
 			}
@@ -218,6 +222,9 @@ func (d *DB) seedFast() error {
 			}
 			// 实例总览须在 skip 路径幂等补齐，否则已有库不会写入菜单
 			if err := d.ensureInstanceOverviewMenu(now); err != nil {
+				return err
+			}
+			if err := d.ensureSlowReportMenu(now); err != nil {
 				return err
 			}
 			if err := d.ensureCloudMenus(now); err != nil {

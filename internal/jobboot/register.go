@@ -3,6 +3,8 @@ package jobboot
 import (
 	"context"
 	"log"
+	"strings"
+	"time"
 
 	"auto-dba/internal/alert"
 	"auto-dba/internal/archive"
@@ -16,6 +18,7 @@ import (
 	"auto-dba/internal/pgdiag"
 	"auto-dba/internal/pgspace"
 	"auto-dba/internal/sessionstore"
+	"auto-dba/internal/slowreport"
 	"auto-dba/internal/sqlinsight"
 	"auto-dba/internal/store"
 )
@@ -350,6 +353,27 @@ func RegisterPlatformJobs(r *jobreg.Registry, d Deps) {
 			return nil
 		})
 	}
+
+	if cur, err := d.DB.GetJobSetting("cloud.slow_report"); err == nil && cur != nil {
+		spec := strings.TrimSpace(cur.ScheduleSpec)
+		if spec == "60s" || spec == "1m" {
+			_, _ = d.DB.UpsertJobSetting("cloud.slow_report", cur.Enabled, "0 9 * * 1", "system")
+		}
+	}
+	r.Register(jobreg.JobDesc{
+		Key: "cloud.slow_report", Name: "慢 SQL 周报", Group: "cloud",
+		Description:  "按已启用的周报规则生成 HTML 并发送邮件。发送时间在此修改，默认每周一 09:00",
+		ScheduleKind: jobreg.ScheduleCron5, DefaultSpec: "0 9 * * 1",
+		Mutable: true, Triggerable: true, Pauseable: true, RiskLevel: jobreg.RiskLow,
+		MisfirePolicy: jobreg.MisfireSkip,
+	}, func(ctx context.Context) error {
+		return slowreport.Scan(ctx, d.DB, d.AlertSecret, time.Now(), func(ctx context.Context, names []string, from, to time.Time) (float64, bool) {
+			if d.AWR == nil {
+				return 0, false
+			}
+			return d.AWR.SlowReportCPUPeak(ctx, names, from, to)
+		})
+	})
 
 	r.Register(jobreg.JobDesc{
 		Key: "client_access.audit_purge", Name: "客户端审计清理", Group: "security",

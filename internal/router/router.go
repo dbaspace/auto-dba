@@ -30,6 +30,7 @@ type Deps struct {
 	Connector          *handler.ConnectorHandler
 	Args               *handler.GlobalArgHandler
 	Jobs               *handler.JobsHandler
+	SlowReport         *handler.SlowReportHandler
 	Ticket             *handler.TicketHandler
 	CreateDB           *handler.CreateDBHandler
 	Account            *handler.AccountHandler
@@ -1155,6 +1156,19 @@ func Init(e *gin.Engine, d Deps) {
 		dg.PUT("/oss", d.DbDeploy.PutOSS)
 	}
 
+	if d.SlowReport != nil {
+		sg := requireURN(store.URNSidebarSQLInsightSettings)
+		vg := requireURN(store.URNSidebarSlowSQLReport)
+		secured.GET("/sql-insight/slow-reports/options", sg, d.SlowReport.Options)
+		secured.GET("/sql-insight/slow-reports", sg, d.SlowReport.List)
+		secured.POST("/sql-insight/slow-reports", sg, d.SlowReport.Save)
+		secured.PUT("/sql-insight/slow-reports/:id", sg, d.SlowReport.Save)
+		secured.DELETE("/sql-insight/slow-reports/:id", sg, d.SlowReport.Delete)
+		secured.POST("/sql-insight/slow-reports/preview", sg, d.SlowReport.Preview)
+		secured.POST("/sql-insight/slow-reports/:id/send", sg, d.SlowReport.Send)
+		secured.GET("/sql-insight/slow-reports/mails", vg, d.SlowReport.Mails)
+		secured.GET("/sql-insight/slow-reports/mails/:id", vg, d.SlowReport.Mail)
+	}
 	secured.GET("/sql-insight", d.Insight.List)
 	secured.POST("/sql-insight", d.Insight.Create)
 	secured.GET("/sql-insight/topology", requireURN(store.URNSqlInsightTabTopology), d.Insight.Topology)
